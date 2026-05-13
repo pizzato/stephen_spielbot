@@ -516,11 +516,14 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         music_path = work_dir / "background_music.wav"
         label = f"Background music ({music_dur:.0f}s)"
         yield emit(f"Generating {label}…", 20)
+        music_url = worker_pool.acquire()
         try:
-            yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, pct=22)
+            yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
         except Exception:
             logger.exception("Music generation failed")
+            worker_pool.release(music_url)
             raise
+        worker_pool.release(music_url)
         logger.info("Music ready: %s (%.1f MB)", music_path.name,
                     music_path.stat().st_size / 1024 / 1024)
         music_upd = gr.update(value=str(music_path), visible=True)

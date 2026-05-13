@@ -22,8 +22,10 @@ def alive_workers(urls: list[str], timeout: int = 5) -> list[str]:
     """Return only the URLs that are currently reachable."""
     ok = [u for u in urls if check_alive(u, timeout=timeout)]
     if not ok:
-        logger.warning("No workers reachable from %s — falling back to localhost", urls)
-        ok = ["http://localhost:8188"]
+        raise RuntimeError(
+            f"No ComfyUI workers reachable. Tried: {urls}\n"
+            "Check your cluster.conf and that workers are running."
+        )
     return ok
 
 
