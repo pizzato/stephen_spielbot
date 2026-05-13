@@ -15,7 +15,6 @@ from datetime import datetime
 from pathlib import Path
 
 import gradio as gr
-import gradio.processing_utils as _gpu
 
 LOG_DIR = Path.home() / ".local" / "share" / "video-generator" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -31,23 +30,11 @@ _file_handler.setFormatter(_log_fmt)
 _stream_handler = logging.StreamHandler(sys.stdout)
 _stream_handler.setFormatter(_log_fmt)
 
-logging.basicConfig(level=logging.DEBUG, handlers=[_file_handler, _stream_handler], force=True)
+# Keep third-party libraries quiet; only our own logger runs at DEBUG.
+logging.basicConfig(level=logging.WARNING, handlers=[_file_handler, _stream_handler], force=True)
 logger = logging.getLogger("video_gen")
+logger.setLevel(logging.DEBUG)
 logger.info("Logging to %s", LOG_FILE)
-
-# ── Intercept Gradio's _check_allowed so we see every file-path decision ────
-_orig_check_allowed = _gpu._check_allowed
-
-def _patched_check_allowed(path, check_in_upload_folder):
-    logger.debug("_check_allowed path=%s cwd=%s upload=%s", path, os.getcwd(), check_in_upload_folder)
-    try:
-        _orig_check_allowed(path, check_in_upload_folder)
-        logger.debug("_check_allowed ALLOWED: %s", path)
-    except Exception as exc:
-        logger.error("_check_allowed BLOCKED: %s — %s", path, exc)
-        raise
-
-_gpu._check_allowed = _patched_check_allowed
 
 sys.path.insert(0, str(Path(__file__).parent))
 
