@@ -869,7 +869,7 @@ def on_add_voice(name: str, file_path: str):
     choices = get_voice_choices()
     rows    = [[v["name"], v["path"]] for v in cfg["voices"]]
     return (
-        rows,
+        gr.update(value=rows),
         gr.update(choices=choices),
         gr.update(choices=choices[1:], value=None),
         "",
@@ -887,11 +887,18 @@ def on_remove_voice(name: str):
     choices = get_voice_choices()
     rows    = [[v["name"], v["path"]] for v in cfg["voices"]]
     return (
-        rows,
+        gr.update(value=rows),
         gr.update(choices=choices),
         gr.update(choices=choices[1:], value=None),
         f"Removed '{name}' ✓",
     )
+
+
+def on_voices_load():
+    """Refresh voice components from disk on each page load."""
+    choices = get_voice_choices()
+    rows    = voices_as_rows()
+    return gr.update(value=rows), gr.update(choices=choices), gr.update(choices=choices[1:])
 
 
 def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
@@ -1380,6 +1387,12 @@ def build_ui() -> gr.Blocks:
             fn=on_remove_voice,
             inputs=[remove_voice_dd],
             outputs=[voices_table, voice_dropdown, remove_voice_dd, cfg_status],
+        )
+
+        demo.load(
+            fn=on_voices_load,
+            inputs=[],
+            outputs=[voices_table, voice_dropdown, remove_voice_dd],
         )
 
     return demo
