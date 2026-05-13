@@ -39,20 +39,27 @@ def _find_local_python() -> str:
 _LOCAL_PYTHON = _find_local_python()
 
 
+_TTS_TIMEOUT = int(os.environ.get("TTS_TIMEOUT", "300"))  # seconds per narration
+
+
 def _f5_local(text: str, ref: Path, output_path: Path) -> None:
-    result = subprocess.run(
-        [
-            _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
-            "--model",       "F5TTS_v1_Base",
-            "--ref_audio",   str(ref),
-            "--ref_text",    "",
-            "--gen_text",    text,
-            "--output_file", str(output_path),
-            "--speed",       "1.0",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
+                "--model",       "F5TTS_v1_Base",
+                "--ref_audio",   str(ref),
+                "--ref_text",    "",
+                "--gen_text",    text,
+                "--output_file", str(output_path),
+                "--speed",       "1.0",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=_TTS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"F5-TTS timed out after {_TTS_TIMEOUT}s (local)")
     if result.returncode != 0:
         raise RuntimeError(f"F5-TTS failed:\n{result.stderr}")
 
@@ -64,16 +71,24 @@ def _f5_remote(text: str, ref: Path, output_path: Path, host: str) -> None:
     }).encode()
 
     # Sync latest tts_runner.py to the deployed location on the remote
-    subprocess.run(
-        ["rsync", "-q", str(_LOCAL_RUNNER), f"{host}:{_REMOTE_RUNNER}"],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            ["rsync", "-q", str(_LOCAL_RUNNER), f"{host}:{_REMOTE_RUNNER}"],
+            check=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"rsync to {host} timed out")
 
-    proc = subprocess.run(
-        ["ssh", host, f"{_REMOTE_PYTHON} {_REMOTE_RUNNER}"],
-        input=payload,
-        capture_output=True,
-    )
+    try:
+        proc = subprocess.run(
+            ["ssh", host, f"{_REMOTE_PYTHON} {_REMOTE_RUNNER}"],
+            input=payload,
+            capture_output=True,
+            timeout=_TTS_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(f"Remote F5-TTS timed out after {_TTS_TIMEOUT}s on {host}")
     if proc.returncode != 0:
         raise RuntimeError(f"Remote F5-TTS failed on {host}:\n{proc.stderr.decode()}")
     output_path.write_bytes(proc.stdout)
