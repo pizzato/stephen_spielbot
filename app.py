@@ -112,18 +112,45 @@ DEFAULT_CFG = {
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
 
+CLUSTER_CONF = Path(__file__).parent / "cluster.conf"
+COMFYUI_PORT = 8188
+
 # Thread pool for long blocking operations — keeps SSE alive via heartbeat yields
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 
 # ── Config helpers ───────────────────────────────────────────────────────────
 
+def _hosts_from_cluster_conf() -> list[str]:
+    """Return non-comment, non-empty hostnames from cluster.conf."""
+    if not CLUSTER_CONF.exists():
+        return []
+    hosts = []
+    for line in CLUSTER_CONF.read_text().splitlines():
+        line = line.split("#")[0].strip()
+        if line:
+            hosts.append(line)
+    return hosts
+
+
+def _default_workers() -> tuple[list[str], list[str]]:
+    """Derive comfy_workers and tts_workers from cluster.conf, falling back to localhost."""
+    hosts = _hosts_from_cluster_conf()
+    if not hosts:
+        return ["http://localhost:8188"], ["localhost"]
+    comfy = [f"http://{h}:{COMFYUI_PORT}" for h in hosts]
+    return comfy, hosts
+
+
 def load_config() -> dict:
+    cfg = DEFAULT_CFG.copy()
+    # Seed worker defaults from cluster.conf before applying saved overrides
+    comfy, tts = _default_workers()
+    cfg["comfy_workers"] = comfy
+    cfg["tts_workers"]   = tts
     if CONFIG_FILE.exists():
-        cfg = DEFAULT_CFG.copy()
         cfg.update(json.loads(CONFIG_FILE.read_text()))
-        return cfg
-    return DEFAULT_CFG.copy()
+    return cfg
 
 
 def save_config(cfg: dict) -> None:
