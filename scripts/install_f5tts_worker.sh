@@ -18,12 +18,16 @@ ssh "$TARGET" bash <<'REMOTE'
 set -euo pipefail
 
 VENV="$HOME/f5tts-env"
-PYTHON="$HOME/miniconda3/bin/python3"
 
-# Fall back to system python3 if miniconda isn't present
-if [[ ! -x "$PYTHON" ]]; then
-    PYTHON="$(which python3)"
-fi
+# Find python3 — prefer miniconda/conda envs, fall back to system
+PYTHON=""
+for candidate in \
+    "$HOME/miniconda3/bin/python3" \
+    "$HOME/miniforge3/bin/python3" \
+    "$HOME/anaconda3/bin/python3"; do
+    [[ -x "$candidate" ]] && PYTHON="$candidate" && break
+done
+[[ -z "$PYTHON" ]] && PYTHON="$(which python3)"
 
 if [[ -f "$VENV/bin/activate" ]]; then
     echo "[f5tts] venv already exists at $VENV"
