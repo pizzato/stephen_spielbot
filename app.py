@@ -1189,7 +1189,7 @@ def build_ui() -> gr.Blocks:
                     value=cfg.get("llm_backend", "local"),
                     label="Script generation backend",
                 )
-                with gr.Group(visible=cfg.get("llm_backend", "local") == "local") as local_cfg_group:
+                with gr.Accordion("Local LLM settings", open=cfg.get("llm_backend", "local") == "local") as local_cfg_group:
                     cfg_local_llm_url = gr.Textbox(
                         label="Local LLM URL",
                         value=cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions"),
@@ -1200,7 +1200,7 @@ def build_ui() -> gr.Blocks:
                         value=cfg.get("local_llm_model", "openai/gpt-oss-120b"),
                         placeholder="openai/gpt-oss-120b",
                     )
-                with gr.Group(visible=cfg.get("llm_backend", "local") == "claude") as claude_cfg_group:
+                with gr.Accordion("Claude settings", open=cfg.get("llm_backend", "local") == "claude") as claude_cfg_group:
                     cfg_claude_key = gr.Textbox(
                         label="Claude API Key",
                         value=cfg.get("claude_api_key", ""),
@@ -1345,7 +1345,7 @@ def build_ui() -> gr.Blocks:
         )
 
         cfg_llm_backend.change(
-            fn=lambda b: (gr.update(visible=(b == "local")), gr.update(visible=(b == "claude"))),
+            fn=lambda b: (gr.update(open=(b == "local")), gr.update(open=(b == "claude"))),
             inputs=[cfg_llm_backend],
             outputs=[local_cfg_group, claude_cfg_group],
         )
@@ -1374,12 +1374,6 @@ def build_ui() -> gr.Blocks:
             fn=on_remove_voice,
             inputs=[remove_voice_dd],
             outputs=[voices_table, voice_dropdown, remove_voice_dd, cfg_status],
-        )
-
-        demo.load(
-            fn=on_voices_load,
-            inputs=[],
-            outputs=[voices_table, voice_dropdown, remove_voice_dd],
         )
 
     return demo
