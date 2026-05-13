@@ -41,7 +41,12 @@ else
     echo "[f5tts] installed"
 fi
 
-# ── 3. Remote workers ──────────────────────────────────────────────────────────
+# ── 3. Download LTX 2.3 + ACE-Step models ────────────────────────────────────
+
+banner "Downloading models"
+bash "$REPO_ROOT/scripts/download_models.sh"
+
+# ── 4. Remote workers ──────────────────────────────────────────────────────────
 
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
