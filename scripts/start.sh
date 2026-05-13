@@ -51,18 +51,17 @@ else
     COMFY_DIR="$HOME/github/ComfyUI"
     COMFY_ENV="$HOME/github/comfyui-env"
     if [[ ! -d "$COMFY_DIR" ]]; then
-        echo "  [comfyui] ERROR: $COMFY_DIR not found — run 'make install' first"
-        exit 1
+        echo "  [comfyui] not installed locally — skipping (using remote workers only)"
+    else
+        echo "  [comfyui] starting directly..."
+        mkdir -p "$(dirname "$COMFY_DIR/comfyui.log")"
+        (source "$COMFY_ENV/bin/activate" && cd "$COMFY_DIR" && \
+            nohup python main.py --listen 0.0.0.0 --port 8188 \
+                >> "$COMFY_DIR/comfyui.log" 2>&1) &
+        echo "  [comfyui] started (log: $COMFY_DIR/comfyui.log)"
+        wait_for_comfyui "localhost" "http://localhost:8188"
     fi
-    echo "  [comfyui] starting directly..."
-    mkdir -p "$(dirname "$COMFY_DIR/comfyui.log")"
-    (source "$COMFY_ENV/bin/activate" && cd "$COMFY_DIR" && \
-        nohup python main.py --listen 0.0.0.0 --port 8188 \
-            >> "$COMFY_DIR/comfyui.log" 2>&1) &
-    echo "  [comfyui] started (log: $COMFY_DIR/comfyui.log)"
 fi
-
-wait_for_comfyui "localhost" "http://localhost:8188"
 
 # ── 2. Remote ComfyUI workers ─────────────────────────────────────────────────
 
