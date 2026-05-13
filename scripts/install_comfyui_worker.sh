@@ -93,12 +93,11 @@ MODEL_DIRS=(
 
 for dir in "${MODEL_DIRS[@]}"; do
     echo "[rsync] $dir..."
-    ssh -A "$TARGET" bash -c "
-        mkdir -p \$HOME/github/ComfyUI/$dir
-        rsync -avz --progress --ignore-existing \
+    ssh -A "$TARGET" "mkdir -p \$HOME/github/ComfyUI/$dir && \
+        rsync -avz --ignore-existing \
             ${MODEL_SOURCE}:\$HOME/github/ComfyUI/$dir/ \
-            \$HOME/github/ComfyUI/$dir/ 2>&1 | tail -5
-    " || echo "[rsync] Warning: some files in $dir may have failed"
+            \$HOME/github/ComfyUI/$dir/ 2>&1 | tail -5" \
+    || echo "[rsync] Warning: some files in $dir may have failed"
 done
 
 # ── 4. Deploy video-generator workflows ──────────────────────────────────────
@@ -112,17 +111,17 @@ ssh "$TARGET" "mkdir -p \$HOME/github/video-generator/{workflows,pipeline,assets
 # Sync workflows and pipeline
 rsync -avz --delete \
     "$REPO_ROOT/workflows/" \
-    "${TARGET}:$HOME/github/video-generator/workflows/"
+    "${TARGET}:~/github/video-generator/workflows/"
 
 rsync -avz --delete \
     "$REPO_ROOT/pipeline/" \
-    "${TARGET}:$HOME/github/video-generator/pipeline/"
+    "${TARGET}:~/github/video-generator/pipeline/"
 
 # Sync assets (default narrator wav for F5-TTS)
 if [[ -d "$REPO_ROOT/assets" ]]; then
     rsync -avz \
         "$REPO_ROOT/assets/" \
-        "${TARGET}:$HOME/github/video-generator/assets/"
+        "${TARGET}:~/github/video-generator/assets/"
 fi
 
 # ── 5. Write ComfyUI start script ─────────────────────────────────────────────
