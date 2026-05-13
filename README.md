@@ -22,24 +22,36 @@ An AI video generator that turns a topic into a fully produced short film — co
 - FFmpeg
 - A local vLLM server **or** a Claude API key for script generation
 
-## Setup
+## Quick start
 
 ```bash
 git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot
-pip install gradio anthropic websocket-client
-
-# Point to your F5-TTS Python interpreter
-export F5TTS_PYTHON=~/miniconda3/envs/f5tts/bin/python
-
-# Start ComfyUI (separate terminal)
-cd ~/github/ComfyUI && python main.py --listen
-
-# Launch the app
-python app.py
+make install   # install deps locally + on every worker in cluster.conf
+make start     # start ComfyUI on all workers, then launch the app
 ```
 
 Open [http://localhost:7860](http://localhost:7860).
+
+```bash
+make stop      # stop everything
+make status    # check health of the app and all workers
+```
+
+## Cluster setup
+
+Edit `cluster.conf` to list your remote worker hostnames (one per line):
+
+```
+# cluster.conf
+s1
+s2
+```
+
+`make install` will SSH into each host and install ComfyUI + F5-TTS automatically.
+The local machine is always included and does not need to appear in the file.
+
+Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
 ## Configuration
 
