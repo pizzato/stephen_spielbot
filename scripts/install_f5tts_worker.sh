@@ -48,7 +48,7 @@ if [[ -f "$REPO_ROOT/assets/default_narrator.wav" ]]; then
     echo "[f5tts] syncing default narrator..."
     ssh "$TARGET" "mkdir -p \$HOME/github/video-generator/assets"
     rsync -q "$REPO_ROOT/assets/default_narrator.wav" \
-        "${TARGET}:$HOME/github/video-generator/assets/"
+        "${TARGET}:~/github/video-generator/assets/"
     echo "[f5tts] narrator synced"
 fi
 

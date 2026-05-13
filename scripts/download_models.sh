@@ -8,6 +8,8 @@
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+VENV="$REPO_ROOT/.venv"
 
 if [[ ! -d "$COMFY_DIR" ]]; then
     echo "ERROR: ComfyUI directory not found: $COMFY_DIR"
@@ -15,10 +17,19 @@ if [[ ! -d "$COMFY_DIR" ]]; then
     exit 1
 fi
 
-# Ensure huggingface-cli is available
-if ! command -v huggingface-cli &>/dev/null; then
+# Ensure huggingface-cli is available (prefer venv, fall back to system pip)
+if ! command -v huggingface-cli &>/dev/null && ! [[ -x "$VENV/bin/huggingface-cli" ]]; then
     echo "[hf] huggingface-cli not found — installing huggingface_hub..."
-    python3 -m pip install --quiet huggingface_hub
+    if [[ -x "$VENV/bin/pip" ]]; then
+        "$VENV/bin/pip" install --quiet huggingface_hub
+    else
+        python3 -m pip install --quiet huggingface_hub
+    fi
+fi
+
+# Use venv's huggingface-cli if available
+if [[ -x "$VENV/bin/huggingface-cli" ]]; then
+    export PATH="$VENV/bin:$PATH"
 fi
 
 echo "=== Downloading models to $COMFY_DIR ==="

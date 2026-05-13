@@ -15,36 +15,80 @@ remote_hosts() {
 
 banner() { echo ""; echo "=== $* ==="; }
 
-# ── 1. Local Python dependencies ──────────────────────────────────────────────
+_find_conda() {
+    for p in \
+        "$HOME/miniconda3/bin/conda" \
+        "$HOME/miniforge3/bin/conda" \
+        "$HOME/anaconda3/bin/conda" \
+        "$HOME/opt/miniconda3/bin/conda" \
+        "$HOME/opt/miniforge3/bin/conda" \
+        "$HOME/opt/anaconda3/bin/conda" \
+        "/opt/conda/bin/conda" \
+        "/usr/local/bin/conda"; do
+        [[ -x "$p" ]] && echo "$p" && return 0
+    done
+    # Fall back to PATH (works when conda shell function is active)
+    local c
+    c="$(command -v conda 2>/dev/null || true)"
+    [[ -x "$c" ]] && echo "$c" && return 0
+    return 1
+}
 
-banner "Installing local Python dependencies"
-python3 -m pip install --quiet -r "$REPO_ROOT/requirements.txt"
-echo "[pip] requirements installed"
+# ── 1. Local Python venv + dependencies ───────────────────────────────────────
+
+banner "Setting up local Python environment"
+VENV="$REPO_ROOT/.venv"
+if [[ ! -x "$VENV/bin/python" ]]; then
+    echo "[venv] creating $VENV ..."
+    python3 -m venv "$VENV"
+fi
+"$VENV/bin/pip" install --quiet -r "$REPO_ROOT/requirements.txt"
+echo "[venv] requirements installed at $VENV"
 
 # ── 2. Local F5-TTS environment ───────────────────────────────────────────────
 
 banner "Checking local F5-TTS environment"
-F5_ENV="${F5TTS_PYTHON:-$HOME/miniconda3/envs/f5tts/bin/python}"
+F5_ENV="${F5TTS_PYTHON:-}"
 
-if [[ -x "$F5_ENV" ]] && "$F5_ENV" -c "import f5_tts" 2>/dev/null; then
+# If not overridden, search for the conda-managed f5tts env
+if [[ -z "$F5_ENV" ]]; then
+    CONDA="$(_find_conda || true)"
+    if [[ -n "$CONDA" ]]; then
+        CONDA_BASE="$(dirname "$(dirname "$CONDA")")"
+        F5_ENV="$CONDA_BASE/envs/f5tts/bin/python"
+    fi
+fi
+
+if [[ -n "$F5_ENV" ]] && [[ -x "$F5_ENV" ]] && "$F5_ENV" -c "import f5_tts" 2>/dev/null; then
     echo "[f5tts] already installed at $F5_ENV"
 else
-    echo "[f5tts] installing into ~/miniconda3/envs/f5tts ..."
-    CONDA="$HOME/miniconda3/bin/conda"
-    if [[ ! -x "$CONDA" ]]; then
-        echo "[f5tts] Miniconda not found at $HOME/miniconda3 — install it first:"
-        echo "  https://docs.conda.io/en/latest/miniconda.html"
-        exit 1
+    CONDA="${CONDA:-$(_find_conda || true)}"
+    if [[ -z "$CONDA" ]]; then
+        echo "[f5tts] WARNING: conda not found — skipping F5-TTS install."
+        echo "  Install Miniconda/Miniforge first to enable local TTS:"
+        echo "  https://github.com/conda-forge/miniforge"
+        echo "  Then re-run 'make install'."
+    else
+        CONDA_BASE="$(dirname "$(dirname "$CONDA")")"
+        echo "[f5tts] installing into conda env f5tts (conda: $CONDA) ..."
+        "$CONDA" create -n f5tts python=3.10 -y
+        # Install cmake + llvmlite via conda to avoid compilation issues
+        "$CONDA" install -n f5tts -c conda-forge cmake llvmlite numba -y --quiet
+        "$CONDA_BASE/envs/f5tts/bin/pip" install --quiet f5-tts
+        echo "[f5tts] installed"
     fi
-    "$CONDA" create -n f5tts python=3.10 -y
-    "$HOME/miniconda3/envs/f5tts/bin/pip" install --quiet f5-tts
-    echo "[f5tts] installed"
 fi
 
 # ── 3. Download LTX 2.3 + ACE-Step models ────────────────────────────────────
 
 banner "Downloading models"
-bash "$REPO_ROOT/scripts/download_models.sh"
+COMFY_DIR="${COMFY_DIR:-$HOME/github/ComfyUI}"
+if [[ ! -d "$COMFY_DIR" ]]; then
+    echo "[models] WARNING: ComfyUI not found at $COMFY_DIR — skipping model download."
+    echo "  Install ComfyUI first, then run:  bash scripts/download_models.sh"
+else
+    bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+fi
 
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
 
