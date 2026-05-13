@@ -910,8 +910,7 @@ def build_ui() -> gr.Blocks:
         with gr.Row(elem_id="header_row"):
             gr.Image(
                 value=str(Path(__file__).parent / "assets" / "StephenSpielbot.png"),
-                show_label=False, show_download_button=False, show_fullscreen_button=False,
-                container=False, width=120, height=120,
+                show_label=False, buttons=[], container=False, width=120, height=120,
             )
             gr.Markdown("# Stephen Spielbot\nAI video generator")
 
