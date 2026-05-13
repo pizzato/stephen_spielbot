@@ -916,8 +916,8 @@ def build_ui() -> gr.Blocks:
             with gr.Column(scale=1):
                 gr.HTML("""
                 <div style="display:flex;flex-direction:column;justify-content:space-between;height:120px;padding:4px 0">
-                  <div style="text-align:center;font-size:2rem;font-weight:700;line-height:1.2">Stephen Spielbot</div>
-                  <div style="text-align:left;font-size:1rem;color:#6b7280">AI slop video director</div>
+                  <div style="font-size:2rem;font-weight:700;line-height:1.2;margin:auto 0">Stephen Spielbot</div>
+                  <div style="font-size:1rem;color:#6b7280">AI slop video director</div>
                 </div>
                 """)
 
