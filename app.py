@@ -907,7 +907,13 @@ def build_ui() -> gr.Blocks:
     cfg = load_config()
 
     with gr.Blocks(title="Stephen Spielbot") as demo:
-        gr.Markdown("# 🎬 Stephen Spielbot")
+        with gr.Row(elem_id="header_row"):
+            gr.Image(
+                value=str(Path(__file__).parent / "assets" / "StephenSpielbot.png"),
+                show_label=False, show_download_button=False, show_fullscreen_button=False,
+                container=False, width=120, height=120,
+            )
+            gr.Markdown("# Stephen Spielbot\nAI video generator")
 
         # Shared state for remix, music description, and visual style
         combined_state   = gr.State("")
