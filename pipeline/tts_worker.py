@@ -9,16 +9,34 @@ from pathlib import Path
 
 logger = logging.getLogger("video_gen")
 
-# Override with F5TTS_PYTHON env var, or fall back to ~/miniconda3/envs/f5tts/bin/python
-_LOCAL_PYTHON  = os.environ.get(
-    "F5TTS_PYTHON",
-    str(Path.home() / "miniconda3" / "envs" / "f5tts" / "bin" / "python"),
-)
-# ~/f5tts-env is the install path on remote workers (created by install_comfyui_worker.sh)
+# Remote deploy path (set by install_comfyui_worker.sh)
 _REMOTE_PYTHON = os.environ.get("F5TTS_REMOTE_PYTHON", "~/f5tts-env/bin/python")
+_REMOTE_RUNNER = os.environ.get("F5TTS_REMOTE_RUNNER", "~/github/video-generator/pipeline/tts_runner.py")
 
-_RUNNER = str(Path(__file__).parent / "tts_runner.py")
-DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+_LOCAL_RUNNER = Path(__file__).parent / "tts_runner.py"
+DEFAULT_REF   = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+
+
+def _find_local_python() -> str:
+    """Find the conda f5tts env python, checking common install locations."""
+    if "F5TTS_PYTHON" in os.environ:
+        return os.environ["F5TTS_PYTHON"]
+    for base in [
+        Path.home() / "opt" / "anaconda3",
+        Path.home() / "opt" / "miniconda3",
+        Path.home() / "opt" / "miniforge3",
+        Path.home() / "anaconda3",
+        Path.home() / "miniconda3",
+        Path.home() / "miniforge3",
+        Path("/opt/conda"),
+    ]:
+        candidate = base / "envs" / "f5tts" / "bin" / "python"
+        if candidate.exists():
+            return str(candidate)
+    return str(Path.home() / "miniconda3" / "envs" / "f5tts" / "bin" / "python")
+
+
+_LOCAL_PYTHON = _find_local_python()
 
 
 def _f5_local(text: str, ref: Path, output_path: Path) -> None:
@@ -45,14 +63,14 @@ def _f5_remote(text: str, ref: Path, output_path: Path, host: str) -> None:
         "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
     }).encode()
 
-    # Sync tts_runner.py to remote
+    # Sync latest tts_runner.py to the deployed location on the remote
     subprocess.run(
-        ["rsync", "-q", _RUNNER, f"{host}:{_RUNNER}"],
+        ["rsync", "-q", str(_LOCAL_RUNNER), f"{host}:{_REMOTE_RUNNER}"],
         check=True,
     )
 
     proc = subprocess.run(
-        ["ssh", host, f"{_REMOTE_PYTHON} {_RUNNER}"],
+        ["ssh", host, f"{_REMOTE_PYTHON} {_REMOTE_RUNNER}"],
         input=payload,
         capture_output=True,
     )
