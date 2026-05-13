@@ -84,6 +84,7 @@ echo "=== Syncing models from $MODEL_SOURCE to $TARGET (this may take a while fo
 
 MODEL_DIRS=(
     "models/checkpoints"
+    "models/diffusion_models"
     "models/loras"
     "models/latent_upscale_models"
     "models/text_encoders"
