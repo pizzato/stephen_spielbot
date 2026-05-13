@@ -1,11 +1,15 @@
 CONF    ?= cluster.conf
 SCRIPTS := scripts
 
-.PHONY: install start stop status
+.PHONY: install download-models start stop status help
 
-## Install dependencies locally and on all cluster workers.
+## Install deps locally + download models + install ComfyUI and F5-TTS on all cluster workers.
 install:
 	@bash $(SCRIPTS)/install.sh $(CONF)
+
+## Download LTX 2.3 and ACE-Step models only (skips already-present files).
+download-models:
+	@bash $(SCRIPTS)/download_models.sh
 
 ## Start ComfyUI on all workers and the Gradio app locally.
 start:
@@ -20,11 +24,12 @@ status:
 	@bash $(SCRIPTS)/status.sh $(CONF)
 
 help:
-	@echo "Usage: make [install|start|stop|status]"
+	@echo "Usage: make [install|download-models|start|stop|status]"
 	@echo ""
-	@echo "  install   Install deps locally; install ComfyUI + F5-TTS on each worker in $(CONF)"
-	@echo "  start     Start ComfyUI on all workers, then launch the Gradio app"
-	@echo "  stop      Stop the Gradio app and ComfyUI on all workers"
-	@echo "  status    Check health of the app and every ComfyUI worker"
+	@echo "  install         Install deps locally; download models; install workers in $(CONF)"
+	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing)"
+	@echo "  start           Start ComfyUI on all workers, then launch the Gradio app"
+	@echo "  stop            Stop the Gradio app and ComfyUI on all workers"
+	@echo "  status          Check health of the app and every ComfyUI worker"
 	@echo ""
-	@echo "  CONF=$(CONF)  (override with make start CONF=other.conf)"
+	@echo "  CONF=$(CONF)  (override with  make install CONF=other.conf)"
