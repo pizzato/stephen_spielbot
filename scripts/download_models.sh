@@ -10,6 +10,10 @@ set -euo pipefail
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="$REPO_ROOT/.venv"
+COMFY_ENV="$HOME/github/comfyui-env"
+
+# Accept token from env (set by install.sh or caller)
+HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
 if [[ ! -d "$COMFY_DIR" ]]; then
     echo "ERROR: ComfyUI directory not found: $COMFY_DIR"
@@ -17,22 +21,27 @@ if [[ ! -d "$COMFY_DIR" ]]; then
     exit 1
 fi
 
-# Ensure huggingface-cli is available (prefer venv, fall back to system pip)
-if ! command -v huggingface-cli &>/dev/null && ! [[ -x "$VENV/bin/huggingface-cli" ]]; then
+# Ensure huggingface-cli is available.
+# Check: local venv → comfyui-env → system PATH → install into best available pip.
+if [[ -x "$VENV/bin/huggingface-cli" ]]; then
+    export PATH="$VENV/bin:$PATH"
+elif [[ -x "$COMFY_ENV/bin/huggingface-cli" ]]; then
+    export PATH="$COMFY_ENV/bin:$PATH"
+elif ! command -v huggingface-cli &>/dev/null; then
     echo "[hf] huggingface-cli not found — installing huggingface_hub..."
     if [[ -x "$VENV/bin/pip" ]]; then
         "$VENV/bin/pip" install --quiet huggingface_hub
+        export PATH="$VENV/bin:$PATH"
+    elif [[ -x "$COMFY_ENV/bin/pip" ]]; then
+        "$COMFY_ENV/bin/pip" install --quiet huggingface_hub
+        export PATH="$COMFY_ENV/bin:$PATH"
     else
-        python3 -m pip install --quiet huggingface_hub
+        python3 -m pip install --quiet --user huggingface_hub
     fi
 fi
 
-# Use venv's huggingface-cli if available
-if [[ -x "$VENV/bin/huggingface-cli" ]]; then
-    export PATH="$VENV/bin:$PATH"
-fi
-
 echo "=== Downloading models to $COMFY_DIR ==="
+[[ -n "$HF_TOKEN" ]] && echo "    (using HuggingFace token)"
 echo ""
 
 # ── Helper: download one file, skip if already present ────────────────────────
@@ -50,10 +59,13 @@ download() {
 
     echo "  [download] $filename  ← $repo/$remote_path"
     mkdir -p "$COMFY_DIR/$local_dir"
+    local extra_args=()
+    [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
     huggingface-cli download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
         --local-dir-use-symlinks False \
-        --quiet
+        --quiet \
+        "${extra_args[@]}"
     local size
     size=$(du -sh "$dest" | cut -f1)
     echo "  [done] $filename ($size)"

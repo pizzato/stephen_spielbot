@@ -88,15 +88,64 @@ else
     fi
 fi
 
-# ── 3. Download LTX 2.3 + ACE-Step models ────────────────────────────────────
+# ── 3. Download models ────────────────────────────────────────────────────────
+# Strategy:
+#   • Local ComfyUI present  → download directly here
+#   • Remote workers only    → download once on MODEL_SOURCE, others rsync from it
+# Either way, ask for an optional HuggingFace token once to speed things up.
 
 banner "Downloading models"
+
 COMFY_DIR="${COMFY_DIR:-$HOME/github/ComfyUI}"
-if [[ ! -d "$COMFY_DIR" ]]; then
-    echo "[models] WARNING: ComfyUI not found at $COMFY_DIR — skipping model download."
-    echo "  Install ComfyUI first, then run:  bash scripts/download_models.sh"
+MODEL_SOURCE="${MODEL_SOURCE:-s3}"   # reference machine; matches install_comfyui_worker.sh
+HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
+
+# Key sentinel files — if both exist, all models are assumed present
+_models_present_on() {
+    local host="$1"
+    if [[ "$host" == "localhost" ]]; then
+        [[ -f "$COMFY_DIR/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors" ]] && \
+        [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]]
+    else
+        ssh "$host" "[[ -f \$HOME/github/ComfyUI/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors && \
+                        -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors ]]" 2>/dev/null
+    fi
+}
+
+_ask_hf_token() {
+    if [[ -z "$HF_TOKEN" ]]; then
+        echo ""
+        echo "Models (~33 GB total) need to be downloaded."
+        echo "A HuggingFace token speeds up downloads (optional — all models are public)."
+        read -rp "HuggingFace token (press Enter to skip): " HF_TOKEN
+    fi
+}
+
+if [[ -d "$COMFY_DIR" ]]; then
+    # Local ComfyUI — download here
+    if ! _models_present_on localhost; then
+        _ask_hf_token
+    fi
+    HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+
+elif [[ -n "$(remote_hosts)" ]]; then
+    # No local ComfyUI — ensure MODEL_SOURCE has all models first
+    if _models_present_on "$MODEL_SOURCE"; then
+        echo "[models] All models already present on $MODEL_SOURCE — skipping download"
+    else
+        _ask_hf_token
+        echo "[models] Downloading models to $MODEL_SOURCE (others will rsync from it)..."
+        # Sync the download script to the source machine and run it there
+        ssh "$MODEL_SOURCE" "mkdir -p \$HOME/github/video-generator/scripts"
+        rsync -q "$REPO_ROOT/scripts/download_models.sh" \
+            "${MODEL_SOURCE}:~/github/video-generator/scripts/download_models.sh"
+        ssh "$MODEL_SOURCE" \
+            "HF_TOKEN='${HF_TOKEN}' bash \$HOME/github/video-generator/scripts/download_models.sh \$HOME/github/ComfyUI"
+    fi
+
 else
-    bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+    echo "[models] No local ComfyUI and no remote workers — skipping."
+    echo "  Add workers to $CONF or install ComfyUI, then run: bash scripts/download_models.sh"
 fi
 
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
