@@ -914,7 +914,12 @@ def build_ui() -> gr.Blocks:
                     show_label=False, buttons=[], container=False, width=120, height=120,
                 )
             with gr.Column(scale=1):
-                gr.Markdown("# Stephen Spielbot\n### AI slop video director")
+                gr.HTML("""
+                <div style="display:flex;flex-direction:column;justify-content:space-between;height:120px;padding:4px 0">
+                  <div style="text-align:center;font-size:2rem;font-weight:700;line-height:1.2">Stephen Spielbot</div>
+                  <div style="text-align:left;font-size:1rem;color:#6b7280">AI slop video director</div>
+                </div>
+                """)
 
         # Shared state for remix, music description, and visual style
         combined_state   = gr.State("")
