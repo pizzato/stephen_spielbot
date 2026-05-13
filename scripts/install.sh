@@ -39,8 +39,17 @@ _find_conda() {
 banner "Setting up local Python environment"
 VENV="$REPO_ROOT/.venv"
 if [[ ! -x "$VENV/bin/python" ]]; then
-    echo "[venv] creating $VENV ..."
-    python3 -m venv "$VENV"
+    # Prefer Python 3.13/3.12/3.11/3.10 — gradio requires 3.10+
+    PYTHON3=""
+    for candidate in python3.13 python3.12 python3.11 python3.10; do
+        if command -v "$candidate" &>/dev/null; then
+            PYTHON3="$(command -v "$candidate")"
+            break
+        fi
+    done
+    [[ -z "$PYTHON3" ]] && PYTHON3="python3"
+    echo "[venv] creating $VENV with $("$PYTHON3" --version) ..."
+    "$PYTHON3" -m venv "$VENV"
 fi
 "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/requirements.txt"
 echo "[venv] requirements installed at $VENV"
