@@ -1,22 +1,38 @@
 """ffmpeg-based video assembly operations."""
 
+import logging
+import os
 import shutil
 import subprocess
-import sys
 import tempfile
+import time
 from pathlib import Path
 
+logger = logging.getLogger("video_gen")
 
-def _run(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
+# Per-call ffmpeg timeout in seconds. Override with FFMPEG_TIMEOUT env var.
+_FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "600"))
+
+
+def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT) -> None:
+    label = f"ffmpeg {' '.join(str(a) for a in cmd[1:4])}…"
+    logger.debug("[ffmpeg] start: %s", label)
+    t0 = time.monotonic()
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        elapsed = time.monotonic() - t0
+        raise RuntimeError(f"ffmpeg timed out after {elapsed:.0f}s: {label}")
+    elapsed = time.monotonic() - t0
     if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed:\n{result.stderr}")
+        raise RuntimeError(f"ffmpeg failed ({elapsed:.1f}s):\n{result.stderr[-2000:]}")
+    logger.debug("[ffmpeg] done: %s (%.1fs)", label, elapsed)
 
 
 def _get_duration(path: Path) -> float:
     result = subprocess.run(
         ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, timeout=30,
     )
     return float(result.stdout.strip())
 
@@ -48,7 +64,7 @@ def extract_last_frame(video_path: Path, output_path: Path) -> Path:
         "-vframes", "1",
         "-q:v", "2",
         str(output_path),
-    ])
+    ], timeout=60)
     return output_path
 
 
@@ -104,29 +120,25 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
 
 
 def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float = 0.3) -> Path:
-    """Concatenate scenes with fade-out/fade-in between them.
-
-    Video fades to black at each scene boundary. Audio plays sequentially
-    with no overlap so narrations never bleed into each other.
-    """
+    """Concatenate scenes with fade-out/fade-in between them."""
     if len(scene_paths) == 1:
         shutil.copy2(scene_paths[0], output_path)
         return output_path
 
     n = len(scene_paths)
     durations = [_get_duration(p) for p in scene_paths]
+    logger.info("[ffmpeg] concatenate_scenes: %d scenes, total %.1fs", n, sum(durations))
 
     inputs = []
     for p in scene_paths:
         inputs += ["-i", str(p)]
 
     filters = []
-    fade_a = 0.05  # tiny audio fade to avoid click at each cut
+    fade_a = 0.05
 
     for i in range(n):
         dur = durations[i]
 
-        # Video: fade out at end (except last), fade in at start (except first)
         vf = []
         if i > 0:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
@@ -134,7 +146,6 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
         filters.append(f"[{i}:v]{','.join(vf) if vf else 'null'}[fv{i}]")
 
-        # Audio: 50ms anti-click fade only — narrations play sequentially, no overlap
         af = []
         if i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
@@ -142,12 +153,12 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
         filters.append(f"[{i}:a]{','.join(af) if af else 'anull'}[fa{i}]")
 
-    # Concat — durations preserved exactly, video and audio stay in sync
     v_in = "".join(f"[fv{i}]" for i in range(n))
     a_in = "".join(f"[fa{i}]" for i in range(n))
     filters.append(f"{v_in}concat=n={n}:v=1:a=0[vout]")
     filters.append(f"{a_in}concat=n={n}:v=0:a=1[aout]")
 
+    # Allow up to 30 min for full re-encode of many scenes
     _run([
         "ffmpeg", "-y",
         *inputs,
@@ -157,7 +168,7 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
         "-c:a", "aac", "-b:a", "192k",
         str(output_path),
-    ])
+    ], timeout=1800)
     return output_path
 
 
@@ -170,7 +181,7 @@ def upscale_video(input_path: Path, output_path: Path, scale: int = 2) -> Path:
         "-c:v", "libx264", "-crf", "16", "-preset", "slow",
         "-c:a", "copy",
         str(output_path),
-    ])
+    ], timeout=3600)
     return output_path
 
 
@@ -184,6 +195,11 @@ def mix_background_music(
     ambient_volume: float = 0.0,
 ) -> Path:
     """Mix narration voice, background music, and optional LTX ambient audio."""
+    video_dur = _get_duration(video_path)
+    music_dur = _get_duration(music_path)
+    logger.info("[ffmpeg] mix_background_music: video=%.1fs music=%.1fs voice_vol=%.2f music_vol=%.2f",
+                video_dur, music_dur, voice_volume, volume)
+
     use_ambient = ambient_path and Path(ambient_path).exists() and ambient_volume > 0
     if use_ambient:
         filter_str = (
