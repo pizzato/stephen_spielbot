@@ -76,7 +76,7 @@ DEFAULT_CFG = {
     "voice_vol": 100,
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
-    "max_clip_secs": 12,
+    "max_clip_secs": 20,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
     # set lora_strength=0 + steps=20-30 + cfg=3-5 for pure dev model mode.
@@ -1160,7 +1160,7 @@ def build_ui() -> gr.Blocks:
                 )
                 with gr.Row():
                     cfg_max_clip = gr.Slider(
-                        3, 12, value=cfg.get("max_clip_secs", 12), step=1,
+                        3, 20, value=cfg.get("max_clip_secs", 20), step=1,
                         label="Max Clip Duration (s)  —  shorter = faster per segment",
                     )
                     cfg_lora = gr.Slider(

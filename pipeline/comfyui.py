@@ -21,7 +21,7 @@ DEFAULT_WIDTH  = 832
 DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
 DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
-MAX_LENGTH     = LTX_FPS * 12 + 1  # 301 frames ≈ 12 seconds
+MAX_LENGTH     = LTX_FPS * 20 + 1  # 501 frames ≈ 20 seconds
 
 # First-pass sigma schedules.
 # The 8-step schedule is the distilled LoRA preset (trained specifically for these values).
