@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the Gradio app and ComfyUI on all workers.
+# Stop the Gradio app, worker agents, and ComfyUI on all workers.
 # Usage: bash scripts/stop.sh [cluster.conf]
 set -euo pipefail
 
@@ -37,7 +37,57 @@ else
     fi
 fi
 
-# ── 2. Local ComfyUI ──────────────────────────────────────────────────────────
+# ── 2. Local worker agent ─────────────────────────────────────────────────────
+
+echo "=== Stopping local worker agent ==="
+LOCAL_AGENT_PID="/tmp/worker_agent_local.pid"
+if [[ -f "$LOCAL_AGENT_PID" ]]; then
+    PID="$(cat "$LOCAL_AGENT_PID")"
+    if kill -0 "$PID" 2>/dev/null; then
+        kill "$PID"
+        echo "  [agent:local] stopped (PID $PID)"
+    else
+        echo "  [agent:local] not running (stale PID)"
+    fi
+    rm -f "$LOCAL_AGENT_PID"
+else
+    PIDS=$(pgrep -f "python.*worker_agent" 2>/dev/null || true)
+    if [[ -n "$PIDS" ]]; then
+        kill $PIDS
+        echo "  [agent:local] stopped (PID $PIDS)"
+    else
+        echo "  [agent:local] not running"
+    fi
+fi
+
+# ── 3. Remote worker agents ────────────────────────────────────────────────────
+
+for host in $(remote_hosts); do
+    echo "=== Stopping worker agent ($host) ==="
+    ssh "$host" bash <<REMOTE 2>/dev/null || true
+AGENT_PID_FILE="/tmp/worker_agent_${host}.pid"
+if [[ -f "\$AGENT_PID_FILE" ]]; then
+    PID="\$(cat "\$AGENT_PID_FILE")"
+    if kill -0 "\$PID" 2>/dev/null; then
+        kill "\$PID"
+        echo "  [agent:$host] stopped (PID \$PID)"
+    else
+        echo "  [agent:$host] not running (stale PID)"
+    fi
+    rm -f "\$AGENT_PID_FILE"
+else
+    PIDS=\$(pgrep -f "python.*worker_agent" 2>/dev/null || true)
+    if [[ -n "\$PIDS" ]]; then
+        kill \$PIDS
+        echo "  [agent:$host] stopped"
+    else
+        echo "  [agent:$host] not running"
+    fi
+fi
+REMOTE
+done
+
+# ── 4. Local ComfyUI ──────────────────────────────────────────────────────────
 
 echo "=== Stopping ComfyUI (local) ==="
 

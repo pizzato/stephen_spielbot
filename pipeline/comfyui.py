@@ -1,8 +1,10 @@
 """ComfyUI API client for video and music generation."""
 
+import base64
 import json
 import random
 import shutil
+import tempfile
 import time
 import urllib.request
 import urllib.error
@@ -382,3 +384,148 @@ def generate_music(
 
     audio_item = outputs[0]
     return _download_output(audio_item, output_path, comfy_url=comfy_url)
+
+
+# ── Public download helper (used by app.py after receiving MQTT results) ────────
+
+def download_output(item: dict, dest: Path, comfy_url: str | None = None) -> Path:
+    """Download a ComfyUI output item. comfy_url can be embedded in item or passed explicitly."""
+    url = comfy_url or item.get("comfy_url", COMFYUI_URL)
+    return _download_output(item, dest, comfy_url=url)
+
+
+# ── Worker-side helpers: submit workflow, return output metadata (no download) ──
+# Used by pipeline/worker_agent.py so large files stay on the worker's ComfyUI
+# and the Mac downloads them via HTTP after receiving the metadata in the result.
+
+def _submit_and_get_item(
+    workflow: dict, timeout: int, comfy_url: str,
+    output_type: str = "output",
+) -> dict:
+    """Queue workflow, wait for completion, return first matching output item + comfy_url."""
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=timeout, comfy_url=comfy_url)
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No outputs from ComfyUI for prompt {prompt_id} ({comfy_url})")
+    item = dict(next((o for o in outputs if o.get("type") == output_type), outputs[0]))
+    item["comfy_url"] = comfy_url
+    return item
+
+
+def generate_video_clip_metadata(
+    positive_prompt: str,
+    negative_prompt: str,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    length: int = DEFAULT_LENGTH,
+    seed: int | None = None,
+    lora_strength: float = 0.5,
+    first_pass_cfg: float = 1.0,
+    first_pass_steps: int = 8,
+    second_pass_cfg: float = 1.0,
+    second_pass_steps: int = 6,
+    comfy_url: str = COMFYUI_URL,
+) -> dict:
+    """Submit T2V workflow; return ComfyUI output metadata instead of downloading."""
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    half_w = width // 2
+    half_h = height // 2
+
+    workflow = _load_workflow("ltx23_t2v.json")
+    workflow = _fill_template(workflow, {
+        "POSITIVE_PROMPT":   positive_prompt,
+        "NEGATIVE_PROMPT":   negative_prompt,
+        "WIDTH":             width,
+        "HEIGHT":            height,
+        "HALF_WIDTH":        half_w,
+        "HALF_HEIGHT":       half_h,
+        "LENGTH":            length,
+        "SEED":              seed,
+        "FIRST_PASS_CFG":    first_pass_cfg,
+        "FIRST_PASS_SIGMAS": _gen_first_pass_sigmas(first_pass_steps),
+    })
+    workflow["3"]["inputs"]["strength_model"] = lora_strength
+    _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
+
+    return _submit_and_get_item(workflow, timeout=900, comfy_url=comfy_url)
+
+
+def generate_video_continuation_metadata(
+    positive_prompt: str,
+    negative_prompt: str,
+    last_frame_b64: str,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    length: int = DEFAULT_LENGTH,
+    seed: int | None = None,
+    lora_strength: float = 0.5,
+    first_pass_cfg: float = 1.0,
+    first_pass_steps: int = 8,
+    second_pass_cfg: float = 1.0,
+    second_pass_steps: int = 6,
+    comfy_url: str = COMFYUI_URL,
+) -> dict:
+    """Submit I2V workflow from a base64-encoded last frame; return ComfyUI output metadata."""
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    half_w = width // 2
+    half_h = height // 2
+
+    with tempfile.NamedTemporaryFile(suffix=".jpg", delete=False) as f:
+        tmp = Path(f.name)
+    try:
+        tmp.write_bytes(base64.b64decode(last_frame_b64))
+        image_name = _upload_image(tmp, comfy_url=comfy_url)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+    workflow = _load_workflow("ltx23_i2v.json")
+    workflow = _fill_template(workflow, {
+        "POSITIVE_PROMPT":   positive_prompt,
+        "NEGATIVE_PROMPT":   negative_prompt,
+        "WIDTH":             width,
+        "HEIGHT":            height,
+        "HALF_WIDTH":        half_w,
+        "HALF_HEIGHT":       half_h,
+        "LENGTH":            length,
+        "SEED":              seed,
+        "IMAGE_NAME":        image_name,
+        "FIRST_PASS_CFG":    first_pass_cfg,
+        "FIRST_PASS_SIGMAS": _gen_first_pass_sigmas(first_pass_steps),
+    })
+    workflow["3"]["inputs"]["strength_model"] = lora_strength
+    _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
+
+    return _submit_and_get_item(workflow, timeout=900, comfy_url=comfy_url)
+
+
+def generate_music_metadata(
+    topic: str,
+    duration_seconds: float,
+    tags: str | None = None,
+    seed: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> dict:
+    """Submit ACE-Step music workflow; return ComfyUI output metadata instead of downloading."""
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    if tags is None:
+        tags = (
+            f"ambient documentary background music, {topic}, "
+            "cinematic, atmospheric, instrumental, orchestral, peaceful"
+        )
+
+    workflow = _load_workflow("ace_music.json")
+    workflow = _fill_template(workflow, {
+        "TAGS":     tags,
+        "DURATION": round(duration_seconds, 1),
+        "SEED":     seed,
+    })
+
+    return _submit_and_get_item(workflow, timeout=600, comfy_url=comfy_url)

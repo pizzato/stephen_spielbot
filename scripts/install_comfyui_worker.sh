@@ -70,6 +70,7 @@ source "$VENV/bin/activate"
 echo "[pip] installing ComfyUI dependencies..."
 cd "$HOME/github/ComfyUI"
 pip install --quiet -r requirements.txt
+pip install --quiet "paho-mqtt>=2.0"
 
 if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
     echo "[pip] installing PyTorch..."
@@ -90,6 +91,7 @@ MODEL_DIRS=(
     "models/text_encoders"
     "models/upscale_models"
     "models/vae"
+    "models/diffusion_models"
 )
 
 for dir in "${MODEL_DIRS[@]}"; do

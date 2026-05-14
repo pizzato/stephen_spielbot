@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Gradio web interface for the AI video generator."""
 
+import base64
 import concurrent.futures
 import json
 import logging
@@ -40,16 +41,16 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import generate_script, Scene, NEGATIVE_PROMPT
 from pipeline.comfyui import (
-    generate_video_clip, generate_video_continuation, generate_music, COMFYUI_URL,
+    download_output, LTX_FPS, MAX_LENGTH,
 )
 from pipeline.assembler import (
     _get_duration, concat_clips, mux_video_audio, extract_last_frame,
     extract_audio, concat_audio, concatenate_scenes, mix_background_music,
 )
-from pipeline.worker_pool import WorkerPool, alive_workers
+from pipeline.mqtt_jobs import MQTTJobClient
 
 MAX_SCENES    = 12
-MAX_CLIP_SECS = 12.0  # LTX 2.3 hard limit (~301 frames at 25fps)
+MAX_CLIP_SECS = 20.0  # LTX 2.3 supports up to 20s clips
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
 CONFIG_FILE  = Path.home() / ".config" / "video-generator" / "config.json"
@@ -91,53 +92,44 @@ DEFAULT_CFG = {
     "claude_api_key": "",
     "claude_model": "claude-sonnet-4-6",
     "voices": [],
-    # ComfyUI worker URLs — one per line in the config UI.
-    # Each worker handles one video generation job at a time.
-    "comfy_workers": ["http://localhost:8188"],
-    "tts_workers":   ["localhost"],
+    "mqtt_broker": "localhost",
+    "mqtt_port":   1883,
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
 
 CLUSTER_CONF = Path(__file__).parent / "cluster.conf"
-COMFYUI_PORT = 8188
 
 # Thread pool for long blocking operations — keeps SSE alive via heartbeat yields
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
+# Shared MQTT client — created lazily on first use
+_mqtt_client: MQTTJobClient | None = None
+_mqtt_lock = __import__("threading").Lock()
+
+
+def _get_mqtt_client() -> MQTTJobClient:
+    global _mqtt_client
+    if _mqtt_client is not None:
+        return _mqtt_client
+    with _mqtt_lock:
+        if _mqtt_client is None:
+            cfg = load_config()
+            broker = cfg.get("mqtt_broker", "localhost")
+            port   = int(cfg.get("mqtt_port", 1883))
+            _mqtt_client = MQTTJobClient(broker_host=broker, broker_port=port)
+            logger.info("MQTT client connected to %s:%d", broker, port)
+    return _mqtt_client
+
 
 # ── Config helpers ───────────────────────────────────────────────────────────
 
-def _hosts_from_cluster_conf() -> list[str]:
-    """Return non-comment, non-empty hostnames from cluster.conf."""
-    if not CLUSTER_CONF.exists():
-        return []
-    hosts = []
-    for line in CLUSTER_CONF.read_text().splitlines():
-        line = line.split("#")[0].strip()
-        if line:
-            hosts.append(line)
-    return hosts
-
-
-def _default_workers() -> tuple[list[str], list[str]]:
-    """Derive comfy_workers and tts_workers from cluster.conf, falling back to localhost."""
-    hosts = _hosts_from_cluster_conf()
-    if not hosts:
-        return ["http://localhost:8188"], ["localhost"]
-    comfy = [f"http://{h}:{COMFYUI_PORT}" for h in hosts]
-    return comfy, hosts
-
-
 def load_config() -> dict:
-    cfg = DEFAULT_CFG.copy()
-    # Seed worker defaults from cluster.conf before applying saved overrides
-    comfy, tts = _default_workers()
-    cfg["comfy_workers"] = comfy
-    cfg["tts_workers"]   = tts
     if CONFIG_FILE.exists():
+        cfg = DEFAULT_CFG.copy()
         cfg.update(json.loads(CONFIG_FILE.read_text()))
-    return cfg
+        return cfg
+    return DEFAULT_CFG.copy()
 
 
 def save_config(cfg: dict) -> None:
@@ -220,12 +212,17 @@ def _error_html(msg: str) -> str:
     )
 
 
-# ── TTS wrapper ──────────────────────────────────────────────────────────────
+# ── TTS via MQTT ─────────────────────────────────────────────────────────────
 
-def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -> None:
-    from pipeline.tts_worker import generate_narration
-    ref = Path(voice_ref) if voice_ref and Path(voice_ref).exists() else None
-    generate_narration(text, out, reference_wav=ref, host=host)
+def _tts_mqtt(text: str, out: Path, voice_ref: str | None) -> None:
+    """Submit a TTS job via MQTT, write result WAV to out."""
+    ref_b64: str | None = None
+    if voice_ref and Path(voice_ref).exists():
+        ref_b64 = base64.b64encode(Path(voice_ref).read_bytes()).decode()
+    client = _get_mqtt_client()
+    req_id = client.submit_job("tts", {"text": text, "ref_audio_b64": ref_b64})
+    result = client.await_result(req_id)
+    out.write_bytes(base64.b64decode(result["wav_b64"]))
 
 
 # ── Script generation ────────────────────────────────────────────────────────
@@ -288,49 +285,45 @@ def _generate_scene_video(
     first_pass_steps: int,
     second_pass_cfg: float,
     second_pass_steps: int,
-    comfy_url: str,
 ) -> tuple[Path, Path | None]:
-    """Generate all video clips for a scene, return (raw_video, ambient_wav).
-    Raw video retains the original LTX audio. Narration is muxed later at assembly.
+    """Generate all video clips for a scene via MQTT workers. Returns (raw_video, ambient_wav).
     Runs entirely in a background thread — no yields."""
     clips: list[Path] = []
     ambient_clips: list[Path] = []
-    last_frame: Path | None = None
+    last_frame_b64: str | None = None
     remaining = narration_dur
     seg_idx = 0
+    client = _get_mqtt_client()
 
     while remaining > 0.5:
         clip_dur  = min(remaining, max_clip_secs)
+        length    = min(int(clip_dur * LTX_FPS) + 1, MAX_LENGTH)
         clip_path = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}.mp4"
 
-        if last_frame is None:
-            generate_video_clip(
-                scene.visual_prompt, scene.negative_prompt, clip_path,
-                width=vid_width, height=vid_height,
-                duration_seconds=clip_dur,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
-                comfy_url=comfy_url,
-            )
+        base_payload: dict = {
+            "positive_prompt":   scene.visual_prompt,
+            "negative_prompt":   scene.negative_prompt,
+            "width":             vid_width,
+            "height":            vid_height,
+            "length":            length,
+            "lora_strength":     lora_strength,
+            "first_pass_cfg":    first_pass_cfg,
+            "first_pass_steps":  first_pass_steps,
+            "second_pass_cfg":   second_pass_cfg,
+            "second_pass_steps": second_pass_steps,
+        }
+
+        if last_frame_b64 is None:
+            req_id = client.submit_job("video_t2v", base_payload)
         else:
-            generate_video_continuation(
-                scene.visual_prompt, scene.negative_prompt, last_frame, clip_path,
-                width=vid_width, height=vid_height,
-                duration_seconds=clip_dur,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
-                comfy_url=comfy_url,
-            )
+            req_id = client.submit_job("video_i2v", {**base_payload, "last_frame_b64": last_frame_b64})
+
+        item = client.await_result(req_id)
+        download_output(item, clip_path)
 
         actual_dur = _get_duration(clip_path)
-        logger.info("  [%s] scene %d seg %d: %.1fs (%.1f MB)",
-                    comfy_url, scene.id, seg_idx + 1, actual_dur,
+        logger.info("  [mqtt] scene %d seg %d: %.1fs (%.1f MB)",
+                    scene.id, seg_idx + 1, actual_dur,
                     clip_path.stat().st_size / 1024 / 1024)
         clips.append(clip_path)
 
@@ -345,6 +338,7 @@ def _generate_scene_video(
         if remaining > 0.5:
             last_frame = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}_last.jpg"
             extract_last_frame(clip_path, last_frame)
+            last_frame_b64 = base64.b64encode(last_frame.read_bytes()).decode()
 
         seg_idx += 1
 
@@ -392,9 +386,6 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     first_pass_steps  = int(cfg.get("first_pass_steps", 8))
     second_pass_cfg   = float(cfg.get("second_pass_cfg", 3.0))
     second_pass_steps = int(cfg.get("second_pass_steps", 6))
-    worker_urls       = alive_workers(cfg.get("comfy_workers", [COMFYUI_URL]))
-    worker_pool       = WorkerPool(worker_urls)
-    logger.info("Workers: %s", worker_urls)
     # resolution from Create tab overrides config default
     vid_width, vid_height = _RESOLUTIONS.get(
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (832, 480)
@@ -469,36 +460,24 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     try:
         yield emit("Starting…", 0)
 
-        # ── Narrations (0–20%) — parallel across TTS workers ────────────────
+        # ── Narrations (0–20%) — parallel MQTT TTS jobs ─────────────────────
         narration_paths: dict[int, Path] = {}
         narration_durs:  dict[int, float] = {}
 
-        tts_hosts = cfg.get("tts_workers", ["localhost"])
-        if not tts_hosts:
-            tts_hosts = ["localhost"]
-
-        def _tts_scene(scene: Scene, primary_host: str) -> tuple[int, Path]:
+        def _tts_scene(scene: Scene) -> tuple[int, Path]:
             out = work_dir / f"scene_{scene.id:02d}_narration.wav"
             if out.exists() and out.stat().st_size > 1000:
                 logger.info("Scene %d narration already exists (%d KB), skipping TTS",
                             scene.id, out.stat().st_size // 1024)
                 return scene.id, out
-            hosts_to_try = [primary_host] + [h for h in tts_hosts if h != primary_host]
-            last_err: Exception | None = None
-            for host in hosts_to_try:
-                try:
-                    _tts(scene.narration, out, voice_ref, host=host)
-                    return scene.id, out
-                except Exception as e:
-                    logger.warning("TTS failed on %s for scene %d, trying next: %s", host, scene.id, e)
-                    last_err = e
-            raise RuntimeError(f"TTS failed on all hosts for scene {scene.id}: {last_err}")
+            _tts_mqtt(scene.narration, out, voice_ref)
+            return scene.id, out
 
-        yield emit(f"Generating {n} narration(s) across {len(tts_hosts)} TTS worker(s)…", 0)
+        yield emit(f"Generating {n} narration(s) via MQTT workers…", 0)
         tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
         tts_pending: dict[concurrent.futures.Future, Scene] = {
-            tts_pool.submit(_tts_scene, scene, tts_hosts[i % len(tts_hosts)]): scene
-            for i, scene in enumerate(scenes)
+            tts_pool.submit(_tts_scene, scene): scene
+            for scene in scenes
         }
         tts_done_count = 0
         try:
@@ -532,7 +511,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         logger.info("All narrations done — %.1fs total, %d video segment(s) to generate", total_dur, total_clips)
         yield emit(f"Narrations done — {total_dur:.0f}s, generating video…", 20)
 
-        # ── Background music (20–35%) ────────────────────────────────────────
+        # ── Background music (20–35%) via MQTT ──────────────────────────────
         music_dur  = max(total_dur * 1.05, 30.0)
         music_path = work_dir / "background_music.wav"
         if music_path.exists() and music_path.stat().st_size > 10_000:
@@ -541,25 +520,30 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         else:
             label = f"Background music ({music_dur:.0f}s)"
             yield emit(f"Generating {label}…", 20)
-            music_url = worker_pool.acquire()
+
+            def _gen_music():
+                mc = _get_mqtt_client()
+                req_id = mc.submit_job("music", {
+                    "topic":            title,
+                    "duration_seconds": music_dur,
+                    "tags":             music_desc or None,
+                })
+                item = mc.await_result(req_id)
+                download_output(item, music_path)
+
             try:
-                yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
+                yield from _run_bg(label, _gen_music, pct=22)
             except Exception:
                 logger.exception("Music generation failed")
-                worker_pool.release(music_url)
                 raise
-            worker_pool.release(music_url)
             logger.info("Music ready: %s (%.1f MB)", music_path.name,
                         music_path.stat().st_size / 1024 / 1024)
         music_upd = gr.update(value=str(music_path), visible=True)
         yield emit("Music ready.", 35)
 
-        # ── Video generation (35–90%) — parallel across workers ─────────────────
+        # ── Video generation (35–90%) — parallel MQTT jobs ───────────────────
         scene_raws_map: dict[int, Path] = {}
         scene_ambient_map: dict[int, Path | None] = {}
-
-        _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
-                                "ConnectionRefused", "RemoteDisconnected")
 
         def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
             existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
@@ -567,45 +551,17 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 logger.info("Scene %d video already exists (%d KB), skipping",
                             scene.id, existing.stat().st_size // 1024)
                 return scene.id, existing, None
-            last_err: Exception | None = None
-            while True:
-                if not worker_pool.has_healthy():
-                    raise RuntimeError(
-                        f"All workers failed — last error: {last_err}"
-                    )
-                url = worker_pool.acquire()
-                try:
-                    logger.info("Scene %d starting on %s", scene.id, url)
-                    sf, sa = _generate_scene_video(
-                        scene, work_dir,
-                        narration_durs[scene.id],
-                        vid_width, vid_height, max_clip_secs,
-                        lora_strength, first_pass_cfg, first_pass_steps,
-                        second_pass_cfg, second_pass_steps,
-                        comfy_url=url,
-                    )
-                    return scene.id, sf, sa
-                except Exception as e:
-                    if any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS):
-                        logger.warning(
-                            "Worker %s failed for scene %d, retrying on another worker: %s",
-                            url, scene.id, e,
-                        )
-                        worker_pool.mark_failed(url)
-                        last_err = e
-                        # mark_failed deleted the semaphore; finally release() is a no-op
-                    else:
-                        raise
-                finally:
-                    # Releases on success and non-worker errors.
-                    # No-op after mark_failed (semaphore already deleted).
-                    worker_pool.release(url)
+            logger.info("Scene %d: submitting to MQTT workers", scene.id)
+            sf, sa = _generate_scene_video(
+                scene, work_dir,
+                narration_durs[scene.id],
+                vid_width, vid_height, max_clip_secs,
+                lora_strength, first_pass_cfg, first_pass_steps,
+                second_pass_cfg, second_pass_steps,
+            )
+            return scene.id, sf, sa
 
-        n_workers = len(worker_pool.urls)
-        yield emit(
-            f"Generating {n} scene(s) across {n_workers} worker(s): {', '.join(worker_pool.urls)}…",
-            35,
-        )
+        yield emit(f"Generating {n} scene(s) via MQTT workers…", 35)
 
         scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
         pending: dict[concurrent.futures.Future, Scene] = {
@@ -928,10 +884,11 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    resolution: str, max_clip_secs: float, lora_strength: float,
                    first_pass_cfg: float, first_pass_steps: int,
                    second_pass_cfg: float, second_pass_steps: int,
-                   workers_text: str, tts_workers_text: str,
+                   mqtt_broker: str, mqtt_port: float,
                    llm_backend: str,
                    local_llm_url: str, local_llm_model: str,
                    claude_api_key: str, claude_model: str):
+    global _mqtt_client
     cfg = load_config()
     cfg["music_vol"]          = int(music_vol)
     cfg["voice_vol"]          = int(voice_vol)
@@ -943,19 +900,25 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["first_pass_steps"]   = int(first_pass_steps)
     cfg["second_pass_cfg"]    = float(second_pass_cfg)
     cfg["second_pass_steps"]  = int(second_pass_steps)
-    workers = [u.strip() for u in workers_text.splitlines() if u.strip()]
-    cfg["comfy_workers"]      = workers or ["http://localhost:8188"]
-    tts_workers = [h.strip() for h in tts_workers_text.splitlines() if h.strip()]
-    cfg["tts_workers"]        = tts_workers or ["localhost"]
+    cfg["mqtt_broker"]        = mqtt_broker.strip() or "localhost"
+    cfg["mqtt_port"]          = int(mqtt_port)
     cfg["llm_backend"]        = llm_backend
     cfg["local_llm_url"]      = local_llm_url.strip() or "http://localhost:8000/v1/chat/completions"
     cfg["local_llm_model"]    = local_llm_model.strip() or "openai/gpt-oss-120b"
     cfg["claude_api_key"]     = claude_api_key.strip()
     cfg["claude_model"]       = claude_model.strip() or "claude-sonnet-4-6"
     save_config(cfg)
-    logger.info("Config saved: lora=%.2f workers=%s tts=%s",
-                lora_strength, cfg["comfy_workers"], cfg["tts_workers"])
-    return f"Settings saved ✓  ({len(cfg['comfy_workers'])} video, {len(cfg['tts_workers'])} TTS worker(s))"
+    # Reset cached MQTT client so next use reconnects with new settings
+    with _mqtt_lock:
+        if _mqtt_client is not None:
+            try:
+                _mqtt_client.close()
+            except Exception:
+                pass
+        _mqtt_client = None
+    logger.info("Config saved: mqtt=%s:%d lora=%.2f",
+                cfg["mqtt_broker"], cfg["mqtt_port"], lora_strength)
+    return f"Settings saved ✓  (MQTT broker: {cfg['mqtt_broker']}:{cfg['mqtt_port']})"
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -1195,29 +1158,22 @@ def build_ui() -> gr.Blocks:
                         label="Refinement Steps  —  3 = fast, 6 = balanced, 8 = best",
                     )
 
-                gr.Markdown("### ComfyUI Workers")
+                gr.Markdown("### MQTT Broker")
                 gr.Markdown(
-                    "One URL per line. Each worker handles one video generation job at a time. "
-                    "Scenes are distributed across all online workers in parallel. "
-                    "Run `bash scripts/install_comfyui_worker.sh <hostname>` to provision a new worker."
+                    "Workers subscribe via MQTT. The broker runs on this Mac (`make start` starts it). "
+                    "Add workers to `cluster.conf` and run `make install` to deploy and register them."
                 )
-                cfg_workers = gr.Textbox(
-                    label="ComfyUI Worker URLs (one per line)",
-                    value="\n".join(cfg.get("comfy_workers", ["http://localhost:8188"])),
-                    lines=5,
-                    placeholder="http://localhost:8188\nhttp://s1:8188\nhttp://s2:8188",
-                )
-                gr.Markdown("### TTS Workers")
-                gr.Markdown(
-                    "Hostnames for parallel narration generation. "
-                    "Each host must have F5-TTS installed in `~/f5tts-env`."
-                )
-                cfg_tts_workers = gr.Textbox(
-                    label="TTS Hosts (one per line)",
-                    value="\n".join(cfg.get("tts_workers", ["localhost"])),
-                    lines=4,
-                    placeholder="localhost\ns1\ns2",
-                )
+                with gr.Row():
+                    cfg_mqtt_broker = gr.Textbox(
+                        label="MQTT Broker Host",
+                        value=cfg.get("mqtt_broker", "localhost"),
+                        placeholder="localhost or Mac LAN IP",
+                    )
+                    cfg_mqtt_port = gr.Number(
+                        label="MQTT Port",
+                        value=cfg.get("mqtt_port", 1883),
+                        precision=0,
+                    )
 
                 gr.Markdown("### LLM Backend")
                 cfg_llm_backend = gr.Radio(
@@ -1392,7 +1348,7 @@ def build_ui() -> gr.Blocks:
                     cfg_resolution, cfg_max_clip, cfg_lora,
                     cfg_first_pass_cfg, cfg_first_pass_steps,
                     cfg_second_pass_cfg, cfg_second_pass_steps,
-                    cfg_workers, cfg_tts_workers,
+                    cfg_mqtt_broker, cfg_mqtt_port,
                     cfg_llm_backend,
                     cfg_local_llm_url, cfg_local_llm_model,
                     cfg_claude_key, cfg_claude_model],
