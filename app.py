@@ -419,9 +419,26 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
     stamp    = datetime.now().strftime("%Y%m%d-%H%M%S")
     slug     = slugify(title)
-    work_dir = OUTPUT_DIR / f"{slug}-{stamp}"
-    work_dir.mkdir(parents=True)
-    logger.info("Work dir: %s | CWD: %s", work_dir, os.getcwd())
+
+    # Resume an existing incomplete work_dir for this slug (within last 48h)
+    work_dir: Path | None = None
+    cutoff = time.time() - 48 * 3600
+    for candidate in sorted(OUTPUT_DIR.glob(f"{slug}-*"), reverse=True):
+        if not candidate.is_dir() or not (candidate / "script.json").exists():
+            continue
+        if candidate.stat().st_mtime < cutoff:
+            break
+        final_candidate = OUTPUT_DIR / f"{candidate.name}.mp4"
+        if not final_candidate.exists():
+            work_dir = candidate
+            stamp = candidate.name[len(slug) + 1:]
+            logger.info("Resuming from existing work dir: %s", work_dir)
+            break
+
+    if work_dir is None:
+        work_dir = OUTPUT_DIR / f"{slug}-{stamp}"
+        work_dir.mkdir(parents=True)
+        logger.info("Work dir: %s | CWD: %s", work_dir, os.getcwd())
 
     (work_dir / "script.json").write_text(
         json.dumps([{"id": s.id, "title": s.title,
@@ -462,6 +479,10 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
         def _tts_scene(scene: Scene, primary_host: str) -> tuple[int, Path]:
             out = work_dir / f"scene_{scene.id:02d}_narration.wav"
+            if out.exists() and out.stat().st_size > 1000:
+                logger.info("Scene %d narration already exists (%d KB), skipping TTS",
+                            scene.id, out.stat().st_size // 1024)
+                return scene.id, out
             hosts_to_try = [primary_host] + [h for h in tts_hosts if h != primary_host]
             last_err: Exception | None = None
             for host in hosts_to_try:
@@ -514,18 +535,22 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         # ── Background music (20–35%) ────────────────────────────────────────
         music_dur  = max(total_dur * 1.05, 30.0)
         music_path = work_dir / "background_music.wav"
-        label = f"Background music ({music_dur:.0f}s)"
-        yield emit(f"Generating {label}…", 20)
-        music_url = worker_pool.acquire()
-        try:
-            yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
-        except Exception:
-            logger.exception("Music generation failed")
+        if music_path.exists() and music_path.stat().st_size > 10_000:
+            logger.info("Music already exists (%.1f MB), skipping generation",
+                        music_path.stat().st_size / 1024 / 1024)
+        else:
+            label = f"Background music ({music_dur:.0f}s)"
+            yield emit(f"Generating {label}…", 20)
+            music_url = worker_pool.acquire()
+            try:
+                yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
+            except Exception:
+                logger.exception("Music generation failed")
+                worker_pool.release(music_url)
+                raise
             worker_pool.release(music_url)
-            raise
-        worker_pool.release(music_url)
-        logger.info("Music ready: %s (%.1f MB)", music_path.name,
-                    music_path.stat().st_size / 1024 / 1024)
+            logger.info("Music ready: %s (%.1f MB)", music_path.name,
+                        music_path.stat().st_size / 1024 / 1024)
         music_upd = gr.update(value=str(music_path), visible=True)
         yield emit("Music ready.", 35)
 
@@ -537,6 +562,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                                 "ConnectionRefused", "RemoteDisconnected")
 
         def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
+            existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
+            if existing.exists() and existing.stat().st_size > 10_000:
+                logger.info("Scene %d video already exists (%d KB), skipping",
+                            scene.id, existing.stat().st_size // 1024)
+                return scene.id, existing, None
             last_err: Exception | None = None
             while True:
                 if not worker_pool.has_healthy():
@@ -624,7 +654,10 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         for s in scenes:
             raw = scene_raws_map[s.id]
             scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
-            mux_video_audio(raw, narration_paths[s.id], scene_final)
+            if scene_final.exists() and scene_final.stat().st_size > 10_000:
+                logger.info("Scene %d muxed final already exists, skipping", s.id)
+            else:
+                mux_video_audio(raw, narration_paths[s.id], scene_final)
             scene_finals.append(scene_final)
 
         scene_ambient_wavs = [scene_ambient_map[s.id] for s in scenes if scene_ambient_map.get(s.id)]
