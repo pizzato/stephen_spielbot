@@ -14,19 +14,32 @@ logger = logging.getLogger("video_gen")
 _FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "600"))
 
 
-def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT) -> None:
+def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT, max_retries: int = 2) -> None:
     label = f"ffmpeg {' '.join(str(a) for a in cmd[1:4])}…"
-    logger.debug("[ffmpeg] start: %s", label)
-    t0 = time.monotonic()
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
+    last_err: Exception | None = None
+    for attempt in range(1, max_retries + 1):
+        logger.debug("[ffmpeg] attempt %d/%d: %s", attempt, max_retries, label)
+        t0 = time.monotonic()
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - t0
+            last_err = RuntimeError(f"ffmpeg timed out after {elapsed:.0f}s: {label}")
+            logger.warning("[ffmpeg] %s (attempt %d/%d)", last_err, attempt, max_retries)
+            if attempt < max_retries:
+                time.sleep(3 * attempt)
+                continue
+            raise last_err
         elapsed = time.monotonic() - t0
-        raise RuntimeError(f"ffmpeg timed out after {elapsed:.0f}s: {label}")
-    elapsed = time.monotonic() - t0
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg failed ({elapsed:.1f}s):\n{result.stderr[-2000:]}")
-    logger.debug("[ffmpeg] done: %s (%.1fs)", label, elapsed)
+        if result.returncode != 0:
+            last_err = RuntimeError(f"ffmpeg failed ({elapsed:.1f}s):\n{result.stderr[-2000:]}")
+            logger.warning("[ffmpeg] failed (attempt %d/%d): %s", attempt, max_retries, str(last_err)[:300])
+            if attempt < max_retries:
+                time.sleep(3 * attempt)
+                continue
+            raise last_err
+        logger.debug("[ffmpeg] done: %s (%.1fs)", label, elapsed)
+        return
 
 
 def _get_duration(path: Path) -> float:
@@ -217,14 +230,18 @@ def mix_background_music(
         )
         inputs = ["-i", str(video_path), "-i", str(music_path)]
 
-    _run([
-        "ffmpeg", "-y",
-        *inputs,
-        "-filter_complex", filter_str,
-        "-map", "0:v",
-        "-map", "[aout]",
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        str(output_path),
-    ])
+    try:
+        _run([
+            "ffmpeg", "-y",
+            *inputs,
+            "-filter_complex", filter_str,
+            "-map", "0:v",
+            "-map", "[aout]",
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            str(output_path),
+        ])
+    except Exception as e:
+        logger.warning("[ffmpeg] mix_background_music failed after retries: %s — copying video without music", e)
+        shutil.copy2(video_path, output_path)
     return output_path
