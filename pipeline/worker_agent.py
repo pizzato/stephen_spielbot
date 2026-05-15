@@ -51,6 +51,16 @@ _DEFAULT_REF_WAV = _ASSETS_DIR / "default_narrator.wav"
 def _find_f5tts_python() -> str:
     if "F5TTS_PYTHON" in os.environ:
         return os.environ["F5TTS_PYTHON"]
+    # Check standalone venv first (e.g. ~/f5tts-env)
+    for venv in [
+        Path.home() / "f5tts-env",
+        Path.home() / "f5-tts-env",
+        Path.home() / "f5tts",
+    ]:
+        candidate = venv / "bin" / "python"
+        if candidate.exists():
+            return str(candidate)
+    # Check conda-style envs
     for base in [
         Path.home() / "opt" / "anaconda3",
         Path.home() / "opt" / "miniconda3",
@@ -63,7 +73,7 @@ def _find_f5tts_python() -> str:
         candidate = base / "envs" / "f5tts" / "bin" / "python"
         if candidate.exists():
             return str(candidate)
-    return str(Path.home() / "miniconda3" / "envs" / "f5tts" / "bin" / "python")
+    return str(Path.home() / "f5tts-env" / "bin" / "python")
 
 
 _F5TTS_PYTHON = _find_f5tts_python()
@@ -148,6 +158,13 @@ class WorkerAgent:
 
     # ── Job implementations ────────────────────────────────────────────────────
 
+    def _fix_comfy_url(self, item: dict) -> dict:
+        """Replace localhost in comfy_url with worker_id so Mac can download files."""
+        if "comfy_url" in item and "localhost" in item["comfy_url"]:
+            item = dict(item)
+            item["comfy_url"] = item["comfy_url"].replace("localhost", self._worker_id)
+        return item
+
     def _run_video_t2v(self, payload: dict) -> dict:
         sys.path.insert(0, str(_HERE.parent))
         from pipeline.comfyui import generate_video_clip_metadata
@@ -165,7 +182,7 @@ class WorkerAgent:
             second_pass_steps= payload.get("second_pass_steps", 6),
             comfy_url        = self._comfy_url,
         )
-        return item
+        return self._fix_comfy_url(item)
 
     def _run_video_i2v(self, payload: dict) -> dict:
         sys.path.insert(0, str(_HERE.parent))
@@ -185,7 +202,7 @@ class WorkerAgent:
             second_pass_steps= payload.get("second_pass_steps", 6),
             comfy_url        = self._comfy_url,
         )
-        return item
+        return self._fix_comfy_url(item)
 
     def _run_tts(self, payload: dict) -> dict:
         text         = payload["text"]
@@ -238,7 +255,7 @@ class WorkerAgent:
             seed             = payload.get("seed"),
             comfy_url        = self._comfy_url,
         )
-        return item
+        return self._fix_comfy_url(item)
 
     # ── MQTT publish helpers ───────────────────────────────────────────────────
 
