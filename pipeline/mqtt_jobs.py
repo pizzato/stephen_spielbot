@@ -32,6 +32,7 @@ _COMPLETION_TIMEOUTS: dict[str, int] = {
 }
 _MAX_ATTEMPTS = 3
 _CHECKER_INTERVAL = 30  # seconds between timeout sweeps
+_CLAIM_TIMEOUT = 60     # re-publish if not claimed within this many seconds
 
 
 class MQTTJobClient:
@@ -170,7 +171,33 @@ class MQTTJobClient:
 
                     claimed_at = req.get("claimed_at")
                     if claimed_at is None:
-                        continue  # not yet claimed; no completion timeout applies
+                        # Re-publish if no worker claimed the job within _CLAIM_TIMEOUT.
+                        # QoS 1 only delivers to connected subscribers at publish time;
+                        # if all workers were offline, the message is lost.
+                        if now - req["submitted_at"] <= _CLAIM_TIMEOUT:
+                            continue
+                        attempt = req["attempt"] + 1
+                        if attempt > _MAX_ATTEMPTS:
+                            logger.error(
+                                "[mqtt] job %s (type=%s) never claimed after %d attempts — giving up",
+                                req["job_id"], req["job_type"], _MAX_ATTEMPTS,
+                            )
+                            req["result"] = {
+                                "success": False,
+                                "error":   f"never claimed after {_MAX_ATTEMPTS} attempts",
+                            }
+                            req["event"].set()
+                        else:
+                            new_job_id = str(uuid.uuid4())
+                            logger.warning(
+                                "[mqtt] job %s never claimed after %.0fs (attempt %d/%d) — re-queuing as %s",
+                                req["job_id"], now - req["submitted_at"], req["attempt"], _MAX_ATTEMPTS, new_job_id,
+                            )
+                            req["job_id"]      = new_job_id
+                            req["attempt"]     = attempt
+                            req["submitted_at"] = now
+                            self._publish_job(new_job_id, req["job_type"], req["payload"], attempt)
+                        continue
 
                     timeout = _COMPLETION_TIMEOUTS.get(req["job_type"], 1200)
                     if now - claimed_at <= timeout:

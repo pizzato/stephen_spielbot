@@ -680,10 +680,15 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
 
 def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields):
+    logger.info("_auto_generate — auto_approve=%s n_scenes=%s n_scene_fields=%d", auto_approve, n_scenes_val, len(scene_fields))
     if not auto_approve:
         yield (gr.update(),) * _GEN_OUT_COUNT
         return
-    yield from on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields)
+    try:
+        yield from on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields)
+    except Exception:
+        logger.exception("_auto_generate → on_generate CRASHED")
+        raise
 
 
 # ── Session restore ──────────────────────────────────────────────────────────
