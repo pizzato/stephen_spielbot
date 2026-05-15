@@ -541,14 +541,24 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         else:
             label = f"Background music ({music_dur:.0f}s)"
             yield emit(f"Generating {label}…", 20)
-            music_url = worker_pool.acquire()
-            try:
-                yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
-            except Exception:
-                logger.exception("Music generation failed")
-                worker_pool.release(music_url)
-                raise
-            worker_pool.release(music_url)
+            _MAX_MUSIC_ATTEMPTS = 3
+            for _music_attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
+                music_url = worker_pool.acquire()
+                try:
+                    yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
+                    worker_pool.release(music_url)
+                    break
+                except Exception as _music_err:
+                    logger.warning("Music attempt %d/%d failed on %s: %s",
+                                   _music_attempt, _MAX_MUSIC_ATTEMPTS, music_url, _music_err)
+                    if any(kw in str(_music_err) for kw in _WORKER_ERR_KEYWORDS):
+                        worker_pool.mark_failed(music_url)
+                    else:
+                        worker_pool.release(music_url)
+                    if _music_attempt == _MAX_MUSIC_ATTEMPTS:
+                        logger.exception("Music generation failed after %d attempts", _MAX_MUSIC_ATTEMPTS)
+                        raise
+                    time.sleep(5)
             logger.info("Music ready: %s (%.1f MB)", music_path.name,
                         music_path.stat().st_size / 1024 / 1024)
         music_upd = gr.update(value=str(music_path), visible=True)
@@ -560,6 +570,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
         _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                                 "ConnectionRefused", "RemoteDisconnected")
+        _MAX_SCENE_ATTEMPTS = 3
 
         def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
             existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
@@ -568,14 +579,12 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                             scene.id, existing.stat().st_size // 1024)
                 return scene.id, existing, None
             last_err: Exception | None = None
-            while True:
+            for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
                 if not worker_pool.has_healthy():
-                    raise RuntimeError(
-                        f"All workers failed — last error: {last_err}"
-                    )
+                    raise RuntimeError(f"All workers failed — last error: {last_err}")
                 url = worker_pool.acquire()
                 try:
-                    logger.info("Scene %d starting on %s", scene.id, url)
+                    logger.info("Scene %d attempt %d/%d on %s", scene.id, attempt, _MAX_SCENE_ATTEMPTS, url)
                     sf, sa = _generate_scene_video(
                         scene, work_dir,
                         narration_durs[scene.id],
@@ -586,20 +595,24 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                     )
                     return scene.id, sf, sa
                 except Exception as e:
+                    last_err = e
                     if any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS):
                         logger.warning(
-                            "Worker %s failed for scene %d, retrying on another worker: %s",
-                            url, scene.id, e,
+                            "Worker %s unreachable for scene %d (attempt %d/%d): %s — removing from pool",
+                            url, scene.id, attempt, _MAX_SCENE_ATTEMPTS, e,
                         )
                         worker_pool.mark_failed(url)
-                        last_err = e
-                        # mark_failed deleted the semaphore; finally release() is a no-op
+                        # mark_failed removes the semaphore; release() below is a no-op
                     else:
-                        raise
+                        logger.warning(
+                            "Scene %d failed on %s (attempt %d/%d): %s — will retry",
+                            scene.id, url, attempt, _MAX_SCENE_ATTEMPTS, e,
+                        )
+                        if attempt < _MAX_SCENE_ATTEMPTS:
+                            time.sleep(5)
                 finally:
-                    # Releases on success and non-worker errors.
-                    # No-op after mark_failed (semaphore already deleted).
-                    worker_pool.release(url)
+                    worker_pool.release(url)  # no-op after mark_failed
+            raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
         n_workers = len(worker_pool.urls)
         yield emit(
@@ -631,11 +644,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                         pct = 35 + 55 * completed / n
                         yield emit(f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)", pct)
                     except Exception as e:
-                        logger.error("Scene %d failed: %s", scene.id, e)
+                        logger.error("Scene %d failed permanently: %s", scene.id, e)
                         if first_error is None:
                             first_error = e
-                        for f in list(pending.keys()):
-                            f.cancel()
+                        # Don't cancel other scenes — let them finish so the user
+                        # gets as many completed scenes as possible.
                         yield emit(f"Scene {scene.id} failed: {e}", 35 + 55 * completed / n)
                 if pending and first_error is None:
                     running = [pending[f].id for f in pending]
