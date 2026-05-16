@@ -451,8 +451,14 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     music_upd = gr.update(visible=False)
     video_upd = [gr.update(visible=False)] * MAX_SCENES
 
+    _status_file = work_dir / "progress.json"
+
     def emit(msg: str, pct: float, final=gr.update(), comb=gr.update(), mus=gr.update(), amb=gr.update(), tabs_upd=gr.update()):
         logger.debug("YIELD %.0f%% — %s", pct, msg)
+        try:
+            _status_file.write_text(json.dumps({"pct": round(pct, 1), "msg": msg, "ts": time.time()}))
+        except Exception:
+            pass
         return (_progress_html(pct, msg), *audio_upd, music_upd, *video_upd, final, comb, mus, amb, tabs_upd)
 
     def _run_bg(label: str, fn, *args, pct: float, **kwargs):
