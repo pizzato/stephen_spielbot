@@ -298,13 +298,18 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
         yield no_op
         return
 
-    cfg              = load_config()
-    worker_urls      = alive_workers(cfg.get("comfy_workers", []))
+    cfg          = load_config()
+    all_workers  = cfg.get("comfy_workers", [])
+    # Never use localhost for image generation — cluster workers only.
+    cluster_urls = [u for u in all_workers
+                    if not any(lh in u for lh in ("localhost", "127.0.0.1"))]
+    worker_urls  = alive_workers(cluster_urls)
     if not worker_urls:
-        logger.warning("No ComfyUI workers available for scene image generation")
+        logger.warning("No cluster ComfyUI workers reachable for scene image generation "
+                       "(localhost excluded by policy)")
         status_html = (
             '<div style="color:#f59e0b;padding:4px 0;font-size:13px">'
-            '⚠ No ComfyUI workers reachable — scene preview images skipped.</div>'
+            '⚠ No cluster workers reachable — scene preview images skipped.</div>'
         )
         yield (status_html, *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
         return
@@ -1227,17 +1232,14 @@ def build_ui() -> gr.Blocks:
                             gr.Markdown(f"### Scene {i + 1}")
                             t = gr.Textbox(label="Title", lines=1)
                             with gr.Row():
-                                with gr.Column(scale=3):
-                                    with gr.Row():
-                                        v  = gr.Textbox(label="Visual Prompt", lines=3)
-                                        nr = gr.Textbox(label="Narration", lines=3)
-                                with gr.Column(scale=1, min_width=200):
-                                    img = gr.Image(
-                                        label="Scene Preview",
-                                        visible=False,
-                                        height=160,
-                                        interactive=False,
-                                    )
+                                v  = gr.Textbox(label="Visual Prompt", lines=3)
+                                nr = gr.Textbox(label="Narration", lines=3)
+                            img = gr.Image(
+                                label="Scene Preview (first frame)",
+                                visible=False,
+                                height=200,
+                                interactive=False,
+                            )
                         scene_titles.append(t)
                         scene_visuals.append(v)
                         scene_narrs.append(nr)
@@ -1518,10 +1520,15 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in, style_in],
             outputs=script_outputs,
         ).then(
-            # Make image_gen_status visible while generating (if gen_scene_images is on)
-            fn=lambda gen_img: gr.update(visible=gen_img) if gen_img else gr.update(visible=False),
+            fn=lambda gen_img: (
+                gr.update(interactive=False, value="⏳ Generating scene images…"),
+                gr.update(visible=gen_img),
+            ) if gen_img else (
+                gr.update(interactive=True, value="1. Generate Script →"),
+                gr.update(visible=False),
+            ),
             inputs=[gen_scene_images_in],
-            outputs=[image_gen_status],
+            outputs=[gen_script_btn, image_gen_status],
         ).then(
             fn=on_generate_scene_images,
             inputs=[n_scenes_in, resolution_in, gen_scene_images_in, style_state,
