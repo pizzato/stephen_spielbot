@@ -152,19 +152,23 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     for i in range(n):
         dur = durations[i]
 
-        vf = []
+        # setpts=PTS-STARTPTS normalises each clip's PTS to start at 0 so that
+        # fade=t=in:st=0 actually covers the very first frame.  Without this,
+        # clips muxed with -c:v copy retain the original ComfyUI PTS (which may
+        # be non-zero), causing the first frame(s) to flash through un-faded.
+        vf = ["setpts=PTS-STARTPTS"]
         if i > 0:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
         if i < n - 1:
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
-        filters.append(f"[{i}:v]{','.join(vf) if vf else 'null'}[fv{i}]")
+        filters.append(f"[{i}:v]{','.join(vf)}[fv{i}]")
 
-        af = []
+        af = ["asetpts=PTS-STARTPTS"]
         if i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
         if i < n - 1:
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
-        filters.append(f"[{i}:a]{','.join(af) if af else 'anull'}[fa{i}]")
+        filters.append(f"[{i}:a]{','.join(af)}[fa{i}]")
 
     v_in = "".join(f"[fv{i}]" for i in range(n))
     a_in = "".join(f"[fa{i}]" for i in range(n))
