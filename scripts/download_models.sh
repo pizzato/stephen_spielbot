@@ -79,7 +79,7 @@ download() {
     "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
         --quiet \
-        "${extra_args[@]}"
+        "${extra_args[@]+"${extra_args[@]}"}"
 
     # Flatten: if hf reproduced the repo subdir structure, move file to dest.
     local actual="$COMFY_DIR/$local_dir/$remote_path"
