@@ -143,11 +143,38 @@ download \
     "split_files/text_encoders/qwen_4b_ace15.safetensors" \
     "models/text_encoders"
 
+# ── FLUX.1-schnell (scene preview image generation) ───────────────────────────
+echo ""
+echo "--- FLUX.1-schnell scene preview models ---"
+
+download \
+    "Comfy-Org/flux1-schnell" \
+    "flux1-schnell-fp8.safetensors" \
+    "models/unet"
+
+# Shared FLUX text encoders (also used by FLUX dev)
+download \
+    "comfyanonymous/flux_text_encoders" \
+    "t5xxl_fp8_e4m3fn.safetensors" \
+    "models/clip"
+
+download \
+    "comfyanonymous/flux_text_encoders" \
+    "clip_l.safetensors" \
+    "models/clip"
+
+# FLUX VAE
+download \
+    "Comfy-Org/flux1-schnell" \
+    "ae.safetensors" \
+    "models/vae"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "All models present in $COMFY_DIR:"
 for dir in models/checkpoints models/loras models/latent_upscale_models \
-           models/text_encoders models/diffusion_models models/vae; do
+           models/text_encoders models/diffusion_models models/vae \
+           models/unet models/clip; do
     [[ -d "$COMFY_DIR/$dir" ]] || continue
     while IFS= read -r f; do
         size=$(du -sh "$f" | cut -f1)

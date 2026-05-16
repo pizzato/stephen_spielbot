@@ -488,48 +488,52 @@ def ltx_upscale_video(video_path: Path, output_path: Path, comfy_url: str = COMF
 
 def generate_scene_image(
     positive_prompt: str,
-    negative_prompt: str,
     output_path: Path,
-    width: int = DEFAULT_WIDTH,
-    height: int = DEFAULT_HEIGHT,
+    width: int = 1024,
+    height: int = 576,
     seed: int | None = None,
-    lora_strength: float = 0.5,
-    first_pass_cfg: float = 1.0,
-    first_pass_steps: int = 8,
-    second_pass_cfg: float = 3.0,
-    second_pass_steps: int = 6,
+    steps: int = 4,
+    flux_model: str = "flux1-schnell-fp8.safetensors",
+    clip_t5: str = "t5xxl_fp8_e4m3fn.safetensors",
+    clip_l: str = "clip_l.safetensors",
+    flux_vae: str = "ae.safetensors",
     comfy_url: str = COMFYUI_URL,
 ) -> Path:
-    """Generate a high-detail preview image for a scene using LTX 2.3.
+    """Generate a high-detail scene preview image using FLUX.1-schnell.
 
-    Generates the minimum-length video clip (13 frames ≈ 0.5 s) and extracts
-    the first frame.  Uses the same model as video generation so the visual
-    style is fully consistent when the frame is later fed into I2V.
+    FLUX produces far better still images than LTX (a video model) and runs in
+    4 steps, making it much faster for preview generation.
     """
-    import subprocess as _sp
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
 
-    tmp_video = output_path.with_suffix(".preview.mp4")
-    try:
-        generate_video_clip(
-            positive_prompt, negative_prompt, tmp_video,
-            width=width, height=height,
-            duration_seconds=0.5,   # 13 frames — LTX minimum that avoids latent rounding issues
-            seed=seed,
-            lora_strength=lora_strength,
-            first_pass_cfg=first_pass_cfg,
-            first_pass_steps=first_pass_steps,
-            second_pass_cfg=second_pass_cfg,
-            second_pass_steps=second_pass_steps,
-            comfy_url=comfy_url,
-        )
-        result = _sp.run(
-            ["ffmpeg", "-y", "-i", str(tmp_video), "-vframes", "1", "-q:v", "2", str(output_path)],
-            capture_output=True, timeout=60,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(f"First-frame extraction failed: {result.stderr.decode()[-500:]}")
-    finally:
-        tmp_video.unlink(missing_ok=True)
+    workflow = _load_workflow("flux_t2i.json")
+    workflow = _fill_template(workflow, {
+        "FLUX_MODEL":      flux_model,
+        "CLIP_T5":         clip_t5,
+        "CLIP_L":          clip_l,
+        "FLUX_VAE":        flux_vae,
+        "POSITIVE_PROMPT": positive_prompt,
+        "WIDTH":           width,
+        "HEIGHT":          height,
+        "STEPS":           steps,
+        "SEED":            seed,
+    })
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=300, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No image output from FLUX for prompt {prompt_id} ({comfy_url})")
+
+    img_item = outputs[0]
+    suffix = Path(img_item.get("filename", "preview.png")).suffix or ".png"
+    tmp = output_path.with_suffix(suffix)
+    _download_output(img_item, tmp, comfy_url=comfy_url)
+    if tmp != output_path:
+        tmp.rename(output_path)
     return output_path
 
 
