@@ -56,6 +56,10 @@ echo "=== Downloading models to $COMFY_DIR ==="
 echo ""
 
 # ── Helper: download one file, skip if already present ────────────────────────
+# The new `hf` CLI preserves the repo subdirectory structure under --local-dir
+# (e.g. split_files/text_encoders/foo.safetensors → local_dir/split_files/…).
+# After downloading we move the file to the flat local_dir and clean up the
+# leftover subdirectory so the rest of the script finds it at the expected path.
 download() {
     local repo="$1" remote_path="$2" local_dir="$3"
     local filename="${remote_path##*/}"
@@ -76,6 +80,17 @@ download() {
         --local-dir "$COMFY_DIR/$local_dir" \
         --quiet \
         "${extra_args[@]}"
+
+    # Flatten: if hf reproduced the repo subdir structure, move file to dest.
+    local actual="$COMFY_DIR/$local_dir/$remote_path"
+    if [[ -f "$actual" && "$actual" != "$dest" ]]; then
+        mv "$actual" "$dest"
+        # Remove the now-empty top-level subdir (e.g. split_files/)
+        local top_subdir="${remote_path%%/*}"
+        [[ "$top_subdir" != "$remote_path" && -d "$COMFY_DIR/$local_dir/$top_subdir" ]] \
+            && rm -rf "$COMFY_DIR/$local_dir/$top_subdir"
+    fi
+
     local size
     size=$(du -sh "$dest" | cut -f1)
     echo "  [done] $filename ($size)"
