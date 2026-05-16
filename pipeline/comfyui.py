@@ -425,34 +425,65 @@ def generate_video_continuation(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
-def _upload_video(video_path: Path) -> str:
-    """Copy video into local ComfyUI input folder. Used only by ltx_upscale_video."""
-    COMFYUI_INPUT_DIR.mkdir(parents=True, exist_ok=True)
-    name = f"upload_{uuid.uuid4().hex[:8]}_{video_path.name}"
-    dest = COMFYUI_INPUT_DIR / name
-    shutil.copy2(video_path, dest)
-    return name
+def _upload_video(video_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Upload a video to ComfyUI input.
+
+    For localhost: copies directly into COMFYUI_INPUT_DIR (fast, no size limit).
+    For remote workers: uses the /upload/image endpoint (ComfyUI accepts videos there too).
+    Returns the filename ComfyUI assigned.
+    """
+    from urllib.parse import urlparse as _urlparse
+    is_local = _urlparse(comfy_url).hostname in ("localhost", "127.0.0.1")
+
+    if is_local:
+        COMFYUI_INPUT_DIR.mkdir(parents=True, exist_ok=True)
+        name = f"upload_{uuid.uuid4().hex[:8]}_{video_path.name}"
+        dest = COMFYUI_INPUT_DIR / name
+        shutil.copy2(video_path, dest)
+        return name
+    else:
+        # Remote worker — upload via HTTP multipart (same endpoint ComfyUI uses for images)
+        data = video_path.read_bytes()
+        filename = f"upload_{uuid.uuid4().hex[:8]}_{video_path.name}"
+        body = (
+            f"--{_BOUNDARY}\r\n"
+            f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
+            f"Content-Type: video/mp4\r\n\r\n"
+        ).encode() + data + f"\r\n--{_BOUNDARY}--\r\n".encode()
+
+        req = urllib.request.Request(
+            f"{comfy_url}/upload/image",
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={_BOUNDARY}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            result = json.loads(resp.read())
+        return result["name"]
 
 
-def ltx_upscale_video(video_path: Path, output_path: Path) -> Path:
-    """Upscale a video using the LTX 2.3 spatial upscaler (local ComfyUI only)."""
-    video_name = _upload_video(video_path)
+def ltx_upscale_video(video_path: Path, output_path: Path, comfy_url: str = COMFYUI_URL) -> Path:
+    """Upscale a video using the LTX 2.3 spatial upscaler."""
+    video_name = _upload_video(video_path, comfy_url=comfy_url)
     try:
         workflow = _load_workflow("ltx23_upscale.json")
         workflow = _fill_template(workflow, {"VIDEO_FILE": video_name})
 
         client_id = str(uuid.uuid4())
-        prompt_id = _queue_prompt(workflow, client_id)
-        _wait_for_completion(prompt_id, client_id, timeout=1800)
+        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+        _wait_for_completion(prompt_id, client_id, timeout=1800, comfy_url=comfy_url)
 
-        outputs = _get_outputs(prompt_id)
+        outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
         if not outputs:
             raise RuntimeError(f"No output from LTX upscale for prompt {prompt_id}")
 
         video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
-        return _download_output(video_item, output_path)
+        return _download_output(video_item, output_path, comfy_url=comfy_url)
     finally:
-        (COMFYUI_INPUT_DIR / video_name).unlink(missing_ok=True)
+        # Only clean up local copy; remote workers manage their own input dirs
+        from urllib.parse import urlparse as _urlparse
+        if _urlparse(comfy_url).hostname in ("localhost", "127.0.0.1"):
+            (COMFYUI_INPUT_DIR / video_name).unlink(missing_ok=True)
 
 
 def generate_music(

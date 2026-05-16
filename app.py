@@ -866,12 +866,17 @@ def on_upscale(video_path_str: str):
         yield gr.update(visible=False), f"❌ Video file not found: {input_path}"
         return
 
+    # Pick a healthy worker URL from config (falls back to localhost if none configured)
+    cfg         = load_config()
+    workers     = alive_workers(cfg.get("comfy_workers", [COMFYUI_URL]))
+    comfy_url   = workers[0] if workers else COMFYUI_URL
+
     stamp       = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_path = OUTPUT_DIR / f"{input_path.stem}_ltx_upscale_{stamp}.mp4"
-    logger.info("LTX upscale: %s → %s", input_path.name, output_path.name)
+    logger.info("LTX upscale: %s → %s via %s", input_path.name, output_path.name, comfy_url)
 
-    yield gr.update(visible=False), "Upscaling with LTX spatial upscaler…"
-    fut   = _executor.submit(ltx_upscale_video, input_path, output_path)
+    yield gr.update(visible=False), f"Upscaling with LTX spatial upscaler via {comfy_url}…"
+    fut   = _executor.submit(ltx_upscale_video, input_path, output_path, comfy_url)
     start = time.monotonic()
     while not fut.done():
         time.sleep(5)
