@@ -40,7 +40,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import generate_script, Scene, NEGATIVE_PROMPT
 from pipeline.comfyui import (
-    generate_video_clip, generate_video_continuation, generate_music, COMFYUI_URL,
+    generate_video_clip, generate_video_continuation, generate_music,
 )
 from pipeline.assembler import (
     _get_duration, concat_clips, mux_video_audio, extract_last_frame,
@@ -93,8 +93,8 @@ DEFAULT_CFG = {
     "voices": [],
     # ComfyUI worker URLs — one per line in the config UI.
     # Each worker handles one video generation job at a time.
-    "comfy_workers": ["http://localhost:8188"],
-    "tts_workers":   ["localhost"],
+    "comfy_workers": [],
+    "tts_workers":   [],
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
@@ -121,10 +121,10 @@ def _hosts_from_cluster_conf() -> list[str]:
 
 
 def _default_workers() -> tuple[list[str], list[str]]:
-    """Derive comfy_workers and tts_workers from cluster.conf, falling back to localhost."""
+    """Derive comfy_workers and tts_workers from cluster.conf."""
     hosts = _hosts_from_cluster_conf()
     if not hosts:
-        return ["http://localhost:8188"], ["localhost"]
+        return [], []
     comfy = [f"http://{h}:{COMFYUI_PORT}" for h in hosts]
     return comfy, hosts
 
@@ -395,7 +395,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     first_pass_steps  = int(cfg.get("first_pass_steps", 8))
     second_pass_cfg   = float(cfg.get("second_pass_cfg", 3.0))
     second_pass_steps = int(cfg.get("second_pass_steps", 6))
-    worker_urls       = alive_workers(cfg.get("comfy_workers", [COMFYUI_URL]))
+    worker_urls       = alive_workers(cfg.get("comfy_workers", []))
     worker_pool       = WorkerPool(worker_urls)
     logger.info("Workers: %s", worker_urls)
     # resolution from Create tab overrides config default
@@ -482,9 +482,9 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         narration_paths: dict[int, Path] = {}
         narration_durs:  dict[int, float] = {}
 
-        tts_hosts = cfg.get("tts_workers", ["localhost"])
+        tts_hosts = cfg.get("tts_workers", [])
         if not tts_hosts:
-            tts_hosts = ["localhost"]
+            raise RuntimeError("No TTS workers configured — add hosts in Settings > TTS Workers")
 
         def _tts_scene(scene: Scene, primary_host: str) -> tuple[int, Path]:
             out = work_dir / f"scene_{scene.id:02d}_narration.wav"
@@ -866,10 +866,12 @@ def on_upscale(video_path_str: str):
         yield gr.update(visible=False), f"❌ Video file not found: {input_path}"
         return
 
-    # Pick a healthy worker URL from config (falls back to localhost if none configured)
     cfg         = load_config()
-    workers     = alive_workers(cfg.get("comfy_workers", [COMFYUI_URL]))
-    comfy_url   = workers[0] if workers else COMFYUI_URL
+    workers     = alive_workers(cfg.get("comfy_workers", []))
+    if not workers:
+        yield gr.update(visible=False), "❌ No ComfyUI workers reachable — add workers in Settings."
+        return
+    comfy_url   = workers[0]
 
     stamp       = datetime.now().strftime("%Y%m%d-%H%M%S")
     output_path = OUTPUT_DIR / f"{input_path.stem}_ltx_upscale_{stamp}.mp4"
@@ -971,9 +973,9 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["second_pass_cfg"]    = float(second_pass_cfg)
     cfg["second_pass_steps"]  = int(second_pass_steps)
     workers = [u.strip() for u in workers_text.splitlines() if u.strip()]
-    cfg["comfy_workers"]      = workers or ["http://localhost:8188"]
+    cfg["comfy_workers"]      = workers
     tts_workers = [h.strip() for h in tts_workers_text.splitlines() if h.strip()]
-    cfg["tts_workers"]        = tts_workers or ["localhost"]
+    cfg["tts_workers"]        = tts_workers
     cfg["llm_backend"]        = llm_backend
     cfg["local_llm_url"]      = local_llm_url.strip() or "http://localhost:8000/v1/chat/completions"
     cfg["local_llm_model"]    = local_llm_model.strip() or "openai/gpt-oss-120b"
