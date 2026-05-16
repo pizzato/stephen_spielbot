@@ -143,31 +143,37 @@ download \
     "split_files/text_encoders/qwen_4b_ace15.safetensors" \
     "models/text_encoders"
 
-# ── FLUX.1-schnell (scene preview image generation) ───────────────────────────
-echo ""
-echo "--- FLUX.1-schnell scene preview models ---"
+# ── FLUX.1-schnell (scene preview image generation) — optional ────────────────
+# ~13 GB total. Skip with:  SKIP_FLUX=1 bash scripts/download_models.sh
+if [[ "${SKIP_FLUX:-0}" == "1" ]]; then
+    echo ""
+    echo "--- FLUX.1-schnell models skipped (SKIP_FLUX=1) ---"
+else
+    echo ""
+    echo "--- FLUX.1-schnell scene preview models (~13 GB) ---"
 
-download \
-    "Comfy-Org/flux1-schnell" \
-    "flux1-schnell-fp8.safetensors" \
-    "models/unet"
+    download \
+        "Comfy-Org/flux1-schnell" \
+        "flux1-schnell-fp8.safetensors" \
+        "models/unet"
 
-# Shared FLUX text encoders (also used by FLUX dev)
-download \
-    "comfyanonymous/flux_text_encoders" \
-    "t5xxl_fp8_e4m3fn.safetensors" \
-    "models/clip"
+    # Shared FLUX text encoders (also used by FLUX dev)
+    download \
+        "comfyanonymous/flux_text_encoders" \
+        "t5xxl_fp8_e4m3fn.safetensors" \
+        "models/clip"
 
-download \
-    "comfyanonymous/flux_text_encoders" \
-    "clip_l.safetensors" \
-    "models/clip"
+    download \
+        "comfyanonymous/flux_text_encoders" \
+        "clip_l.safetensors" \
+        "models/clip"
 
-# FLUX VAE
-download \
-    "Comfy-Org/flux1-schnell" \
-    "ae.safetensors" \
-    "models/vae"
+    # FLUX VAE
+    download \
+        "Comfy-Org/flux1-schnell" \
+        "ae.safetensors" \
+        "models/vae"
+fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""

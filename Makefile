@@ -1,14 +1,18 @@
 CONF    ?= cluster.conf
 SCRIPTS := scripts
 
-.PHONY: install download-models start stop status help
+.PHONY: install download-models download-flux start stop status help
 
-## Install deps locally + download models + install ComfyUI and F5-TTS on all cluster workers.
+## Install deps locally + download models (LTX + ACE-Step, no FLUX) + install workers.
 install:
-	@bash $(SCRIPTS)/install.sh $(CONF)
+	@SKIP_FLUX=1 bash $(SCRIPTS)/install.sh $(CONF)
 
-## Download LTX 2.3 and ACE-Step models only (skips already-present files).
+## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
+	@SKIP_FLUX=1 bash $(SCRIPTS)/download_models.sh
+
+## Download FLUX.1-schnell models for scene preview images (~13 GB, requires free disk space).
+download-flux:
 	@bash $(SCRIPTS)/download_models.sh
 
 ## Start ComfyUI on all workers and the Gradio app locally.
@@ -26,8 +30,9 @@ status:
 help:
 	@echo "Usage: make [install|download-models|start|stop|status]"
 	@echo ""
-	@echo "  install         Install deps locally; download models; install workers in $(CONF)"
-	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing)"
+	@echo "  install         Install deps locally; download LTX+ACE models; install workers in $(CONF)"
+	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
+	@echo "  download-flux   Download FLUX.1-schnell models for scene previews (~13 GB)"
 	@echo "  start           Start ComfyUI on all workers, then launch the Gradio app"
 	@echo "  stop            Stop the Gradio app and ComfyUI on all workers"
 	@echo "  status          Check health of the app and every ComfyUI worker"
