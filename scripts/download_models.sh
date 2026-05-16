@@ -21,22 +21,33 @@ if [[ ! -d "$COMFY_DIR" ]]; then
     exit 1
 fi
 
-# Ensure huggingface-cli is available.
+# Ensure the HuggingFace CLI is available.
+# huggingface_hub >= 1.0 ships the binary as `hf`; older versions used `huggingface-cli`.
 # Check: local venv → comfyui-env → system PATH → install into best available pip.
-if [[ -x "$VENV/bin/huggingface-cli" ]]; then
-    export PATH="$VENV/bin:$PATH"
-elif [[ -x "$COMFY_ENV/bin/huggingface-cli" ]]; then
-    export PATH="$COMFY_ENV/bin:$PATH"
-elif ! command -v huggingface-cli &>/dev/null; then
-    echo "[hf] huggingface-cli not found — installing huggingface_hub..."
+HF_CMD=""
+for candidate in "$VENV/bin/hf" "$COMFY_ENV/bin/hf" \
+                 "$VENV/bin/huggingface-cli" "$COMFY_ENV/bin/huggingface-cli"; do
+    if [[ -x "$candidate" ]]; then
+        HF_CMD="$candidate"
+        break
+    fi
+done
+if [[ -z "$HF_CMD" ]]; then
+    if   command -v hf               &>/dev/null; then HF_CMD="hf"
+    elif command -v huggingface-cli  &>/dev/null; then HF_CMD="huggingface-cli"
+    fi
+fi
+if [[ -z "$HF_CMD" ]]; then
+    echo "[hf] HuggingFace CLI not found — installing huggingface_hub..."
     if [[ -x "$VENV/bin/pip" ]]; then
-        "$VENV/bin/pip" install --quiet huggingface_hub
-        export PATH="$VENV/bin:$PATH"
+        "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0"
+        HF_CMD="$VENV/bin/hf"
     elif [[ -x "$COMFY_ENV/bin/pip" ]]; then
-        "$COMFY_ENV/bin/pip" install --quiet huggingface_hub
-        export PATH="$COMFY_ENV/bin:$PATH"
+        "$COMFY_ENV/bin/pip" install --quiet "huggingface_hub>=1.0"
+        HF_CMD="$COMFY_ENV/bin/hf"
     else
-        python3 -m pip install --quiet --user huggingface_hub
+        python3 -m pip install --quiet --user "huggingface_hub>=1.0"
+        HF_CMD="hf"
     fi
 fi
 
@@ -61,7 +72,7 @@ download() {
     mkdir -p "$COMFY_DIR/$local_dir"
     local extra_args=()
     [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
-    huggingface-cli download "$repo" "$remote_path" \
+    "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
         --local-dir-use-symlinks False \
         --quiet \
