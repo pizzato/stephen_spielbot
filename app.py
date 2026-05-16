@@ -299,15 +299,18 @@ def _generate_scene_video(
     remaining = narration_dur
     seg_idx = 0
 
+    _CLIP_BUFFER_SECS = 1.0  # always request 1s extra so the clip outlasts the narration
+
     while remaining > 0.5:
-        clip_dur  = min(remaining, max_clip_secs)
+        clip_dur     = min(remaining, max_clip_secs)
+        request_dur  = clip_dur + _CLIP_BUFFER_SECS  # trimmed to narration by mux step
         clip_path = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}.mp4"
 
         if last_frame is None:
             generate_video_clip(
                 scene.visual_prompt, scene.negative_prompt, clip_path,
                 width=vid_width, height=vid_height,
-                duration_seconds=clip_dur,
+                duration_seconds=request_dur,
                 lora_strength=lora_strength,
                 first_pass_cfg=first_pass_cfg,
                 first_pass_steps=first_pass_steps,
@@ -319,7 +322,7 @@ def _generate_scene_video(
             generate_video_continuation(
                 scene.visual_prompt, scene.negative_prompt, last_frame, clip_path,
                 width=vid_width, height=vid_height,
-                duration_seconds=clip_dur,
+                duration_seconds=request_dur,
                 lora_strength=lora_strength,
                 first_pass_cfg=first_pass_cfg,
                 first_pass_steps=first_pass_steps,
