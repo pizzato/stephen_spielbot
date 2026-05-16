@@ -117,18 +117,40 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
     audio_dur = _get_duration(audio_path)
     video_dur = _get_duration(video_path)
 
-    loop_flag = [] if video_dur >= audio_dur else ["-stream_loop", "-1"]
-    _run([
-        "ffmpeg", "-y",
-        *loop_flag, "-i", str(video_path),
-        "-i", str(audio_path),
-        "-map", "0:v:0",
-        "-map", "1:a:0",
-        "-t", str(audio_dur),
-        "-c:v", "copy",
-        "-c:a", "aac", "-b:a", "192k",
-        str(output_path),
-    ])
+    if video_dur >= audio_dur:
+        # Video covers the full narration — simple stream copy, trim to audio length.
+        _run([
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-t", str(audio_dur),
+            "-c:v", "copy",
+            "-c:a", "aac", "-b:a", "192k",
+            str(output_path),
+        ])
+    else:
+        # Video is slightly shorter than narration (ComfyUI frame-count rounding).
+        # Freeze the last frame to fill the gap instead of looping from the start —
+        # looping caused the beginning of the scene to flash before the next scene.
+        gap = audio_dur - video_dur
+        logger.info(
+            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs — freezing last frame %.3fs",
+            video_dur, audio_dur, gap,
+        )
+        _run([
+            "ffmpeg", "-y",
+            "-i", str(video_path),
+            "-i", str(audio_path),
+            "-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={gap:.3f}[vout]",
+            "-map", "[vout]",
+            "-map", "1:a:0",
+            "-t", str(audio_dur),
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+            "-c:a", "aac", "-b:a", "192k",
+            str(output_path),
+        ])
     return output_path
 
 
