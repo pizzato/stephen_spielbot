@@ -41,10 +41,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pipeline.llm import generate_script, Scene, NEGATIVE_PROMPT
 from pipeline.comfyui import (
     generate_video_clip, generate_video_continuation, generate_music,
+    generate_scene_image,
 )
 from pipeline.assembler import (
-    _get_duration, concat_clips, mux_video_audio, extract_last_frame,
-    extract_audio, concat_audio, concatenate_scenes, mix_background_music,
+    _get_duration, concat_clips, mux_video_audio, extract_first_frame,
+    extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
+    mix_background_music,
 )
 from pipeline.worker_pool import WorkerPool, alive_workers
 
@@ -274,6 +276,122 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool, style_hint
         return (gr.update(),) * 53
 
 
+# ── Scene image generation — yields progressive updates to the Script tab ────
+
+# image_gen_outputs count: 1 (status HTML) + MAX_SCENES (images) + 1 (state)
+_IMG_GEN_OUT_COUNT = 1 + MAX_SCENES + 1
+
+
+def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, *scene_visuals):
+    """Generate a preview image for each scene right after script creation.
+
+    Runs as a Gradio generator so images appear in the Script tab progressively.
+    If gen_scene_images is False, yields a single no-op and returns immediately.
+    """
+    n = int(n_scenes_val)
+    no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
+
+    if not gen_scene_images:
+        yield no_op
+        return
+
+    cfg              = load_config()
+    worker_urls      = alive_workers(cfg.get("comfy_workers", []))
+    if not worker_urls:
+        logger.warning("No ComfyUI workers available for scene image generation")
+        status_html = (
+            '<div style="color:#f59e0b;padding:4px 0;font-size:13px">'
+            '⚠ No ComfyUI workers reachable — scene preview images skipped.</div>'
+        )
+        yield (status_html, *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
+        return
+
+    worker_pool      = WorkerPool(worker_urls)
+    lora_strength    = float(cfg.get("lora_strength", 0.5))
+    first_pass_cfg   = float(cfg.get("first_pass_cfg", 1.0))
+    first_pass_steps = int(cfg.get("first_pass_steps", 8))
+    second_pass_cfg  = float(cfg.get("second_pass_cfg", 3.0))
+    second_pass_steps = int(cfg.get("second_pass_steps", 6))
+    vid_width, vid_height = _RESOLUTIONS.get(
+        resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (832, 480)
+    )
+    style_clean = style.strip().rstrip(".") if style and style.strip() else ""
+
+    # We don't have a work_dir yet — use a temp directory for preview images.
+    # Images are later copied into the real work_dir by on_generate().
+    import tempfile
+    tmp_img_dir = Path(tempfile.mkdtemp(prefix="spielbot_preview_"))
+
+    img_upd     = [gr.update(visible=False)] * MAX_SCENES
+    images_list = [""] * MAX_SCENES
+
+    def _img_status_html(done: int, total: int, extra: str = "") -> str:
+        pct = done / total * 100 if total else 0
+        color = "#22c55e" if done == total else "#7c3aed"
+        label = f"Scene preview images: {done}/{total} generated{extra}"
+        return (
+            f'<div style="padding:4px 0">'
+            f'<div style="font-size:13px;color:#374151;margin-bottom:4px">{label}</div>'
+            f'<div style="background:#e5e7eb;border-radius:4px;height:6px;overflow:hidden">'
+            f'<div style="background:{color};width:{pct:.1f}%;height:100%;border-radius:4px;transition:width 0.4s"></div>'
+            f'</div></div>'
+        )
+
+    yield (_img_status_html(0, n, " — generating…"), *img_upd, images_list)
+
+    def _gen_image(i: int) -> tuple[int, Path]:
+        visual = list(scene_visuals)[i]
+        prompt = f"{style_clean}. {visual}" if style_clean else visual
+        out    = tmp_img_dir / f"scene_{i+1:02d}_preview.jpg"
+        if out.exists():
+            return i, out
+        url = worker_pool.acquire()
+        try:
+            generate_scene_image(
+                prompt, "",
+                out,
+                width=vid_width, height=vid_height,
+                lora_strength=lora_strength,
+                first_pass_cfg=first_pass_cfg,
+                first_pass_steps=first_pass_steps,
+                second_pass_cfg=second_pass_cfg,
+                second_pass_steps=second_pass_steps,
+                comfy_url=url,
+            )
+        finally:
+            worker_pool.release(url)
+        return i, out
+
+    img_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+    pending: dict[concurrent.futures.Future, int] = {
+        img_pool.submit(_gen_image, i): i for i in range(n)
+    }
+    done_count = 0
+    try:
+        while pending:
+            completed_futs, _ = concurrent.futures.wait(
+                list(pending.keys()), timeout=5,
+                return_when=concurrent.futures.FIRST_COMPLETED,
+            )
+            for fut in completed_futs:
+                idx = pending.pop(fut)
+                try:
+                    _, img_path = fut.result()
+                    img_upd = list(img_upd)
+                    img_upd[idx] = gr.update(value=str(img_path), visible=True)
+                    images_list = list(images_list)
+                    images_list[idx] = str(img_path)
+                    done_count += 1
+                    logger.info("Scene %d preview image ready: %s", idx + 1, img_path.name)
+                except Exception as e:
+                    logger.warning("Scene %d image generation failed: %s", idx + 1, e)
+                    done_count += 1
+            extra = "" if done_count < n else " — done ✓"
+            yield (_img_status_html(done_count, n, extra), *img_upd, images_list)
+    finally:
+        img_pool.shutdown(wait=False)
+
+
 # ── Per-scene video generation (runs in a worker thread) ─────────────────────
 
 def _generate_scene_video(
@@ -289,6 +407,7 @@ def _generate_scene_video(
     second_pass_cfg: float,
     second_pass_steps: int,
     comfy_url: str,
+    scene_first_frame: Path | None = None,
 ) -> tuple[Path, Path | None]:
     """Generate all video clips for a scene, return (raw_video, ambient_wav).
     Raw video retains the original LTX audio. Narration is muxed later at assembly.
@@ -306,7 +425,22 @@ def _generate_scene_video(
         request_dur  = clip_dur + _CLIP_BUFFER_SECS  # trimmed to narration by mux step
         clip_path = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}.mp4"
 
-        if last_frame is None:
+        if last_frame is None and scene_first_frame is not None and scene_first_frame.exists():
+            # Use the pre-generated scene preview image as first frame (I2V)
+            logger.info("  [%s] scene %d seg %d: using preview image as first frame (I2V)",
+                        comfy_url, scene.id, seg_idx + 1)
+            generate_video_continuation(
+                scene.visual_prompt, scene.negative_prompt, scene_first_frame, clip_path,
+                width=vid_width, height=vid_height,
+                duration_seconds=request_dur,
+                lora_strength=lora_strength,
+                first_pass_cfg=first_pass_cfg,
+                first_pass_steps=first_pass_steps,
+                second_pass_cfg=second_pass_cfg,
+                second_pass_steps=second_pass_steps,
+                comfy_url=comfy_url,
+            )
+        elif last_frame is None:
             generate_video_clip(
                 scene.visual_prompt, scene.negative_prompt, clip_path,
                 width=vid_width, height=vid_height,
@@ -379,11 +513,19 @@ def _generate_scene_video(
 _GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1  # = 31
 
 
-def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields):
+def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
+                scene_images_list, *scene_fields):
     n       = int(n_scenes_val)
     titles  = list(scene_fields[0           : MAX_SCENES])
     visuals = list(scene_fields[MAX_SCENES  : MAX_SCENES * 2])
     narrs   = list(scene_fields[MAX_SCENES*2: MAX_SCENES * 3])
+
+    # Build a map from scene id (1-based) to pre-generated preview image path (or None)
+    scene_preview_map: dict[int, Path | None] = {}
+    if scene_images_list:
+        for idx, img_str in enumerate(scene_images_list[:n]):
+            p = Path(img_str) if img_str else None
+            scene_preview_map[idx + 1] = p if (p and p.exists()) else None
 
     cfg               = load_config()
     music_vol         = cfg.get("music_vol", 18) / 100.0
@@ -601,6 +743,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                         lora_strength, first_pass_cfg, first_pass_steps,
                         second_pass_cfg, second_pass_steps,
                         comfy_url=url,
+                        scene_first_frame=scene_preview_map.get(scene.id),
                     )
                     return scene.id, sf, sa
                 except Exception as e:
@@ -745,11 +888,13 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
 
 
-def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields):
+def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
+                   scene_images_list, *scene_fields):
     if not auto_approve:
         yield (gr.update(),) * _GEN_OUT_COUNT
         return
-    yield from on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve, *scene_fields)
+    yield from on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style,
+                           auto_approve, scene_images_list, *scene_fields)
 
 
 # ── Session restore ──────────────────────────────────────────────────────────
@@ -1007,12 +1152,13 @@ def build_ui() -> gr.Blocks:
                 </div>
                 """)
 
-        # Shared state for remix, music description, and visual style
-        combined_state   = gr.State("")
-        music_state      = gr.State("")
-        ambient_state    = gr.State("")
-        music_desc_state = gr.State("")
-        style_state      = gr.State("")
+        # Shared state for remix, music description, visual style, and scene preview images
+        combined_state      = gr.State("")
+        music_state         = gr.State("")
+        ambient_state       = gr.State("")
+        music_desc_state    = gr.State("")
+        style_state         = gr.State("")
+        scene_images_state  = gr.State([""] * MAX_SCENES)
 
         with gr.Tabs(elem_id="main_tabs") as tabs:
 
@@ -1044,8 +1190,12 @@ def build_ui() -> gr.Blocks:
                         choices=list(_RESOLUTIONS.keys()),
                         value=cfg.get("resolution", _DEFAULT_RESOLUTION),
                     )
+                with gr.Row():
                     auto_approve_in = gr.Checkbox(
                         label="Auto-approve script (skip review)", value=False,
+                    )
+                    gen_scene_images_in = gr.Checkbox(
+                        label="Generate scene preview images (I2V first frames)", value=True,
                     )
 
                 gen_script_btn = gr.Button(
@@ -1061,22 +1211,36 @@ def build_ui() -> gr.Blocks:
                         placeholder="Generated or entered style will appear here — edit freely",
                     )
 
-                    scene_titles:  list[gr.Textbox] = []
-                    scene_visuals: list[gr.Textbox] = []
-                    scene_narrs:   list[gr.Textbox] = []
-                    scene_blocks:  list[gr.Group]   = []
+                    image_gen_status = gr.HTML(value="", visible=False)
+
+                    scene_titles:         list[gr.Textbox] = []
+                    scene_visuals:        list[gr.Textbox] = []
+                    scene_narrs:          list[gr.Textbox] = []
+                    scene_blocks:         list[gr.Group]   = []
+                    scene_preview_images: list[gr.Image]   = []
 
                     for i in range(MAX_SCENES):
                         with gr.Group(visible=False) as blk:
                             gr.Markdown(f"### Scene {i + 1}")
                             t = gr.Textbox(label="Title", lines=1)
                             with gr.Row():
-                                v  = gr.Textbox(label="Visual Prompt", lines=3)
-                                nr = gr.Textbox(label="Narration", lines=3)
+                                with gr.Column(scale=3):
+                                    with gr.Row():
+                                        v  = gr.Textbox(label="Visual Prompt", lines=3)
+                                        nr = gr.Textbox(label="Narration", lines=3)
+                                with gr.Column(scale=1, min_width=200):
+                                    img = gr.Image(
+                                        label="Scene Preview",
+                                        visible=False,
+                                        height=160,
+                                        interactive=False,
+                                        show_download_button=False,
+                                    )
                         scene_titles.append(t)
                         scene_visuals.append(v)
                         scene_narrs.append(nr)
                         scene_blocks.append(blk)
+                        scene_preview_images.append(img)
 
                     approve_btn = gr.Button(
                         "2. Approve & Generate Video →", variant="primary", size="lg"
@@ -1325,6 +1489,13 @@ def build_ui() -> gr.Blocks:
             style_box, style_state,   # style shown in Script tab + stored in state
         ]
 
+        # Outputs for the scene image generation step
+        img_gen_outputs = [
+            image_gen_status,
+            *scene_preview_images,
+            scene_images_state,
+        ]
+
         gen_outputs = [
             progress_bar,
             *scene_audios,
@@ -1345,10 +1516,21 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in, style_in],
             outputs=script_outputs,
         ).then(
+            # Make image_gen_status visible while generating (if gen_scene_images is on)
+            fn=lambda gen_img: gr.update(visible=gen_img) if gen_img else gr.update(visible=False),
+            inputs=[gen_scene_images_in],
+            outputs=[image_gen_status],
+        ).then(
+            fn=on_generate_scene_images,
+            inputs=[n_scenes_in, resolution_in, gen_scene_images_in, style_state,
+                    *scene_visuals],
+            outputs=img_gen_outputs,
+        ).then(
             fn=_auto_generate,
             inputs=[
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
+                scene_images_state,
                 *scene_titles, *scene_visuals, *scene_narrs,
             ],
             outputs=gen_outputs,
@@ -1371,6 +1553,7 @@ def build_ui() -> gr.Blocks:
             inputs=[
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
+                scene_images_state,
                 *scene_titles, *scene_visuals, *scene_narrs,
             ],
             outputs=gen_outputs,

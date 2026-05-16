@@ -68,6 +68,18 @@ def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
+def extract_first_frame(video_path: Path, output_path: Path) -> Path:
+    """Extract the first frame of a video to an image file."""
+    _run([
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-vframes", "1",
+        "-q:v", "2",
+        str(output_path),
+    ], timeout=60)
+    return output_path
+
+
 def extract_last_frame(video_path: Path, output_path: Path) -> Path:
     """Extract the last frame of a video to an image file."""
     _run([
