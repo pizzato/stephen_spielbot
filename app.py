@@ -1237,7 +1237,6 @@ def build_ui() -> gr.Blocks:
                                         visible=False,
                                         height=160,
                                         interactive=False,
-                                        show_download_button=False,
                                     )
                         scene_titles.append(t)
                         scene_visuals.append(v)
