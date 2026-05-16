@@ -44,8 +44,6 @@ fi
 
 echo ""
 echo "ComfyUI workers:"
-check_comfyui "localhost" "http://localhost:8188"
-
 for host in $(remote_hosts); do
     check_comfyui "$host" "http://${host}:8188"
 done

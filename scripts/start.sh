@@ -36,34 +36,7 @@ wait_for_comfyui() {
     echo " TIMEOUT (ComfyUI may still be loading)"
 }
 
-# ── 1. Local ComfyUI ──────────────────────────────────────────────────────────
-
-echo "=== Starting ComfyUI (local) ==="
-
-if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-    echo "  [comfyui] already running (systemd)"
-elif systemctl --user list-unit-files comfyui-worker.service 2>/dev/null | grep -q comfyui; then
-    systemctl --user start comfyui-worker.service
-    echo "  [comfyui] started via systemd"
-elif pgrep -f "python.*main.py.*8188" &>/dev/null; then
-    echo "  [comfyui] already running (process)"
-else
-    COMFY_DIR="$HOME/github/ComfyUI"
-    COMFY_ENV="$HOME/github/comfyui-env"
-    if [[ ! -d "$COMFY_DIR" ]]; then
-        echo "  [comfyui] not installed locally — skipping (using remote workers only)"
-    else
-        echo "  [comfyui] starting directly..."
-        mkdir -p "$(dirname "$COMFY_DIR/comfyui.log")"
-        (source "$COMFY_ENV/bin/activate" && cd "$COMFY_DIR" && \
-            nohup python main.py --listen 0.0.0.0 --port 8188 \
-                >> "$COMFY_DIR/comfyui.log" 2>&1) &
-        echo "  [comfyui] started (log: $COMFY_DIR/comfyui.log)"
-        wait_for_comfyui "localhost" "http://localhost:8188"
-    fi
-fi
-
-# ── 2. Remote ComfyUI workers ─────────────────────────────────────────────────
+# ── 1. Remote ComfyUI workers ─────────────────────────────────────────────────
 
 for host in $(remote_hosts); do
     echo "=== Starting ComfyUI ($host) ==="
@@ -82,7 +55,7 @@ REMOTE
     wait_for_comfyui "$host" "http://${host}:8188"
 done
 
-# ── 3. Gradio app ─────────────────────────────────────────────────────────────
+# ── 2. Gradio app ─────────────────────────────────────────────────────────────
 
 echo "=== Starting Gradio app ==="
 
