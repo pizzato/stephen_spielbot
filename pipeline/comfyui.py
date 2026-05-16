@@ -486,6 +486,53 @@ def ltx_upscale_video(video_path: Path, output_path: Path, comfy_url: str = COMF
             (COMFYUI_INPUT_DIR / video_name).unlink(missing_ok=True)
 
 
+def generate_scene_image(
+    positive_prompt: str,
+    negative_prompt: str,
+    output_path: Path,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    lora_strength: float = 0.5,
+    first_pass_cfg: float = 1.0,
+    first_pass_steps: int = 8,
+    second_pass_cfg: float = 3.0,
+    second_pass_steps: int = 6,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Generate a high-detail preview image for a scene using LTX 2.3.
+
+    Generates the minimum-length video clip (13 frames ≈ 0.5 s) and extracts
+    the first frame.  Uses the same model as video generation so the visual
+    style is fully consistent when the frame is later fed into I2V.
+    """
+    import subprocess as _sp
+
+    tmp_video = output_path.with_suffix(".preview.mp4")
+    try:
+        generate_video_clip(
+            positive_prompt, negative_prompt, tmp_video,
+            width=width, height=height,
+            duration_seconds=0.5,   # 13 frames — LTX minimum that avoids latent rounding issues
+            seed=seed,
+            lora_strength=lora_strength,
+            first_pass_cfg=first_pass_cfg,
+            first_pass_steps=first_pass_steps,
+            second_pass_cfg=second_pass_cfg,
+            second_pass_steps=second_pass_steps,
+            comfy_url=comfy_url,
+        )
+        result = _sp.run(
+            ["ffmpeg", "-y", "-i", str(tmp_video), "-vframes", "1", "-q:v", "2", str(output_path)],
+            capture_output=True, timeout=60,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"First-frame extraction failed: {result.stderr.decode()[-500:]}")
+    finally:
+        tmp_video.unlink(missing_ok=True)
+    return output_path
+
+
 def generate_music(
     topic: str,
     duration_seconds: float,
