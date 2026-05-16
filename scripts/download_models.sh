@@ -74,7 +74,6 @@ download() {
     [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
     "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
-        --local-dir-use-symlinks False \
         --quiet \
         "${extra_args[@]}"
     local size
