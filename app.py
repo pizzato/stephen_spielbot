@@ -95,6 +95,14 @@ DEFAULT_CFG = {
     "local_llm_model": "openai/gpt-oss-120b",
     "claude_api_key": "",
     "claude_model": "claude-sonnet-4-6",
+    # FLUX image generation for scene previews
+    "flux_model":    "flux1-schnell-fp8.safetensors",
+    "flux_clip_t5":  "t5xxl_fp8_e4m3fn.safetensors",
+    "flux_clip_l":   "clip_l.safetensors",
+    "flux_vae":      "ae.safetensors",
+    "flux_steps":    4,
+    "flux_img_width":  1024,
+    "flux_img_height":  576,
     "voices": [],
     # ComfyUI worker URLs — one per line in the config UI.
     # Each worker handles one video generation job at a time.
@@ -314,19 +322,16 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
         yield (status_html, *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
         return
 
-    worker_pool      = WorkerPool(worker_urls)
-    lora_strength    = float(cfg.get("lora_strength", 0.5))
-    first_pass_cfg   = float(cfg.get("first_pass_cfg", 1.0))
-    first_pass_steps = int(cfg.get("first_pass_steps", 8))
-    second_pass_cfg  = float(cfg.get("second_pass_cfg", 3.0))
-    second_pass_steps = int(cfg.get("second_pass_steps", 6))
-    vid_width, vid_height = _RESOLUTIONS.get(
-        resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (832, 480)
-    )
-    style_clean = style.strip().rstrip(".") if style and style.strip() else ""
+    worker_pool   = WorkerPool(worker_urls)
+    flux_model    = cfg.get("flux_model",    "flux1-schnell-fp8.safetensors")
+    flux_clip_t5  = cfg.get("flux_clip_t5",  "t5xxl_fp8_e4m3fn.safetensors")
+    flux_clip_l   = cfg.get("flux_clip_l",   "clip_l.safetensors")
+    flux_vae      = cfg.get("flux_vae",      "ae.safetensors")
+    flux_steps    = int(cfg.get("flux_steps", 4))
+    img_width     = int(cfg.get("flux_img_width",  1024))
+    img_height    = int(cfg.get("flux_img_height",  576))
+    style_clean   = style.strip().rstrip(".") if style and style.strip() else ""
 
-    # We don't have a work_dir yet — use a temp directory for preview images.
-    # Images are later copied into the real work_dir by on_generate().
     import tempfile
     tmp_img_dir = Path(tempfile.mkdtemp(prefix="spielbot_preview_"))
 
@@ -336,7 +341,7 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
     def _img_status_html(done: int, total: int, extra: str = "") -> str:
         pct = done / total * 100 if total else 0
         color = "#22c55e" if done == total else "#7c3aed"
-        label = f"Scene preview images: {done}/{total} generated{extra}"
+        label = f"Scene preview images: {done}/{total}{extra}"
         return (
             f'<div style="padding:4px 0">'
             f'<div style="font-size:13px;color:#374151;margin-bottom:4px">{label}</div>'
@@ -345,25 +350,24 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
             f'</div></div>'
         )
 
-    yield (_img_status_html(0, n, " — generating…"), *img_upd, images_list)
+    yield (_img_status_html(0, n, " — generating with FLUX…"), *img_upd, images_list)
 
     def _gen_image(i: int) -> tuple[int, Path]:
         visual = list(scene_visuals)[i]
         prompt = f"{style_clean}. {visual}" if style_clean else visual
-        out    = tmp_img_dir / f"scene_{i+1:02d}_preview.jpg"
+        out    = tmp_img_dir / f"scene_{i+1:02d}_preview.png"
         if out.exists():
             return i, out
         url = worker_pool.acquire()
         try:
             generate_scene_image(
-                prompt, "",
-                out,
-                width=vid_width, height=vid_height,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
+                prompt, out,
+                width=img_width, height=img_height,
+                steps=flux_steps,
+                flux_model=flux_model,
+                clip_t5=flux_clip_t5,
+                clip_l=flux_clip_l,
+                flux_vae=flux_vae,
                 comfy_url=url,
             )
         finally:
@@ -374,14 +378,19 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
     pending: dict[concurrent.futures.Future, int] = {
         img_pool.submit(_gen_image, i): i for i in range(n)
     }
-    done_count = 0
+    done_count   = 0
+    last_yield   = time.time()
     try:
         while pending:
-            completed_futs, _ = concurrent.futures.wait(
-                list(pending.keys()), timeout=5,
+            # Wait up to 30 s for a completion; only yield to Gradio when something
+            # actually changed (or as a keepalive every 30 s) to avoid flooding the
+            # browser with SSE messages.
+            done_futs, _ = concurrent.futures.wait(
+                list(pending.keys()), timeout=30,
                 return_when=concurrent.futures.FIRST_COMPLETED,
             )
-            for fut in completed_futs:
+            changed = bool(done_futs)
+            for fut in done_futs:
                 idx = pending.pop(fut)
                 try:
                     _, img_path = fut.result()
@@ -394,8 +403,11 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                 except Exception as e:
                     logger.warning("Scene %d image generation failed: %s", idx + 1, e)
                     done_count += 1
-            extra = "" if done_count < n else " — done ✓"
-            yield (_img_status_html(done_count, n, extra), *img_upd, images_list)
+            now = time.time()
+            if changed or (now - last_yield >= 30):
+                extra = " ✓ done" if done_count >= n else f" — {len(pending)} remaining…"
+                yield (_img_status_html(done_count, n, extra), *img_upd, images_list)
+                last_yield = now
     finally:
         img_pool.shutdown(wait=False)
 
@@ -1113,7 +1125,10 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    workers_text: str, tts_workers_text: str,
                    llm_backend: str,
                    local_llm_url: str, local_llm_model: str,
-                   claude_api_key: str, claude_model: str):
+                   claude_api_key: str, claude_model: str,
+                   flux_model: str, flux_vae: str,
+                   flux_clip_t5: str, flux_clip_l: str,
+                   flux_steps: int, flux_img_width: int, flux_img_height: int):
     cfg = load_config()
     cfg["music_vol"]          = int(music_vol)
     cfg["voice_vol"]          = int(voice_vol)
@@ -1134,6 +1149,13 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["local_llm_model"]    = local_llm_model.strip() or "openai/gpt-oss-120b"
     cfg["claude_api_key"]     = claude_api_key.strip()
     cfg["claude_model"]       = claude_model.strip() or "claude-sonnet-4-6"
+    cfg["flux_model"]         = flux_model.strip() or "flux1-schnell-fp8.safetensors"
+    cfg["flux_vae"]           = flux_vae.strip() or "ae.safetensors"
+    cfg["flux_clip_t5"]       = flux_clip_t5.strip() or "t5xxl_fp8_e4m3fn.safetensors"
+    cfg["flux_clip_l"]        = flux_clip_l.strip() or "clip_l.safetensors"
+    cfg["flux_steps"]         = int(flux_steps)
+    cfg["flux_img_width"]     = int(flux_img_width)
+    cfg["flux_img_height"]    = int(flux_img_height)
     save_config(cfg)
     logger.info("Config saved: lora=%.2f workers=%s tts=%s",
                 lora_strength, cfg["comfy_workers"], cfg["tts_workers"])
@@ -1203,7 +1225,7 @@ def build_ui() -> gr.Blocks:
                         label="Auto-approve script (skip review)", value=False,
                     )
                     gen_scene_images_in = gr.Checkbox(
-                        label="Generate scene preview images (I2V first frames)", value=True,
+                        label="Generate scene preview images (FLUX, I2V first frames)", value=False,
                     )
 
                 gen_script_btn = gr.Button(
@@ -1446,6 +1468,49 @@ def build_ui() -> gr.Blocks:
                         placeholder="claude-sonnet-4-6",
                     )
 
+                gr.Markdown("### Scene Preview Images (FLUX.1-schnell)")
+                gr.Markdown(
+                    "FLUX.1-schnell generates high-quality preview images in ~4 steps. "
+                    "Enable the checkbox in the Create tab to use them as I2V first frames. "
+                    "Model files must already be present in ComfyUI's models directory — "
+                    "run `make install` to download them."
+                )
+                with gr.Row():
+                    cfg_flux_model = gr.Textbox(
+                        label="FLUX UNet model (models/unet/)",
+                        value=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                        placeholder="flux1-schnell-fp8.safetensors",
+                    )
+                    cfg_flux_vae = gr.Textbox(
+                        label="FLUX VAE (models/vae/)",
+                        value=cfg.get("flux_vae", "ae.safetensors"),
+                        placeholder="ae.safetensors",
+                    )
+                with gr.Row():
+                    cfg_flux_clip_t5 = gr.Textbox(
+                        label="T5 text encoder (models/clip/)",
+                        value=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                        placeholder="t5xxl_fp8_e4m3fn.safetensors",
+                    )
+                    cfg_flux_clip_l = gr.Textbox(
+                        label="CLIP-L text encoder (models/clip/)",
+                        value=cfg.get("flux_clip_l", "clip_l.safetensors"),
+                        placeholder="clip_l.safetensors",
+                    )
+                with gr.Row():
+                    cfg_flux_steps = gr.Slider(
+                        1, 20, value=cfg.get("flux_steps", 4), step=1,
+                        label="FLUX steps  —  4 = schnell (fast), 20 = dev (slow)",
+                    )
+                    cfg_flux_img_width = gr.Number(
+                        label="Preview width px",
+                        value=cfg.get("flux_img_width", 1024), precision=0,
+                    )
+                    cfg_flux_img_height = gr.Number(
+                        label="Preview height px",
+                        value=cfg.get("flux_img_height", 576), precision=0,
+                    )
+
                 save_cfg_btn = gr.Button("Save Defaults", variant="secondary")
                 cfg_status   = gr.Markdown("")
 
@@ -1616,7 +1681,10 @@ def build_ui() -> gr.Blocks:
                     cfg_workers, cfg_tts_workers,
                     cfg_llm_backend,
                     cfg_local_llm_url, cfg_local_llm_model,
-                    cfg_claude_key, cfg_claude_model],
+                    cfg_claude_key, cfg_claude_model,
+                    cfg_flux_model, cfg_flux_vae,
+                    cfg_flux_clip_t5, cfg_flux_clip_l,
+                    cfg_flux_steps, cfg_flux_img_width, cfg_flux_img_height],
             outputs=[cfg_status],
         )
 
