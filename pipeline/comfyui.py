@@ -1,6 +1,7 @@
 """ComfyUI API client for video and music generation."""
 
 import json
+import logging
 import random
 import shutil
 import time
@@ -9,6 +10,16 @@ import urllib.error
 import uuid
 import websocket  # websocket-client
 from pathlib import Path
+
+logger = logging.getLogger("video_gen")
+
+
+class StuckJobError(RuntimeError):
+    """ComfyUI job was running but made no node progress for too long."""
+
+
+class DroppedJobError(RuntimeError):
+    """ComfyUI job disappeared from the queue without completing."""
 
 _BOUNDARY = "----ComfyUIBoundary"
 
@@ -117,20 +128,98 @@ def _poll_completion(prompt_id: str, deadline: float, comfy_url: str = COMFYUI_U
     raise RuntimeError(f"ComfyUI timed out polling history for {prompt_id} ({comfy_url})")
 
 
+def _check_queue(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
+    """Return 'running', 'pending', or 'absent' for prompt_id in ComfyUI's queue."""
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/queue", timeout=10) as resp:
+            queue = json.loads(resp.read())
+        for item in queue.get("queue_running", []):
+            if len(item) > 1 and item[1] == prompt_id:
+                return "running"
+        for item in queue.get("queue_pending", []):
+            if len(item) > 1 and item[1] == prompt_id:
+                return "pending"
+    except Exception:
+        pass
+    return "absent"
+
+
+def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
+    """Return 'completed', 'error', or 'absent' from /history."""
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/history/{prompt_id}", timeout=10) as resp:
+            hist = json.loads(resp.read())
+        if prompt_id in hist:
+            s = hist[prompt_id].get("status", {})
+            if s.get("completed"):
+                return "completed"
+            if s.get("status_str") == "error":
+                return "error"
+    except Exception:
+        pass
+    return "absent"
+
+
+_QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
+_STUCK_TIMEOUT        = 600  # seconds of silence from a *running* job → StuckJobError
+
+
 def _wait_for_completion(
     prompt_id: str, client_id: str,
-    timeout: int = 600, comfy_url: str = COMFYUI_URL,
+    timeout: int = 900, comfy_url: str = COMFYUI_URL,
 ) -> None:
-    """Block until ComfyUI finishes executing prompt_id via WebSocket.
+    """Block until ComfyUI finishes executing prompt_id.
 
+    Actively monitors the job:
+    - WebSocket progress/executing messages reset a "last-seen-activity" timer.
+    - /queue is polled every 60 s:
+        * 'absent' and not in /history → DroppedJobError (re-queued by caller)
+        * 'running' with no activity for _STUCK_TIMEOUT → StuckJobError (retried by caller)
     Falls back to polling /history if the WebSocket drops.
     """
     ws = websocket.WebSocket()
     ws.connect(_ws_url(comfy_url, client_id))
-    start    = time.time()
-    deadline = start + timeout
+    start            = time.time()
+    deadline         = start + timeout
+    last_activity_at: float | None = None   # None until the job actually starts executing
+    last_queue_check = time.time()
+    nodes_done       = 0
+
     try:
         while time.time() < deadline:
+            now = time.time()
+
+            # ── periodic queue health check ────────────────────────────────
+            if now - last_queue_check >= _QUEUE_CHECK_INTERVAL:
+                last_queue_check = now
+                q_status = _check_queue(prompt_id, comfy_url)
+                logger.info(
+                    "[comfy] job %s… queue=%s nodes_done=%d elapsed=%.0fs",
+                    prompt_id[:8], q_status, nodes_done, now - start,
+                )
+
+                if q_status == "absent":
+                    h_status = _check_history(prompt_id, comfy_url)
+                    if h_status == "completed":
+                        return
+                    if h_status == "error":
+                        raise RuntimeError(f"ComfyUI job {prompt_id} failed (history error)")
+                    raise DroppedJobError(
+                        f"Job {prompt_id} vanished from queue on {comfy_url} without completing"
+                        f" — will re-submit"
+                    )
+
+                # Stuck detection: only once the job has started executing
+                if last_activity_at is not None and q_status == "running":
+                    stalled = now - last_activity_at
+                    if stalled > _STUCK_TIMEOUT:
+                        raise StuckJobError(
+                            f"Job {prompt_id} on {comfy_url} has been running but produced no"
+                            f" node activity for {stalled:.0f}s (limit {_STUCK_TIMEOUT}s)"
+                            f" — will re-submit"
+                        )
+
+            # ── WebSocket receive ──────────────────────────────────────────
             ws.settimeout(30)
             try:
                 msg = json.loads(ws.recv())
@@ -142,10 +231,20 @@ def _wait_for_completion(
             mtype = msg.get("type")
             data  = msg.get("data", {})
 
-            if mtype == "executing" and data.get("prompt_id") == prompt_id and data.get("node") is None:
-                return
-            if mtype == "execution_error" and data.get("prompt_id") == prompt_id:
+            if data.get("prompt_id") != prompt_id:
+                continue  # message for a different job
+
+            if mtype == "progress":
+                last_activity_at = time.time()
+                nodes_done = data.get("value", nodes_done)
+            elif mtype == "executing":
+                node = data.get("node")
+                if node is None:
+                    return   # execution finished
+                last_activity_at = time.time()
+            elif mtype == "execution_error":
                 raise RuntimeError(f"ComfyUI execution error: {data}")
+
     finally:
         try:
             ws.close()
@@ -247,9 +346,14 @@ def generate_video_clip(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
+    # Timeout scales with pixel count: 15 min baseline at 832×480, capped at 60 min.
+    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT   # 399 360
+    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
+    logger.info("[comfy] generate_video_clip %dx%d timeout=%ds", width, height, _video_timeout)
+
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=900, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url)
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
@@ -305,9 +409,13 @@ def generate_video_continuation(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
+    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT
+    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
+    logger.info("[comfy] generate_video_continuation %dx%d timeout=%ds", width, height, _video_timeout)
+
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=900, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url)
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
