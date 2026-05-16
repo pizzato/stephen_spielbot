@@ -13,6 +13,16 @@ remote_hosts() {
     grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
 }
 
+# Find PIDs of whatever process is listening on port 8188.
+# Works regardless of how ComfyUI was invoked (with or without --port 8188).
+comfyui_pids() {
+    # lsof: BSD/macOS and most Linux
+    lsof -ti TCP:8188 -s TCP:LISTEN 2>/dev/null \
+    || ss -tlnp 'sport = :8188' 2>/dev/null \
+       | grep -oP 'pid=\K[0-9]+' \
+    || true
+}
+
 # ── 1. Gradio app ─────────────────────────────────────────────────────────────
 
 echo "=== Stopping Gradio app ==="
@@ -27,7 +37,6 @@ if [[ -f "$PID_FILE" ]]; then
     fi
     rm -f "$PID_FILE"
 else
-    # Fallback: find by process name
     PIDS=$(pgrep -f "python.*app\.py" 2>/dev/null || true)
     if [[ -n "$PIDS" ]]; then
         kill $PIDS
@@ -45,7 +54,7 @@ if systemctl --user is-active comfyui-worker.service &>/dev/null; then
     systemctl --user stop comfyui-worker.service
     echo "  [comfyui] stopped (systemd)"
 else
-    PIDS=$(pgrep -f "python.*main\.py.*8188" 2>/dev/null || true)
+    PIDS=$(comfyui_pids)
     if [[ -n "$PIDS" ]]; then
         kill $PIDS
         echo "  [comfyui] stopped (PID $PIDS)"
@@ -63,7 +72,10 @@ for host in $(remote_hosts); do
             systemctl --user stop comfyui-worker.service
             echo "  [comfyui] stopped (systemd)"
         else
-            PIDS=$(pgrep -f "python.*main\.py.*8188" 2>/dev/null || true)
+            # Find by port rather than command-line pattern — works however ComfyUI was started
+            PIDS=$(lsof -ti TCP:8188 -s TCP:LISTEN 2>/dev/null \
+                || ss -tlnp 'sport = :8188' 2>/dev/null | grep -oP 'pid=\K[0-9]+' \
+                || true)
             if [[ -n "$PIDS" ]]; then
                 kill $PIDS
                 echo "  [comfyui] stopped (PID $PIDS)"
