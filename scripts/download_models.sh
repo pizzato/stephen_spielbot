@@ -168,9 +168,9 @@ else
         "clip_l.safetensors" \
         "models/clip"
 
-    # FLUX VAE
+    # FLUX VAE (hosted in the original Black Forest Labs repo)
     download \
-        "Comfy-Org/flux1-schnell" \
+        "black-forest-labs/FLUX.1-schnell" \
         "ae.safetensors" \
         "models/vae"
 fi
