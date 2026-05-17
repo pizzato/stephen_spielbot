@@ -60,7 +60,7 @@ class Scene:
 # Claude backend
 # ══════════════════════════════════════════════════════════════════════════════
 
-_CLAUDE_SYSTEM = """You are a video script writer. Given a topic title, generate a structured video script.
+_CLAUDE_SYSTEM = """You are a video script writer specialising in YouTube documentary content. Given a topic title, generate a structured video script optimised for viewer retention.
 
 Output ONLY a JSON object with exactly three keys:
 
@@ -75,7 +75,12 @@ Output ONLY a JSON object with exactly three keys:
   - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
   - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
 
-Write the narrations as a continuous narrative — each scene follows naturally from the last.
+STRUCTURE RULES — critical for YouTube retention:
+- Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
+- Middle scenes: Build the narrative progressively, each scene raising the stakes or deepening understanding. Every narration should end with an implicit pull toward the next scene.
+- Final scene (conclusion): Land with a satisfying payoff — a moment of insight, wonder, or emotional resolution that makes the viewer feel their time was well spent. Leave them with something worth remembering or sharing.
+
+Write the narrations as a single continuous narrative. The arc must feel purposeful: curiosity ignited → journey deepened → reward delivered.
 
 Output only the raw JSON object. No markdown, no code fences, no explanation."""
 
@@ -143,7 +148,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 _STORY_SYSTEM = """\
-You are a video script writer. Write a complete narrated story for an AI-generated documentary video.
+You are a video script writer specialising in YouTube documentary content. Write a complete narrated story for an AI-generated documentary video, optimised for viewer retention.
 
 Output ONLY plain text using this exact format — no JSON, no markdown, no extra commentary:
 
@@ -156,7 +161,10 @@ NARRATION_2: [exactly 2 sentences, approximately 9 seconds when read aloud at a 
 ...continue for all N scenes
 
 Rules:
-- Write narrations as a coherent flowing story — each paragraph follows naturally from the last.
+- SCENE 1 must open with a compelling hook: tease the most surprising or emotionally resonant moment from later in the video — a question unanswered, a tension unresolved, or a revelation hinted at but withheld. Make the listener feel they cannot afford to stop watching.
+- MIDDLE SCENES build the narrative progressively, deepening understanding and raising stakes. Each narration should carry an implicit pull toward the next scene.
+- FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
+- Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
 - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
 - Every value must fit on a single line (no line breaks within a value).
 - No blank lines between entries.
