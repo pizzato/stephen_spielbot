@@ -1,7 +1,7 @@
 CONF    ?= cluster.conf
 SCRIPTS := scripts
 
-.PHONY: install download-models download-flux start stop restart restart-server status help
+.PHONY: install download-models download-flux download-flux-cluster start stop restart restart-server status help
 
 ## Install deps locally + download models (LTX + ACE-Step, no FLUX) + install workers.
 install:
@@ -11,9 +11,13 @@ install:
 download-models:
 	@SKIP_FLUX=1 bash $(SCRIPTS)/download_models.sh
 
-## Download FLUX.1-schnell models for scene preview images (~13 GB, requires free disk space).
+## Download FLUX.1-schnell models locally (~13 GB).
 download-flux:
 	@bash $(SCRIPTS)/download_models.sh
+
+## Download FLUX.1-schnell models to the first cluster node, then rsync to all workers.
+download-flux-cluster:
+	@bash $(SCRIPTS)/download_flux_cluster.sh $(CONF)
 
 ## Start ComfyUI on all workers and the Gradio app locally.
 start:
@@ -40,7 +44,8 @@ help:
 	@echo ""
 	@echo "  install         Install deps locally; download LTX+ACE models; install workers in $(CONF)"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
-	@echo "  download-flux   Download FLUX.1-schnell models for scene previews (~13 GB)"
+	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)
+  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo "  start           Start ComfyUI on all workers, then launch the Gradio app"
 	@echo "  stop            Stop the Gradio app and ComfyUI on all workers"
 	@echo "  restart         Stop everything, then start everything"
