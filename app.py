@@ -1257,6 +1257,43 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
+_PERSIST_JS = """
+() => {
+    const KEY = 'spielbot_title';
+    function setup() {
+        const el = document.getElementById('title_input');
+        if (!el) { setTimeout(setup, 150); return; }
+        const ta = el.querySelector('textarea');
+        if (!ta) { setTimeout(setup, 150); return; }
+
+        // Save on every keystroke
+        ta.addEventListener('input', () => { if (ta.value) localStorage.setItem(KEY, ta.value); });
+
+        // Restore: poll until value is stable (Gradio has finished initialising)
+        const saved = localStorage.getItem(KEY);
+        if (!saved) return;
+        let prev = ta.value, ticks = 0;
+        const iv = setInterval(() => {
+            if (ta.value === prev) {
+                ticks++;
+                if (ticks >= 4) {          // stable for ~400 ms
+                    clearInterval(iv);
+                    if (!ta.value) {       // only restore if Gradio left it empty
+                        ta.value = saved;
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+                }
+            } else {
+                prev = ta.value; ticks = 0;
+            }
+        }, 100);
+    }
+    setup();
+    return [];
+}
+"""
+
+
 def build_ui() -> gr.Blocks:
     cfg = load_config()
 
@@ -1292,6 +1329,7 @@ def build_ui() -> gr.Blocks:
                         title_in = gr.Textbox(
                             label="Describe what you want to create",
                             placeholder="e.g.  The History of the Roman Empire",
+                            elem_id="title_input",
                         )
                     with gr.Column(scale=1):
                         n_scenes_in = gr.Slider(1, MAX_SCENES, value=5, step=1, label="Scenes")
@@ -1817,6 +1855,8 @@ def build_ui() -> gr.Blocks:
             inputs=[remove_voice_dd],
             outputs=[voices_table, voice_dropdown, remove_voice_dd, cfg_status],
         )
+
+        demo.load(fn=None, js=_PERSIST_JS)
 
     return demo
 
