@@ -44,8 +44,8 @@ help:
 	@echo ""
 	@echo "  install         Install deps locally; download all models (LTX+ACE+FLUX); install workers in $(CONF)"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
-	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)
-  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
+	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
+	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo "  start           Start ComfyUI on all workers, then launch the Gradio app"
 	@echo "  stop            Stop the Gradio app and ComfyUI on all workers"
 	@echo "  restart         Stop everything, then start everything"
