@@ -168,9 +168,9 @@ else
         "clip_l.safetensors" \
         "models/clip"
 
-    # FLUX VAE (hosted in the original Black Forest Labs repo)
+    # FLUX VAE — BFL repo requires license approval; use public mirror instead
     download \
-        "black-forest-labs/FLUX.1-schnell" \
+        "camenduru/FLUX.1-dev" \
         "ae.safetensors" \
         "models/vae"
 fi
