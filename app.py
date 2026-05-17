@@ -50,7 +50,7 @@ from pipeline.assembler import (
 )
 from pipeline.worker_pool import WorkerPool, alive_workers
 
-MAX_SCENES    = 12
+MAX_SCENES    = 30
 MAX_CLIP_SECS = 12.0  # LTX 2.3 hard limit (~301 frames at 25fps)
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -243,22 +243,21 @@ def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -
 
 # ── Script generation ────────────────────────────────────────────────────────
 
-def on_generate_script(title: str, n_scenes: int, auto_approve: bool, style_hint: str):
+def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
     if not title.strip():
-        raise gr.Error("Please enter a topic title.")
+        raise gr.Error("Please describe what you want to create.")
 
-    logger.info("on_generate_script — title=%r n_scenes=%d auto_approve=%s style_hint=%r",
-                title, n_scenes, auto_approve, style_hint)
+    logger.info("on_generate_script — title=%r n_scenes=%d auto_approve=%s",
+                title, n_scenes, auto_approve)
     try:
         scenes, music_desc, style = generate_script(
             title.strip(), int(n_scenes),
-            style_hint=style_hint.strip() if style_hint else None,
         )
     except Exception as e:
         logger.exception("generate_script failed")
         first_line = str(e).split("\n")[0][:300]
         gr.Warning(f"Script generation failed: {first_line}")
-        return (gr.update(),) * 53
+        return (gr.update(),) * (2 + MAX_SCENES * 4 + 3)
 
     logger.info("Script generated — %d scenes, music: %r, style: %r", len(scenes), music_desc, style)
 
@@ -284,7 +283,7 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool, style_hint
     except Exception as e:
         logger.exception("on_generate_script failed assembling return value")
         gr.Warning(f"Failed to process script: {str(e)[:200]}")
-        return (gr.update(),) * 53
+        return (gr.update(),) * (2 + MAX_SCENES * 4 + 3)
 
 
 # ── Scene image generation — yields progressive updates to the Script tab ────
@@ -523,7 +522,7 @@ def _generate_scene_video(
 # gen_outputs count: 1 (progress_bar) + MAX_SCENES (audios) + 1 (music)
 #                  + MAX_SCENES (videos) + 1 (final_video) + 1 (combined_state)
 #                  + 1 (music_state) + 1 (ambient_state) + 1 (tabs)
-_GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1  # = 31
+_GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1
 
 
 def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
@@ -1198,17 +1197,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     with gr.Column(scale=3):
                         title_in = gr.Textbox(
-                            label="Topic / Title",
+                            label="Describe what you want to create",
                             placeholder="e.g.  The History of the Roman Empire",
                         )
                     with gr.Column(scale=1):
-                        n_scenes_in = gr.Slider(2, MAX_SCENES, value=5, step=1, label="Scenes")
-
-                style_in = gr.Textbox(
-                    label="Visual Style (optional — leave blank for LLM to generate)",
-                    placeholder="e.g.  cinematic 35mm film, warm golden tones, shallow depth of field",
-                    lines=1,
-                )
+                        n_scenes_in = gr.Slider(1, MAX_SCENES, value=5, step=1, label="Scenes")
 
                 with gr.Row():
                     voice_dropdown = gr.Dropdown(
@@ -1584,7 +1577,7 @@ def build_ui() -> gr.Blocks:
             inputs=[], outputs=[gen_script_btn],
         ).then(
             fn=on_generate_script,
-            inputs=[title_in, n_scenes_in, auto_approve_in, style_in],
+            inputs=[title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
             fn=lambda gen_img: (
