@@ -294,17 +294,13 @@ _IMG_GEN_OUT_COUNT = 1 + MAX_SCENES + 1
 
 
 def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, *scene_visuals):
-    """Generate a preview image for each scene right after script creation.
+    """Generate a FLUX preview image for each scene (always runs — needed for I2V).
 
-    Runs as a Gradio generator so images appear in the Script tab progressively.
-    If gen_scene_images is False, yields a single no-op and returns immediately.
+    gen_scene_images controls whether images are shown in the Script tab UI.
+    Image generation itself always runs because video is always I2V, not T2V.
     """
     n = int(n_scenes_val)
     no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
-
-    if not gen_scene_images:
-        yield no_op
-        return
 
     cfg          = load_config()
     all_workers  = cfg.get("comfy_workers", [])
@@ -395,7 +391,7 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                 try:
                     _, img_path = fut.result()
                     img_upd = list(img_upd)
-                    img_upd[idx] = gr.update(value=str(img_path), visible=True)
+                    img_upd[idx] = gr.update(value=str(img_path), visible=bool(gen_scene_images))
                     images_list = list(images_list)
                     images_list[idx] = str(img_path)
                     done_count += 1
@@ -428,10 +424,14 @@ def _generate_scene_video(
     second_pass_steps: int,
     comfy_url: str,
     scene_first_frame: Path | None = None,
+    flux_cfg: dict | None = None,
 ) -> tuple[Path, Path | None]:
-    """Generate all video clips for a scene, return (raw_video, ambient_wav).
-    Raw video retains the original LTX audio. Narration is muxed later at assembly.
-    Runs entirely in a background thread — no yields."""
+    """Generate all video clips for a scene using I2V (image-to-video).
+
+    Always uses a FLUX-generated first frame — never T2V from noise.
+    If scene_first_frame is not pre-supplied, generates one inline with FLUX.
+    Runs entirely in a background thread — no yields.
+    """
     clips: list[Path] = []
     ambient_clips: list[Path] = []
     last_frame: Path | None = None
@@ -440,50 +440,43 @@ def _generate_scene_video(
 
     _CLIP_BUFFER_SECS = 1.0  # always request 1s extra so the clip outlasts the narration
 
+    # Ensure we have a first-frame image for I2V — generate with FLUX if not pre-supplied.
+    if scene_first_frame is None or not scene_first_frame.exists():
+        fx = flux_cfg or {}
+        first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
+        logger.info("  [%s] scene %d: generating FLUX first frame inline", comfy_url, scene.id)
+        generate_scene_image(
+            scene.visual_prompt, first_frame_path,
+            width=vid_width, height=vid_height,
+            flux_model=fx.get("model", "flux1-schnell-fp8.safetensors"),
+            clip_t5=fx.get("clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+            clip_l=fx.get("clip_l", "clip_l.safetensors"),
+            flux_vae=fx.get("vae", "ae.safetensors"),
+            steps=fx.get("steps", 4),
+            comfy_url=comfy_url,
+        )
+        scene_first_frame = first_frame_path
+
     while remaining > 0.5:
         clip_dur     = min(remaining, max_clip_secs)
         request_dur  = clip_dur + _CLIP_BUFFER_SECS  # trimmed to narration by mux step
         clip_path = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}.mp4"
 
-        if last_frame is None and scene_first_frame is not None and scene_first_frame.exists():
-            # Use the pre-generated scene preview image as first frame (I2V)
-            logger.info("  [%s] scene %d seg %d: using preview image as first frame (I2V)",
-                        comfy_url, scene.id, seg_idx + 1)
-            generate_video_continuation(
-                scene.visual_prompt, scene.negative_prompt, scene_first_frame, clip_path,
-                width=vid_width, height=vid_height,
-                duration_seconds=request_dur,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
-                comfy_url=comfy_url,
-            )
-        elif last_frame is None:
-            generate_video_clip(
-                scene.visual_prompt, scene.negative_prompt, clip_path,
-                width=vid_width, height=vid_height,
-                duration_seconds=request_dur,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
-                comfy_url=comfy_url,
-            )
-        else:
-            generate_video_continuation(
-                scene.visual_prompt, scene.negative_prompt, last_frame, clip_path,
-                width=vid_width, height=vid_height,
-                duration_seconds=request_dur,
-                lora_strength=lora_strength,
-                first_pass_cfg=first_pass_cfg,
-                first_pass_steps=first_pass_steps,
-                second_pass_cfg=second_pass_cfg,
-                second_pass_steps=second_pass_steps,
-                comfy_url=comfy_url,
-            )
+        anchor = scene_first_frame if last_frame is None else last_frame
+        logger.info("  [%s] scene %d seg %d: I2V from %s",
+                    comfy_url, scene.id, seg_idx + 1,
+                    "preview image" if last_frame is None else "last frame")
+        generate_video_continuation(
+            scene.visual_prompt, scene.negative_prompt, anchor, clip_path,
+            width=vid_width, height=vid_height,
+            duration_seconds=request_dur,
+            lora_strength=lora_strength,
+            first_pass_cfg=first_pass_cfg,
+            first_pass_steps=first_pass_steps,
+            second_pass_cfg=second_pass_cfg,
+            second_pass_steps=second_pass_steps,
+            comfy_url=comfy_url,
+        )
 
         actual_dur = _get_duration(clip_path)
         logger.info("  [%s] scene %d seg %d: %.1fs (%.1f MB)",
@@ -557,6 +550,13 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     first_pass_steps  = int(cfg.get("first_pass_steps", 8))
     second_pass_cfg   = float(cfg.get("second_pass_cfg", 3.0))
     second_pass_steps = int(cfg.get("second_pass_steps", 6))
+    flux_cfg = {
+        "model":  cfg.get("flux_model",   "flux1-schnell-fp8.safetensors"),
+        "clip_t5": cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+        "clip_l":  cfg.get("flux_clip_l",  "clip_l.safetensors"),
+        "vae":     cfg.get("flux_vae",     "ae.safetensors"),
+        "steps":   int(cfg.get("flux_steps", 4)),
+    }
     worker_urls       = alive_workers(cfg.get("comfy_workers", []))
     worker_pool       = WorkerPool(worker_urls)
     logger.info("Workers: %s", worker_urls)
@@ -764,6 +764,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                         second_pass_cfg, second_pass_steps,
                         comfy_url=url,
                         scene_first_frame=scene_preview_map.get(scene.id),
+                        flux_cfg=flux_cfg,
                     )
                     return scene.id, sf, sa
                 except Exception as e:
@@ -1225,7 +1226,7 @@ def build_ui() -> gr.Blocks:
                         label="Auto-approve script (skip review)", value=False,
                     )
                     gen_scene_images_in = gr.Checkbox(
-                        label="Generate scene preview images (FLUX, I2V first frames)", value=False,
+                        label="Show scene preview images in Script tab", value=True,
                     )
 
                 gen_script_btn = gr.Button(
@@ -1470,10 +1471,11 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown("### Scene Preview Images (FLUX.1-schnell)")
                 gr.Markdown(
-                    "FLUX.1-schnell generates high-quality preview images in ~4 steps. "
-                    "Enable the checkbox in the Create tab to use them as I2V first frames. "
-                    "Model files must already be present in ComfyUI's models directory — "
-                    "run `make install` to download them."
+                    "FLUX.1-schnell generates a first-frame image for every scene before video generation. "
+                    "Video is always I2V (image-to-video) — T2V is never used. "
+                    "The checkbox in the Create tab controls whether images are shown here; "
+                    "generation always runs. Model files must be in ComfyUI's models directory — "
+                    "run `make download-flux` to download them."
                 )
                 with gr.Row():
                     cfg_flux_model = gr.Textbox(
