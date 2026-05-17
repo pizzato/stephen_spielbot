@@ -161,7 +161,7 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
 
 
 _QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
-_STUCK_TIMEOUT        = 120  # seconds of silence from a *running* job → StuckJobError
+_STUCK_TIMEOUT        = 600  # seconds of silence from a *running* job → StuckJobError
 _PENDING_TIMEOUT      = 180  # seconds a job may sit *pending* before we try another worker
 
 
