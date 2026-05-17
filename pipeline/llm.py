@@ -9,6 +9,7 @@ Claude backend: single call, JSON output, reliable.
 Local backend:  two-stage plain-text (story + per-scene visuals), works
                 around the reasoning-model token constraints.
 """
+from __future__ import annotations
 
 import concurrent.futures
 import json
@@ -84,58 +85,73 @@ Write the narrations as a single continuous narrative. The arc must feel purpose
 
 Output only the raw JSON object. No markdown, no code fences, no explanation."""
 
+_CLAUDE_CONTINUATION_SYSTEM = """You are a video script writer specialising in YouTube documentary content, continuing a multi-part script in progress.
+
+Output ONLY a JSON array of scene objects. Each object has exactly these keys:
+  - "id": integer scene number (as specified in the request)
+  - "title": 5-10 word scene title
+  - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
+  - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors.
+  - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.
+
+Output only the raw JSON array. No markdown, no code fences, no explanation."""
+
+_CLAUDE_BATCH_SIZE = 10  # max scenes per API call
+
+
+def _parse_claude_response(content: str, label: str):
+    """Strip fences, remove trailing commas, parse JSON. Raises RuntimeError on failure."""
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    content = re.sub(r",\s*([}\]])", r"\1", content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Claude returned invalid JSON ({label}): {e}\nContent: {content[:400]}")
+
+
+def _claude_call(client, model: str, system: str, user_msg: str,
+                 max_tokens: int, label: str) -> str:
+    response = client.messages.create(
+        model=model, max_tokens=max_tokens, system=system,
+        messages=[{"role": "user", "content": user_msg}],
+    )
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"Claude hit the token limit ({max_tokens}) for {label}. "
+            "Try fewer scenes or a shorter topic."
+        )
+    return response.content[0].text.strip()
+
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str) -> tuple[list[Scene], str, str]:
     import anthropic
+    client = anthropic.Anthropic(api_key=api_key)
 
+    # ── Batch 1: style + music + first BATCH_SIZE scenes ──────────────────────
+    first_batch = min(_CLAUDE_BATCH_SIZE, n_scenes)
     style_note = (
         f'\nIMPORTANT: Use exactly this text for the "style" field: "{style_hint}"'
-        if style_hint and style_hint.strip()
-        else ""
+        if style_hint and style_hint.strip() else ""
+    )
+    is_last_batch = (first_batch == n_scenes)
+    conclusion_note = (
+        f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
+        if is_last_batch else ""
     )
     user_msg = (
         f'Generate a {n_scenes}-scene video script for the topic: "{title}"\n'
-        f"Output exactly {n_scenes} scenes.{style_note}"
+        f"Output exactly {first_batch} scenes, numbered 1 to {first_batch}.{style_note}{conclusion_note}"
     )
+    max_tokens = first_batch * 350 + 500
+    raw = _claude_call(client, model, _CLAUDE_SYSTEM, user_msg, max_tokens, f"scenes 1–{first_batch}")
+    outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
-    # ~350 tokens/scene (image_prompt + video_prompt + narration + title) + 500 overhead
-    max_tokens = max(8096, n_scenes * 350 + 500)
-
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=max_tokens,
-        system=_CLAUDE_SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError(
-            f"Claude hit the token limit ({max_tokens}) before finishing the script "
-            f"for {n_scenes} scenes. Try fewer scenes."
-        )
-
-    content = response.content[0].text.strip()
-
-    # Strip markdown fences if present
-    if content.startswith("```"):
-        lines = content.splitlines()
-        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-    # Remove trailing commas
-    content = re.sub(r",\s*([}\]])", r"\1", content)
-
-    try:
-        outer = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Claude returned invalid JSON: {e}\nContent: {content[:500]}")
-
-    style      = (style_hint.strip() if style_hint and style_hint.strip()
-                  else outer.get("style", ""))
+    style      = style_hint.strip() if style_hint and style_hint.strip() else outer.get("style", "")
     music_desc = outer.get("music", "cinematic orchestral background music, atmospheric, instrumental")
     scenes_data = outer.get("scenes", [])
-
     if not scenes_data:
         raise RuntimeError("Claude returned empty scene list")
 
@@ -147,9 +163,49 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
         )
-        for i, item in enumerate(scenes_data[:n_scenes])
+        for i, item in enumerate(scenes_data[:first_batch])
     ]
-    return scenes, music_desc, style
+
+    # ── Continuation batches ──────────────────────────────────────────────────
+    batch_start = first_batch + 1
+    while batch_start <= n_scenes:
+        batch_end   = min(batch_start + _CLAUDE_BATCH_SIZE - 1, n_scenes)
+        is_last     = batch_end == n_scenes
+        # Provide last 3 scenes as continuity context
+        ctx = [
+            {"id": s.id, "title": s.title, "narration": s.narration}
+            for s in scenes[-3:]
+        ]
+        ctx_str = "\n".join(
+            f'  Scene {s["id"]}: "{s["title"]}" — {s["narration"]}' for s in ctx
+        )
+        conclusion_note = (
+            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — deliver a satisfying payoff."
+            if is_last else ""
+        )
+        cont_msg = (
+            f'Continue the {n_scenes}-scene video script for: "{title}"\n'
+            f"Generate scenes {batch_start} to {batch_end} "
+            f"(scene IDs {batch_start}–{batch_end}).\n\n"
+            f"Previous scenes for narrative continuity:\n{ctx_str}{conclusion_note}"
+        )
+        max_tokens = (batch_end - batch_start + 1) * 350 + 300
+        raw = _claude_call(client, model, _CLAUDE_CONTINUATION_SYSTEM, cont_msg,
+                           max_tokens, f"scenes {batch_start}–{batch_end}")
+        items = _parse_claude_response(raw, f"scenes {batch_start}–{batch_end}")
+        if not isinstance(items, list):
+            items = items.get("scenes", [])
+        for i, item in enumerate(items):
+            scenes.append(Scene(
+                id=batch_start + i,
+                title=item.get("title", f"Scene {batch_start + i}"),
+                image_prompt=item.get("image_prompt", title),
+                video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
+                narration=item.get("narration", ""),
+            ))
+        batch_start = batch_end + 1
+
+    return scenes[:n_scenes], music_desc, style
 
 
 # ══════════════════════════════════════════════════════════════════════════════
