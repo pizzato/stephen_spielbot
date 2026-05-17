@@ -391,7 +391,8 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                 try:
                     _, img_path = fut.result()
                     img_upd = list(img_upd)
-                    img_upd[idx] = gr.update(value=str(img_path), visible=bool(gen_scene_images))
+                    img_upd[idx] = gr.update(value=str(img_path), visible=bool(gen_scene_images),
+                                              label="Scene Preview (first frame)")
                     images_list = list(images_list)
                     images_list[idx] = str(img_path)
                     done_count += 1
