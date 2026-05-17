@@ -99,13 +99,22 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         f"Output exactly {n_scenes} scenes.{style_note}"
     )
 
+    # ~350 tokens/scene (image_prompt + video_prompt + narration + title) + 500 overhead
+    max_tokens = max(8096, n_scenes * 350 + 500)
+
     client = anthropic.Anthropic(api_key=api_key)
     response = client.messages.create(
         model=model,
-        max_tokens=8096,
+        max_tokens=max_tokens,
         system=_CLAUDE_SYSTEM,
         messages=[{"role": "user", "content": user_msg}],
     )
+
+    if response.stop_reason == "max_tokens":
+        raise RuntimeError(
+            f"Claude hit the token limit ({max_tokens}) before finishing the script "
+            f"for {n_scenes} scenes. Try fewer scenes."
+        )
 
     content = response.content[0].text.strip()
 
