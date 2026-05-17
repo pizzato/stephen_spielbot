@@ -162,6 +162,7 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
 
 _QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
 _STUCK_TIMEOUT        = 120  # seconds of silence from a *running* job → StuckJobError
+_PENDING_TIMEOUT      = 180  # seconds a job may sit *pending* before we try another worker
 
 
 def _wait_for_completion(
@@ -207,6 +208,14 @@ def _wait_for_completion(
                     raise DroppedJobError(
                         f"Job {prompt_id} vanished from queue on {comfy_url} without completing"
                         f" — will re-submit"
+                    )
+
+                # Pending timeout: worker's queue is blocked by another job.
+                if q_status == "pending" and now - start > _PENDING_TIMEOUT:
+                    raise StuckJobError(
+                        f"Job {prompt_id} on {comfy_url} has been pending in queue for"
+                        f" {now - start:.0f}s (limit {_PENDING_TIMEOUT}s)"
+                        f" — worker blocked, will try another"
                     )
 
                 # Stuck detection: fires whenever the job is "running".
@@ -525,7 +534,7 @@ def generate_scene_image(
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=300, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:

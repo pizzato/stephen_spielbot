@@ -1729,9 +1729,12 @@ def build_ui() -> gr.Blocks:
         # Keep style_state in sync when user edits style_box directly
         style_box.change(fn=lambda v: v, inputs=[style_box], outputs=[style_state])
 
-        # Sync script_resolution_in → resolution_in so video uses the same resolution as previews
+        # Bidirectional sync between Create-tab resolution and Script-tab preview resolution
         script_resolution_in.change(
             fn=lambda v: v, inputs=[script_resolution_in], outputs=[resolution_in]
+        )
+        resolution_in.change(
+            fn=lambda v: v, inputs=[resolution_in], outputs=[script_resolution_in]
         )
 
         # Regenerate all scene images at the selected resolution
