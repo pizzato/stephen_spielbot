@@ -41,7 +41,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pipeline.llm import generate_script, Scene, NEGATIVE_PROMPT
 from pipeline.comfyui import (
     generate_video_clip, generate_video_continuation, generate_music,
-    generate_scene_image,
+    generate_scene_image, StuckJobError,
 )
 from pipeline.assembler import (
     _get_duration, concat_clips, mux_video_audio, extract_first_frame,
@@ -733,7 +733,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 except Exception as _music_err:
                     logger.warning("Music attempt %d/%d failed on %s: %s",
                                    _music_attempt, _MAX_MUSIC_ATTEMPTS, music_url, _music_err)
-                    if any(kw in str(_music_err) for kw in _WORKER_ERR_KEYWORDS):
+                    if isinstance(_music_err, StuckJobError) or any(kw in str(_music_err) for kw in _WORKER_ERR_KEYWORDS):
                         worker_pool.mark_failed(music_url)
                     else:
                         worker_pool.release(music_url)
@@ -777,9 +777,13 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                     return scene.id, sf, sa
                 except Exception as e:
                     last_err = e
-                    if any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS):
+                    is_worker_fault = (
+                        isinstance(e, StuckJobError)
+                        or any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS)
+                    )
+                    if is_worker_fault:
                         logger.warning(
-                            "Worker %s unreachable for scene %d (attempt %d/%d): %s — removing from pool",
+                            "Worker %s unhealthy for scene %d (attempt %d/%d): %s — removing from pool",
                             url, scene.id, attempt, _MAX_SCENE_ATTEMPTS, e,
                         )
                         worker_pool.mark_failed(url)
