@@ -255,22 +255,23 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
         logger.exception("generate_script failed")
         first_line = str(e).split("\n")[0][:300]
         gr.Warning(f"Script generation failed: {first_line}")
-        return (gr.update(),) * (2 + MAX_SCENES * 4 + 3)
+        return (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
 
     logger.info("Script generated — %d scenes, music: %r, style: %r", len(scenes), music_desc, style)
 
     try:
-        titles  = [s.title         for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        visuals = [s.visual_prompt for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        narrs   = [s.narration     for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        blocks  = [gr.update(visible=(i < len(scenes))) for i in range(MAX_SCENES)]
+        titles      = [s.title        for s in scenes] + [""] * (MAX_SCENES - len(scenes))
+        img_prompts = [s.image_prompt for s in scenes] + [""] * (MAX_SCENES - len(scenes))
+        vid_prompts = [s.video_prompt for s in scenes] + [""] * (MAX_SCENES - len(scenes))
+        narrs       = [s.narration    for s in scenes] + [""] * (MAX_SCENES - len(scenes))
+        blocks      = [gr.update(visible=(i < len(scenes))) for i in range(MAX_SCENES)]
 
         next_tab = "progress" if auto_approve else "script"
 
         result = (
             gr.update(selected=next_tab),
             gr.update(visible=True),
-            *titles, *visuals, *narrs,
+            *titles, *img_prompts, *vid_prompts, *narrs,
             *blocks,
             music_desc,   # → music_desc_state
             style,        # → style_box (visible text input)
@@ -281,7 +282,7 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
     except Exception as e:
         logger.exception("on_generate_script failed assembling return value")
         gr.Warning(f"Failed to process script: {str(e)[:200]}")
-        return (gr.update(),) * (2 + MAX_SCENES * 4 + 3)
+        return (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
 
 
 # ── Scene image generation — yields progressive updates to the Script tab ────
@@ -290,12 +291,8 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 _IMG_GEN_OUT_COUNT = 1 + MAX_SCENES + 1
 
 
-def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, *scene_visuals):
-    """Generate a FLUX preview image for each scene (always runs — needed for I2V).
-
-    gen_scene_images controls whether images are shown in the Script tab UI.
-    Image generation itself always runs because video is always I2V, not T2V.
-    """
+def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_prompts):
+    """Generate a FLUX preview image for each scene (always runs — needed for I2V)."""
     n = int(n_scenes_val)
     no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
 
@@ -349,8 +346,8 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
            *img_upd, images_list)
 
     def _gen_image(i: int) -> tuple[int, Path]:
-        visual = list(scene_visuals)[i]
-        prompt = f"{style_clean}. {visual}" if style_clean else visual
+        image_prompt = list(scene_image_prompts)[i]
+        prompt = f"{style_clean}. {image_prompt}" if style_clean else image_prompt
         out    = tmp_img_dir / f"scene_{i+1:02d}_preview.png"
         if out.exists():
             return i, out
@@ -391,7 +388,7 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                 try:
                     _, img_path = fut.result()
                     img_upd = list(img_upd)
-                    img_upd[idx] = gr.update(value=str(img_path), visible=bool(gen_scene_images),
+                    img_upd[idx] = gr.update(value=str(img_path), visible=True,
                                               label="Scene Preview (first frame)")
                     images_list = list(images_list)
                     images_list[idx] = str(img_path)
@@ -403,7 +400,7 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                     img_upd[idx] = gr.update(
                         value=None,
                         label=f"Scene {idx+1} — failed: {str(e)[:80]}",
-                        visible=bool(gen_scene_images),
+                        visible=True,
                     )
                     done_count += 1
             now = time.time()
@@ -414,6 +411,88 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                 last_yield = now
     finally:
         img_pool.shutdown(wait=False)
+
+
+def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
+                          images_state, *all_image_prompts):
+    """Regenerate the FLUX preview image for a single scene."""
+    import tempfile
+    n = int(n_scenes_val)
+    no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
+    if scene_idx >= n:
+        yield no_op
+        return
+
+    cfg          = load_config()
+    all_workers  = cfg.get("comfy_workers", [])
+    cluster_urls = [u for u in all_workers
+                    if not any(lh in u for lh in ("localhost", "127.0.0.1"))]
+    worker_urls  = alive_workers(cluster_urls)
+    if not worker_urls:
+        status_html = (
+            '<div style="color:#f59e0b;padding:4px 0;font-size:13px">'
+            '⚠ No cluster workers reachable — cannot regenerate image.</div>'
+        )
+        yield (gr.update(value=status_html, visible=True),
+               *([gr.update()] * MAX_SCENES), list(images_state or []))
+        return
+
+    worker_pool  = WorkerPool(worker_urls)
+    flux_model   = cfg.get("flux_model",   "flux1-schnell-fp8.safetensors")
+    flux_clip_t5 = cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors")
+    flux_clip_l  = cfg.get("flux_clip_l",  "clip_l.safetensors")
+    flux_vae     = cfg.get("flux_vae",     "ae.safetensors")
+    flux_steps   = int(cfg.get("flux_steps", 4))
+    img_width, img_height = _RESOLUTIONS.get(
+        resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
+    )
+    style_clean  = style.strip().rstrip(".") if style and style.strip() else ""
+    image_prompt = all_image_prompts[scene_idx] if scene_idx < len(all_image_prompts) else ""
+    prompt       = f"{style_clean}. {image_prompt}" if style_clean else image_prompt
+
+    tmp_img_dir  = Path(tempfile.mkdtemp(prefix="spielbot_preview_"))
+    out          = tmp_img_dir / f"scene_{scene_idx+1:02d}_preview.png"
+    img_upd      = [gr.update()] * MAX_SCENES
+    images_lst   = list(images_state or [""] * MAX_SCENES)
+
+    yield (gr.update(value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
+                           f'⏳ Regenerating scene {scene_idx+1} image…</div>', visible=True),
+           *img_upd, images_lst)
+
+    url = worker_pool.acquire()
+    try:
+        generate_scene_image(
+            prompt, out,
+            width=img_width, height=img_height,
+            steps=flux_steps,
+            flux_model=flux_model,
+            clip_t5=flux_clip_t5,
+            clip_l=flux_clip_l,
+            flux_vae=flux_vae,
+            comfy_url=url,
+        )
+        img_upd = list(img_upd)
+        img_upd[scene_idx] = gr.update(value=str(out), visible=True,
+                                        label="Scene Preview (first frame)")
+        images_lst = list(images_lst)
+        while len(images_lst) <= scene_idx:
+            images_lst.append("")
+        images_lst[scene_idx] = str(out)
+        yield (gr.update(value="", visible=False), *img_upd, images_lst)
+    except Exception as e:
+        logger.warning("Scene %d regen failed: %s", scene_idx + 1, e)
+        img_upd = list(img_upd)
+        img_upd[scene_idx] = gr.update(
+            value=None,
+            label=f"Scene {scene_idx+1} — failed: {str(e)[:80]}",
+            visible=True,
+        )
+        yield (gr.update(value=f'<div style="color:#ef4444;padding:4px 0;font-size:13px">'
+                               f'✗ Scene {scene_idx+1} regen failed: {str(e)[:120]}</div>',
+                         visible=True),
+               *img_upd, images_lst)
+    finally:
+        worker_pool.release(url)
 
 
 # ── Per-scene video generation (runs in a worker thread) ─────────────────────
@@ -454,7 +533,7 @@ def _generate_scene_video(
         first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
         logger.info("  [%s] scene %d: generating FLUX first frame inline", comfy_url, scene.id)
         generate_scene_image(
-            scene.visual_prompt, first_frame_path,
+            scene.image_prompt, first_frame_path,
             width=vid_width, height=vid_height,
             flux_model=fx.get("model", "flux1-schnell-fp8.safetensors"),
             clip_t5=fx.get("clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -475,7 +554,7 @@ def _generate_scene_video(
                     comfy_url, scene.id, seg_idx + 1,
                     "preview image" if last_frame is None else "last frame")
         generate_video_continuation(
-            scene.visual_prompt, scene.negative_prompt, anchor, clip_path,
+            scene.video_prompt, scene.negative_prompt, anchor, clip_path,
             width=vid_width, height=vid_height,
             duration_seconds=request_dur,
             lora_strength=lora_strength,
@@ -536,10 +615,11 @@ _GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1
 
 def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
                 scene_images_list, *scene_fields):
-    n       = int(n_scenes_val)
-    titles  = list(scene_fields[0           : MAX_SCENES])
-    visuals = list(scene_fields[MAX_SCENES  : MAX_SCENES * 2])
-    narrs   = list(scene_fields[MAX_SCENES*2: MAX_SCENES * 3])
+    n           = int(n_scenes_val)
+    titles      = list(scene_fields[0             : MAX_SCENES])
+    img_prompts = list(scene_fields[MAX_SCENES    : MAX_SCENES * 2])
+    vid_prompts = list(scene_fields[MAX_SCENES*2  : MAX_SCENES * 3])
+    narrs       = list(scene_fields[MAX_SCENES*3  : MAX_SCENES * 4])
 
     # Build a map from scene id (1-based) to pre-generated preview image path (or None)
     scene_preview_map: dict[int, Path | None] = {}
@@ -583,8 +663,9 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         Scene(
             id=i + 1,
             title=titles[i] or f"Scene {i+1}",
-            visual_prompt=(f"{style_clean}. {visuals[i] or title}" if style_clean
-                           else (visuals[i] or title)),
+            image_prompt=(f"{style_clean}. {img_prompts[i] or title}" if style_clean
+                          else (img_prompts[i] or title)),
+            video_prompt=vid_prompts[i] or img_prompts[i] or title,
             narration=narrs[i] or "",
         )
         for i in range(n)
@@ -615,7 +696,8 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
     (work_dir / "script.json").write_text(
         json.dumps([{"id": s.id, "title": s.title,
-                     "visual_prompt": s.visual_prompt,
+                     "image_prompt": s.image_prompt,
+                     "video_prompt": s.video_prompt,
                      "narration": s.narration} for s in scenes], indent=2)
     )
 
@@ -1229,9 +1311,6 @@ def build_ui() -> gr.Blocks:
                     auto_approve_in = gr.Checkbox(
                         label="Auto-approve script (skip review)", value=False,
                     )
-                    gen_scene_images_in = gr.Checkbox(
-                        label="Show scene preview images in Script tab", value=True,
-                    )
 
                 gen_script_btn = gr.Button(
                     "1. Generate Script →", variant="primary", size="lg"
@@ -1248,30 +1327,47 @@ def build_ui() -> gr.Blocks:
 
                     image_gen_status = gr.HTML(value="", visible=False)
 
+                    with gr.Row():
+                        script_resolution_in = gr.Dropdown(
+                            label="Preview Image Resolution",
+                            choices=list(_RESOLUTIONS.keys()),
+                            value=cfg.get("resolution", _DEFAULT_RESOLUTION),
+                        )
+                        regen_all_btn = gr.Button(
+                            "↺ Regenerate all scene images", variant="secondary"
+                        )
+
                     scene_titles:         list[gr.Textbox] = []
-                    scene_visuals:        list[gr.Textbox] = []
+                    scene_image_prompts:  list[gr.Textbox] = []
+                    scene_video_prompts:  list[gr.Textbox] = []
                     scene_narrs:          list[gr.Textbox] = []
                     scene_blocks:         list[gr.Group]   = []
                     scene_preview_images: list[gr.Image]   = []
+                    scene_regen_btns:     list[gr.Button]  = []
 
                     for i in range(MAX_SCENES):
                         with gr.Group(visible=False) as blk:
                             gr.Markdown(f"### Scene {i + 1}")
                             t = gr.Textbox(label="Title", lines=1)
                             with gr.Row():
-                                v  = gr.Textbox(label="Visual Prompt", lines=3)
-                                nr = gr.Textbox(label="Narration", lines=3)
-                            img = gr.Image(
-                                label="Scene Preview (first frame)",
-                                visible=False,
-                                height=200,
-                                interactive=False,
-                            )
+                                ip = gr.Textbox(label="Image Prompt  (FLUX — static, highly detailed)", lines=4)
+                                vp = gr.Textbox(label="Video Prompt  (LTX — motion & camera)", lines=4)
+                                nr = gr.Textbox(label="Narration", lines=4)
+                            with gr.Row():
+                                img = gr.Image(
+                                    label="Scene Preview (first frame)",
+                                    visible=False,
+                                    height=200,
+                                    interactive=False,
+                                )
+                                rb = gr.Button("↺ Regenerate image", variant="secondary", scale=0)
                         scene_titles.append(t)
-                        scene_visuals.append(v)
+                        scene_image_prompts.append(ip)
+                        scene_video_prompts.append(vp)
                         scene_narrs.append(nr)
                         scene_blocks.append(blk)
                         scene_preview_images.append(img)
+                        scene_regen_btns.append(rb)
 
                     approve_btn = gr.Button(
                         "2. Approve & Generate Video →", variant="primary", size="lg"
@@ -1550,7 +1646,7 @@ def build_ui() -> gr.Blocks:
 
         script_outputs = [
             tabs, script_col,
-            *scene_titles, *scene_visuals, *scene_narrs,
+            *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
             *scene_blocks,
             music_desc_state,
             style_box, style_state,   # style shown in Script tab + stored in state
@@ -1590,8 +1686,8 @@ def build_ui() -> gr.Blocks:
             outputs=[gen_script_btn],
         ).then(
             fn=on_generate_scene_images,
-            inputs=[n_scenes_in, resolution_in, gen_scene_images_in, style_state,
-                    *scene_visuals],
+            inputs=[n_scenes_in, script_resolution_in, style_state,
+                    *scene_image_prompts],
             outputs=img_gen_outputs,
         ).then(
             fn=_auto_generate,
@@ -1599,7 +1695,7 @@ def build_ui() -> gr.Blocks:
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 scene_images_state,
-                *scene_titles, *scene_visuals, *scene_narrs,
+                *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
             ],
             outputs=gen_outputs,
         ).then(
@@ -1622,7 +1718,7 @@ def build_ui() -> gr.Blocks:
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 scene_images_state,
-                *scene_titles, *scene_visuals, *scene_narrs,
+                *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
             ],
             outputs=gen_outputs,
         ).then(
@@ -1632,6 +1728,29 @@ def build_ui() -> gr.Blocks:
 
         # Keep style_state in sync when user edits style_box directly
         style_box.change(fn=lambda v: v, inputs=[style_box], outputs=[style_state])
+
+        # Sync script_resolution_in → resolution_in so video uses the same resolution as previews
+        script_resolution_in.change(
+            fn=lambda v: v, inputs=[script_resolution_in], outputs=[resolution_in]
+        )
+
+        # Regenerate all scene images at the selected resolution
+        regen_all_btn.click(
+            fn=on_generate_scene_images,
+            inputs=[n_scenes_in, script_resolution_in, style_state, *scene_image_prompts],
+            outputs=img_gen_outputs,
+        )
+
+        # Per-scene regenerate buttons
+        for _i, _btn in enumerate(scene_regen_btns):
+            _btn.click(
+                fn=lambda n, res, sty, imgs, *prompts, _idx=_i: on_regen_single_scene(
+                    _idx, n, res, sty, imgs, *prompts
+                ),
+                inputs=[n_scenes_in, script_resolution_in, style_state,
+                        scene_images_state, *scene_image_prompts],
+                outputs=img_gen_outputs,
+            )
 
         remix_btn.click(
             fn=on_remix,
