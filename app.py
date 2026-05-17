@@ -247,15 +247,26 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 
     logger.info("on_generate_script — title=%r n_scenes=%d auto_approve=%s",
                 title, n_scenes, auto_approve)
+
+    _no_op = (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
+
+    # Run generate_script in a thread so we can yield keep-alives while waiting.
+    # Without this, long Claude API calls (30 scenes ≈ 3 min) cause Gradio's
+    # WebSocket to time out and the page resets to the Create tab.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(generate_script, title.strip(), int(n_scenes))
+        while not fut.done():
+            yield _no_op
+            time.sleep(3)
+
     try:
-        scenes, music_desc, style = generate_script(
-            title.strip(), int(n_scenes),
-        )
+        scenes, music_desc, style = fut.result()
     except Exception as e:
         logger.exception("generate_script failed")
         first_line = str(e).split("\n")[0][:300]
         gr.Warning(f"Script generation failed: {first_line}")
-        return (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
+        yield _no_op
+        return
 
     logger.info("Script generated — %d scenes, music: %r, style: %r", len(scenes), music_desc, style)
 
@@ -278,11 +289,11 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
             style,        # → style_state
         )
         logger.info("on_generate_script returning %d values, next_tab=%r", len(result), next_tab)
-        return result
+        yield result
     except Exception as e:
         logger.exception("on_generate_script failed assembling return value")
         gr.Warning(f"Failed to process script: {str(e)[:200]}")
-        return (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
+        yield _no_op
 
 
 # ── Scene image generation — yields progressive updates to the Script tab ────
