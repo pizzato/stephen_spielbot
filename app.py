@@ -1495,7 +1495,7 @@ def build_ui() -> gr.Blocks:
                         label="FLUX steps  —  4 = schnell (fast), 20 = dev (slow)",
                     )
 
-                save_cfg_btn = gr.Button("Save Defaults", variant="secondary")
+                save_cfg_btn = gr.Button("Save Defaults", variant="secondary", visible=False)
                 cfg_status   = gr.Markdown("")
 
                 gr.Markdown("### Voice Library")
@@ -1656,21 +1656,22 @@ def build_ui() -> gr.Blocks:
             outputs=[local_cfg_group, claude_cfg_group],
         )
 
-        save_cfg_btn.click(
-            fn=on_save_config,
-            inputs=[cfg_music_vol, cfg_voice_vol, cfg_ambient_vol,
-                    cfg_resolution, cfg_max_clip, cfg_lora,
-                    cfg_first_pass_cfg, cfg_first_pass_steps,
-                    cfg_second_pass_cfg, cfg_second_pass_steps,
-                    cfg_workers, cfg_tts_workers,
-                    cfg_llm_backend,
-                    cfg_local_llm_url, cfg_local_llm_model,
-                    cfg_claude_key, cfg_claude_model,
-                    cfg_flux_model, cfg_flux_vae,
-                    cfg_flux_clip_t5, cfg_flux_clip_l,
-                    cfg_flux_steps],
-            outputs=[cfg_status],
-        )
+        _cfg_inputs = [cfg_music_vol, cfg_voice_vol, cfg_ambient_vol,
+                       cfg_resolution, cfg_max_clip, cfg_lora,
+                       cfg_first_pass_cfg, cfg_first_pass_steps,
+                       cfg_second_pass_cfg, cfg_second_pass_steps,
+                       cfg_workers, cfg_tts_workers,
+                       cfg_llm_backend,
+                       cfg_local_llm_url, cfg_local_llm_model,
+                       cfg_claude_key, cfg_claude_model,
+                       cfg_flux_model, cfg_flux_vae,
+                       cfg_flux_clip_t5, cfg_flux_clip_l,
+                       cfg_flux_steps]
+
+        for _inp in _cfg_inputs:
+            _inp.change(fn=on_save_config, inputs=_cfg_inputs, outputs=[cfg_status])
+
+        save_cfg_btn.click(fn=on_save_config, inputs=_cfg_inputs, outputs=[cfg_status])
 
         add_voice_btn.click(
             fn=on_add_voice,
