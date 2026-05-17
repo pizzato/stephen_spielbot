@@ -3,9 +3,9 @@ SCRIPTS := scripts
 
 .PHONY: install download-models download-flux download-flux-cluster start stop restart restart-server status help
 
-## Install deps locally + download models (LTX + ACE-Step, no FLUX) + install workers.
+## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
 install:
-	@SKIP_FLUX=1 bash $(SCRIPTS)/install.sh $(CONF)
+	@bash $(SCRIPTS)/install.sh $(CONF)
 
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
@@ -42,7 +42,7 @@ status:
 help:
 	@echo "Usage: make [install|download-models|start|stop|status]"
 	@echo ""
-	@echo "  install         Install deps locally; download LTX+ACE models; install workers in $(CONF)"
+	@echo "  install         Install deps locally; download all models (LTX+ACE+FLUX); install workers in $(CONF)"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)
   download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"

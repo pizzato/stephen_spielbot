@@ -103,15 +103,17 @@ HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 FIRST_HOST="$(remote_hosts | head -1)"
 MODEL_SOURCE="${MODEL_SOURCE:-${FIRST_HOST:-}}"
 
-# Key sentinel files — if both exist, all models are assumed present
+# Sentinel files — if all exist, all models (including FLUX) are assumed present
 _models_present_on() {
     local host="$1"
     if [[ "$host" == "localhost" ]]; then
         [[ -f "$COMFY_DIR/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors" ]] && \
-        [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]]
+        [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]] && \
+        [[ -f "$COMFY_DIR/models/unet/flux1-schnell-fp8.safetensors" ]]
     else
         ssh "$host" "[[ -f \$HOME/github/ComfyUI/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors && \
-                        -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors ]]" 2>/dev/null
+                        -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors && \
+                        -f \$HOME/github/ComfyUI/models/unet/flux1-schnell-fp8.safetensors ]]" 2>/dev/null
     fi
 }
 
