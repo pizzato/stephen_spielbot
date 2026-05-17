@@ -161,7 +161,7 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
 
 
 _QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
-_STUCK_TIMEOUT        = 600  # seconds of silence from a *running* job → StuckJobError
+_STUCK_TIMEOUT        = 120  # seconds of silence from a *running* job → StuckJobError
 
 
 def _wait_for_completion(
@@ -209,9 +209,12 @@ def _wait_for_completion(
                         f" — will re-submit"
                     )
 
-                # Stuck detection: only once the job has started executing
-                if last_activity_at is not None and q_status == "running":
-                    stalled = now - last_activity_at
+                # Stuck detection: fires whenever the job is "running".
+                # If it has produced progress, base the timer on last_activity_at.
+                # If it has never produced any activity, base the timer on start.
+                if q_status == "running":
+                    baseline = last_activity_at if last_activity_at is not None else start
+                    stalled = now - baseline
                     if stalled > _STUCK_TIMEOUT:
                         raise StuckJobError(
                             f"Job {prompt_id} on {comfy_url} has been running but produced no"
