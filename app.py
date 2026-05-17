@@ -101,8 +101,6 @@ DEFAULT_CFG = {
     "flux_clip_l":   "clip_l.safetensors",
     "flux_vae":      "ae.safetensors",
     "flux_steps":    4,
-    "flux_img_width":  1024,
-    "flux_img_height":  576,
     "voices": [],
     # ComfyUI worker URLs — one per line in the config UI.
     # Each worker handles one video generation job at a time.
@@ -323,8 +321,9 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
     flux_clip_l   = cfg.get("flux_clip_l",   "clip_l.safetensors")
     flux_vae      = cfg.get("flux_vae",      "ae.safetensors")
     flux_steps    = int(cfg.get("flux_steps", 4))
-    img_width     = int(cfg.get("flux_img_width",  1024))
-    img_height    = int(cfg.get("flux_img_height",  576))
+    img_width, img_height = _RESOLUTIONS.get(
+        resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
+    )
     style_clean   = style.strip().rstrip(".") if style and style.strip() else ""
 
     import tempfile
@@ -1128,7 +1127,7 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    claude_api_key: str, claude_model: str,
                    flux_model: str, flux_vae: str,
                    flux_clip_t5: str, flux_clip_l: str,
-                   flux_steps: int, flux_img_width: int, flux_img_height: int):
+                   flux_steps: int):
     cfg = load_config()
     cfg["music_vol"]          = int(music_vol)
     cfg["voice_vol"]          = int(voice_vol)
@@ -1154,8 +1153,6 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["flux_clip_t5"]       = flux_clip_t5.strip() or "t5xxl_fp8_e4m3fn.safetensors"
     cfg["flux_clip_l"]        = flux_clip_l.strip() or "clip_l.safetensors"
     cfg["flux_steps"]         = int(flux_steps)
-    cfg["flux_img_width"]     = int(flux_img_width)
-    cfg["flux_img_height"]    = int(flux_img_height)
     save_config(cfg)
     logger.info("Config saved: lora=%.2f workers=%s tts=%s",
                 lora_strength, cfg["comfy_workers"], cfg["tts_workers"])
@@ -1497,14 +1494,6 @@ def build_ui() -> gr.Blocks:
                         1, 20, value=cfg.get("flux_steps", 4), step=1,
                         label="FLUX steps  —  4 = schnell (fast), 20 = dev (slow)",
                     )
-                    cfg_flux_img_width = gr.Number(
-                        label="Preview width px",
-                        value=cfg.get("flux_img_width", 1024), precision=0,
-                    )
-                    cfg_flux_img_height = gr.Number(
-                        label="Preview height px",
-                        value=cfg.get("flux_img_height", 576), precision=0,
-                    )
 
                 save_cfg_btn = gr.Button("Save Defaults", variant="secondary")
                 cfg_status   = gr.Markdown("")
@@ -1679,7 +1668,7 @@ def build_ui() -> gr.Blocks:
                     cfg_claude_key, cfg_claude_model,
                     cfg_flux_model, cfg_flux_vae,
                     cfg_flux_clip_t5, cfg_flux_clip_l,
-                    cfg_flux_steps, cfg_flux_img_width, cfg_flux_img_height],
+                    cfg_flux_steps],
             outputs=[cfg_status],
         )
 
