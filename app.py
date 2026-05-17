@@ -705,6 +705,9 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
         # ── Background music (20–35%) ────────────────────────────────────────
         music_dur  = max(total_dur * 1.05, 30.0)
+        _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
+                                "ConnectionRefused", "RemoteDisconnected")
+
         music_path = work_dir / "background_music.wav"
         if music_path.exists() and music_path.stat().st_size > 10_000:
             logger.info("Music already exists (%.1f MB), skipping generation",
@@ -738,9 +741,6 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         # ── Video generation (35–90%) — parallel across workers ─────────────────
         scene_raws_map: dict[int, Path] = {}
         scene_ambient_map: dict[int, Path | None] = {}
-
-        _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
-                                "ConnectionRefused", "RemoteDisconnected")
         _MAX_SCENE_ATTEMPTS = 3
 
         def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
