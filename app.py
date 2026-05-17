@@ -312,7 +312,8 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
             '<div style="color:#f59e0b;padding:4px 0;font-size:13px">'
             '⚠ No cluster workers reachable — scene preview images skipped.</div>'
         )
-        yield (status_html, *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
+        yield (gr.update(value=status_html, visible=True),
+               *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
         return
 
     worker_pool   = WorkerPool(worker_urls)
@@ -344,7 +345,8 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
             f'</div></div>'
         )
 
-    yield (_img_status_html(0, n, " — generating with FLUX…"), *img_upd, images_list)
+    yield (gr.update(value=_img_status_html(0, n, " — generating with FLUX…"), visible=True),
+           *img_upd, images_list)
 
     def _gen_image(i: int) -> tuple[int, Path]:
         visual = list(scene_visuals)[i]
@@ -396,11 +398,18 @@ def on_generate_scene_images(n_scenes_val, resolution, gen_scene_images, style, 
                     logger.info("Scene %d preview image ready: %s", idx + 1, img_path.name)
                 except Exception as e:
                     logger.warning("Scene %d image generation failed: %s", idx + 1, e)
+                    img_upd = list(img_upd)
+                    img_upd[idx] = gr.update(
+                        value=None,
+                        label=f"Scene {idx+1} — failed: {str(e)[:80]}",
+                        visible=bool(gen_scene_images),
+                    )
                     done_count += 1
             now = time.time()
             if changed or (now - last_yield >= 30):
                 extra = " ✓ done" if done_count >= n else f" — {len(pending)} remaining…"
-                yield (_img_status_html(done_count, n, extra), *img_upd, images_list)
+                yield (gr.update(value=_img_status_html(done_count, n, extra)),
+                       *img_upd, images_list)
                 last_yield = now
     finally:
         img_pool.shutdown(wait=False)
@@ -1569,15 +1578,11 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
-            fn=lambda gen_img: (
+            fn=lambda: (
                 gr.update(interactive=False, value="⏳ Generating scene images…"),
-                gr.update(visible=gen_img),
-            ) if gen_img else (
-                gr.update(interactive=True, value="1. Generate Script →"),
-                gr.update(visible=False),
             ),
-            inputs=[gen_scene_images_in],
-            outputs=[gen_script_btn, image_gen_status],
+            inputs=[],
+            outputs=[gen_script_btn],
         ).then(
             fn=on_generate_scene_images,
             inputs=[n_scenes_in, resolution_in, gen_scene_images_in, style_state,
