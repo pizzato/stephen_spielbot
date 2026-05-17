@@ -50,7 +50,8 @@ def _load_cfg() -> dict:
 class Scene:
     id: int
     title: str
-    visual_prompt: str
+    image_prompt: str   # FLUX: highly detailed static description, no motion words
+    video_prompt: str   # LTX I2V: motion, camera movement, action, pacing
     narration: str
     negative_prompt: str = NEGATIVE_PROMPT
 
@@ -63,20 +64,15 @@ _CLAUDE_SYSTEM = """You are a video script writer. Given a topic title, generate
 
 Output ONLY a JSON object with exactly three keys:
 
-"style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every visual prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, slow motion, photorealistic documentary style"
+"style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
 
 "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
 "scenes": Array of scene objects, each with:
   - "id": integer starting from 1
   - "title": 5-10 word scene title
-  - "visual_prompt": 50-80 word cinematic description written as flowing sentences (NOT a keyword list). This drives an AI video model that understands natural language. You MUST include ALL five elements:
-      1. Subject/setting — what is shown and where
-      2. Motion/action — what moves, how it moves (this is the most important element — static descriptions produce static video)
-      3. Camera — explicit camera movement (slow dolly forward, aerial tracking shot, static wide angle, gentle pan left, etc.)
-      4. Lighting — specific and evocative (golden afternoon light, cool diffused overcast, warm candlelight, neon reflections)
-      5. Atmosphere — particles, mist, air quality, sound cues that enhance mood (dust motes in shafts of light, mist drifts through the scene, distant sounds implied by the visuals)
-    No people unless essential to the story. No text or logos. Do NOT include style descriptors (those come from the style field). Match the visual to what the narration describes.
+  - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
+  - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
   - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
 
 Write the narrations as a continuous narrative — each scene follows naturally from the last.
@@ -133,7 +129,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         Scene(
             id=item.get("id", i + 1),
             title=item.get("title", f"Scene {i + 1}"),
-            visual_prompt=item.get("visual_prompt", title),
+            image_prompt=item.get("image_prompt", title),
+            video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
         )
         for i, item in enumerate(scenes_data[:n_scenes])
@@ -166,13 +163,16 @@ Rules:
 - No text outside the key: value lines."""
 
 _VISUAL_SYSTEM = """\
-You are a cinematographer writing a visual description for an AI video generation model (LTX 2.3).
-The model reads full sentences and generates motion based on what you describe. Static or vague descriptions produce static video.
-The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it.
+You are generating two descriptions for an AI video pipeline. The pipeline has two stages:
+1. FLUX image generator — needs a highly detailed static image description (no motion).
+2. LTX I2V video model — needs a motion/camera description that starts from the FLUX image.
 
-Output ONLY plain text in this exact single-line format:
+The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it in either field.
 
-VISUAL: [50-80 word description written as flowing sentences. You MUST include: (1) subject and setting, (2) what moves and how — this is the most important element, be explicit about motion (camera pushes forward, mist drifts between columns, leaves rustle), (3) explicit camera movement (slow dolly, aerial descent, static wide angle, gentle pan), (4) specific lighting quality (golden afternoon light, diffused overcast, flickering candlelight), (5) atmosphere or particles (mist drifts, dust motes float, steam rises). No people unless essential. No text or logos. Match the narration's subject.]"""
+Output ONLY plain text in this exact two-line format (each on a single line, no line breaks within a value):
+
+IMAGE: [60-100 word highly detailed static image description for FLUX. Describe this as a frozen, perfectly composed photograph. Include exact subjects and positions, environment details, lighting quality and direction, color palette, textures, atmospheric depth. NO motion words, NO camera movement words, NO action verbs.]
+VIDEO: [30-50 word motion description for LTX I2V. What moves and how (camera pushes forward, mist drifts, leaves rustle), explicit camera movement (slow dolly, aerial descent, gentle pan, static wide angle), pacing. Match the narration's action. No style descriptors.]"""
 
 
 def _check_local_available(url: str) -> bool:
@@ -267,13 +267,13 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
 
 def _local_generate_visual(title: str, style: str,
                             scene_id: int, scene_title: str, narration: str,
-                            url: str, model: str) -> str:
+                            url: str, model: str) -> tuple[str, str]:
     user_msg = (
         f'Video topic: "{title}"\n'
         f"Visual style: {style}\n\n"
         f"Scene: {scene_title}\n"
         f"Narration: {narration}\n\n"
-        "Generate the VISUAL line for this scene."
+        "Generate the IMAGE and VIDEO lines for this scene."
     )
     raw = _local_llm(
         [
@@ -283,8 +283,14 @@ def _local_generate_visual(title: str, style: str,
         max_tokens=2048,
         url=url, model=model,
     )
-    visual = _get_field(raw, "VISUAL")
-    return visual or raw.strip().lstrip("VISUAL:").strip()
+    image_prompt = _get_field(raw, "IMAGE")
+    video_prompt = _get_field(raw, "VIDEO")
+    # Graceful fallback if model didn't split correctly
+    if not image_prompt:
+        image_prompt = raw.strip().lstrip("IMAGE:").strip()
+    if not video_prompt:
+        video_prompt = image_prompt
+    return image_prompt, video_prompt
 
 
 def _local_generate(title: str, n_scenes: int,
@@ -307,25 +313,29 @@ def _local_generate(title: str, n_scenes: int,
 
     logger.info("Story: %d scenes, style=%r", len(outlines), style)
 
-    def _fetch(outline: dict) -> tuple[int, str]:
-        return outline["id"], _local_generate_visual(
+    def _fetch(outline: dict) -> tuple[int, str, str]:
+        img_p, vid_p = _local_generate_visual(
             title, style,
             outline["id"],
             outline.get("title", f"Scene {outline['id']}"),
             outline.get("narration", ""),
             url=url, model=model,
         )
+        return outline["id"], img_p, vid_p
 
-    visuals: dict[int, str] = {}
+    img_prompts: dict[int, str] = {}
+    vid_prompts: dict[int, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        for sid, visual in pool.map(_fetch, outlines):
-            visuals[sid] = visual
+        for sid, img_p, vid_p in pool.map(_fetch, outlines):
+            img_prompts[sid] = img_p
+            vid_prompts[sid] = vid_p
 
     scenes = [
         Scene(
             id=o["id"],
             title=o.get("title", f"Scene {o['id']}"),
-            visual_prompt=visuals.get(o["id"], title),
+            image_prompt=img_prompts.get(o["id"], title),
+            video_prompt=vid_prompts.get(o["id"], title),
             narration=o.get("narration", ""),
         )
         for o in sorted(outlines, key=lambda x: x["id"])
