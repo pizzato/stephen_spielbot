@@ -232,6 +232,22 @@ def _error_html(msg: str) -> str:
     )
 
 
+def _poll_progress() -> str:
+    """Read progress.json from the most-recently-modified active job folder."""
+    try:
+        candidates = sorted(
+            OUTPUT_DIR.glob("*/progress.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not candidates:
+            return _progress_html(0, "Waiting to start…")
+        data = json.loads(candidates[0].read_text())
+        return _progress_html(data.get("pct", 0), data.get("msg", "…"))
+    except Exception:
+        return _progress_html(0, "Waiting to start…")
+
+
 # ── TTS wrapper ──────────────────────────────────────────────────────────────
 
 def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -> None:
@@ -1438,6 +1454,7 @@ def build_ui() -> gr.Blocks:
             # ── Progress ─────────────────────────────────────────────────
             with gr.Tab("⏳ Progress", id="progress"):
                 progress_bar = gr.HTML(value=_progress_html(0, "Waiting to start…"))
+                progress_timer = gr.Timer(value=3, active=True)
 
                 gr.Markdown("#### Narrations")
                 with gr.Row():
@@ -1705,6 +1722,8 @@ def build_ui() -> gr.Blocks:
                     )
 
         # ── Event wiring ─────────────────────────────────────────────────────
+
+        progress_timer.tick(fn=_poll_progress, outputs=[progress_bar])
 
         script_outputs = [
             tabs, script_col,
