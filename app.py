@@ -201,8 +201,9 @@ def voices_as_rows() -> list[list[str]]:
 
 # ── UI helpers ───────────────────────────────────────────────────────────────
 
-def slugify(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+def slugify(text: str, max_len: int = 80) -> str:
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s[:max_len].rstrip("-")
 
 
 def _progress_html(pct: float, msg: str) -> str:
@@ -642,6 +643,9 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     cfg               = load_config()
     music_vol         = cfg.get("music_vol", 18) / 100.0
     voice_vol         = cfg.get("voice_vol", 100) / 100.0
+    # Fall back to config default_voice if the dropdown sent the generic default
+    if not voice_name or voice_name == F5TTS_DEFAULT_OPTION:
+        voice_name = cfg.get("default_voice", voice_name)
     voice_ref         = voice_path_for(voice_name)
     max_clip_secs     = float(cfg.get("max_clip_secs", MAX_CLIP_SECS))
     lora_strength     = float(cfg.get("lora_strength", 0.5))
@@ -728,11 +732,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         return (_progress_html(pct, msg), *audio_upd, music_upd, *video_upd, final, comb, mus, amb, tabs_upd)
 
     def _run_bg(label: str, fn, *args, pct: float, **kwargs):
-        """Run fn(*args, **kwargs) in thread; yield heartbeat every 5s to keep SSE alive."""
+        """Run fn(*args, **kwargs) in thread; yield heartbeat every 30s to keep SSE alive."""
         fut   = _executor.submit(fn, *args, **kwargs)
         start = time.monotonic()
         while not fut.done():
-            time.sleep(5)
+            time.sleep(30)
             elapsed = time.monotonic() - start
             logger.debug("heartbeat %s — %.0fs", label, elapsed)
             yield emit(f"{label} ({elapsed:.0f}s…)", pct)
@@ -773,10 +777,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
             for i, scene in enumerate(scenes)
         }
         tts_done_count = 0
+        tts_last_yield = time.time()
         try:
             while tts_pending:
                 done_futs, _ = concurrent.futures.wait(
-                    list(tts_pending.keys()), timeout=5,
+                    list(tts_pending.keys()), timeout=30,
                     return_when=concurrent.futures.FIRST_COMPLETED,
                 )
                 for fut in done_futs:
@@ -791,11 +796,14 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                     audio_upd[sid - 1] = gr.update(value=str(out), visible=True)
                     pct = 20.0 * tts_done_count / n
                     yield emit(f"Narration {sid}/{n} done — {dur:.1f}s ({tts_done_count}/{n})", pct)
-                if tts_pending:
+                    tts_last_yield = time.time()
+                now = time.time()
+                if tts_pending and (now - tts_last_yield >= 30):
                     yield emit(
                         f"Narrations generating… ({tts_done_count}/{n} done)",
                         20.0 * tts_done_count / n,
                     )
+                    tts_last_yield = now
         finally:
             tts_pool.shutdown(wait=False)
 
@@ -904,10 +912,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         }
         completed = 0
         first_error: Exception | None = None
+        vid_last_yield = time.time()
         try:
             while pending:
                 done, _ = concurrent.futures.wait(
-                    list(pending.keys()), timeout=5,
+                    list(pending.keys()), timeout=30,
                     return_when=concurrent.futures.FIRST_COMPLETED,
                 )
                 for fut in done:
@@ -921,6 +930,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                         video_upd[sid - 1] = gr.update(value=str(scene_raw), visible=True)
                         pct = 35 + 55 * completed / n
                         yield emit(f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)", pct)
+                        vid_last_yield = time.time()
                     except Exception as e:
                         logger.error("Scene %d failed permanently: %s", scene.id, e)
                         if first_error is None:
@@ -928,12 +938,15 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                         # Don't cancel other scenes — let them finish so the user
                         # gets as many completed scenes as possible.
                         yield emit(f"Scene {scene.id} failed: {e}", 35 + 55 * completed / n)
-                if pending and first_error is None:
+                        vid_last_yield = time.time()
+                now = time.time()
+                if pending and first_error is None and (now - vid_last_yield >= 30):
                     running = [pending[f].id for f in pending]
                     yield emit(
                         f"Scenes {running} generating… ({completed}/{n} done)",
                         35 + 55 * completed / n,
                     )
+                    vid_last_yield = now
         finally:
             scene_pool.shutdown(wait=False)
 
