@@ -697,6 +697,15 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
     n = int(n_scenes_val)
     # Save any pending edits from the current page into the state
     scenes_data = _save_page_edits(scenes_data, current_page, *page_textbox_values)
+
+    # Guard: if scenes_data is empty the browser reconnected and state was lost.
+    # Raise a visible error rather than crashing with IndexError.
+    if not scenes_data:
+        logger.error("on_generate called with empty scenes_data (state lost after reconnect) — aborting")
+        raise gr.Error(
+            "Scene data was lost (browser reconnected). Please generate the script again."
+        )
+
     titles      = [s.get("title", "")        for s in scenes_data[:n]]
     img_prompts = [s.get("image_prompt", "") for s in scenes_data[:n]]
     vid_prompts = [s.get("video_prompt", "") for s in scenes_data[:n]]

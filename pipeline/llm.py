@@ -112,34 +112,56 @@ def _parse_claude_response(content: str, label: str):
 
 
 def _claude_call(client, model: str, system: str, user_msg: str,
-                 max_tokens: int, label: str, retries: int = 3) -> str:
+                 max_tokens: int, label: str, retries: int = 6) -> str:
+    """Call the Claude API using streaming to avoid long-idle-connection timeouts.
+
+    Large responses (many scenes) can take minutes to generate.  Non-streaming
+    requests leave the HTTP connection idle while Claude thinks, which causes
+    some network appliances / NAT routers to drop the connection after ~3 min.
+    Streaming sends token deltas as they arrive, keeping the connection alive.
+    """
     import time as _time
     last_exc: Exception | None = None
     for attempt in range(1, retries + 1):
         try:
-            response = client.messages.create(
+            chunks: list[str] = []
+            stop_reason: str | None = None
+            # Use the streaming context-manager so tokens arrive incrementally.
+            with client.messages.stream(
                 model=model, max_tokens=max_tokens, system=system,
                 messages=[{"role": "user", "content": user_msg}],
-            )
-            if response.stop_reason == "max_tokens":
+            ) as stream:
+                for text in stream.text_stream:
+                    chunks.append(text)
+                final_msg = stream.get_final_message()
+                stop_reason = final_msg.stop_reason
+            text = "".join(chunks).strip()
+            if stop_reason == "max_tokens":
                 raise RuntimeError(
                     f"Claude hit the token limit ({max_tokens}) for {label}. "
                     "Try fewer scenes or a shorter topic."
                 )
-            return response.content[0].text.strip()
+            return text
         except Exception as exc:
             last_exc = exc
             if attempt < retries:
-                logger.warning("Claude API call failed (attempt %d/%d): %s — retrying in 5s",
-                               attempt, retries, exc)
-                _time.sleep(5)
+                # Exponential backoff: 10s, 20s, 40s, 60s, 60s
+                delay = min(10 * (2 ** (attempt - 1)), 60)
+                logger.warning("Claude API call failed (attempt %d/%d): %s — retrying in %ds",
+                               attempt, retries, exc, delay)
+                _time.sleep(delay)
     raise last_exc
 
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str) -> tuple[list[Scene], str, str]:
     import anthropic
-    client = anthropic.Anthropic(api_key=api_key)
+    import httpx
+    # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
+    # from Anthropic's servers after ~3 minutes on large prompts, causing
+    # "Server disconnected without sending a response" errors.
+    http_client = httpx.Client(http2=False)
+    client = anthropic.Anthropic(api_key=api_key, http_client=http_client)
 
     # ── Batch 1: style + music + first BATCH_SIZE scenes ──────────────────────
     first_batch = min(_CLAUDE_BATCH_SIZE, n_scenes)
