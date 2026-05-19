@@ -47,7 +47,7 @@ from pipeline.comfyui import (
 from pipeline.assembler import (
     _get_duration, concat_clips, mux_video_audio, extract_first_frame,
     extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
-    mix_background_music,
+    ensure_video_resolution, mix_background_music,
 )
 from pipeline.worker_pool import WorkerPool, alive_workers
 
@@ -1265,6 +1265,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 volume=music_vol, voice_volume=voice_vol,
                 ambient_path=ambient_path, ambient_volume=ambient_vol,
             )
+            ensure_video_resolution(final_path, vid_width, vid_height)
         except Exception:
             logger.exception("mix_background_music failed")
             raise
