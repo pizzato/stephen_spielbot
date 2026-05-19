@@ -248,6 +248,54 @@ def _poll_progress() -> str:
         return _progress_html(0, "Waiting to start…")
 
 
+_SCENES_PER_PAGE = 10
+
+
+def _render_page(scenes_data: list, page: int, n_scenes: int) -> tuple:
+    """Return updates for page navigation + 10 scene textboxes."""
+    n_scenes = int(n_scenes)
+    start = page * _SCENES_PER_PAGE
+    end   = min(start + _SCENES_PER_PAGE, n_scenes)
+    logger.info("_render_page: page=%d n_scenes=%d start=%d end=%d scenes_data_len=%d next_visible=%s",
+                page, n_scenes, start, end, len(scenes_data), end < n_scenes)
+    page_scenes = scenes_data[start:end]
+    num_vis = len(page_scenes)
+
+    n_pages   = max(1, math.ceil(n_scenes / _SCENES_PER_PAGE))
+    page_text = f"**Page {page + 1}/{n_pages}** — Scenes {start + 1}–{end} of {n_scenes}"
+
+    groups = [gr.update(visible=(i < num_vis)) for i in range(_SCENES_PER_PAGE)]
+    titles = [s.get("title", "")         for s in page_scenes] + [""] * (_SCENES_PER_PAGE - num_vis)
+    ips    = [s.get("image_prompt", "")  for s in page_scenes] + [""] * (_SCENES_PER_PAGE - num_vis)
+    vps    = [s.get("video_prompt", "")  for s in page_scenes] + [""] * (_SCENES_PER_PAGE - num_vis)
+    nrs    = [s.get("narration", "")     for s in page_scenes] + [""] * (_SCENES_PER_PAGE - num_vis)
+
+    return (
+        gr.update(visible=(page > 0)),           # prev_page_btn
+        gr.update(visible=(end < n_scenes)),      # next_page_btn
+        gr.update(value=page_text, visible=True), # page_info_md
+        *groups, *titles, *ips, *vps, *nrs,       # 10+40 = 50 component updates
+    )
+# Total return: 3 + 50 = 53 values
+
+
+def _save_page_edits(scenes_data: list, page: int, *page_vals) -> list:
+    """Merge the current page's textbox values back into scenes_data."""
+    titles = list(page_vals[0:10])
+    ips    = list(page_vals[10:20])
+    vps    = list(page_vals[20:30])
+    nrs    = list(page_vals[30:40])
+    scenes_data = list(scenes_data)
+    start = page * _SCENES_PER_PAGE
+    for i in range(_SCENES_PER_PAGE):
+        idx = start + i
+        if idx < len(scenes_data):
+            scenes_data[idx] = {**scenes_data[idx],
+                                "title": titles[i], "image_prompt": ips[i],
+                                "video_prompt": vps[i], "narration": nrs[i]}
+    return scenes_data
+
+
 # ── TTS wrapper ──────────────────────────────────────────────────────────────
 
 def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -> None:
@@ -265,7 +313,7 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
     logger.info("on_generate_script — title=%r n_scenes=%d auto_approve=%s",
                 title, n_scenes, auto_approve)
 
-    _no_op = (gr.update(),) * (2 + MAX_SCENES * 5 + 3)
+    _no_op = (gr.update(),) * 7  # tabs, script_col, scenes_data, cur_page, music_desc, style_box, style_state
 
     # Run generate_script in a thread so we can yield keep-alives while waiting.
     # Without this, long Claude API calls (30 scenes ≈ 3 min) cause Gradio's
@@ -288,24 +336,23 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
     logger.info("Script generated — %d scenes, music: %r, style: %r", len(scenes), music_desc, style)
 
     try:
-        titles      = [s.title        for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        img_prompts = [s.image_prompt for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        vid_prompts = [s.video_prompt for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        narrs       = [s.narration    for s in scenes] + [""] * (MAX_SCENES - len(scenes))
-        blocks      = [gr.update(visible=(i < len(scenes))) for i in range(MAX_SCENES)]
-
         next_tab = "progress" if auto_approve else "script"
 
+        scenes_list = [
+            {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+             "video_prompt": s.video_prompt, "narration": s.narration}
+            for s in scenes
+        ]
         result = (
             gr.update(selected=next_tab),
             gr.update(visible=True),
-            *titles, *img_prompts, *vid_prompts, *narrs,
-            *blocks,
+            scenes_list,  # → scenes_data_state
+            0,            # → current_page_state (reset to first page)
             music_desc,   # → music_desc_state
-            style,        # → style_box (visible text input)
+            style,        # → style_box
             style,        # → style_state
         )
-        logger.info("on_generate_script returning %d values, next_tab=%r", len(result), next_tab)
+        logger.info("on_generate_script returning %d scenes, next_tab=%r", len(scenes), next_tab)
         yield result
     except Exception as e:
         logger.exception("on_generate_script failed assembling return value")
@@ -315,11 +362,11 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 
 # ── Scene image generation — yields progressive updates to the Script tab ────
 
-# image_gen_outputs count: 1 (status HTML) + MAX_SCENES (images) + 1 (state)
-_IMG_GEN_OUT_COUNT = 1 + MAX_SCENES + 1
+# image_gen_outputs count: 1 (status HTML) + _SCENES_PER_PAGE (images) + 1 (state)
+_IMG_GEN_OUT_COUNT = 1 + _SCENES_PER_PAGE + 1
 
 
-def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_prompts):
+def on_generate_scene_images(n_scenes_val, resolution, style, scenes_data):
     """Generate a FLUX preview image for each scene (always runs — needed for I2V)."""
     n = int(n_scenes_val)
     no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
@@ -338,7 +385,7 @@ def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_promp
             '⚠ No cluster workers reachable — scene preview images skipped.</div>'
         )
         yield (gr.update(value=status_html, visible=True),
-               *([gr.update()] * MAX_SCENES), [""] * MAX_SCENES)
+               *([gr.update()] * _SCENES_PER_PAGE), [""] * MAX_SCENES)
         return
 
     worker_pool   = WorkerPool(worker_urls)
@@ -355,7 +402,7 @@ def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_promp
     import tempfile
     tmp_img_dir = Path(tempfile.mkdtemp(prefix="spielbot_preview_"))
 
-    img_upd     = [gr.update(visible=False)] * MAX_SCENES
+    img_upd     = [gr.update(visible=False)] * _SCENES_PER_PAGE
     images_list = [""] * MAX_SCENES
 
     def _img_status_html(done: int, total: int, extra: str = "") -> str:
@@ -374,7 +421,7 @@ def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_promp
            *img_upd, images_list)
 
     def _gen_image(i: int) -> tuple[int, Path]:
-        image_prompt = list(scene_image_prompts)[i]
+        image_prompt = scenes_data[i].get("image_prompt", "") if i < len(scenes_data) else ""
         prompt = f"{style_clean}. {image_prompt}" if style_clean else image_prompt
         out    = tmp_img_dir / f"scene_{i+1:02d}_preview.png"
         if out.exists():
@@ -415,21 +462,23 @@ def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_promp
                 idx = pending.pop(fut)
                 try:
                     _, img_path = fut.result()
-                    img_upd = list(img_upd)
-                    img_upd[idx] = gr.update(value=str(img_path), visible=True,
-                                              label="Scene Preview (first frame)")
                     images_list = list(images_list)
                     images_list[idx] = str(img_path)
+                    if idx < _SCENES_PER_PAGE:
+                        img_upd = list(img_upd)
+                        img_upd[idx] = gr.update(value=str(img_path), visible=True,
+                                                  label="Scene Preview (first frame)")
                     done_count += 1
                     logger.info("Scene %d preview image ready: %s", idx + 1, img_path.name)
                 except Exception as e:
                     logger.warning("Scene %d image generation failed: %s", idx + 1, e)
-                    img_upd = list(img_upd)
-                    img_upd[idx] = gr.update(
-                        value=None,
-                        label=f"Scene {idx+1} — failed: {str(e)[:80]}",
-                        visible=True,
-                    )
+                    if idx < _SCENES_PER_PAGE:
+                        img_upd = list(img_upd)
+                        img_upd[idx] = gr.update(
+                            value=None,
+                            label=f"Scene {idx+1} — failed: {str(e)[:80]}",
+                            visible=True,
+                        )
                     done_count += 1
             now = time.time()
             if changed or (now - last_yield >= 30):
@@ -442,7 +491,7 @@ def on_generate_scene_images(n_scenes_val, resolution, style, *scene_image_promp
 
 
 def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
-                          images_state, *all_image_prompts):
+                          images_state, scenes_data):
     """Regenerate the FLUX preview image for a single scene."""
     import tempfile
     n = int(n_scenes_val)
@@ -462,7 +511,7 @@ def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
             '⚠ No cluster workers reachable — cannot regenerate image.</div>'
         )
         yield (gr.update(value=status_html, visible=True),
-               *([gr.update()] * MAX_SCENES), list(images_state or []))
+               *([gr.update()] * _SCENES_PER_PAGE), list(images_state or []))
         return
 
     worker_pool  = WorkerPool(worker_urls)
@@ -475,12 +524,12 @@ def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
     )
     style_clean  = style.strip().rstrip(".") if style and style.strip() else ""
-    image_prompt = all_image_prompts[scene_idx] if scene_idx < len(all_image_prompts) else ""
+    image_prompt = scenes_data[scene_idx].get("image_prompt", "") if scene_idx < len(scenes_data) else ""
     prompt       = f"{style_clean}. {image_prompt}" if style_clean else image_prompt
 
     tmp_img_dir  = Path(tempfile.mkdtemp(prefix="spielbot_preview_"))
     out          = tmp_img_dir / f"scene_{scene_idx+1:02d}_preview.png"
-    img_upd      = [gr.update()] * MAX_SCENES
+    img_upd      = [gr.update()] * _SCENES_PER_PAGE
     images_lst   = list(images_state or [""] * MAX_SCENES)
 
     yield (gr.update(value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
@@ -499,8 +548,9 @@ def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
             flux_vae=flux_vae,
             comfy_url=url,
         )
+        page_slot = scene_idx % _SCENES_PER_PAGE
         img_upd = list(img_upd)
-        img_upd[scene_idx] = gr.update(value=str(out), visible=True,
+        img_upd[page_slot] = gr.update(value=str(out), visible=True,
                                         label="Scene Preview (first frame)")
         images_lst = list(images_lst)
         while len(images_lst) <= scene_idx:
@@ -509,8 +559,9 @@ def on_regen_single_scene(scene_idx: int, n_scenes_val, resolution, style,
         yield (gr.update(value="", visible=False), *img_upd, images_lst)
     except Exception as e:
         logger.warning("Scene %d regen failed: %s", scene_idx + 1, e)
+        page_slot = scene_idx % _SCENES_PER_PAGE
         img_upd = list(img_upd)
-        img_upd[scene_idx] = gr.update(
+        img_upd[page_slot] = gr.update(
             value=None,
             label=f"Scene {scene_idx+1} — failed: {str(e)[:80]}",
             visible=True,
@@ -642,12 +693,14 @@ _GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1
 
 
 def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
-                scene_images_list, *scene_fields):
-    n           = int(n_scenes_val)
-    titles      = list(scene_fields[0             : MAX_SCENES])
-    img_prompts = list(scene_fields[MAX_SCENES    : MAX_SCENES * 2])
-    vid_prompts = list(scene_fields[MAX_SCENES*2  : MAX_SCENES * 3])
-    narrs       = list(scene_fields[MAX_SCENES*3  : MAX_SCENES * 4])
+                scene_images_list, scenes_data, current_page, *page_textbox_values):
+    n = int(n_scenes_val)
+    # Save any pending edits from the current page into the state
+    scenes_data = _save_page_edits(scenes_data, current_page, *page_textbox_values)
+    titles      = [s.get("title", "")        for s in scenes_data[:n]]
+    img_prompts = [s.get("image_prompt", "") for s in scenes_data[:n]]
+    vid_prompts = [s.get("video_prompt", "") for s in scenes_data[:n]]
+    narrs       = [s.get("narration", "")    for s in scenes_data[:n]]
 
     # Build a map from scene id (1-based) to pre-generated preview image path (or None)
     scene_preview_map: dict[int, Path | None] = {}
@@ -874,6 +927,15 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 logger.info("Scene %d video already exists (%d KB), skipping",
                             scene.id, existing.stat().st_size // 1024)
                 return scene.id, existing, None
+            # Single-clip scenes produce clip_01.mp4 (not _video.mp4) — also resume those.
+            single_clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
+            clip_02     = work_dir / f"scene_{scene.id:02d}_clip_02.mp4"
+            if (single_clip.exists() and single_clip.stat().st_size > 10_000
+                    and not clip_02.exists()):
+                amb = work_dir / f"scene_{scene.id:02d}_ambient.wav"
+                logger.info("Scene %d single-clip already exists (%d KB), skipping",
+                            scene.id, single_clip.stat().st_size // 1024)
+                return scene.id, single_clip, amb if amb.exists() else None
             last_err: Exception | None = None
             for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
                 if not worker_pool.has_healthy():
@@ -1044,12 +1106,13 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
 
 def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
-                   scene_images_list, *scene_fields):
+                   scene_images_list, scenes_data, current_page, *page_textbox_values):
     if not auto_approve:
         yield (gr.update(),) * _GEN_OUT_COUNT
         return
     yield from on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style,
-                           auto_approve, scene_images_list, *scene_fields)
+                           auto_approve, scene_images_list, scenes_data, current_page,
+                           *page_textbox_values)
 
 
 # ── Session restore ──────────────────────────────────────────────────────────
@@ -1359,6 +1422,8 @@ def build_ui() -> gr.Blocks:
         music_desc_state    = gr.State("")
         style_state         = gr.State("")
         scene_images_state  = gr.State([""] * MAX_SCENES)
+        scenes_data_state   = gr.State([])
+        current_page_state  = gr.State(0)
 
         with gr.Tabs(elem_id="main_tabs") as tabs:
 
@@ -1415,6 +1480,13 @@ def build_ui() -> gr.Blocks:
                             "↺ Regenerate all scene images", variant="secondary"
                         )
 
+                    # Page navigation
+                    with gr.Row():
+                        prev_page_btn = gr.Button("◀ Prev", scale=0, visible=False)
+                        page_info_md  = gr.Markdown("", visible=False)
+                        next_page_btn = gr.Button("Next ▶", scale=0, visible=False)
+
+                    # 10 scene blocks for current page
                     scene_titles:         list[gr.Textbox] = []
                     scene_image_prompts:  list[gr.Textbox] = []
                     scene_video_prompts:  list[gr.Textbox] = []
@@ -1423,7 +1495,7 @@ def build_ui() -> gr.Blocks:
                     scene_preview_images: list[gr.Image]   = []
                     scene_regen_btns:     list[gr.Button]  = []
 
-                    for i in range(MAX_SCENES):
+                    for i in range(_SCENES_PER_PAGE):
                         with gr.Group(visible=False) as blk:
                             gr.Markdown(f"### Scene {i + 1}")
                             t = gr.Textbox(label="Title", lines=1)
@@ -1727,10 +1799,15 @@ def build_ui() -> gr.Blocks:
 
         script_outputs = [
             tabs, script_col,
-            *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
-            *scene_blocks,
+            scenes_data_state, current_page_state,
             music_desc_state,
-            style_box, style_state,   # style shown in Script tab + stored in state
+            style_box, style_state,
+        ]
+
+        _page_render_outputs = [
+            prev_page_btn, next_page_btn, page_info_md,
+            *scene_blocks,
+            *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
         ]
 
         # Outputs for the scene image generation step
@@ -1760,15 +1837,15 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
-            fn=lambda: (
-                gr.update(interactive=False, value="⏳ Generating scene images…"),
-            ),
-            inputs=[],
-            outputs=[gen_script_btn],
+            fn=_render_page,
+            inputs=[scenes_data_state, current_page_state, n_scenes_in],
+            outputs=_page_render_outputs,
+        ).then(
+            fn=lambda: gr.update(interactive=False, value="⏳ Generating scene images…"),
+            inputs=[], outputs=[gen_script_btn],
         ).then(
             fn=on_generate_scene_images,
-            inputs=[n_scenes_in, script_resolution_in, style_state,
-                    *scene_image_prompts],
+            inputs=[n_scenes_in, script_resolution_in, style_state, scenes_data_state],
             outputs=img_gen_outputs,
         ).then(
             fn=_auto_generate,
@@ -1776,6 +1853,7 @@ def build_ui() -> gr.Blocks:
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 scene_images_state,
+                scenes_data_state, current_page_state,
                 *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
             ],
             outputs=gen_outputs,
@@ -1799,6 +1877,7 @@ def build_ui() -> gr.Blocks:
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 scene_images_state,
+                scenes_data_state, current_page_state,
                 *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
             ],
             outputs=gen_outputs,
@@ -1821,18 +1900,44 @@ def build_ui() -> gr.Blocks:
         # Regenerate all scene images at the selected resolution
         regen_all_btn.click(
             fn=on_generate_scene_images,
-            inputs=[n_scenes_in, script_resolution_in, style_state, *scene_image_prompts],
+            inputs=[n_scenes_in, script_resolution_in, style_state, scenes_data_state],
             outputs=img_gen_outputs,
         )
+
+        # Page navigation
+        _page_nav_inputs = [
+            scenes_data_state, current_page_state, n_scenes_in,
+            *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs,
+        ]
+        _page_nav_outputs = [
+            scenes_data_state, current_page_state,
+            *_page_render_outputs,
+        ]
+
+        def _go_prev(scenes, page, n, *vals):
+            saved = _save_page_edits(scenes, page, *vals)
+            new_p = max(0, page - 1)
+            return (saved, new_p, *_render_page(saved, new_p, n))
+
+        def _go_next(scenes, page, n, *vals):
+            saved = _save_page_edits(scenes, page, *vals)
+            n_pages = max(1, math.ceil(n / _SCENES_PER_PAGE))
+            new_p = min(page + 1, n_pages - 1)
+            return (saved, new_p, *_render_page(saved, new_p, n))
+
+        prev_page_btn.click(fn=_go_prev, inputs=_page_nav_inputs, outputs=_page_nav_outputs)
+        next_page_btn.click(fn=_go_next, inputs=_page_nav_inputs, outputs=_page_nav_outputs)
 
         # Per-scene regenerate buttons
         for _i, _btn in enumerate(scene_regen_btns):
             _btn.click(
-                fn=lambda n, res, sty, imgs, *prompts, _idx=_i: on_regen_single_scene(
-                    _idx, n, res, sty, imgs, *prompts
+                fn=lambda n, res, sty, imgs, sdata, pg, *vals, _idx=_i: on_regen_single_scene(
+                    pg * _SCENES_PER_PAGE + _idx, n, res, sty, imgs,
+                    _save_page_edits(sdata, pg, *vals)
                 ),
                 inputs=[n_scenes_in, script_resolution_in, style_state,
-                        scene_images_state, *scene_image_prompts],
+                        scene_images_state, scenes_data_state, current_page_state,
+                        *scene_titles, *scene_image_prompts, *scene_video_prompts, *scene_narrs],
                 outputs=img_gen_outputs,
             )
 
