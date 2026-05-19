@@ -39,7 +39,7 @@ from pipeline.comfyui import (
 from pipeline.assembler import (
     _get_duration, concat_clips, mux_video_audio,
     extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
-    mix_background_music,
+    ensure_video_resolution, mix_background_music,
 )
 from pipeline.tts_worker import generate_narration
 from pipeline.worker_pool import WorkerPool, alive_workers
@@ -480,6 +480,7 @@ def main(work_dir: Path) -> None:
         volume=music_vol, voice_volume=voice_vol,
         ambient_path=ambient_path, ambient_volume=ambient_vol,
     )
+    ensure_video_resolution(final_path, vid_width, vid_height)
 
     size_mb = final_path.stat().st_size / 1024 / 1024
     logger.info("DONE — %s (%.1f MB)", final_path.name, size_mb)
