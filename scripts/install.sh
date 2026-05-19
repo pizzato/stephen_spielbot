@@ -97,18 +97,23 @@ fi
 banner "Downloading models"
 
 COMFY_DIR="${COMFY_DIR:-$HOME/github/ComfyUI}"
-MODEL_SOURCE="${MODEL_SOURCE:-s3}"   # reference machine; matches install_comfyui_worker.sh
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
-# Key sentinel files — if both exist, all models are assumed present
+# Use the first cluster node as the model source (download once there, rsync to others)
+FIRST_HOST="$(remote_hosts | head -1)"
+MODEL_SOURCE="${MODEL_SOURCE:-${FIRST_HOST:-}}"
+
+# Sentinel files — if all exist, all models (including FLUX) are assumed present
 _models_present_on() {
     local host="$1"
     if [[ "$host" == "localhost" ]]; then
         [[ -f "$COMFY_DIR/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors" ]] && \
-        [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]]
+        [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]] && \
+        [[ -f "$COMFY_DIR/models/unet/flux1-schnell-fp8.safetensors" ]]
     else
         ssh "$host" "[[ -f \$HOME/github/ComfyUI/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors && \
-                        -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors ]]" 2>/dev/null
+                        -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors && \
+                        -f \$HOME/github/ComfyUI/models/unet/flux1-schnell-fp8.safetensors ]]" 2>/dev/null
     fi
 }
 
@@ -129,12 +134,14 @@ if [[ -d "$COMFY_DIR" ]]; then
     HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 
 elif [[ -n "$(remote_hosts)" ]]; then
-    # No local ComfyUI — ensure MODEL_SOURCE has all models first
-    if _models_present_on "$MODEL_SOURCE"; then
+    # No local ComfyUI — download once on the first cluster node; others rsync from it
+    if [[ -z "$MODEL_SOURCE" ]]; then
+        echo "[models] No hosts in $CONF — skipping download."
+    elif _models_present_on "$MODEL_SOURCE"; then
         echo "[models] All models already present on $MODEL_SOURCE — skipping download"
     else
         _ask_hf_token
-        echo "[models] Downloading models to $MODEL_SOURCE (others will rsync from it)..."
+        echo "[models] Downloading models to $MODEL_SOURCE (first node; others will rsync from it)..."
         # Sync the download script to the source machine and run it there
         ssh "$MODEL_SOURCE" "mkdir -p \$HOME/github/video-generator/scripts"
         rsync -q "$REPO_ROOT/scripts/download_models.sh" \
@@ -159,7 +166,7 @@ fi
 
 for host in $HOSTS; do
     banner "Installing worker: $host"
-    bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host"
+    bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
     bash "$REPO_ROOT/scripts/install_f5tts_worker.sh"   "$host"
 done
 
