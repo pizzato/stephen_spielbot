@@ -21,22 +21,33 @@ if [[ ! -d "$COMFY_DIR" ]]; then
     exit 1
 fi
 
-# Ensure huggingface-cli is available.
+# Ensure the HuggingFace CLI is available.
+# huggingface_hub >= 1.0 ships the binary as `hf`; older versions used `huggingface-cli`.
 # Check: local venv → comfyui-env → system PATH → install into best available pip.
-if [[ -x "$VENV/bin/huggingface-cli" ]]; then
-    export PATH="$VENV/bin:$PATH"
-elif [[ -x "$COMFY_ENV/bin/huggingface-cli" ]]; then
-    export PATH="$COMFY_ENV/bin:$PATH"
-elif ! command -v huggingface-cli &>/dev/null; then
-    echo "[hf] huggingface-cli not found — installing huggingface_hub..."
+HF_CMD=""
+for candidate in "$VENV/bin/hf" "$COMFY_ENV/bin/hf" \
+                 "$VENV/bin/huggingface-cli" "$COMFY_ENV/bin/huggingface-cli"; do
+    if [[ -x "$candidate" ]]; then
+        HF_CMD="$candidate"
+        break
+    fi
+done
+if [[ -z "$HF_CMD" ]]; then
+    if   command -v hf               &>/dev/null; then HF_CMD="hf"
+    elif command -v huggingface-cli  &>/dev/null; then HF_CMD="huggingface-cli"
+    fi
+fi
+if [[ -z "$HF_CMD" ]]; then
+    echo "[hf] HuggingFace CLI not found — installing huggingface_hub..."
     if [[ -x "$VENV/bin/pip" ]]; then
-        "$VENV/bin/pip" install --quiet huggingface_hub
-        export PATH="$VENV/bin:$PATH"
+        "$VENV/bin/pip" install --quiet "huggingface_hub>=1.0"
+        HF_CMD="$VENV/bin/hf"
     elif [[ -x "$COMFY_ENV/bin/pip" ]]; then
-        "$COMFY_ENV/bin/pip" install --quiet huggingface_hub
-        export PATH="$COMFY_ENV/bin:$PATH"
+        "$COMFY_ENV/bin/pip" install --quiet "huggingface_hub>=1.0"
+        HF_CMD="$COMFY_ENV/bin/hf"
     else
-        python3 -m pip install --quiet --user huggingface_hub
+        python3 -m pip install --quiet --user "huggingface_hub>=1.0"
+        HF_CMD="hf"
     fi
 fi
 
@@ -45,6 +56,10 @@ echo "=== Downloading models to $COMFY_DIR ==="
 echo ""
 
 # ── Helper: download one file, skip if already present ────────────────────────
+# The new `hf` CLI preserves the repo subdirectory structure under --local-dir
+# (e.g. split_files/text_encoders/foo.safetensors → local_dir/split_files/…).
+# After downloading we move the file to the flat local_dir and clean up the
+# leftover subdirectory so the rest of the script finds it at the expected path.
 download() {
     local repo="$1" remote_path="$2" local_dir="$3"
     local filename="${remote_path##*/}"
@@ -61,11 +76,21 @@ download() {
     mkdir -p "$COMFY_DIR/$local_dir"
     local extra_args=()
     [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
-    huggingface-cli download "$repo" "$remote_path" \
+    "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
-        --local-dir-use-symlinks False \
         --quiet \
-        "${extra_args[@]}"
+        "${extra_args[@]+"${extra_args[@]}"}"
+
+    # Flatten: if hf reproduced the repo subdir structure, move file to dest.
+    local actual="$COMFY_DIR/$local_dir/$remote_path"
+    if [[ -f "$actual" && "$actual" != "$dest" ]]; then
+        mv "$actual" "$dest"
+        # Remove the now-empty top-level subdir (e.g. split_files/)
+        local top_subdir="${remote_path%%/*}"
+        [[ "$top_subdir" != "$remote_path" && -d "$COMFY_DIR/$local_dir/$top_subdir" ]] \
+            && rm -rf "$COMFY_DIR/$local_dir/$top_subdir"
+    fi
+
     local size
     size=$(du -sh "$dest" | cut -f1)
     echo "  [done] $filename ($size)"
@@ -118,11 +143,44 @@ download \
     "split_files/text_encoders/qwen_4b_ace15.safetensors" \
     "models/text_encoders"
 
+# ── FLUX.1-schnell (scene preview image generation) — optional ────────────────
+# ~13 GB total. Skip with:  SKIP_FLUX=1 bash scripts/download_models.sh
+if [[ "${SKIP_FLUX:-0}" == "1" ]]; then
+    echo ""
+    echo "--- FLUX.1-schnell models skipped (SKIP_FLUX=1) ---"
+else
+    echo ""
+    echo "--- FLUX.1-schnell scene preview models (~13 GB) ---"
+
+    download \
+        "Comfy-Org/flux1-schnell" \
+        "flux1-schnell-fp8.safetensors" \
+        "models/unet"
+
+    # Shared FLUX text encoders (also used by FLUX dev)
+    download \
+        "comfyanonymous/flux_text_encoders" \
+        "t5xxl_fp8_e4m3fn.safetensors" \
+        "models/clip"
+
+    download \
+        "comfyanonymous/flux_text_encoders" \
+        "clip_l.safetensors" \
+        "models/clip"
+
+    # FLUX VAE — BFL repo requires license approval; use public mirror instead
+    download \
+        "camenduru/FLUX.1-dev" \
+        "ae.safetensors" \
+        "models/vae"
+fi
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
 echo "All models present in $COMFY_DIR:"
 for dir in models/checkpoints models/loras models/latent_upscale_models \
-           models/text_encoders models/diffusion_models models/vae; do
+           models/text_encoders models/diffusion_models models/vae \
+           models/unet models/clip; do
     [[ -d "$COMFY_DIR/$dir" ]] || continue
     while IFS= read -r f; do
         size=$(du -sh "$f" | cut -f1)

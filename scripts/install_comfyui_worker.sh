@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Install and configure a ComfyUI worker on a remote DGX Spark.
-# Usage: bash scripts/install_comfyui_worker.sh <hostname>
-# Example: bash scripts/install_comfyui_worker.sh s1
+# Usage: bash scripts/install_comfyui_worker.sh <hostname> [model-source-host]
+# Example: bash scripts/install_comfyui_worker.sh s2 s1
 #
 # What it does:
 #   1. Installs Miniconda (if absent)
 #   2. Clones ComfyUI and creates the comfyui-env venv (via miniconda Python 3.13)
-#   3. Rsyncs all LTX + ACE-Step models from s3 (already fully set up)
+#   3. Rsyncs all models from model-source-host (skipped if target IS the source)
 #   4. Deploys the video-generator repo (workflows + pipeline)
 #   5. Starts ComfyUI listening on 0.0.0.0:8188
 #   6. Verifies the worker is responding
@@ -14,12 +14,12 @@
 set -euo pipefail
 
 TARGET="${1:-}"
-MODEL_SOURCE="s3"   # machine that already has all models
+MODEL_SOURCE="${2:-}"   # machine that already has all models; rsync source
 COMFYUI_PORT=8188
 
 if [[ -z "$TARGET" ]]; then
-    echo "Usage: $0 <hostname>"
-    echo "  Example: $0 s1"
+    echo "Usage: $0 <hostname> [model-source-host]"
+    echo "  Example: $0 s1 s1"
     exit 1
 fi
 
@@ -79,9 +79,7 @@ fi
 echo "[venv] OK — $(python --version), torch $(python -c 'import torch; print(torch.__version__)')"
 REMOTE
 
-# ── 3. Rsync models from reference machine (s3) ──────────────────────────────
-echo "=== Syncing models from $MODEL_SOURCE to $TARGET (this may take a while for large files) ==="
-
+# ── 3. Rsync models from source node ─────────────────────────────────────────
 MODEL_DIRS=(
     "models/checkpoints"
     "models/diffusion_models"
@@ -90,16 +88,23 @@ MODEL_DIRS=(
     "models/text_encoders"
     "models/upscale_models"
     "models/vae"
+    "models/unet"
+    "models/clip"
 )
 
-for dir in "${MODEL_DIRS[@]}"; do
-    echo "[rsync] $dir..."
-    ssh -A "$TARGET" "mkdir -p \$HOME/github/ComfyUI/$dir && \
-        rsync -avz --ignore-existing \
-            ${MODEL_SOURCE}:\$HOME/github/ComfyUI/$dir/ \
-            \$HOME/github/ComfyUI/$dir/ 2>&1 | tail -5" \
-    || echo "[rsync] Warning: some files in $dir may have failed"
-done
+if [[ -z "$MODEL_SOURCE" || "$MODEL_SOURCE" == "$TARGET" ]]; then
+    echo "=== $TARGET is the model source — skipping rsync (models already here) ==="
+else
+    echo "=== Syncing models from $MODEL_SOURCE to $TARGET (this may take a while for large files) ==="
+    for dir in "${MODEL_DIRS[@]}"; do
+        echo "[rsync] $dir..."
+        ssh -A "$TARGET" "mkdir -p \$HOME/github/ComfyUI/$dir && \
+            rsync -avz --ignore-existing \
+                ${MODEL_SOURCE}:\$HOME/github/ComfyUI/$dir/ \
+                \$HOME/github/ComfyUI/$dir/ 2>&1 | tail -5" \
+        || echo "[rsync] Warning: some files in $dir may have failed"
+    done
+fi
 
 # ── 4. Deploy video-generator workflows ──────────────────────────────────────
 echo "=== Deploying video-generator to $TARGET ==="

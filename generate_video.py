@@ -58,7 +58,9 @@ def main() -> None:
 
     script_path = work_dir / "script.json"
     script_path.write_text(json.dumps(
-        [{"id": s.id, "title": s.title, "visual_prompt": s.visual_prompt, "narration": s.narration}
+        [{"id": s.id, "title": s.title,
+          "image_prompt": s.image_prompt, "video_prompt": s.video_prompt,
+          "narration": s.narration}
          for s in scenes],
         indent=2,
     ))
@@ -110,7 +112,7 @@ def main() -> None:
             print(f"  Clip {k+1}/{n_clips}…", flush=True)
             clip_path = work_dir / f"scene_{scene.id:02d}_clip_{k+1:02d}.mp4"
             generate_video_clip(
-                positive_prompt=scene.visual_prompt,
+                positive_prompt=scene.video_prompt,
                 negative_prompt=scene.negative_prompt,
                 output_path=clip_path,
             )

@@ -9,6 +9,7 @@ Claude backend: single call, JSON output, reliable.
 Local backend:  two-stage plain-text (story + per-scene visuals), works
                 around the reasoning-model token constraints.
 """
+from __future__ import annotations
 
 import concurrent.futures
 import json
@@ -50,7 +51,8 @@ def _load_cfg() -> dict:
 class Scene:
     id: int
     title: str
-    visual_prompt: str
+    image_prompt: str   # FLUX: highly detailed static description, no motion words
+    video_prompt: str   # LTX I2V: motion, camera movement, action, pacing
     narration: str
     negative_prompt: str = NEGATIVE_PROMPT
 
@@ -59,73 +61,133 @@ class Scene:
 # Claude backend
 # ══════════════════════════════════════════════════════════════════════════════
 
-_CLAUDE_SYSTEM = """You are a video script writer. Given a topic title, generate a structured video script.
+_CLAUDE_SYSTEM = """You are a video script writer specialising in YouTube documentary content. Given a topic title, generate a structured video script optimised for viewer retention.
 
 Output ONLY a JSON object with exactly three keys:
 
-"style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every visual prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, slow motion, photorealistic documentary style"
+"style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
 
 "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
 "scenes": Array of scene objects, each with:
   - "id": integer starting from 1
   - "title": 5-10 word scene title
-  - "visual_prompt": 50-80 word cinematic description written as flowing sentences (NOT a keyword list). This drives an AI video model that understands natural language. You MUST include ALL five elements:
-      1. Subject/setting — what is shown and where
-      2. Motion/action — what moves, how it moves (this is the most important element — static descriptions produce static video)
-      3. Camera — explicit camera movement (slow dolly forward, aerial tracking shot, static wide angle, gentle pan left, etc.)
-      4. Lighting — specific and evocative (golden afternoon light, cool diffused overcast, warm candlelight, neon reflections)
-      5. Atmosphere — particles, mist, air quality, sound cues that enhance mood (dust motes in shafts of light, mist drifts through the scene, distant sounds implied by the visuals)
-    No people unless essential to the story. No text or logos. Do NOT include style descriptors (those come from the style field). Match the visual to what the narration describes.
+  - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
+  - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
   - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
 
-Write the narrations as a continuous narrative — each scene follows naturally from the last.
+STRUCTURE RULES — critical for YouTube retention:
+- Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
+- Middle scenes: Build the narrative progressively, each scene raising the stakes or deepening understanding. Every narration should end with an implicit pull toward the next scene.
+- Final scene (conclusion): Land with a satisfying payoff — a moment of insight, wonder, or emotional resolution that makes the viewer feel their time was well spent. Leave them with something worth remembering or sharing.
+
+Write the narrations as a single continuous narrative. The arc must feel purposeful: curiosity ignited → journey deepened → reward delivered.
 
 Output only the raw JSON object. No markdown, no code fences, no explanation."""
+
+_CLAUDE_CONTINUATION_SYSTEM = """You are a video script writer specialising in YouTube documentary content, continuing a multi-part script in progress.
+
+Output ONLY a JSON array of scene objects. Each object has exactly these keys:
+  - "id": integer scene number (as specified in the request)
+  - "title": 5-10 word scene title
+  - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
+  - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors.
+  - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.
+
+Output only the raw JSON array. No markdown, no code fences, no explanation."""
+
+_CLAUDE_BATCH_SIZE = 10  # max scenes per API call
+
+
+def _parse_claude_response(content: str, label: str):
+    """Strip fences, remove trailing commas, parse JSON. Raises RuntimeError on failure."""
+    if content.startswith("```"):
+        lines = content.splitlines()
+        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    content = re.sub(r",\s*([}\]])", r"\1", content)
+    try:
+        return json.loads(content)
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Claude returned invalid JSON ({label}): {e}\nContent: {content[:400]}")
+
+
+def _claude_call(client, model: str, system: str, user_msg: str,
+                 max_tokens: int, label: str, retries: int = 6) -> str:
+    """Call the Claude API using streaming to avoid long-idle-connection timeouts.
+
+    Large responses (many scenes) can take minutes to generate.  Non-streaming
+    requests leave the HTTP connection idle while Claude thinks, which causes
+    some network appliances / NAT routers to drop the connection after ~3 min.
+    Streaming sends token deltas as they arrive, keeping the connection alive.
+    """
+    import time as _time
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            chunks: list[str] = []
+            stop_reason: str | None = None
+            # Use the streaming context-manager so tokens arrive incrementally.
+            with client.messages.stream(
+                model=model, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            ) as stream:
+                for text in stream.text_stream:
+                    chunks.append(text)
+                final_msg = stream.get_final_message()
+                stop_reason = final_msg.stop_reason
+            text = "".join(chunks).strip()
+            if stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"Claude hit the token limit ({max_tokens}) for {label}. "
+                    "Try fewer scenes or a shorter topic."
+                )
+            return text
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                # Exponential backoff: 10s, 20s, 40s, 60s, 60s
+                delay = min(10 * (2 ** (attempt - 1)), 60)
+                logger.warning("Claude API call failed (attempt %d/%d): %s — retrying in %ds",
+                               attempt, retries, exc, delay)
+                _time.sleep(delay)
+    raise last_exc
 
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str) -> tuple[list[Scene], str, str]:
     import anthropic
+    import httpx
+    # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
+    # from Anthropic's servers after ~3 minutes on large prompts, causing
+    # "Server disconnected without sending a response" errors.
+    http_client = httpx.Client(http2=False)
+    client = anthropic.Anthropic(api_key=api_key, http_client=http_client)
 
+    # ── Batch 1: style + music + first BATCH_SIZE scenes ──────────────────────
+    first_batch = min(_CLAUDE_BATCH_SIZE, n_scenes)
     style_note = (
         f'\nIMPORTANT: Use exactly this text for the "style" field: "{style_hint}"'
-        if style_hint and style_hint.strip()
-        else ""
+        if style_hint and style_hint.strip() else ""
+    )
+    is_last_batch = (first_batch == n_scenes)
+    conclusion_note = (
+        f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
+        if is_last_batch else ""
     )
     user_msg = (
-        f'Generate a {n_scenes}-scene video script for the topic: "{title}"\n'
-        f"Output exactly {n_scenes} scenes.{style_note}"
+        f'Topic: "{title}"\n'
+        f"Total video length: {n_scenes} scenes. "
+        f"THIS REQUEST: generate ONLY scenes 1 to {first_batch} "
+        f"(the remaining scenes will be requested separately). "
+        f"Output exactly {first_batch} scene objects in the 'scenes' array — no more, no fewer.{style_note}{conclusion_note}"
     )
+    max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
+    raw = _claude_call(client, model, _CLAUDE_SYSTEM, user_msg, max_tokens, f"scenes 1–{first_batch}")
+    outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model=model,
-        max_tokens=8096,
-        system=_CLAUDE_SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-
-    content = response.content[0].text.strip()
-
-    # Strip markdown fences if present
-    if content.startswith("```"):
-        lines = content.splitlines()
-        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-
-    # Remove trailing commas
-    content = re.sub(r",\s*([}\]])", r"\1", content)
-
-    try:
-        outer = json.loads(content)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Claude returned invalid JSON: {e}\nContent: {content[:500]}")
-
-    style      = (style_hint.strip() if style_hint and style_hint.strip()
-                  else outer.get("style", ""))
+    style      = style_hint.strip() if style_hint and style_hint.strip() else outer.get("style", "")
     music_desc = outer.get("music", "cinematic orchestral background music, atmospheric, instrumental")
     scenes_data = outer.get("scenes", [])
-
     if not scenes_data:
         raise RuntimeError("Claude returned empty scene list")
 
@@ -133,12 +195,53 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         Scene(
             id=item.get("id", i + 1),
             title=item.get("title", f"Scene {i + 1}"),
-            visual_prompt=item.get("visual_prompt", title),
+            image_prompt=item.get("image_prompt", title),
+            video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
         )
-        for i, item in enumerate(scenes_data[:n_scenes])
+        for i, item in enumerate(scenes_data[:first_batch])
     ]
-    return scenes, music_desc, style
+
+    # ── Continuation batches ──────────────────────────────────────────────────
+    batch_start = first_batch + 1
+    while batch_start <= n_scenes:
+        batch_end   = min(batch_start + _CLAUDE_BATCH_SIZE - 1, n_scenes)
+        is_last     = batch_end == n_scenes
+        # Provide last 3 scenes as continuity context
+        ctx = [
+            {"id": s.id, "title": s.title, "narration": s.narration}
+            for s in scenes[-3:]
+        ]
+        ctx_str = "\n".join(
+            f'  Scene {s["id"]}: "{s["title"]}" — {s["narration"]}' for s in ctx
+        )
+        conclusion_note = (
+            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — deliver a satisfying payoff."
+            if is_last else ""
+        )
+        cont_msg = (
+            f'Continue the {n_scenes}-scene video script for: "{title}"\n'
+            f"Generate scenes {batch_start} to {batch_end} "
+            f"(scene IDs {batch_start}–{batch_end}).\n\n"
+            f"Previous scenes for narrative continuity:\n{ctx_str}{conclusion_note}"
+        )
+        max_tokens = (batch_end - batch_start + 1) * 350 + 300
+        raw = _claude_call(client, model, _CLAUDE_CONTINUATION_SYSTEM, cont_msg,
+                           max_tokens, f"scenes {batch_start}–{batch_end}")
+        items = _parse_claude_response(raw, f"scenes {batch_start}–{batch_end}")
+        if not isinstance(items, list):
+            items = items.get("scenes", [])
+        for i, item in enumerate(items):
+            scenes.append(Scene(
+                id=batch_start + i,
+                title=item.get("title", f"Scene {batch_start + i}"),
+                image_prompt=item.get("image_prompt", title),
+                video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
+                narration=item.get("narration", ""),
+            ))
+        batch_start = batch_end + 1
+
+    return scenes[:n_scenes], music_desc, style
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -146,7 +249,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
 # ══════════════════════════════════════════════════════════════════════════════
 
 _STORY_SYSTEM = """\
-You are a video script writer. Write a complete narrated story for an AI-generated documentary video.
+You are a video script writer specialising in YouTube documentary content. Write a complete narrated story for an AI-generated documentary video, optimised for viewer retention.
 
 Output ONLY plain text using this exact format — no JSON, no markdown, no extra commentary:
 
@@ -159,20 +262,26 @@ NARRATION_2: [exactly 2 sentences, approximately 9 seconds when read aloud at a 
 ...continue for all N scenes
 
 Rules:
-- Write narrations as a coherent flowing story — each paragraph follows naturally from the last.
+- SCENE 1 must open with a compelling hook: tease the most surprising or emotionally resonant moment from later in the video — a question unanswered, a tension unresolved, or a revelation hinted at but withheld. Make the listener feel they cannot afford to stop watching.
+- MIDDLE SCENES build the narrative progressively, deepening understanding and raising stakes. Each narration should carry an implicit pull toward the next scene.
+- FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
+- Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
 - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
 - Every value must fit on a single line (no line breaks within a value).
 - No blank lines between entries.
 - No text outside the key: value lines."""
 
 _VISUAL_SYSTEM = """\
-You are a cinematographer writing a visual description for an AI video generation model (LTX 2.3).
-The model reads full sentences and generates motion based on what you describe. Static or vague descriptions produce static video.
-The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it.
+You are generating two descriptions for an AI video pipeline. The pipeline has two stages:
+1. FLUX image generator — needs a highly detailed static image description (no motion).
+2. LTX I2V video model — needs a motion/camera description that starts from the FLUX image.
 
-Output ONLY plain text in this exact single-line format:
+The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it in either field.
 
-VISUAL: [50-80 word description written as flowing sentences. You MUST include: (1) subject and setting, (2) what moves and how — this is the most important element, be explicit about motion (camera pushes forward, mist drifts between columns, leaves rustle), (3) explicit camera movement (slow dolly, aerial descent, static wide angle, gentle pan), (4) specific lighting quality (golden afternoon light, diffused overcast, flickering candlelight), (5) atmosphere or particles (mist drifts, dust motes float, steam rises). No people unless essential. No text or logos. Match the narration's subject.]"""
+Output ONLY plain text in this exact two-line format (each on a single line, no line breaks within a value):
+
+IMAGE: [60-100 word highly detailed static image description for FLUX. Describe this as a frozen, perfectly composed photograph. Include exact subjects and positions, environment details, lighting quality and direction, color palette, textures, atmospheric depth. NO motion words, NO camera movement words, NO action verbs.]
+VIDEO: [30-50 word motion description for LTX I2V. What moves and how (camera pushes forward, mist drifts, leaves rustle), explicit camera movement (slow dolly, aerial descent, gentle pan, static wide angle), pacing. Match the narration's action. No style descriptors.]"""
 
 
 def _check_local_available(url: str) -> bool:
@@ -267,13 +376,13 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
 
 def _local_generate_visual(title: str, style: str,
                             scene_id: int, scene_title: str, narration: str,
-                            url: str, model: str) -> str:
+                            url: str, model: str) -> tuple[str, str]:
     user_msg = (
         f'Video topic: "{title}"\n'
         f"Visual style: {style}\n\n"
         f"Scene: {scene_title}\n"
         f"Narration: {narration}\n\n"
-        "Generate the VISUAL line for this scene."
+        "Generate the IMAGE and VIDEO lines for this scene."
     )
     raw = _local_llm(
         [
@@ -283,8 +392,14 @@ def _local_generate_visual(title: str, style: str,
         max_tokens=2048,
         url=url, model=model,
     )
-    visual = _get_field(raw, "VISUAL")
-    return visual or raw.strip().lstrip("VISUAL:").strip()
+    image_prompt = _get_field(raw, "IMAGE")
+    video_prompt = _get_field(raw, "VIDEO")
+    # Graceful fallback if model didn't split correctly
+    if not image_prompt:
+        image_prompt = raw.strip().lstrip("IMAGE:").strip()
+    if not video_prompt:
+        video_prompt = image_prompt
+    return image_prompt, video_prompt
 
 
 def _local_generate(title: str, n_scenes: int,
@@ -307,25 +422,29 @@ def _local_generate(title: str, n_scenes: int,
 
     logger.info("Story: %d scenes, style=%r", len(outlines), style)
 
-    def _fetch(outline: dict) -> tuple[int, str]:
-        return outline["id"], _local_generate_visual(
+    def _fetch(outline: dict) -> tuple[int, str, str]:
+        img_p, vid_p = _local_generate_visual(
             title, style,
             outline["id"],
             outline.get("title", f"Scene {outline['id']}"),
             outline.get("narration", ""),
             url=url, model=model,
         )
+        return outline["id"], img_p, vid_p
 
-    visuals: dict[int, str] = {}
+    img_prompts: dict[int, str] = {}
+    vid_prompts: dict[int, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        for sid, visual in pool.map(_fetch, outlines):
-            visuals[sid] = visual
+        for sid, img_p, vid_p in pool.map(_fetch, outlines):
+            img_prompts[sid] = img_p
+            vid_prompts[sid] = vid_p
 
     scenes = [
         Scene(
             id=o["id"],
             title=o.get("title", f"Scene {o['id']}"),
-            visual_prompt=visuals.get(o["id"], title),
+            image_prompt=img_prompts.get(o["id"], title),
+            video_prompt=vid_prompts.get(o["id"], title),
             narration=o.get("narration", ""),
         )
         for o in sorted(outlines, key=lambda x: x["id"])

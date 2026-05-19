@@ -4,7 +4,9 @@ import json
 import logging
 import random
 import shutil
+import subprocess
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
@@ -160,8 +162,47 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
-_QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
-_STUCK_TIMEOUT        = 600  # seconds of silence from a *running* job → StuckJobError
+_QUEUE_CHECK_INTERVAL      = 60    # seconds between /queue health checks
+_STUCK_TIMEOUT             = 7200  # seconds of silence from a *running* job → StuckJobError
+_PENDING_TIMEOUT           = 180   # seconds a job may sit *pending* before we try another worker
+_HEARTBEAT_INTERVAL        = 300   # seconds between GPU idle checks (only when job is running)
+_HEARTBEAT_IDLE_THRESHOLD  = 15    # GPU utilisation % below this is considered idle
+_HEARTBEAT_IDLE_SAMPLES    = 3     # consecutive idle heartbeats required to declare stuck
+
+
+def _hostname_from_url(url: str) -> str:
+    return urllib.parse.urlparse(url).hostname or url
+
+
+def _check_gpu_idle(host: str) -> bool | None:
+    """SSH to host, check GPU utilisation via nvidia-smi.
+
+    Returns True if all GPUs are below _HEARTBEAT_IDLE_THRESHOLD, False if any
+    are busy, None if the check could not be completed (SSH/nvidia-smi failure).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no", host,
+                "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null",
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        utils = [int(ln.strip()) for ln in result.stdout.splitlines() if ln.strip().isdigit()]
+        if not utils:
+            return None
+        busy = any(u >= _HEARTBEAT_IDLE_THRESHOLD for u in utils)
+        logger.debug(
+            "[heartbeat] %s GPU util: %s — %s",
+            host, utils, "busy" if busy else "idle",
+        )
+        return not busy  # True = idle, False = busy
+    except Exception as exc:
+        logger.debug("[heartbeat] %s GPU check failed: %s", host, exc)
+        return None
 
 
 def _wait_for_completion(
@@ -184,6 +225,9 @@ def _wait_for_completion(
     last_activity_at: float | None = None   # None until the job actually starts executing
     last_queue_check = time.time()
     nodes_done       = 0
+    last_heartbeat_at = start
+    consecutive_idle  = 0
+    host              = _hostname_from_url(comfy_url)
 
     try:
         while time.time() < deadline:
@@ -209,9 +253,50 @@ def _wait_for_completion(
                         f" — will re-submit"
                     )
 
-                # Stuck detection: only once the job has started executing
-                if last_activity_at is not None and q_status == "running":
-                    stalled = now - last_activity_at
+                # Pending timeout: worker's queue is blocked by another job.
+                if q_status == "pending" and now - start > _PENDING_TIMEOUT:
+                    raise StuckJobError(
+                        f"Job {prompt_id} on {comfy_url} has been pending in queue for"
+                        f" {now - start:.0f}s (limit {_PENDING_TIMEOUT}s)"
+                        f" — worker blocked, will try another"
+                    )
+
+                if q_status == "running":
+                    # ── GPU heartbeat: sample utilisation every _HEARTBEAT_INTERVAL ──
+                    if now - last_heartbeat_at >= _HEARTBEAT_INTERVAL:
+                        last_heartbeat_at = now
+                        gpu_idle = _check_gpu_idle(host)
+                        if gpu_idle is False:
+                            # GPU is busy — worker is genuinely doing work.
+                            # Reset the idle counter and treat it as WebSocket activity
+                            # so the silence-based stuck timer doesn't fire.
+                            consecutive_idle = 0
+                            last_activity_at = now
+                            logger.info(
+                                "[comfy] job %s… heartbeat OK — GPU active on %s",
+                                prompt_id[:8], host,
+                            )
+                        elif gpu_idle is True:
+                            consecutive_idle += 1
+                            logger.warning(
+                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s",
+                                prompt_id[:8], consecutive_idle,
+                                _HEARTBEAT_IDLE_SAMPLES, _HEARTBEAT_IDLE_THRESHOLD, host,
+                            )
+                            if consecutive_idle >= _HEARTBEAT_IDLE_SAMPLES:
+                                raise StuckJobError(
+                                    f"Job {prompt_id} on {comfy_url}: GPU idle for "
+                                    f"{consecutive_idle} consecutive heartbeats "
+                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%)"
+                                    f" — worker appears hung, will re-submit"
+                                )
+                        # gpu_idle is None → SSH failed → skip, don't update counters
+
+                    # Stuck detection: fires when WebSocket has been silent too long.
+                    # GPU heartbeats above reset last_activity_at when the GPU is busy,
+                    # so this only triggers when the machine is genuinely idle.
+                    baseline = last_activity_at if last_activity_at is not None else start
+                    stalled = now - baseline
                     if stalled > _STUCK_TIMEOUT:
                         raise StuckJobError(
                             f"Job {prompt_id} on {comfy_url} has been running but produced no"
@@ -484,6 +569,57 @@ def ltx_upscale_video(video_path: Path, output_path: Path, comfy_url: str = COMF
         from urllib.parse import urlparse as _urlparse
         if _urlparse(comfy_url).hostname in ("localhost", "127.0.0.1"):
             (COMFYUI_INPUT_DIR / video_name).unlink(missing_ok=True)
+
+
+def generate_scene_image(
+    positive_prompt: str,
+    output_path: Path,
+    width: int = 1024,
+    height: int = 576,
+    seed: int | None = None,
+    steps: int = 4,
+    flux_model: str = "flux1-schnell-fp8.safetensors",
+    clip_t5: str = "t5xxl_fp8_e4m3fn.safetensors",
+    clip_l: str = "clip_l.safetensors",
+    flux_vae: str = "ae.safetensors",
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Generate a high-detail scene preview image using FLUX.1-schnell.
+
+    FLUX produces far better still images than LTX (a video model) and runs in
+    4 steps, making it much faster for preview generation.
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    workflow = _load_workflow("flux_t2i.json")
+    workflow = _fill_template(workflow, {
+        "FLUX_MODEL":      flux_model,
+        "CLIP_T5":         clip_t5,
+        "CLIP_L":          clip_l,
+        "FLUX_VAE":        flux_vae,
+        "POSITIVE_PROMPT": positive_prompt,
+        "WIDTH":           width,
+        "HEIGHT":          height,
+        "STEPS":           steps,
+        "SEED":            seed,
+    })
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No image output from FLUX for prompt {prompt_id} ({comfy_url})")
+
+    img_item = outputs[0]
+    suffix = Path(img_item.get("filename", "preview.png")).suffix or ".png"
+    tmp = output_path.with_suffix(suffix)
+    _download_output(img_item, tmp, comfy_url=comfy_url)
+    if tmp != output_path:
+        tmp.rename(output_path)
+    return output_path
 
 
 def generate_music(
