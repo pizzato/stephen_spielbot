@@ -58,6 +58,14 @@ def load_config() -> dict:
     raise RuntimeError(f"Config not found: {CONFIG_FILE}")
 
 
+def load_job_config(work_dir: Path) -> dict:
+    cfg = load_config()
+    job_cfg = work_dir / "job_config.json"
+    if job_cfg.exists():
+        cfg.update(json.loads(job_cfg.read_text()))
+    return cfg
+
+
 def write_progress(status_file: Path, pct: float, msg: str) -> None:
     try:
         status_file.write_text(json.dumps({"pct": round(pct, 1), "msg": msg, "ts": time.time()}))
@@ -164,7 +172,7 @@ def _generate_scene_video(
 
 
 def main(work_dir: Path) -> None:
-    cfg = load_config()
+    cfg = load_job_config(work_dir)
 
     # Load script
     script_data = json.loads((work_dir / "script.json").read_text())
@@ -212,6 +220,13 @@ def main(work_dir: Path) -> None:
         "Landscape (832×480)":         (832, 480),
         "Landscape HD (1024×576)":     (1024, 576),
         "Landscape FHD (1920×1080)":   (1920, 1080),
+        "Portrait Fast (288×512)":     (288, 512),
+        "Portrait (480×832)":          (480, 832),
+        "Portrait HD (576×1024)":      (576, 1024),
+        "Portrait FHD (1080×1920)":    (1080, 1920),
+        "Square (512×512)":            (512, 512),
+        "Square HD (576×576)":         (576, 576),
+        "Square FHD (1080×1080)":      (1080, 1080),
     }
     vid_width, vid_height = _RESOLUTIONS.get(res_name, (1920, 1080))
     logger.info("Resolution: %s → %dx%d", res_name, vid_width, vid_height)
@@ -256,7 +271,9 @@ def main(work_dir: Path) -> None:
         raise RuntimeError(f"TTS failed on all hosts for scene {scene.id}: {last_err}")
 
     write_progress(status_file, 0, f"Generating {n} narrations…")
-    tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+    if not tts_hosts:
+        raise RuntimeError("No TTS workers configured")
+    tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(tts_hosts)))
     tts_pending = {
         tts_pool.submit(_tts_scene, scene, tts_hosts[i % len(tts_hosts)]): scene
         for i, scene in enumerate(scenes)
@@ -297,7 +314,7 @@ def main(work_dir: Path) -> None:
         for attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
             music_url = worker_pool.acquire()
             try:
-                generate_music(title, music_dur, music_path, None, comfy_url=music_url)
+                generate_music(title, music_dur, music_path, cfg.get("music_desc") or None, comfy_url=music_url)
                 worker_pool.release(music_url)
                 break
             except Exception as e:
@@ -321,6 +338,16 @@ def main(work_dir: Path) -> None:
         if existing.exists() and existing.stat().st_size > 10_000:
             logger.info("Scene %d video exists (%d KB), skipping", scene.id, existing.stat().st_size // 1024)
             return scene.id, existing, None
+
+        single_clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
+        clip_02 = work_dir / f"scene_{scene.id:02d}_clip_02.mp4"
+        if (single_clip.exists() and single_clip.stat().st_size > 10_000
+                and not clip_02.exists()
+                and narration_durs[scene.id] <= max_clip_secs + 0.5):
+            amb = work_dir / f"scene_{scene.id:02d}_ambient.wav"
+            logger.info("Scene %d single-clip exists (%d KB), skipping",
+                        scene.id, single_clip.stat().st_size // 1024)
+            return scene.id, single_clip, amb if amb.exists() else None
 
         # Check if a preview image exists for this scene
         scene_first_frame: Path | None = None
@@ -370,7 +397,7 @@ def main(work_dir: Path) -> None:
     n_workers = len(worker_pool.urls)
     write_progress(status_file, 35, f"Generating {n} scenes across {n_workers} worker(s)…")
 
-    scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+    scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
     pending: dict[concurrent.futures.Future, Scene] = {
         scene_pool.submit(_run_scene, scene): scene for scene in scenes
     }
@@ -457,6 +484,15 @@ def main(work_dir: Path) -> None:
     size_mb = final_path.stat().st_size / 1024 / 1024
     logger.info("DONE — %s (%.1f MB)", final_path.name, size_mb)
     write_progress(status_file, 100, f"✅ Done — {final_path.name} ({size_mb:.1f} MB)")
+    try:
+        (work_dir / "job.json").write_text(json.dumps({
+            "work_dir": str(work_dir),
+            "status": "done",
+            "final_path": str(final_path),
+            "updated_at": time.time(),
+        }, indent=2))
+    except Exception:
+        pass
     print(f"\n✅ DONE: {final_path}")
 
 
@@ -468,4 +504,17 @@ if __name__ == "__main__":
     if not work_dir.is_dir():
         print(f"Not a directory: {work_dir}", file=sys.stderr)
         sys.exit(1)
-    main(work_dir)
+    try:
+        main(work_dir)
+    except Exception as exc:
+        try:
+            (work_dir / "job.json").write_text(json.dumps({
+                "work_dir": str(work_dir),
+                "status": "error",
+                "error": str(exc),
+                "updated_at": time.time(),
+            }, indent=2))
+            write_progress(work_dir / "progress.json", 0, f"Error: {str(exc).splitlines()[0][:300]}")
+        except Exception:
+            pass
+        raise

@@ -160,7 +160,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
     # from Anthropic's servers after ~3 minutes on large prompts, causing
     # "Server disconnected without sending a response" errors.
-    http_client = httpx.Client(http2=False)
+    timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
+    http_client = httpx.Client(http2=False, timeout=timeout)
     client = anthropic.Anthropic(api_key=api_key, http_client=http_client)
 
     # ── Batch 1: style + music + first BATCH_SIZE scenes ──────────────────────
