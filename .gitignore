@@ -35,3 +35,4 @@ logs/
 .vscode/
 *.swp
 *.swo
+.claude/

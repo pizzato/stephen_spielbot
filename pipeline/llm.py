@@ -112,17 +112,28 @@ def _parse_claude_response(content: str, label: str):
 
 
 def _claude_call(client, model: str, system: str, user_msg: str,
-                 max_tokens: int, label: str) -> str:
-    response = client.messages.create(
-        model=model, max_tokens=max_tokens, system=system,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    if response.stop_reason == "max_tokens":
-        raise RuntimeError(
-            f"Claude hit the token limit ({max_tokens}) for {label}. "
-            "Try fewer scenes or a shorter topic."
-        )
-    return response.content[0].text.strip()
+                 max_tokens: int, label: str, retries: int = 3) -> str:
+    import time as _time
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            response = client.messages.create(
+                model=model, max_tokens=max_tokens, system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            if response.stop_reason == "max_tokens":
+                raise RuntimeError(
+                    f"Claude hit the token limit ({max_tokens}) for {label}. "
+                    "Try fewer scenes or a shorter topic."
+                )
+            return response.content[0].text.strip()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                logger.warning("Claude API call failed (attempt %d/%d): %s — retrying in 5s",
+                               attempt, retries, exc)
+                _time.sleep(5)
+    raise last_exc
 
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
@@ -142,10 +153,13 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         if is_last_batch else ""
     )
     user_msg = (
-        f'Generate a {n_scenes}-scene video script for the topic: "{title}"\n'
-        f"Output exactly {first_batch} scenes, numbered 1 to {first_batch}.{style_note}{conclusion_note}"
+        f'Topic: "{title}"\n'
+        f"Total video length: {n_scenes} scenes. "
+        f"THIS REQUEST: generate ONLY scenes 1 to {first_batch} "
+        f"(the remaining scenes will be requested separately). "
+        f"Output exactly {first_batch} scene objects in the 'scenes' array — no more, no fewer.{style_note}{conclusion_note}"
     )
-    max_tokens = first_batch * 350 + 500
+    max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
     raw = _claude_call(client, model, _CLAUDE_SYSTEM, user_msg, max_tokens, f"scenes 1–{first_batch}")
     outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
