@@ -249,6 +249,16 @@ def _launch_generation_job(work_dir: Path) -> dict:
     )
 
 
+def _job_config_snapshot(cfg: dict) -> dict:
+    """Persist only non-secret runtime settings needed by the background worker."""
+    job_cfg = cfg.copy()
+    for key in list(job_cfg):
+        lowered = key.lower()
+        if "api_key" in lowered or "token" in lowered or "secret" in lowered:
+            job_cfg.pop(key, None)
+    return job_cfg
+
+
 def _status_for_work_dir(work_dir: Path) -> tuple[float, str]:
     status_file = work_dir / "progress.json"
     pct = 0.0
@@ -979,7 +989,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 if preview.resolve() != dest.resolve():
                     shutil.copy2(preview, dest)
 
-        job_cfg = cfg.copy()
+        job_cfg = _job_config_snapshot(cfg)
         job_cfg["resolution"] = resolution or cfg.get("resolution", _DEFAULT_RESOLUTION)
         job_cfg["default_voice"] = voice_name
         job_cfg["music_desc"] = music_desc or ""
