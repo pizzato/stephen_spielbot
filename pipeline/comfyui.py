@@ -4,7 +4,9 @@ import json
 import logging
 import random
 import shutil
+import subprocess
 import time
+import urllib.parse
 import urllib.request
 import urllib.error
 import uuid
@@ -160,9 +162,47 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
-_QUEUE_CHECK_INTERVAL = 60   # seconds between /queue health checks
-_STUCK_TIMEOUT        = 600  # seconds of silence from a *running* job → StuckJobError
-_PENDING_TIMEOUT      = 180  # seconds a job may sit *pending* before we try another worker
+_QUEUE_CHECK_INTERVAL      = 60    # seconds between /queue health checks
+_STUCK_TIMEOUT             = 7200  # seconds of silence from a *running* job → StuckJobError
+_PENDING_TIMEOUT           = 180   # seconds a job may sit *pending* before we try another worker
+_HEARTBEAT_INTERVAL        = 300   # seconds between GPU idle checks (only when job is running)
+_HEARTBEAT_IDLE_THRESHOLD  = 15    # GPU utilisation % below this is considered idle
+_HEARTBEAT_IDLE_SAMPLES    = 3     # consecutive idle heartbeats required to declare stuck
+
+
+def _hostname_from_url(url: str) -> str:
+    return urllib.parse.urlparse(url).hostname or url
+
+
+def _check_gpu_idle(host: str) -> bool | None:
+    """SSH to host, check GPU utilisation via nvidia-smi.
+
+    Returns True if all GPUs are below _HEARTBEAT_IDLE_THRESHOLD, False if any
+    are busy, None if the check could not be completed (SSH/nvidia-smi failure).
+    """
+    try:
+        result = subprocess.run(
+            [
+                "ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                "-o", "StrictHostKeyChecking=no", host,
+                "nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits 2>/dev/null",
+            ],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode != 0:
+            return None
+        utils = [int(ln.strip()) for ln in result.stdout.splitlines() if ln.strip().isdigit()]
+        if not utils:
+            return None
+        busy = any(u >= _HEARTBEAT_IDLE_THRESHOLD for u in utils)
+        logger.debug(
+            "[heartbeat] %s GPU util: %s — %s",
+            host, utils, "busy" if busy else "idle",
+        )
+        return not busy  # True = idle, False = busy
+    except Exception as exc:
+        logger.debug("[heartbeat] %s GPU check failed: %s", host, exc)
+        return None
 
 
 def _wait_for_completion(
@@ -185,6 +225,9 @@ def _wait_for_completion(
     last_activity_at: float | None = None   # None until the job actually starts executing
     last_queue_check = time.time()
     nodes_done       = 0
+    last_heartbeat_at = start
+    consecutive_idle  = 0
+    host              = _hostname_from_url(comfy_url)
 
     try:
         while time.time() < deadline:
@@ -218,10 +261,40 @@ def _wait_for_completion(
                         f" — worker blocked, will try another"
                     )
 
-                # Stuck detection: fires whenever the job is "running".
-                # If it has produced progress, base the timer on last_activity_at.
-                # If it has never produced any activity, base the timer on start.
                 if q_status == "running":
+                    # ── GPU heartbeat: sample utilisation every _HEARTBEAT_INTERVAL ──
+                    if now - last_heartbeat_at >= _HEARTBEAT_INTERVAL:
+                        last_heartbeat_at = now
+                        gpu_idle = _check_gpu_idle(host)
+                        if gpu_idle is False:
+                            # GPU is busy — worker is genuinely doing work.
+                            # Reset the idle counter and treat it as WebSocket activity
+                            # so the silence-based stuck timer doesn't fire.
+                            consecutive_idle = 0
+                            last_activity_at = now
+                            logger.info(
+                                "[comfy] job %s… heartbeat OK — GPU active on %s",
+                                prompt_id[:8], host,
+                            )
+                        elif gpu_idle is True:
+                            consecutive_idle += 1
+                            logger.warning(
+                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s",
+                                prompt_id[:8], consecutive_idle,
+                                _HEARTBEAT_IDLE_SAMPLES, _HEARTBEAT_IDLE_THRESHOLD, host,
+                            )
+                            if consecutive_idle >= _HEARTBEAT_IDLE_SAMPLES:
+                                raise StuckJobError(
+                                    f"Job {prompt_id} on {comfy_url}: GPU idle for "
+                                    f"{consecutive_idle} consecutive heartbeats "
+                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%)"
+                                    f" — worker appears hung, will re-submit"
+                                )
+                        # gpu_idle is None → SSH failed → skip, don't update counters
+
+                    # Stuck detection: fires when WebSocket has been silent too long.
+                    # GPU heartbeats above reset last_activity_at when the GPU is busy,
+                    # so this only triggers when the machine is genuinely idle.
                     baseline = last_activity_at if last_activity_at is not None else start
                     stalled = now - baseline
                     if stalled > _STUCK_TIMEOUT:
