@@ -146,6 +146,48 @@ def _check_queue(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
+def _post_json(path: str, payload: dict | None, comfy_url: str = COMFYUI_URL, timeout: int = 10) -> None:
+    data = json.dumps(payload or {}).encode()
+    req = urllib.request.Request(
+        f"{comfy_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout):
+        pass
+
+
+def _delete_pending_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL) -> None:
+    """Remove a prompt from ComfyUI's pending queue."""
+    try:
+        _post_json("/queue", {"delete": [prompt_id]}, comfy_url=comfy_url)
+        logger.info("[comfy] deleted pending job %s… on %s", prompt_id[:8], comfy_url)
+    except Exception as exc:
+        logger.warning("[comfy] could not delete pending job %s… on %s: %s",
+                       prompt_id[:8], comfy_url, exc)
+
+
+def _interrupt_running_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL) -> None:
+    """Interrupt the currently running prompt on a worker."""
+    try:
+        _post_json("/interrupt", {}, comfy_url=comfy_url)
+        logger.info("[comfy] interrupted running job %s… on %s", prompt_id[:8], comfy_url)
+    except Exception as exc:
+        logger.warning("[comfy] could not interrupt running job %s… on %s: %s",
+                       prompt_id[:8], comfy_url, exc)
+
+
+def _cleanup_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL, reason: str = "") -> None:
+    q_status = _check_queue(prompt_id, comfy_url)
+    if q_status == "pending":
+        _delete_pending_prompt(prompt_id, comfy_url)
+    elif q_status == "running":
+        logger.warning("[comfy] interrupting job %s… on %s (%s)",
+                       prompt_id[:8], comfy_url, reason or "cleanup")
+        _interrupt_running_prompt(prompt_id, comfy_url)
+
+
 def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     """Return 'completed', 'error', or 'absent' from /history."""
     try:
@@ -255,6 +297,7 @@ def _wait_for_completion(
 
                 # Pending timeout: worker's queue is blocked by another job.
                 if q_status == "pending" and now - start > _PENDING_TIMEOUT:
+                    _delete_pending_prompt(prompt_id, comfy_url)
                     raise StuckJobError(
                         f"Job {prompt_id} on {comfy_url} has been pending in queue for"
                         f" {now - start:.0f}s (limit {_PENDING_TIMEOUT}s)"
@@ -284,6 +327,7 @@ def _wait_for_completion(
                                 _HEARTBEAT_IDLE_SAMPLES, _HEARTBEAT_IDLE_THRESHOLD, host,
                             )
                             if consecutive_idle >= _HEARTBEAT_IDLE_SAMPLES:
+                                _interrupt_running_prompt(prompt_id, comfy_url)
                                 raise StuckJobError(
                                     f"Job {prompt_id} on {comfy_url}: GPU idle for "
                                     f"{consecutive_idle} consecutive heartbeats "
@@ -298,6 +342,7 @@ def _wait_for_completion(
                     baseline = last_activity_at if last_activity_at is not None else start
                     stalled = now - baseline
                     if stalled > _STUCK_TIMEOUT:
+                        _cleanup_prompt(prompt_id, comfy_url, reason="node activity timeout")
                         raise StuckJobError(
                             f"Job {prompt_id} on {comfy_url} has been running but produced no"
                             f" node activity for {stalled:.0f}s (limit {_STUCK_TIMEOUT}s)"
@@ -336,7 +381,11 @@ def _wait_for_completion(
         except Exception:
             pass
 
-    _poll_completion(prompt_id, deadline, comfy_url=comfy_url)
+    try:
+        _poll_completion(prompt_id, deadline, comfy_url=comfy_url)
+    except Exception:
+        _cleanup_prompt(prompt_id, comfy_url, reason="completion timeout")
+        raise
 
 
 def _get_outputs(prompt_id: str, comfy_url: str = COMFYUI_URL) -> list[dict]:

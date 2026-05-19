@@ -21,7 +21,7 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 else
     mkdir -p "$(dirname "$APP_LOG")"
     cd "$REPO_ROOT"
-    nohup "$PYTHON" app.py >> "$APP_LOG" 2>&1 &
+    nohup "$PYTHON" app.py >/tmp/stephen_spielbot.out 2>&1 &
     echo $! > "$PID_FILE"
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi

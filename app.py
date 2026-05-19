@@ -9,6 +9,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -57,6 +58,8 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 CONFIG_FILE  = Path.home() / ".config" / "video-generator" / "config.json"
 VOICES_DIR   = CONFIG_FILE.parent / "voices"
 SESSION_FILE = CONFIG_FILE.parent / "last_session.json"
+REPO_ROOT    = Path(__file__).parent
+RESUME_SCRIPT = REPO_ROOT / "resume_generation.py"
 
 _RESOLUTIONS = {
     # Landscape 16:9
@@ -74,7 +77,7 @@ _RESOLUTIONS = {
     "Square HD (576×576)":         (576, 576),
     "Square FHD (1080×1080)":      (1080, 1080),
 }
-_DEFAULT_RESOLUTION = "Landscape (832×480)"
+_DEFAULT_RESOLUTION = "Landscape FHD (1920×1080)"
 
 DEFAULT_CFG = {
     "music_vol": 18,
@@ -182,6 +185,124 @@ def load_session() -> dict | None:
     return None
 
 
+def _job_meta_path(work_dir: Path) -> Path:
+    return work_dir / "job.json"
+
+
+def _final_path_for_work_dir(work_dir: Path) -> Path:
+    return OUTPUT_DIR / f"{work_dir.name}.mp4"
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text())
+
+
+def _process_running(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
+
+
+def _write_job_meta(work_dir: Path, **updates) -> dict:
+    meta_path = _job_meta_path(work_dir)
+    try:
+        meta = _read_json(meta_path)
+    except Exception:
+        meta = {"work_dir": str(work_dir), "created_at": time.time()}
+    meta.update(updates)
+    meta["updated_at"] = time.time()
+    meta_path.write_text(json.dumps(meta, indent=2))
+    return meta
+
+
+def _launch_generation_job(work_dir: Path) -> dict:
+    """Start the resumable generator in its own process."""
+    meta_path = _job_meta_path(work_dir)
+    if meta_path.exists():
+        try:
+            meta = _read_json(meta_path)
+            if _process_running(meta.get("pid")):
+                return meta
+        except Exception:
+            pass
+
+    log_path = work_dir / "job.log"
+    log_f = log_path.open("a", encoding="utf-8")
+    proc = subprocess.Popen(
+        [sys.executable, str(RESUME_SCRIPT), str(work_dir)],
+        cwd=str(REPO_ROOT),
+        stdout=log_f,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    logger.info("Launched generation job pid=%s work_dir=%s", proc.pid, work_dir)
+    return _write_job_meta(
+        work_dir,
+        pid=proc.pid,
+        status="running",
+        log_path=str(log_path),
+        command=[sys.executable, str(RESUME_SCRIPT), str(work_dir)],
+    )
+
+
+def _status_for_work_dir(work_dir: Path) -> tuple[float, str]:
+    status_file = work_dir / "progress.json"
+    pct = 0.0
+    msg = "Waiting to start..."
+    if status_file.exists():
+        try:
+            data = _read_json(status_file)
+            pct = float(data.get("pct", 0))
+            msg = str(data.get("msg", "..."))
+        except Exception:
+            pass
+
+    final_path = _final_path_for_work_dir(work_dir)
+    if final_path.exists() and final_path.stat().st_size > 10_000:
+        return 100.0, f"Done - {final_path.name} ({final_path.stat().st_size / 1024 / 1024:.1f} MB)"
+
+    try:
+        meta = _read_json(_job_meta_path(work_dir))
+        if meta.get("status") == "error":
+            return pct, f"Generation failed: {str(meta.get('error', 'unknown error')).splitlines()[0][:300]}"
+        pid = meta.get("pid")
+        if pid and not _process_running(pid) and pct < 100:
+            return pct, f"Generation process exited before completion. Check {work_dir / 'job.log'}"
+    except Exception:
+        pass
+
+    return pct, msg
+
+
+def _collect_job_outputs(work_dir: Path):
+    final_path = _final_path_for_work_dir(work_dir)
+    combined = work_dir / "combined.mp4"
+    music = work_dir / "background_music.wav"
+    ambient = work_dir / "ambient.wav"
+
+    if not (final_path.exists() and final_path.stat().st_size > 10_000):
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+
+    amb_str = str(ambient) if ambient.exists() else ""
+    if combined.exists() and music.exists():
+        save_session(str(combined), str(music), amb_str,
+                     load_config().get("voice_vol", 100),
+                     load_config().get("music_vol", 18),
+                     load_config().get("ambient_vol", 0))
+    _write_job_meta(work_dir, status="done", final_path=str(final_path))
+    return (
+        gr.update(value=str(final_path), visible=True),
+        str(combined) if combined.exists() else "",
+        str(music) if music.exists() else "",
+        amb_str,
+        gr.update(selected="output"),
+    )
+
+
 def get_voice_choices() -> list[str]:
     return [F5TTS_DEFAULT_OPTION] + [v["name"] for v in load_config().get("voices", [])]
 
@@ -232,9 +353,15 @@ def _error_html(msg: str) -> str:
     )
 
 
-def _poll_progress() -> str:
-    """Read progress.json from the most-recently-modified active job folder."""
+def _poll_progress(active_job_dir: str = "") -> str:
+    """Read progress.json for the active job, falling back to the latest job."""
     try:
+        if active_job_dir:
+            work_dir = Path(active_job_dir)
+            if work_dir.exists():
+                pct, msg = _status_for_work_dir(work_dir)
+                return _progress_html(pct, msg)
+
         candidates = sorted(
             OUTPUT_DIR.glob("*/progress.json"),
             key=lambda p: p.stat().st_mtime,
@@ -242,10 +369,19 @@ def _poll_progress() -> str:
         )
         if not candidates:
             return _progress_html(0, "Waiting to start…")
-        data = json.loads(candidates[0].read_text())
-        return _progress_html(data.get("pct", 0), data.get("msg", "…"))
+        pct, msg = _status_for_work_dir(candidates[0].parent)
+        return _progress_html(pct, msg)
     except Exception:
         return _progress_html(0, "Waiting to start…")
+
+
+def _poll_job_outputs(active_job_dir: str):
+    if not active_job_dir:
+        return (_progress_html(0, "Waiting to start…"), gr.update(), gr.update(),
+                gr.update(), gr.update(), gr.update())
+    work_dir = Path(active_job_dir)
+    final, comb, mus, amb, tabs_upd = _collect_job_outputs(work_dir)
+    return (_poll_progress(active_job_dir), final, comb, mus, amb, tabs_upd)
 
 
 _SCENES_PER_PAGE = 10
@@ -366,17 +502,30 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 _IMG_GEN_OUT_COUNT = 1 + _SCENES_PER_PAGE + 1
 
 
-def on_generate_scene_images(n_scenes_val, resolution, style, scenes_data):
-    """Generate a FLUX preview image for each scene (always runs — needed for I2V)."""
+def on_generate_scene_images(n_scenes_val, resolution, style, scenes_data, auto_approve=False):
+    """Generate review previews; auto-approved jobs generate first frames in the worker."""
     n = int(n_scenes_val)
     no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
+
+    if auto_approve:
+        status_html = (
+            '<div style="color:#6b7280;padding:4px 0;font-size:13px">'
+            'Scene previews skipped for auto-approved generation.</div>'
+        )
+        yield (gr.update(value=status_html, visible=True),
+               *([gr.update()] * _SCENES_PER_PAGE), [""] * MAX_SCENES)
+        return
 
     cfg          = load_config()
     all_workers  = cfg.get("comfy_workers", [])
     # Never use localhost for image generation — cluster workers only.
     cluster_urls = [u for u in all_workers
                     if not any(lh in u for lh in ("localhost", "127.0.0.1"))]
-    worker_urls  = alive_workers(cluster_urls)
+    try:
+        worker_urls = alive_workers(cluster_urls)
+    except Exception as exc:
+        logger.warning("Scene image generation worker probe failed; skipping previews: %s", exc)
+        worker_urls = []
     if not worker_urls:
         logger.warning("No cluster ComfyUI workers reachable for scene image generation "
                        "(localhost excluded by policy)")
@@ -442,7 +591,7 @@ def on_generate_scene_images(n_scenes_val, resolution, style, scenes_data):
             worker_pool.release(url)
         return i, out
 
-    img_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+    img_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(worker_urls)))
     pending: dict[concurrent.futures.Future, int] = {
         img_pool.submit(_gen_image, i): i for i in range(n)
     }
@@ -688,8 +837,8 @@ def _generate_scene_video(
 
 # gen_outputs count: 1 (progress_bar) + MAX_SCENES (audios) + 1 (music)
 #                  + MAX_SCENES (videos) + 1 (final_video) + 1 (combined_state)
-#                  + 1 (music_state) + 1 (ambient_state) + 1 (tabs)
-_GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1
+#                  + 1 (music_state) + 1 (ambient_state) + 1 (tabs) + 1 (active_job)
+_GEN_OUT_COUNT = 1 + MAX_SCENES + 1 + MAX_SCENES + 1 + 1 + 1 + 1 + 1 + 1
 
 
 def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
@@ -801,13 +950,16 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
     _status_file = work_dir / "progress.json"
 
+    active_job_dir = str(work_dir)
+
     def emit(msg: str, pct: float, final=gr.update(), comb=gr.update(), mus=gr.update(), amb=gr.update(), tabs_upd=gr.update()):
         logger.debug("YIELD %.0f%% — %s", pct, msg)
         try:
             _status_file.write_text(json.dumps({"pct": round(pct, 1), "msg": msg, "ts": time.time()}))
         except Exception:
             pass
-        return (_progress_html(pct, msg), *audio_upd, music_upd, *video_upd, final, comb, mus, amb, tabs_upd)
+        return (_progress_html(pct, msg), *audio_upd, music_upd, *video_upd,
+                final, comb, mus, amb, tabs_upd, active_job_dir)
 
     def _run_bg(label: str, fn, *args, pct: float, **kwargs):
         """Run fn(*args, **kwargs) in thread; yield heartbeat every 30s to keep SSE alive."""
@@ -821,6 +973,22 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         fut.result()  # re-raise any exception
 
     try:
+        for sid, preview in scene_preview_map.items():
+            if preview and preview.exists():
+                dest = work_dir / f"scene_{sid:02d}_preview.png"
+                if preview.resolve() != dest.resolve():
+                    shutil.copy2(preview, dest)
+
+        job_cfg = cfg.copy()
+        job_cfg["resolution"] = resolution or cfg.get("resolution", _DEFAULT_RESOLUTION)
+        job_cfg["default_voice"] = voice_name
+        job_cfg["music_desc"] = music_desc or ""
+        (work_dir / "job_config.json").write_text(json.dumps(job_cfg, indent=2))
+
+        _launch_generation_job(work_dir)
+        yield emit(f"Generation job started - {work_dir.name}", 0, tabs_upd=gr.update(selected="progress"))
+        return
+
         yield emit("Starting…", 0)
 
         # ── Narrations (0–20%) — parallel across TTS workers ────────────────
@@ -849,7 +1017,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
             raise RuntimeError(f"TTS failed on all hosts for scene {scene.id}: {last_err}")
 
         yield emit(f"Generating {n} narration(s) across {len(tts_hosts)} TTS worker(s)…", 0)
-        tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+        tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(tts_hosts)))
         tts_pending: dict[concurrent.futures.Future, Scene] = {
             tts_pool.submit(_tts_scene, scene, tts_hosts[i % len(tts_hosts)]): scene
             for i, scene in enumerate(scenes)
@@ -940,7 +1108,8 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
             single_clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
             clip_02     = work_dir / f"scene_{scene.id:02d}_clip_02.mp4"
             if (single_clip.exists() and single_clip.stat().st_size > 10_000
-                    and not clip_02.exists()):
+                    and not clip_02.exists()
+                    and narration_durs[scene.id] <= max_clip_secs + 0.5):
                 amb = work_dir / f"scene_{scene.id:02d}_ambient.wav"
                 logger.info("Scene %d single-clip already exists (%d KB), skipping",
                             scene.id, single_clip.stat().st_size // 1024)
@@ -993,7 +1162,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
             35,
         )
 
-        scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n)
+        scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
         pending: dict[concurrent.futures.Future, Scene] = {
             scene_pool.submit(_run_scene, scene): scene for scene in scenes
         }
@@ -1111,7 +1280,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         logger.exception("on_generate CRASHED")
         first_line = str(e).split("\n")[0][:300]
         yield (_error_html(f"❌ Error: {first_line}"), *audio_upd, music_upd, *video_upd,
-               gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+               gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), active_job_dir)
 
 
 def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
@@ -1433,6 +1602,7 @@ def build_ui() -> gr.Blocks:
         scene_images_state  = gr.State([""] * MAX_SCENES)
         scenes_data_state   = gr.State([])
         current_page_state  = gr.State(0)
+        active_job_state    = gr.State("")
 
         with gr.Tabs(elem_id="main_tabs") as tabs:
 
@@ -1804,8 +1974,6 @@ def build_ui() -> gr.Blocks:
 
         # ── Event wiring ─────────────────────────────────────────────────────
 
-        progress_timer.tick(fn=_poll_progress, outputs=[progress_bar])
-
         script_outputs = [
             tabs, script_col,
             scenes_data_state, current_page_state,
@@ -1836,7 +2004,15 @@ def build_ui() -> gr.Blocks:
             music_state,
             ambient_state,
             tabs,
+            active_job_state,
         ]
+
+        progress_timer.tick(
+            fn=_poll_job_outputs,
+            inputs=[active_job_state],
+            outputs=[progress_bar, final_video_out, combined_state,
+                     music_state, ambient_state, tabs],
+        )
 
         gen_script_btn.click(
             fn=lambda: gr.update(interactive=False, value="⏳ Generating script…"),
@@ -1854,7 +2030,7 @@ def build_ui() -> gr.Blocks:
             inputs=[], outputs=[gen_script_btn],
         ).then(
             fn=on_generate_scene_images,
-            inputs=[n_scenes_in, script_resolution_in, style_state, scenes_data_state],
+            inputs=[n_scenes_in, script_resolution_in, style_state, scenes_data_state, auto_approve_in],
             outputs=img_gen_outputs,
         ).then(
             fn=_auto_generate,
