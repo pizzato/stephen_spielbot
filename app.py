@@ -1091,6 +1091,11 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
             _MAX_MUSIC_ATTEMPTS = 3
             for _music_attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
                 music_url = worker_pool.acquire()
+                yield emit(
+                    f"Generating {label} on {music_url} "
+                    f"(attempt {_music_attempt}/{_MAX_MUSIC_ATTEMPTS})…",
+                    20,
+                )
                 try:
                     yield from _run_bg(label, generate_music, title, music_dur, music_path, music_desc or None, comfy_url=music_url, pct=22)
                     worker_pool.release(music_url)
@@ -1098,13 +1103,20 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
                 except Exception as _music_err:
                     logger.warning("Music attempt %d/%d failed on %s: %s",
                                    _music_attempt, _MAX_MUSIC_ATTEMPTS, music_url, _music_err)
+                    first_line = str(_music_err).splitlines()[0][:180]
                     if isinstance(_music_err, StuckJobError) or any(kw in str(_music_err) for kw in _WORKER_ERR_KEYWORDS):
                         worker_pool.mark_failed(music_url)
                     else:
                         worker_pool.release(music_url)
                     if _music_attempt == _MAX_MUSIC_ATTEMPTS:
                         logger.exception("Music generation failed after %d attempts", _MAX_MUSIC_ATTEMPTS)
+                        yield emit(f"Background music failed on {music_url}: {first_line}", 20)
                         raise
+                    yield emit(
+                        f"Background music attempt {_music_attempt}/{_MAX_MUSIC_ATTEMPTS} failed on {music_url}; "
+                        f"retrying. {first_line}",
+                        20,
+                    )
                     time.sleep(5)
             logger.info("Music ready: %s (%.1f MB)", music_path.name,
                         music_path.stat().st_size / 1024 / 1024)
