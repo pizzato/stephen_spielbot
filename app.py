@@ -297,6 +297,12 @@ def _collect_job_outputs(work_dir: Path):
     if not (final_path.exists() and final_path.stat().st_size > 10_000):
         return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
+    try:
+        meta = _read_json(_job_meta_path(work_dir))
+    except Exception:
+        meta = {}
+    already_done = meta.get("status") == "done" and meta.get("final_path") == str(final_path)
+
     amb_str = str(ambient) if ambient.exists() else ""
     if combined.exists() and music.exists():
         save_session(str(combined), str(music), amb_str,
@@ -309,7 +315,9 @@ def _collect_job_outputs(work_dir: Path):
         str(combined) if combined.exists() else "",
         str(music) if music.exists() else "",
         amb_str,
-        gr.update(selected="output"),
+        # Select Remix once when a job first completes. After that, let users
+        # move around without the polling timer pulling them back to Remix.
+        gr.update() if already_done else gr.update(selected="output"),
     )
 
 
@@ -2054,7 +2062,7 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=gen_outputs,
         ).then(
-            fn=lambda auto: gr.update(selected="output") if auto else gr.update(),
+            fn=lambda auto: gr.update(selected="progress") if auto else gr.update(),
             inputs=[auto_approve_in], outputs=[tabs],
         ).then(
             fn=lambda: gr.update(interactive=True, value="1. Generate Script →"),
