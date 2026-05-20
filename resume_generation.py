@@ -313,18 +313,32 @@ def main(work_dir: Path) -> None:
         _MAX_MUSIC_ATTEMPTS = 3
         for attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
             music_url = worker_pool.acquire()
+            write_progress(
+                status_file,
+                20,
+                f"Generating background music ({music_dur:.0f}s) on {music_url} "
+                f"(attempt {attempt}/{_MAX_MUSIC_ATTEMPTS})…",
+            )
             try:
                 generate_music(title, music_dur, music_path, cfg.get("music_desc") or None, comfy_url=music_url)
                 worker_pool.release(music_url)
                 break
             except Exception as e:
                 logger.warning("Music attempt %d/%d failed on %s: %s", attempt, _MAX_MUSIC_ATTEMPTS, music_url, e)
+                first_line = str(e).splitlines()[0][:180]
                 if isinstance(e, StuckJobError) or any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS):
                     worker_pool.mark_failed(music_url)
                 else:
                     worker_pool.release(music_url)
                 if attempt == _MAX_MUSIC_ATTEMPTS:
+                    write_progress(status_file, 20, f"Background music failed on {music_url}: {first_line}")
                     raise
+                write_progress(
+                    status_file,
+                    20,
+                    f"Background music attempt {attempt}/{_MAX_MUSIC_ATTEMPTS} failed on {music_url}; "
+                    f"retrying. {first_line}",
+                )
 
     write_progress(status_file, 35, "Music ready. Generating scene videos…")
 
