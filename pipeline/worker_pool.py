@@ -1,8 +1,8 @@
 """Manages a pool of ComfyUI worker URLs for distributed video generation."""
 
 import logging
+from collections import deque
 import threading
-import time
 import urllib.request
 import urllib.error
 
@@ -36,6 +36,8 @@ class WorkerPool:
         if not urls:
             raise ValueError("WorkerPool needs at least one URL")
         self._lock = threading.Lock()
+        self._cond = threading.Condition(self._lock)
+        self._waiters: deque[object] = deque()
         self._urls = list(urls)
         self._sems: dict[str, threading.Semaphore] = {u: threading.Semaphore(1) for u in self._urls}
 
@@ -45,33 +47,54 @@ class WorkerPool:
             return list(self._urls)
 
     def acquire(self) -> str:
-        """Block until any worker is free, return its URL."""
-        while True:
-            with self._lock:
-                urls = list(self._urls)
-            if not urls:
-                raise RuntimeError("No healthy workers remaining in pool")
-            for url in urls:
-                sem = self._sems.get(url)
-                if sem and sem.acquire(blocking=False):
-                    logger.debug("WorkerPool: acquired %s", url)
-                    return url
-            time.sleep(0.5)
+        """Block until any worker is free, return its URL.
+
+        Keep callers FIFO so retries cannot be starved by later scene threads.
+        """
+        token = object()
+        with self._cond:
+            self._waiters.append(token)
+            try:
+                while True:
+                    if not self._urls:
+                        raise RuntimeError("No healthy workers remaining in pool")
+
+                    is_turn = self._waiters and self._waiters[0] is token
+                    if is_turn:
+                        for url in list(self._urls):
+                            sem = self._sems.get(url)
+                            if sem and sem.acquire(blocking=False):
+                                self._waiters.popleft()
+                                self._cond.notify_all()
+                                logger.debug("WorkerPool: acquired %s", url)
+                                return url
+
+                    self._cond.wait(timeout=0.5)
+            except Exception:
+                try:
+                    self._waiters.remove(token)
+                    self._cond.notify_all()
+                except ValueError:
+                    pass
+                raise
 
     def release(self, url: str) -> None:
-        sem = self._sems.get(url)
-        if sem:
-            logger.debug("WorkerPool: released %s", url)
-            sem.release()
+        with self._cond:
+            sem = self._sems.get(url)
+            if sem:
+                logger.debug("WorkerPool: released %s", url)
+                sem.release()
+                self._cond.notify_all()
         # else: worker was already removed via mark_failed — no-op
 
     def mark_failed(self, url: str) -> None:
         """Permanently remove a worker from the pool after a failure."""
-        with self._lock:
+        with self._cond:
             if url in self._sems:
                 logger.warning("WorkerPool: %s failed, removing from pool", url)
                 self._urls = [u for u in self._urls if u != url]
                 del self._sems[url]
+                self._cond.notify_all()
 
     def has_healthy(self) -> bool:
         with self._lock:
