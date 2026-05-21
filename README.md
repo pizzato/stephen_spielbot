@@ -14,6 +14,31 @@ An AI video generator that turns a topic into a fully produced short film — co
 4. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
 5. **Assembly** — FFmpeg mixes everything into a single video with synced audio
 
+## Durable orchestration
+
+Generation state is mirrored into a SQLite controller database at
+`~/.local/share/video-generator/orchestrator.sqlite3`.  Each story, image,
+narration, music, scene-video, mux, and final-assembly unit is tracked as a
+task with dependencies, attempts, leases, worker ownership, and produced
+artifacts.  The Gradio **Progress** tab shows this durable task graph alongside
+the existing progress bar.
+
+The standard app path still launches `resume_generation.py`, but that process
+now writes durable task/artifact state as it runs.  For a fully agent-driven
+deployment, run one worker daemon per execution resource:
+
+```bash
+make worker-agent KIND=comfy ENDPOINT=http://s1:8188
+make worker-agent KIND=tts ENDPOINT=s1
+make worker-agent KIND=local ENDPOINT=assembler
+```
+
+Worker agents lease ready tasks, heartbeat while running, and expired leases are
+made available for retry.  This gives recovery a persisted source of truth
+instead of relying only on process memory, ComfyUI queue state, and files.
+Current implementation and test status are tracked in
+[`docs/durable_orchestration_status.md`](docs/durable_orchestration_status.md).
+
 ## Requirements
 
 - Python 3.10+
