@@ -32,24 +32,28 @@ logger.setLevel(logging.DEBUG)
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT
-from pipeline.comfyui import (
-    generate_video_continuation, generate_music,
-    generate_scene_image, StuckJobError,
-)
+from pipeline.comfyui import generate_music, StuckJobError
 from pipeline.assembler import (
-    _get_duration, concat_clips, mux_video_audio,
-    extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
+    _get_duration, mux_video_audio,
+    concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
 )
 from pipeline.tts_worker import generate_narration
+from pipeline.orchestrator import (
+    DurableStore, TaskRun,
+    JOB_DONE, JOB_ERROR, JOB_RUNNING,
+    job_id_from_work_dir, task_id, worker_id,
+)
+from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.json"
 OUTPUT_DIR  = Path.home() / "videos"
 
-_CLIP_BUFFER_SECS = 1.0
 _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                         "ConnectionRefused", "RemoteDisconnected")
+_PROGRESS_STORE: DurableStore | None = None
+_PROGRESS_JOB_ID: str | None = None
 
 
 def load_config() -> dict:
@@ -71,107 +75,22 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
         status_file.write_text(json.dumps({"pct": round(pct, 1), "msg": msg, "ts": time.time()}))
     except Exception:
         pass
+    try:
+        if _PROGRESS_STORE is not None and _PROGRESS_JOB_ID is not None:
+            status = JOB_DONE if pct >= 100 else JOB_RUNNING
+            _PROGRESS_STORE.update_job(
+                _PROGRESS_JOB_ID,
+                status=status,
+                progress_pct=pct,
+                progress_message=msg,
+            )
+    except Exception:
+        logger.debug("Could not mirror progress to durable store", exc_info=True)
     logger.info("PROGRESS %.0f%% — %s", pct, msg)
 
 
-def _generate_scene_video(
-    scene: Scene,
-    work_dir: Path,
-    narration_dur: float,
-    vid_width: int,
-    vid_height: int,
-    max_clip_secs: float,
-    lora_strength: float,
-    first_pass_cfg: float,
-    first_pass_steps: int,
-    second_pass_cfg: float,
-    second_pass_steps: int,
-    comfy_url: str,
-    scene_first_frame: Path | None = None,
-    flux_cfg: dict | None = None,
-) -> tuple[Path, Path | None]:
-    clips: list[Path] = []
-    ambient_clips: list[Path] = []
-    last_frame: Path | None = None
-    remaining = narration_dur
-    seg_idx = 0
-
-    if scene_first_frame is None or not scene_first_frame.exists():
-        fx = flux_cfg or {}
-        first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
-        logger.info("  [%s] scene %d: generating FLUX first frame inline", comfy_url, scene.id)
-        generate_scene_image(
-            scene.image_prompt, first_frame_path,
-            width=vid_width, height=vid_height,
-            flux_model=fx.get("model", "flux1-schnell-fp8.safetensors"),
-            clip_t5=fx.get("clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-            clip_l=fx.get("clip_l", "clip_l.safetensors"),
-            flux_vae=fx.get("vae", "ae.safetensors"),
-            steps=fx.get("steps", 4),
-            comfy_url=comfy_url,
-        )
-        scene_first_frame = first_frame_path
-
-    while remaining > 0.5:
-        clip_dur    = min(remaining, max_clip_secs)
-        request_dur = clip_dur + _CLIP_BUFFER_SECS
-        clip_path   = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}.mp4"
-
-        anchor = scene_first_frame if last_frame is None else last_frame
-        logger.info("  [%s] scene %d seg %d: I2V from %s",
-                    comfy_url, scene.id, seg_idx + 1,
-                    "preview image" if last_frame is None else "last frame")
-        generate_video_continuation(
-            scene.video_prompt, scene.negative_prompt, anchor, clip_path,
-            width=vid_width, height=vid_height,
-            duration_seconds=request_dur,
-            lora_strength=lora_strength,
-            first_pass_cfg=first_pass_cfg,
-            first_pass_steps=first_pass_steps,
-            second_pass_cfg=second_pass_cfg,
-            second_pass_steps=second_pass_steps,
-            comfy_url=comfy_url,
-        )
-
-        actual_dur = _get_duration(clip_path)
-        logger.info("  [%s] scene %d seg %d: %.1fs (%.1f MB)",
-                    comfy_url, scene.id, seg_idx + 1, actual_dur,
-                    clip_path.stat().st_size / 1024 / 1024)
-        clips.append(clip_path)
-
-        amb_clip = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}_ambient.wav"
-        try:
-            extract_audio(clip_path, amb_clip, duration=actual_dur)
-            ambient_clips.append(amb_clip)
-        except Exception:
-            logger.warning("Could not extract ambient audio from %s", clip_path.name)
-
-        remaining -= actual_dur
-        if remaining > 0.5:
-            last_frame = work_dir / f"scene_{scene.id:02d}_clip_{seg_idx+1:02d}_last.jpg"
-            extract_last_frame(clip_path, last_frame)
-
-        seg_idx += 1
-
-    if len(clips) == 1:
-        raw = clips[0]
-    else:
-        raw = work_dir / f"scene_{scene.id:02d}_video.mp4"
-        concat_clips(clips, raw)
-
-    scene_amb: Path | None = None
-    if ambient_clips:
-        scene_amb_path = work_dir / f"scene_{scene.id:02d}_ambient.wav"
-        if len(ambient_clips) == 1:
-            shutil.copy2(ambient_clips[0], scene_amb_path)
-        else:
-            concat_audio(ambient_clips, scene_amb_path)
-        scene_amb = scene_amb_path
-
-    return raw, scene_amb
-
-
 def main(work_dir: Path) -> None:
+    global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
 
     # Load script
@@ -188,6 +107,12 @@ def main(work_dir: Path) -> None:
     ]
     n = len(scenes)
     logger.info("Loaded %d scenes from %s", n, work_dir / "script.json")
+    title = cfg.get("title") or (scenes[0].title.split(":")[0] if scenes else work_dir.name)
+
+    store = DurableStore.default()
+    durable_job_id = job_id_from_work_dir(work_dir)
+    _PROGRESS_STORE = store
+    _PROGRESS_JOB_ID = durable_job_id
 
     # Config
     music_vol         = cfg.get("music_vol", 18) / 100.0
@@ -233,6 +158,18 @@ def main(work_dir: Path) -> None:
     logger.info("Workers: %s", worker_urls)
     logger.info("TTS hosts: %s", tts_hosts)
 
+    plan_cfg = {
+        **cfg,
+        "title": title,
+        "resolution": res_name,
+        "vid_width": vid_width,
+        "vid_height": vid_height,
+        "voice_ref": voice_ref_str or "",
+    }
+    store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
+    store.recover_incomplete_tasks(durable_job_id)
+    store.update_job(durable_job_id, status=JOB_RUNNING, progress_pct=0, progress_message="starting")
+
     worker_pool = WorkerPool(worker_urls)
     status_file = work_dir / "progress.json"
 
@@ -254,16 +191,38 @@ def main(work_dir: Path) -> None:
 
     def _tts_scene(scene: Scene, primary_host: str) -> tuple[int, Path]:
         out = work_dir / f"scene_{scene.id:02d}_narration.wav"
+        narration_task = task_id(durable_job_id, "scene", scene.id, "narration")
         if out.exists() and out.stat().st_size > 1000:
             logger.info("Scene %d narration exists (%d KB), skipping TTS",
                         scene.id, out.stat().st_size // 1024)
+            dur = _get_duration(out)
+            store.complete_task(narration_task, result={"path": str(out), "duration": dur, "skipped": True})
+            store.record_artifact(durable_job_id, narration_task, "narration", out, duration_seconds=dur)
             return scene.id, out
         hosts_to_try = [primary_host] + [h for h in tts_hosts if h != primary_host]
         last_err: Exception | None = None
         for host in hosts_to_try:
+            wid = worker_id("tts", host)
+            store.register_worker(wid, "tts", host)
             try:
                 ref = Path(voice_ref_str) if voice_ref_str and Path(voice_ref_str).exists() else None
-                generate_narration(scene.narration, out, reference_wav=ref, host=host)
+                with TaskRun(
+                    store,
+                    narration_task,
+                    worker_id_value=wid,
+                    lease_seconds=600,
+                    start_message=f"TTS on {host}",
+                ) as run:
+                    generate_narration(scene.narration, out, reference_wav=ref, host=host)
+                    dur = _get_duration(out)
+                    store.record_artifact(
+                        durable_job_id,
+                        narration_task,
+                        "narration",
+                        out,
+                        duration_seconds=dur,
+                    )
+                    run.complete({"path": str(out), "duration": dur, "host": host}, "narration ready")
                 return scene.id, out
             except Exception as e:
                 logger.warning("TTS failed on %s for scene %d: %s", host, scene.id, e)
@@ -304,15 +263,38 @@ def main(work_dir: Path) -> None:
     # ── Background music (20–35%) ────────────────────────────────────────────
     music_dur  = max(total_dur * 1.05, 30.0)
     music_path = work_dir / "background_music.wav"
-    title = scenes[0].title.split(":")[0] if scenes else "Australia"
+    title = title or (scenes[0].title.split(":")[0] if scenes else "Australia")
 
     if music_path.exists() and music_path.stat().st_size > 10_000:
         logger.info("Music already exists (%.1f MB), skipping", music_path.stat().st_size / 1024 / 1024)
+        music_task = task_id(durable_job_id, "music")
+        store.complete_task(
+            music_task,
+            result={"path": str(music_path), "duration": _get_duration(music_path), "skipped": True},
+        )
+        store.record_artifact(
+            durable_job_id,
+            music_task,
+            "music",
+            music_path,
+            duration_seconds=_get_duration(music_path),
+        )
     else:
         write_progress(status_file, 20, f"Generating background music ({music_dur:.0f}s)…")
         _MAX_MUSIC_ATTEMPTS = 3
+        music_task = task_id(durable_job_id, "music")
+        store.update_task_payload(
+            music_task,
+            {
+                "duration_seconds": music_dur,
+                "output_path": str(music_path),
+                "music_desc": cfg.get("music_desc") or "",
+            },
+        )
         for attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
             music_url = worker_pool.acquire()
+            music_worker = worker_id("comfy", music_url)
+            store.register_worker(music_worker, "comfy", music_url)
             write_progress(
                 status_file,
                 20,
@@ -320,7 +302,26 @@ def main(work_dir: Path) -> None:
                 f"(attempt {attempt}/{_MAX_MUSIC_ATTEMPTS})…",
             )
             try:
-                generate_music(title, music_dur, music_path, cfg.get("music_desc") or None, comfy_url=music_url)
+                with TaskRun(
+                    store,
+                    music_task,
+                    worker_id_value=music_worker,
+                    lease_seconds=900,
+                    start_message=f"music on {music_url}",
+                ) as run:
+                    generate_music(title, music_dur, music_path, cfg.get("music_desc") or None, comfy_url=music_url)
+                    actual_music_dur = _get_duration(music_path)
+                    store.record_artifact(
+                        durable_job_id,
+                        music_task,
+                        "music",
+                        music_path,
+                        duration_seconds=actual_music_dur,
+                    )
+                    run.complete(
+                        {"path": str(music_path), "duration": actual_music_dur, "worker": music_url},
+                        "music ready",
+                    )
                 worker_pool.release(music_url)
                 break
             except Exception as e:
@@ -349,8 +350,16 @@ def main(work_dir: Path) -> None:
 
     def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
         existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
+        image_task = task_id(durable_job_id, "scene", scene.id, "image")
+        video_task = task_id(durable_job_id, "scene", scene.id, "video")
+        first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
         if existing.exists() and existing.stat().st_size > 10_000:
             logger.info("Scene %d video exists (%d KB), skipping", scene.id, existing.stat().st_size // 1024)
+            if first_frame_path.exists():
+                store.complete_task(image_task, result={"path": str(first_frame_path), "skipped": True})
+                store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+            store.complete_task(video_task, result={"path": str(existing), "skipped": True})
+            store.record_artifact(durable_job_id, video_task, "scene_video", existing, duration_seconds=_get_duration(existing))
             return scene.id, existing, None
 
         single_clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
@@ -361,6 +370,11 @@ def main(work_dir: Path) -> None:
             amb = work_dir / f"scene_{scene.id:02d}_ambient.wav"
             logger.info("Scene %d single-clip exists (%d KB), skipping",
                         scene.id, single_clip.stat().st_size // 1024)
+            if first_frame_path.exists():
+                store.complete_task(image_task, result={"path": str(first_frame_path), "skipped": True})
+                store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+            store.complete_task(video_task, result={"path": str(single_clip), "skipped": True})
+            store.record_artifact(durable_job_id, video_task, "scene_video", single_clip, duration_seconds=_get_duration(single_clip))
             return scene.id, single_clip, amb if amb.exists() else None
 
         # Check if a preview image exists for this scene
@@ -376,20 +390,81 @@ def main(work_dir: Path) -> None:
             if not worker_pool.has_healthy():
                 raise RuntimeError(f"All workers failed — last error: {last_err}")
             url = worker_pool.acquire()
+            comfy_worker = worker_id("comfy", url)
+            store.register_worker(comfy_worker, "comfy", url)
             try:
                 logger.info("Scene %d attempt %d/%d on %s", scene.id, attempt, _MAX_SCENE_ATTEMPTS, url)
-                sf, sa = _generate_scene_video(
-                    scene, work_dir,
-                    narration_durs[scene.id],
-                    vid_width, vid_height, max_clip_secs,
-                    lora_strength, first_pass_cfg, first_pass_steps,
-                    second_pass_cfg, second_pass_steps,
-                    comfy_url=url,
-                    scene_first_frame=scene_first_frame,
-                    flux_cfg=flux_cfg,
+                store.update_task_payload(
+                    video_task,
+                    {
+                        "narration_duration": narration_durs[scene.id],
+                        "vid_width": vid_width,
+                        "vid_height": vid_height,
+                        "max_clip_secs": max_clip_secs,
+                        "lora_strength": lora_strength,
+                        "first_pass_cfg": first_pass_cfg,
+                        "first_pass_steps": first_pass_steps,
+                        "second_pass_cfg": second_pass_cfg,
+                        "second_pass_steps": second_pass_steps,
+                    },
                 )
+                if scene_first_frame and scene_first_frame.exists():
+                    store.complete_task(image_task, result={"path": str(scene_first_frame), "skipped": True})
+                    store.record_artifact(durable_job_id, image_task, "image", scene_first_frame)
+                else:
+                    store.start_task(
+                        image_task,
+                        worker_id_value=comfy_worker,
+                        lease_seconds=900,
+                        message=f"first frame on {url}",
+                    )
+                with TaskRun(
+                    store,
+                    video_task,
+                    worker_id_value=comfy_worker,
+                    lease_seconds=3600,
+                    start_message=f"video on {url}",
+                ) as run:
+                    sf, sa = _generate_scene_video(
+                        scene, work_dir,
+                        narration_durs[scene.id],
+                        vid_width, vid_height, max_clip_secs,
+                        lora_strength, first_pass_cfg, first_pass_steps,
+                        second_pass_cfg, second_pass_steps,
+                        comfy_url=url,
+                        scene_first_frame=scene_first_frame,
+                        flux_cfg=flux_cfg,
+                    )
+                    produced_first_frame = scene_first_frame or first_frame_path
+                    if produced_first_frame and produced_first_frame.exists():
+                        store.complete_task(image_task, result={"path": str(produced_first_frame)})
+                        store.record_artifact(durable_job_id, image_task, "image", produced_first_frame)
+                    store.record_artifact(
+                        durable_job_id,
+                        video_task,
+                        "scene_video",
+                        sf,
+                        duration_seconds=_get_duration(sf),
+                    )
+                    if sa:
+                        store.record_artifact(
+                            durable_job_id,
+                            video_task,
+                            "ambient",
+                            sa,
+                            duration_seconds=_get_duration(sa),
+                        )
+                    run.complete(
+                        {"path": str(sf), "ambient_path": str(sa) if sa else "", "worker": url},
+                        "scene video ready",
+                    )
                 return scene.id, sf, sa
             except Exception as e:
+                if first_frame_path.exists():
+                    store.complete_task(image_task, result={"path": str(first_frame_path)})
+                    store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+                else:
+                    store.fail_task(image_task, e, retryable=True)
                 last_err = e
                 is_worker_fault = (
                     isinstance(e, StuckJobError)
@@ -459,10 +534,28 @@ def main(work_dir: Path) -> None:
     for s in scenes:
         raw = scene_raws_map[s.id]
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
+        mux_task = task_id(durable_job_id, "scene", s.id, "mux")
         if scene_final.exists() and scene_final.stat().st_size > 10_000:
             logger.info("Scene %d muxed final exists, skipping", s.id)
+            store.complete_task(mux_task, result={"path": str(scene_final), "skipped": True})
+            store.record_artifact(durable_job_id, mux_task, "scene_final", scene_final, duration_seconds=_get_duration(scene_final))
         else:
-            mux_video_audio(raw, narration_paths[s.id], scene_final)
+            with TaskRun(
+                store,
+                mux_task,
+                worker_id_value=worker_id("local", "assembler"),
+                lease_seconds=600,
+                start_message="muxing scene",
+            ) as run:
+                mux_video_audio(raw, narration_paths[s.id], scene_final)
+                store.record_artifact(
+                    durable_job_id,
+                    mux_task,
+                    "scene_final",
+                    scene_final,
+                    duration_seconds=_get_duration(scene_final),
+                )
+                run.complete({"path": str(scene_final)}, "scene muxed")
         scene_finals.append(scene_final)
 
     scene_ambient_wavs = [scene_ambient_map[s.id] for s in scenes if scene_ambient_map.get(s.id)]
@@ -484,21 +577,52 @@ def main(work_dir: Path) -> None:
     else:
         ambient_path = None
 
-    write_progress(status_file, 90, "Concatenating scenes…")
-    concatenate_scenes(scene_finals, combined)
-
     ambient_vol = cfg.get("ambient_vol", 0) / 100.0
-    write_progress(status_file, 95, f"Mixing audio (voice {voice_vol*100:.0f}%, music {music_vol*100:.0f}%)…")
-    mix_background_music(
-        combined, music_path, final_path,
-        volume=music_vol, voice_volume=voice_vol,
-        ambient_path=ambient_path, ambient_volume=ambient_vol,
+    final_task = task_id(durable_job_id, "final")
+    store.update_task_payload(
+        final_task,
+        {
+            "scene_count": len(scenes),
+            "final_path": str(final_path),
+            "music_path": str(music_path),
+            "music_vol": music_vol,
+            "voice_vol": voice_vol,
+            "ambient_vol": ambient_vol,
+            "vid_width": vid_width,
+            "vid_height": vid_height,
+            "ambient_path": str(ambient_path) if ambient_path else "",
+        },
     )
-    ensure_video_resolution(final_path, vid_width, vid_height)
+    write_progress(status_file, 90, "Concatenating scenes…")
+    with TaskRun(
+        store,
+        final_task,
+        worker_id_value=worker_id("local", "assembler"),
+        lease_seconds=900,
+        start_message="assembling final video",
+    ) as final_run:
+        concatenate_scenes(scene_finals, combined)
+
+        write_progress(status_file, 95, f"Mixing audio (voice {voice_vol*100:.0f}%, music {music_vol*100:.0f}%)…")
+        mix_background_music(
+            combined, music_path, final_path,
+            volume=music_vol, voice_volume=voice_vol,
+            ambient_path=ambient_path, ambient_volume=ambient_vol,
+        )
+        ensure_video_resolution(final_path, vid_width, vid_height)
+        store.record_artifact(
+            durable_job_id,
+            final_task,
+            "final_video",
+            final_path,
+            duration_seconds=_get_duration(final_path),
+        )
+        final_run.complete({"path": str(final_path), "combined": str(combined)}, "final video ready")
 
     size_mb = final_path.stat().st_size / 1024 / 1024
     logger.info("DONE — %s (%.1f MB)", final_path.name, size_mb)
     write_progress(status_file, 100, f"✅ Done — {final_path.name} ({size_mb:.1f} MB)")
+    store.update_job(durable_job_id, status=JOB_DONE, progress_pct=100, progress_message=f"Done - {final_path.name}", final_path=final_path)
     try:
         (work_dir / "job.json").write_text(json.dumps({
             "work_dir": str(work_dir),
@@ -523,6 +647,13 @@ if __name__ == "__main__":
         main(work_dir)
     except Exception as exc:
         try:
+            if _PROGRESS_STORE is not None and _PROGRESS_JOB_ID is not None:
+                _PROGRESS_STORE.update_job(
+                    _PROGRESS_JOB_ID,
+                    status=JOB_ERROR,
+                    progress_message=str(exc).splitlines()[0][:300],
+                    error=str(exc),
+                )
             (work_dir / "job.json").write_text(json.dumps({
                 "work_dir": str(work_dir),
                 "status": "error",

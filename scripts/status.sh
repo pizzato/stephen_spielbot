@@ -40,6 +40,40 @@ else
     ALL_OK=false
 fi
 
+# ── Durable orchestration ─────────────────────────────────────────────────────
+
+echo ""
+echo "Durable orchestration:"
+DB="${SPIELBOT_ORCHESTRATOR_DB:-$HOME/.local/share/video-generator/orchestrator.sqlite3}"
+if [[ -f "$DB" ]]; then
+    python3 -c '
+import sqlite3, sys
+db = sys.argv[1]
+con = sqlite3.connect(db)
+con.row_factory = sqlite3.Row
+jobs = con.execute("SELECT title,status,progress_pct,updated_at FROM jobs ORDER BY updated_at DESC LIMIT 3").fetchall()
+workers = con.execute("SELECT kind,endpoint,status,last_heartbeat_at FROM workers ORDER BY kind,endpoint").fetchall()
+print(f"  ✓ DB: {db}")
+if jobs:
+    for row in jobs:
+        title = row["title"] or "(untitled)"
+        status = row["status"]
+        progress = row["progress_pct"]
+        print(f"    job {status:>7} {progress:5.1f}%  {title[:60]}")
+else:
+    print("    no jobs recorded yet")
+if workers:
+    print("    workers:")
+    for row in workers:
+        kind = row["kind"]
+        status = row["status"]
+        endpoint = row["endpoint"]
+        print(f"      {kind} {status} {endpoint}")
+' "$DB"
+else
+    echo "  - No orchestration DB yet ($DB)"
+fi
+
 # ── ComfyUI workers ────────────────────────────────────────────────────────────
 
 echo ""
