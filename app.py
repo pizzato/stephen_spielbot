@@ -795,18 +795,32 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 
 # ── Scene image generation — one active scene only ───────────────────────────
 
-_IMG_GEN_OUT_COUNT = 2
+_IMG_GEN_OUT_COUNT = 3
 
 
-def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: str,
-                          title: str, image_prompt: str, video_prompt: str, narration: str):
-    """Regenerate the FLUX preview image for the active scene only."""
-    no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
-    if not job_id:
-        yield no_op
-        return
+def _generate_active_scene_preview(
+    job_id: str,
+    scene_id: int,
+    resolution: str,
+    style: str,
+    title: str,
+    image_prompt: str,
+    *,
+    force: bool = False,
+) -> Path:
+    work_dir = _job_work_dir(job_id)
+    if work_dir is None:
+        raise RuntimeError("No script work directory is available.")
+    sid = int(scene_id)
+    store = DurableStore.default()
+    try:
+        scene = store.get_scene(job_id, sid) or {}
+    finally:
+        store.close()
+    existing = scene.get("preview_path") or ""
+    if existing and Path(existing).exists() and not force:
+        return Path(existing)
 
-    _save_active_scene(job_id, scene_id, title, image_prompt, video_prompt, narration)
     cfg = load_config()
     all_workers = cfg.get("comfy_workers", [])
     cluster_urls = [u for u in all_workers
@@ -817,15 +831,9 @@ def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: st
         logger.warning("Scene image generation worker probe failed: %s", exc)
         worker_urls = []
     if not worker_urls:
-        status_html = (
-            '<div style="color:#f59e0b;padding:4px 0;font-size:13px">'
-            'No cluster workers reachable - cannot regenerate this scene image.</div>'
-        )
-        yield (gr.update(value=status_html, visible=True), gr.update())
-        return
+        raise RuntimeError("No cluster workers reachable for scene preview generation.")
 
-    work_dir = _job_work_dir(job_id) or _script_work_dir(title or "preview")
-    out = work_dir / f"scene_{int(scene_id):02d}_preview.png"
+    out = work_dir / f"scene_{sid:02d}_preview.png"
     flux_model = cfg.get("flux_model", "flux1-schnell-fp8.safetensors")
     flux_clip_t5 = cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors")
     flux_clip_l = cfg.get("flux_clip_l", "clip_l.safetensors")
@@ -835,16 +843,8 @@ def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: st
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
     )
     style_clean = style.strip().rstrip(".") if style and style.strip() else ""
-    prompt = f"{style_clean}. {image_prompt}" if style_clean else image_prompt
-
-    yield (
-        gr.update(
-            value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
-                  f'Generating scene {int(scene_id)} preview...</div>',
-            visible=True,
-        ),
-        gr.update(),
-    )
+    base_prompt = image_prompt or scene.get("image_prompt") or title
+    prompt = f"{style_clean}. {base_prompt}" if style_clean else base_prompt
 
     worker_pool = WorkerPool(worker_urls)
     url = worker_pool.acquire()
@@ -863,12 +863,105 @@ def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: st
         )
         store = DurableStore.default()
         try:
-            store.update_scene_preview(job_id, int(scene_id), out)
+            store.update_scene_preview(job_id, sid, out)
         finally:
             store.close()
+        return out
+    finally:
+        worker_pool.release(url)
+
+
+def on_generate_missing_scene_preview(job_id: str, scene_id: int, resolution: str, style: str,
+                                      title: str, image_prompt: str, video_prompt: str,
+                                      narration: str, auto_approve: bool = False):
+    """Generate an initial preview for the selected scene if it does not already exist."""
+    no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
+    if auto_approve or not job_id:
+        yield no_op
+        return
+    try:
+        _save_active_scene(job_id, scene_id, title, image_prompt, video_prompt, narration)
+        store = DurableStore.default()
+        try:
+            scene = store.get_scene(job_id, int(scene_id or 1)) or {}
+        finally:
+            store.close()
+        existing = scene.get("preview_path") or ""
+        if existing and Path(existing).exists():
+            yield (
+                gr.update(value="", visible=False),
+                gr.update(value=existing, visible=True, label="Scene Preview (first frame)"),
+                gr.update(value=_scene_summary_html(job_id, int(scene_id or 1))),
+            )
+            return
+        yield (
+            gr.update(
+                value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
+                      f'Generating scene {int(scene_id or 1)} initial preview...</div>',
+                visible=True,
+            ),
+            gr.update(),
+            gr.update(),
+        )
+        out = _generate_active_scene_preview(
+            job_id,
+            int(scene_id or 1),
+            resolution,
+            style,
+            title,
+            image_prompt,
+            force=False,
+        )
         yield (
             gr.update(value="", visible=False),
             gr.update(value=str(out), visible=True, label="Scene Preview (first frame)"),
+            gr.update(value=_scene_summary_html(job_id, int(scene_id or 1))),
+        )
+    except Exception as e:
+        logger.warning("Scene %d initial preview failed: %s", int(scene_id or 1), e)
+        yield (
+            gr.update(
+                value=f'<div style="color:#ef4444;padding:4px 0;font-size:13px">'
+                      f'Scene {int(scene_id or 1)} preview failed: {html.escape(str(e)[:120])}</div>',
+                visible=True,
+            ),
+            gr.update(),
+            gr.update(),
+        )
+
+
+def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: str,
+                          title: str, image_prompt: str, video_prompt: str, narration: str):
+    """Regenerate the FLUX preview image for the active scene only."""
+    no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
+    if not job_id:
+        yield no_op
+        return
+
+    _save_active_scene(job_id, scene_id, title, image_prompt, video_prompt, narration)
+    try:
+        yield (
+            gr.update(
+                value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
+                      f'Regenerating scene {int(scene_id)} preview...</div>',
+                visible=True,
+            ),
+            gr.update(),
+            gr.update(),
+        )
+        out = _generate_active_scene_preview(
+            job_id,
+            int(scene_id),
+            resolution,
+            style,
+            title,
+            image_prompt,
+            force=True,
+        )
+        yield (
+            gr.update(value="", visible=False),
+            gr.update(value=str(out), visible=True, label="Scene Preview (first frame)"),
+            gr.update(value=_scene_summary_html(job_id, int(scene_id))),
         )
     except Exception as e:
         logger.warning("Scene %d regen failed: %s", int(scene_id), e)
@@ -879,9 +972,8 @@ def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: st
                 visible=True,
             ),
             gr.update(),
+            gr.update(),
         )
-    finally:
-        worker_pool.release(url)
 
 
 # ── Video generation — generator, yields progressive UI updates ──────────────
@@ -1403,7 +1495,7 @@ def build_ui() -> gr.Blocks:
                         script_resolution_in = gr.Dropdown(
                             label="Preview Image Resolution",
                             choices=list(_RESOLUTIONS.keys()),
-                            value=cfg.get("resolution", _DEFAULT_RESOLUTION),
+                            value="Landscape Fast (512×288)",
                         )
                         regen_scene_btn = gr.Button(
                             "↺ Regenerate current scene image", variant="secondary"
@@ -1723,6 +1815,7 @@ def build_ui() -> gr.Blocks:
         img_gen_outputs = [
             image_gen_status,
             selected_scene_preview,
+            scene_summary_html,
         ]
 
         gen_outputs = [
@@ -1781,6 +1874,14 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
+            fn=on_generate_missing_scene_preview,
+            inputs=[
+                script_job_id_state, current_scene_state, script_resolution_in,
+                style_state, scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box, auto_approve_in,
+            ],
+            outputs=img_gen_outputs,
+        ).then(
             fn=_auto_generate,
             inputs=[
                 title_in, n_scenes_in, voice_dropdown, resolution_in,
@@ -1822,14 +1923,6 @@ def build_ui() -> gr.Blocks:
         # Keep style_state in sync when user edits style_box directly
         style_box.change(fn=lambda v: v, inputs=[style_box], outputs=[style_state])
 
-        # Bidirectional sync between Create-tab resolution and Script-tab preview resolution
-        script_resolution_in.change(
-            fn=lambda v: v, inputs=[script_resolution_in], outputs=[resolution_in]
-        )
-        resolution_in.change(
-            fn=lambda v: v, inputs=[resolution_in], outputs=[script_resolution_in]
-        )
-
         regen_scene_btn.click(
             fn=on_regen_active_scene,
             inputs=[
@@ -1856,11 +1949,27 @@ def build_ui() -> gr.Blocks:
             fn=lambda job_id, sid, title, ip, vp, nr: _navigate_scene(-1, job_id, sid, title, ip, vp, nr),
             inputs=scene_nav_inputs,
             outputs=scene_nav_outputs,
+        ).then(
+            fn=on_generate_missing_scene_preview,
+            inputs=[
+                script_job_id_state, current_scene_state, script_resolution_in,
+                style_state, scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box,
+            ],
+            outputs=img_gen_outputs,
         )
         next_scene_btn.click(
             fn=lambda job_id, sid, title, ip, vp, nr: _navigate_scene(1, job_id, sid, title, ip, vp, nr),
             inputs=scene_nav_inputs,
             outputs=scene_nav_outputs,
+        ).then(
+            fn=on_generate_missing_scene_preview,
+            inputs=[
+                script_job_id_state, current_scene_state, script_resolution_in,
+                style_state, scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box,
+            ],
+            outputs=img_gen_outputs,
         )
         scene_picker.release(
             fn=_jump_scene,
@@ -1871,6 +1980,14 @@ def build_ui() -> gr.Blocks:
                 scene_video_prompt_box, scene_narration_box,
             ],
             outputs=scene_nav_outputs,
+        ).then(
+            fn=on_generate_missing_scene_preview,
+            inputs=[
+                script_job_id_state, current_scene_state, script_resolution_in,
+                style_state, scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box,
+            ],
+            outputs=img_gen_outputs,
         )
 
         remix_btn.click(

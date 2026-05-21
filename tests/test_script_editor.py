@@ -34,9 +34,29 @@ class ScriptEditorTests(unittest.TestCase):
         self.assertIn("current_scene_state", source)
         self.assertIn("scene_picker", source)
         self.assertIn("scene_title_box", source)
+        self.assertIn("on_generate_missing_scene_preview", source)
         self.assertNotIn("scene_titles:", source)
         self.assertNotIn("scene_preview_images:", source)
         self.assertNotIn("range(_SCENES_PER_PAGE)", source)
+
+    def test_preview_callbacks_keep_constant_scene_outputs(self):
+        args = _function_node("on_regen_active_scene").args
+        params = [arg.arg for arg in args.args]
+
+        self.assertEqual(
+            params,
+            [
+                "job_id",
+                "scene_id",
+                "resolution",
+                "style",
+                "title",
+                "image_prompt",
+                "video_prompt",
+                "narration",
+            ],
+        )
+        self.assertIsNone(args.vararg)
 
 
 if __name__ == "__main__":
