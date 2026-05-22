@@ -472,6 +472,15 @@ class DurableStore:
                 priority=10 + sid,
                 max_attempts=3,
             )
+            stored_scene = self.get_scene(job_id, sid) or {}
+            preview_path = stored_scene.get("preview_path", "")
+            if preview_path:
+                self.skip_task_if_artifact_exists(
+                    image_task,
+                    preview_path,
+                    artifact_kind="image",
+                    result={"source": "script_preview"},
+                )
             self.create_task(
                 narration_task,
                 job_id,
@@ -575,7 +584,10 @@ class DurableStore:
                     image_prompt=excluded.image_prompt,
                     video_prompt=excluded.video_prompt,
                     narration=excluded.narration,
-                    preview_path=excluded.preview_path,
+                    preview_path=CASE
+                        WHEN excluded.preview_path != '' THEN excluded.preview_path
+                        ELSE scenes.preview_path
+                    END,
                     metadata_json=excluded.metadata_json,
                     updated_at=excluded.updated_at
                 """,

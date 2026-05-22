@@ -34,7 +34,7 @@ class ScriptEditorTests(unittest.TestCase):
         self.assertIn("current_scene_state", source)
         self.assertIn("scene_picker", source)
         self.assertIn("scene_title_box", source)
-        self.assertIn("on_generate_missing_scene_preview", source)
+        self.assertIn("on_generate_scene_previews", source)
         self.assertNotIn("scene_titles:", source)
         self.assertNotIn("scene_preview_images:", source)
         self.assertNotIn("range(_SCENES_PER_PAGE)", source)
@@ -54,6 +54,26 @@ class ScriptEditorTests(unittest.TestCase):
                 "image_prompt",
                 "video_prompt",
                 "narration",
+            ],
+        )
+        self.assertIsNone(args.vararg)
+
+    def test_script_preview_callback_generates_all_scenes_without_bulk_outputs(self):
+        args = _function_node("on_generate_scene_previews").args
+        params = [arg.arg for arg in args.args]
+
+        self.assertEqual(
+            params,
+            [
+                "job_id",
+                "scene_id",
+                "resolution",
+                "style",
+                "title",
+                "image_prompt",
+                "video_prompt",
+                "narration",
+                "auto_approve",
             ],
         )
         self.assertIsNone(args.vararg)

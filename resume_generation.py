@@ -365,8 +365,7 @@ def main(work_dir: Path) -> None:
         single_clip = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
         clip_02 = work_dir / f"scene_{scene.id:02d}_clip_02.mp4"
         if (single_clip.exists() and single_clip.stat().st_size > 10_000
-                and not clip_02.exists()
-                and narration_durs[scene.id] <= max_clip_secs + 0.5):
+                and not clip_02.exists()):
             amb = work_dir / f"scene_{scene.id:02d}_ambient.wav"
             logger.info("Scene %d single-clip exists (%d KB), skipping",
                         scene.id, single_clip.stat().st_size // 1024)

@@ -111,6 +111,28 @@ class DurableStoreTests(unittest.TestCase):
         rows = self.store.scene_rows(self.job_id)
         self.assertEqual([row["id"] for row in rows], [1, 2])
 
+    def test_generation_plan_preserves_script_previews_and_completes_image_tasks(self):
+        self.store.create_or_update_job(self.job_id, self.work_dir, "Demo", {}, {"scene_count": 1})
+        preview = self.work_dir / "scene_01_preview.png"
+        preview.write_bytes(b"preview")
+        self.store.upsert_scene(
+            self.job_id,
+            1,
+            title="Scene 1",
+            image_prompt="A still image",
+            video_prompt="A slow camera move",
+            narration="Narration text.",
+            preview_path=preview,
+        )
+
+        self.store.ensure_generation_plan(self.job_id, self.work_dir, "Demo", self.scenes[:1], {})
+
+        scene = self.store.get_scene(self.job_id, 1)
+        image_task = self.store.get_task(task_id(self.job_id, "scene", 1, "image"))
+        self.assertEqual(scene["preview_path"], str(preview))
+        self.assertEqual(image_task.status, TASK_SUCCEEDED)
+        self.assertEqual(image_task.result["path"], str(preview))
+
     def test_leases_expire_and_can_be_reacquired(self):
         self.store.ensure_generation_plan(self.job_id, self.work_dir, "Demo", self.scenes[:1], {})
         wid = worker_id("comfy", "http://s1:8188")
