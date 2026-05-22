@@ -50,12 +50,12 @@ from pipeline.assembler import (
     extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
 )
-from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
 
 MAX_SCENES    = 100
-MAX_CLIP_SECS = 12.0  # LTX 2.3 hard limit (~301 frames at 25fps)
+MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
 CONFIG_FILE  = Path.home() / ".config" / "video-generator" / "config.json"
@@ -87,7 +87,7 @@ DEFAULT_CFG = {
     "voice_vol": 100,
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
-    "max_clip_secs": 20,
+    "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
     # set lora_strength=0 + steps=20-30 + cfg=3-5 for pure dev model mode.
@@ -193,7 +193,82 @@ def _job_meta_path(work_dir: Path) -> Path:
 
 
 def _final_path_for_work_dir(work_dir: Path) -> Path:
-    return OUTPUT_DIR / f"{work_dir.name}.mp4"
+    meta_path = _job_meta_path(work_dir)
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text())
+            final_path = Path(meta.get("final_path", ""))
+            if final_path.exists() and final_path.stat().st_size > 10_000:
+                return final_path
+        except Exception:
+            pass
+
+    canonical = OUTPUT_DIR / f"{work_dir.name}.mp4"
+    if canonical.exists() and canonical.stat().st_size > 10_000:
+        return canonical
+
+    status_path = work_dir / "progress.json"
+    if status_path.exists():
+        try:
+            status = json.loads(status_path.read_text())
+            msg = str(status.get("msg", ""))
+            match = re.search(r"Done\s+[—-]\s+(.+?\.mp4)\s+\(([\d.]+)\s+MB\)", msg)
+            if match:
+                size_mb = float(match.group(2))
+                for candidate in OUTPUT_DIR.glob("*.mp4"):
+                    try:
+                        actual_mb = candidate.stat().st_size / 1024 / 1024
+                        if abs(actual_mb - size_mb) < max(2.0, size_mb * 0.02):
+                            return candidate
+                    except OSError:
+                        continue
+        except Exception:
+            pass
+
+    try:
+        marker_mtime = max(
+            (p.stat().st_mtime for p in (meta_path, status_path) if p.exists()),
+            default=0.0,
+        )
+        recent = [
+            p for p in OUTPUT_DIR.glob("*.mp4")
+            if p.stat().st_size > 10_000 and p.stat().st_mtime >= marker_mtime - 600
+        ]
+        if recent:
+            return max(recent, key=lambda p: p.stat().st_mtime)
+    except Exception:
+        pass
+
+    return canonical
+
+
+def _latest_work_dir() -> Path | None:
+    candidates: dict[Path, float] = {}
+    for pattern in ("*/progress.json", "*/script.json", "*/job.json"):
+        for path in OUTPUT_DIR.glob(pattern):
+            if path.parent.exists():
+                candidates[path.parent] = max(candidates.get(path.parent, 0.0), path.stat().st_mtime)
+    if not candidates:
+        return None
+    return max(candidates, key=lambda p: candidates[p])
+
+
+def _work_dir_marker_mtime(work_dir: Path) -> float:
+    return max(
+        (p.stat().st_mtime for p in (work_dir / "progress.json", work_dir / "script.json", work_dir / "job.json")
+         if p.exists()),
+        default=0.0,
+    )
+
+
+def _preferred_work_dir(active_job_dir: str = "") -> Path | None:
+    active = Path(active_job_dir) if active_job_dir else None
+    latest = _latest_work_dir()
+    if active and active.exists():
+        if latest and latest.exists() and _work_dir_marker_mtime(latest) > _work_dir_marker_mtime(active) + 1:
+            return latest
+        return active
+    return latest
 
 
 def _read_json(path: Path) -> dict:
@@ -304,7 +379,7 @@ def _collect_job_outputs(work_dir: Path):
         meta = _read_json(_job_meta_path(work_dir))
     except Exception:
         meta = {}
-    already_done = meta.get("status") == "done" and meta.get("final_path") == str(final_path)
+    remix_already_selected = bool(meta.get("ui_remix_selected_at"))
 
     amb_str = str(ambient) if ambient.exists() else ""
     if combined.exists() and music.exists():
@@ -312,15 +387,18 @@ def _collect_job_outputs(work_dir: Path):
                      load_config().get("voice_vol", 100),
                      load_config().get("music_vol", 18),
                      load_config().get("ambient_vol", 0))
-    _write_job_meta(work_dir, status="done", final_path=str(final_path))
+    meta_updates = {"status": "done", "final_path": str(final_path)}
+    if not remix_already_selected:
+        meta_updates["ui_remix_selected_at"] = time.time()
+    _write_job_meta(work_dir, **meta_updates)
     return (
         gr.update(value=str(final_path), visible=True),
         str(combined) if combined.exists() else "",
         str(music) if music.exists() else "",
         amb_str,
-        # Select Remix once when a job first completes. After that, let users
-        # move around without the polling timer pulling them back to Remix.
-        gr.update() if already_done else gr.update(selected="output"),
+        # Select Remix once when the UI first observes completion. The worker
+        # process may have already marked job.json done before this timer tick.
+        gr.update() if remix_already_selected else gr.update(selected="output"),
     )
 
 
@@ -377,32 +455,34 @@ def _error_html(msg: str) -> str:
 def _poll_progress(active_job_dir: str = "") -> str:
     """Read progress.json for the active job, falling back to the latest job."""
     try:
-        if active_job_dir:
-            work_dir = Path(active_job_dir)
-            if work_dir.exists():
-                pct, msg = _status_for_work_dir(work_dir)
-                return _progress_html(pct, msg)
-
-        candidates = sorted(
-            OUTPUT_DIR.glob("*/progress.json"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        )
-        if not candidates:
+        work_dir = _preferred_work_dir(active_job_dir)
+        if work_dir is None:
             return _progress_html(0, "Waiting to start…")
-        pct, msg = _status_for_work_dir(candidates[0].parent)
+        pct, msg = _status_for_work_dir(work_dir)
         return _progress_html(pct, msg)
     except Exception:
         return _progress_html(0, "Waiting to start…")
 
 
 def _poll_job_outputs(active_job_dir: str):
-    if not active_job_dir:
+    work_dir = _preferred_work_dir(active_job_dir)
+    if work_dir is None:
         return (_progress_html(0, "Waiting to start…"), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update())
-    work_dir = Path(active_job_dir)
+                gr.update(), gr.update(), gr.update(), "")
     final, comb, mus, amb, tabs_upd = _collect_job_outputs(work_dir)
-    return (_poll_progress(active_job_dir), final, comb, mus, amb, tabs_upd)
+    return (_poll_progress(str(work_dir)), final, comb, mus, amb, tabs_upd, str(work_dir))
+
+
+def _mark_existing_scene_previews_succeeded(store: DurableStore, job_id: str) -> None:
+    for row in store.scene_rows(job_id):
+        preview = row.get("preview_path") or ""
+        if preview and Path(preview).exists():
+            store.skip_task_if_artifact_exists(
+                task_id(job_id, "scene", int(row["id"]), "image"),
+                preview,
+                artifact_kind="image",
+                result={"source": "script_preview"},
+            )
 
 
 def _orchestration_html(active_job_dir: str = "") -> str:
@@ -410,7 +490,8 @@ def _orchestration_html(active_job_dir: str = "") -> str:
     store = None
     try:
         store = DurableStore.default()
-        job = store.get_job_by_work_dir(active_job_dir) if active_job_dir else None
+        preferred = _preferred_work_dir(active_job_dir)
+        job = store.get_job_by_work_dir(str(preferred)) if preferred else None
         if job is None:
             recent = store.recent_jobs(limit=1)
             job = recent[0] if recent else None
@@ -420,6 +501,7 @@ def _orchestration_html(active_job_dir: str = "") -> str:
                 "No durable jobs recorded yet.</div>"
             )
 
+        _mark_existing_scene_previews_succeeded(store, job["id"])
         summary = store.job_summary(job["id"])
         counts = summary["counts"]
         tasks = store.task_rows(job["id"])
@@ -798,6 +880,16 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 _IMG_GEN_OUT_COUNT = 3
 
 
+def _preview_worker_urls() -> list[str]:
+    cfg = load_config()
+    all_workers = cfg.get("comfy_workers", [])
+    try:
+        return alive_workers(all_workers)
+    except Exception as exc:
+        logger.warning("Scene image generation worker probe failed: %s", exc)
+        return []
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,
@@ -807,6 +899,7 @@ def _generate_active_scene_preview(
     image_prompt: str,
     *,
     force: bool = False,
+    worker_pool: WorkerPool | None = None,
 ) -> Path:
     work_dir = _job_work_dir(job_id)
     if work_dir is None:
@@ -822,15 +915,11 @@ def _generate_active_scene_preview(
         return Path(existing)
 
     cfg = load_config()
-    all_workers = cfg.get("comfy_workers", [])
-    cluster_urls = [u for u in all_workers
-                    if not any(lh in u for lh in ("localhost", "127.0.0.1"))]
-    try:
-        worker_urls = alive_workers(cluster_urls)
-    except Exception as exc:
-        logger.warning("Scene image generation worker probe failed: %s", exc)
-        worker_urls = []
-    if not worker_urls:
+    if worker_pool is None:
+        worker_urls = _preview_worker_urls()
+        if worker_urls:
+            worker_pool = WorkerPool(worker_urls)
+    if worker_pool is None:
         raise RuntimeError("No cluster workers reachable for scene preview generation.")
 
     out = work_dir / f"scene_{sid:02d}_preview.png"
@@ -846,7 +935,6 @@ def _generate_active_scene_preview(
     base_prompt = image_prompt or scene.get("image_prompt") or title
     prompt = f"{style_clean}. {base_prompt}" if style_clean else base_prompt
 
-    worker_pool = WorkerPool(worker_urls)
     url = worker_pool.acquire()
     try:
         generate_scene_image(
@@ -871,58 +959,131 @@ def _generate_active_scene_preview(
         worker_pool.release(url)
 
 
-def on_generate_missing_scene_preview(job_id: str, scene_id: int, resolution: str, style: str,
-                                      title: str, image_prompt: str, video_prompt: str,
-                                      narration: str, auto_approve: bool = False):
-    """Generate an initial preview for the selected scene if it does not already exist."""
+def on_generate_scene_previews(job_id: str, scene_id: int, resolution: str, style: str,
+                               title: str, image_prompt: str, video_prompt: str,
+                               narration: str, auto_approve: bool = False):
+    """Generate missing first-frame previews for every scene in the script."""
     no_op = (gr.update(),) * _IMG_GEN_OUT_COUNT
-    if auto_approve or not job_id:
+    if not job_id:
         yield no_op
         return
     try:
         _save_active_scene(job_id, scene_id, title, image_prompt, video_prompt, narration)
         store = DurableStore.default()
         try:
+            rows = store.scene_rows(job_id)
             scene = store.get_scene(job_id, int(scene_id or 1)) or {}
         finally:
             store.close()
-        existing = scene.get("preview_path") or ""
-        if existing and Path(existing).exists():
+        if not rows:
+            yield no_op
+            return
+
+        selected_id = int(scene_id or 1)
+        selected_existing = scene.get("preview_path") or ""
+        missing = [
+            row for row in rows
+            if not (row.get("preview_path") and Path(row["preview_path"]).exists())
+        ]
+        if not missing:
             yield (
                 gr.update(value="", visible=False),
-                gr.update(value=existing, visible=True, label="Scene Preview (first frame)"),
-                gr.update(value=_scene_summary_html(job_id, int(scene_id or 1))),
+                gr.update(value=selected_existing, visible=True, label="Scene Preview (first frame)")
+                if selected_existing and Path(selected_existing).exists()
+                else gr.update(),
+                gr.update(value=_scene_summary_html(job_id, selected_id)),
             )
             return
+
+        worker_urls = _preview_worker_urls()
+        if not worker_urls:
+            raise RuntimeError("No cluster workers reachable for scene preview generation.")
+        worker_pool = WorkerPool(worker_urls)
+        total = len(rows)
+        done = total - len(missing)
+
         yield (
             gr.update(
                 value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
-                      f'Generating scene {int(scene_id or 1)} initial preview...</div>',
+                      f'Generating initial scene previews {done}/{total}...</div>',
                 visible=True,
             ),
             gr.update(),
             gr.update(),
         )
-        out = _generate_active_scene_preview(
-            job_id,
-            int(scene_id or 1),
-            resolution,
-            style,
-            title,
-            image_prompt,
-            force=False,
+
+        max_workers = min(len(worker_urls), len(missing))
+        completed = 0
+        selected_preview: Path | None = (
+            Path(selected_existing)
+            if selected_existing and Path(selected_existing).exists()
+            else None
         )
-        yield (
-            gr.update(value="", visible=False),
-            gr.update(value=str(out), visible=True, label="Scene Preview (first frame)"),
-            gr.update(value=_scene_summary_html(job_id, int(scene_id or 1))),
-        )
-    except Exception as e:
-        logger.warning("Scene %d initial preview failed: %s", int(scene_id or 1), e)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            failures: list[int] = []
+            future_map = {
+                pool.submit(
+                    _generate_active_scene_preview,
+                    job_id,
+                    int(row["id"]),
+                    resolution,
+                    style,
+                    row.get("title") or f"Scene {int(row['id'])}",
+                    row.get("image_prompt") or row.get("title") or f"Scene {int(row['id'])}",
+                    force=False,
+                    worker_pool=worker_pool,
+                ): int(row["id"])
+                for row in missing
+            }
+            for fut in concurrent.futures.as_completed(future_map):
+                sid = future_map[fut]
+                completed += 1
+                try:
+                    out = fut.result()
+                    if sid == selected_id:
+                        selected_preview = out
+                except Exception as exc:
+                    logger.warning("Scene %d initial preview failed: %s", sid, exc)
+                    failures.append(sid)
+                preview_update = (
+                    gr.update(value=str(selected_preview), visible=True, label="Scene Preview (first frame)")
+                    if selected_preview and selected_preview.exists()
+                    else gr.update()
+                )
+                yield (
+                    gr.update(
+                        value=f'<div style="color:#7c3aed;padding:4px 0;font-size:13px">'
+                              f'Generating initial scene previews {done + completed}/{total}...</div>',
+                        visible=True,
+                    ),
+                    preview_update,
+                    gr.update(value=_scene_summary_html(job_id, selected_id)),
+                )
+
+        store = DurableStore.default()
+        try:
+            selected = store.get_scene(job_id, selected_id) or {}
+            selected_path = selected.get("preview_path") or ""
+        finally:
+            store.close()
         yield (
             gr.update(
                 value=f'<div style="color:#ef4444;padding:4px 0;font-size:13px">'
-                      f'Scene {int(scene_id or 1)} preview failed: {html.escape(str(e)[:120])}</div>',
+                      f'Preview generation failed for scenes: '
+                      f'{html.escape(", ".join(str(s) for s in failures))}</div>',
+                visible=True,
+            ) if failures else gr.update(value="", visible=False),
+            gr.update(value=selected_path, visible=True, label="Scene Preview (first frame)")
+            if selected_path and Path(selected_path).exists()
+            else gr.update(),
+            gr.update(value=_scene_summary_html(job_id, selected_id)),
+        )
+    except Exception as e:
+        logger.warning("Initial scene preview generation failed: %s", e)
+        yield (
+            gr.update(
+                value=f'<div style="color:#ef4444;padding:4px 0;font-size:13px">'
+                      f'Initial scene previews failed: {html.escape(str(e)[:120])}</div>',
                 visible=True,
             ),
             gr.update(),
@@ -1046,6 +1207,7 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
 
         job_cfg = _job_config_snapshot(cfg)
         job_cfg["resolution"] = resolution or cfg.get("resolution", _DEFAULT_RESOLUTION)
+        job_cfg["max_clip_secs"] = 0
         job_cfg["default_voice"] = voice_name
         job_cfg["voice_ref"] = voice_ref or ""
         job_cfg["music_desc"] = music_desc or ""
@@ -1551,7 +1713,6 @@ def build_ui() -> gr.Blocks:
                     mark_worker_online_btn = gr.Button("Mark Online", variant="secondary", scale=1)
                     mark_worker_offline_btn = gr.Button("Mark Offline", variant="secondary", scale=1)
 
-                gr.Markdown("#### Background Music")
                 music_audio_out = gr.Audio(
                     label="Background Music", visible=False, interactive=False
                 )
@@ -1635,8 +1796,8 @@ def build_ui() -> gr.Blocks:
                 )
                 with gr.Row():
                     cfg_max_clip = gr.Slider(
-                        3, 20, value=cfg.get("max_clip_secs", 20), step=1,
-                        label="Max Clip Duration (s)  —  shorter = faster per segment",
+                        0, 120, value=cfg.get("max_clip_secs", 0), step=1,
+                        label="Legacy Max Clip Duration (s)  —  0 = one clip for full scene",
                     )
                     cfg_lora = gr.Slider(
                         0.0, 1.0, value=cfg.get("lora_strength", 0.5), step=0.05,
@@ -1833,7 +1994,7 @@ def build_ui() -> gr.Blocks:
             fn=_poll_job_outputs,
             inputs=[active_job_state],
             outputs=[progress_bar, final_video_out, combined_state,
-                     music_state, ambient_state, tabs],
+                     music_state, ambient_state, tabs, active_job_state],
         )
         progress_timer.tick(
             fn=_orchestration_html,
@@ -1874,7 +2035,7 @@ def build_ui() -> gr.Blocks:
             inputs=[title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
-            fn=on_generate_missing_scene_preview,
+            fn=on_generate_scene_previews,
             inputs=[
                 script_job_id_state, current_scene_state, script_resolution_in,
                 style_state, scene_title_box, scene_image_prompt_box,
@@ -1950,7 +2111,7 @@ def build_ui() -> gr.Blocks:
             inputs=scene_nav_inputs,
             outputs=scene_nav_outputs,
         ).then(
-            fn=on_generate_missing_scene_preview,
+            fn=on_generate_scene_previews,
             inputs=[
                 script_job_id_state, current_scene_state, script_resolution_in,
                 style_state, scene_title_box, scene_image_prompt_box,
@@ -1963,7 +2124,7 @@ def build_ui() -> gr.Blocks:
             inputs=scene_nav_inputs,
             outputs=scene_nav_outputs,
         ).then(
-            fn=on_generate_missing_scene_preview,
+            fn=on_generate_scene_previews,
             inputs=[
                 script_job_id_state, current_scene_state, script_resolution_in,
                 style_state, scene_title_box, scene_image_prompt_box,
@@ -1981,7 +2142,7 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=scene_nav_outputs,
         ).then(
-            fn=on_generate_missing_scene_preview,
+            fn=on_generate_scene_previews,
             inputs=[
                 script_job_id_state, current_scene_state, script_resolution_in,
                 style_state, scene_title_box, scene_image_prompt_box,

@@ -34,7 +34,6 @@ DEFAULT_WIDTH  = 832
 DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
 DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
-MAX_LENGTH     = LTX_FPS * 20 + 1  # 501 frames ≈ 20 seconds
 
 # First-pass sigma schedules.
 # The 8-step schedule is the distilled LoRA preset (trained specifically for these values).
@@ -50,6 +49,12 @@ def _gen_first_pass_sigmas(steps: int) -> str:
         return _DISTILLED_SIGMAS
     vals = [round(1.0 - i / steps, 6) for i in range(steps + 1)]
     return ", ".join(str(v) for v in vals)
+
+
+def _video_timeout_seconds(width: int, height: int, length: int) -> int:
+    base_px = DEFAULT_WIDTH * DEFAULT_HEIGHT
+    base_frames = DEFAULT_LENGTH
+    return max(900, int(900 * (width * height) / base_px * (length / base_frames)))
 
 
 # Second-pass (refinement) sigma schedules.
@@ -456,7 +461,7 @@ def generate_video_clip(
 ) -> Path:
     """Generate a video clip using LTX 2.3 T2V and save to output_path."""
     if duration_seconds is not None:
-        length = min(int(duration_seconds * LTX_FPS) + 1, MAX_LENGTH)
+        length = max(1, int(duration_seconds * LTX_FPS) + 1)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -480,10 +485,11 @@ def generate_video_clip(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
-    # Timeout scales with pixel count: 15 min baseline at 832×480, capped at 60 min.
-    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT   # 399 360
-    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
-    logger.info("[comfy] generate_video_clip %dx%d timeout=%ds", width, height, _video_timeout)
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info(
+        "[comfy] generate_video_clip %dx%d length=%d timeout=%ds",
+        width, height, length, _video_timeout,
+    )
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
@@ -516,7 +522,7 @@ def generate_video_continuation(
 ) -> Path:
     """Continue a video clip from its last frame using LTX 2.3 I2V."""
     if duration_seconds is not None:
-        length = min(int(duration_seconds * LTX_FPS) + 1, MAX_LENGTH)
+        length = max(1, int(duration_seconds * LTX_FPS) + 1)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -543,9 +549,11 @@ def generate_video_continuation(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
-    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT
-    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
-    logger.info("[comfy] generate_video_continuation %dx%d timeout=%ds", width, height, _video_timeout)
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info(
+        "[comfy] generate_video_continuation %dx%d length=%d timeout=%ds",
+        width, height, length, _video_timeout,
+    )
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
