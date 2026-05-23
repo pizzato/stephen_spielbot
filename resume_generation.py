@@ -385,7 +385,7 @@ def main(work_dir: Path) -> None:
             )
             worker_pool.release(_cover_url)
             _cover_url = None
-            _overlay_title_on_image(cover_base, cover_path, video_title)
+            shutil.copy2(cover_base, cover_path)
             logger.info("Cover image saved: %s", cover_path)
         except Exception as _cover_err:
             logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)

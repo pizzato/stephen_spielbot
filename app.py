@@ -3448,7 +3448,7 @@ def build_ui() -> gr.Blocks:
                     )
                 finally:
                     worker_pool.release(url)
-                _overlay_title_on_image(cover_base, cover_path, title)
+                shutil.copy2(cover_base, cover_path)
                 cover_str = str(cover_path)
                 yield (
                     _post_status_html("Cover image ready.", "success"),
