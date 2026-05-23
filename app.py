@@ -1913,6 +1913,7 @@ def _queue_html(queue: list[dict]) -> str:
         "pending": "#9333ea",
         "creating": "#0ea5e9",
         "done": "#22c55e",
+        "posted": "#16a34a",
     }
     rows = []
     for i, item in enumerate(queue):
@@ -2326,18 +2327,18 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
         )
         if not match:
             return
+        # Always mark the queue item as posted with the URL
+        yt.update_queue_item(match["id"], status="posted", youtube_url=yt_url)
         comment_id = match.get("comment_id", "")
-        if not comment_id:
-            return
-        if match.get("notified"):
-            return  # already replied
+        if not comment_id or match.get("notified"):
+            return  # no comment to reply to, or already replied
         reply_text = (
             f"Your suggested video is now live! 🎬 Watch it here: {yt_url}\n"
             f"Thanks again for the great suggestion!"
         )
         result = yt.reply_to_comment(secrets, comment_id, reply_text)
         if result.get("success"):
-            yt.update_queue_item(match["id"], notified=True, youtube_url=yt_url)
+            yt.update_queue_item(match["id"], notified=True)
             logger.info("Notified comment requester for %s", video_title)
         else:
             logger.warning("Failed to notify comment requester: %s", result.get("error"))
