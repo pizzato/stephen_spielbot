@@ -53,6 +53,12 @@ from pipeline.assembler import (
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
+from pipeline.cover import (
+    overlay_title_on_image as _overlay_title_on_image,
+    build_cover_prompt as _cover_prompt,
+    COVER_WIDTH as _COVER_W,
+    COVER_HEIGHT as _COVER_H,
+)
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -81,6 +87,23 @@ _RESOLUTIONS = {
     "Square FHD (1080×1080)":      (1080, 1080),
 }
 _DEFAULT_RESOLUTION = "Landscape FHD (1920×1080)"
+
+# Map each resolution to its "fast preview" counterpart of the same aspect ratio.
+# Used to auto-sync the Script-tab preview resolution when the user picks a video resolution.
+_FAST_PREVIEW_RESOLUTION: dict[str, str] = {
+    key: (
+        "Portrait Fast (288×512)" if "Portrait" in key
+        else "Square (512×512)"   if "Square"   in key
+        else "Landscape Fast (512×288)"
+    )
+    for key in _RESOLUTIONS
+}
+
+
+def _fast_preview_resolution(video_resolution: str) -> str:
+    """Return the fast-preview resolution key that matches the aspect ratio of *video_resolution*."""
+    return _FAST_PREVIEW_RESOLUTION.get(video_resolution, "Landscape Fast (512×288)")
+
 
 DEFAULT_CFG = {
     "music_vol": 18,
@@ -262,13 +285,11 @@ def _work_dir_marker_mtime(work_dir: Path) -> float:
 
 
 def _preferred_work_dir(active_job_dir: str = "") -> Path | None:
-    active = Path(active_job_dir) if active_job_dir else None
-    latest = _latest_work_dir()
-    if active and active.exists():
-        if latest and latest.exists() and _work_dir_marker_mtime(latest) > _work_dir_marker_mtime(active) + 1:
-            return latest
-        return active
-    return latest
+    if active_job_dir:
+        active = Path(active_job_dir)
+        if active.exists():
+            return active
+    return _latest_work_dir()
 
 
 def _read_json(path: Path) -> dict:
@@ -379,6 +400,8 @@ def _collect_job_outputs(work_dir: Path):
         meta = _read_json(_job_meta_path(work_dir))
     except Exception:
         meta = {}
+    # already_done: the job was marked done in a previous session — don't re-trigger tab switch
+    already_done = meta.get("status") == "done"
     remix_already_selected = bool(meta.get("ui_remix_selected_at"))
 
     amb_str = str(ambient) if ambient.exists() else ""
@@ -396,9 +419,9 @@ def _collect_job_outputs(work_dir: Path):
         str(combined) if combined.exists() else "",
         str(music) if music.exists() else "",
         amb_str,
-        # Select Remix once when the UI first observes completion. The worker
-        # process may have already marked job.json done before this timer tick.
-        gr.update() if remix_already_selected else gr.update(selected="output"),
+        # Select Remix only when transitioning to done in this session.
+        # If already_done, this is a page reload seeing an old completed job — skip.
+        gr.update() if (remix_already_selected or already_done) else gr.update(selected="output"),
     )
 
 
@@ -473,6 +496,20 @@ def _poll_job_outputs(active_job_dir: str):
     return (_poll_progress(str(work_dir)), final, comb, mus, amb, tabs_upd, str(work_dir))
 
 
+def _poll_cover_image(active_job_dir: str):
+    """Return a gr.update for the progress-tab cover image, showing it as soon as it exists."""
+    try:
+        work_dir = _preferred_work_dir(active_job_dir)
+        if work_dir is None:
+            return gr.update()
+        cover = work_dir / "cover.png"
+        if cover.exists() and cover.stat().st_size > 1000:
+            return gr.update(value=str(cover), visible=True)
+    except Exception:
+        pass
+    return gr.update()
+
+
 def _mark_existing_scene_previews_succeeded(store: DurableStore, job_id: str) -> None:
     for row in store.scene_rows(job_id):
         preview = row.get("preview_path") or ""
@@ -510,28 +547,55 @@ def _orchestration_html(active_job_dir: str = "") -> str:
             f"{html.escape(str(k))}: {v}" for k, v in sorted(counts.items())
         ) or "no tasks"
 
+        # Sort tasks: active/pending first (by execution order), succeeded last
+        _STATUS_SORT = {
+            "running": 0, "leased": 1, "queued": 2,
+            "failed_retryable": 3, "lost": 4,
+            "failed_terminal": 5, "cancelled": 6, "succeeded": 7,
+        }
+        tasks_sorted = sorted(
+            tasks, key=lambda r: (_STATUS_SORT.get(r["status"], 99), int(r["priority"]))
+        )
+
+        _STATUS_COLOR = {
+            "running": "#16a34a", "leased": "#0ea5e9", "queued": "#9333ea",
+            "succeeded": "#6b7280", "failed_retryable": "#f59e0b",
+            "failed_terminal": "#dc2626", "cancelled": "#9ca3af", "lost": "#f97316",
+        }
+
         task_rows = []
-        for row in tasks:
+        for row in tasks_sorted:
             err = row["error"] or ""
+            color = _STATUS_COLOR.get(row["status"], "#374151")
             task_rows.append(
                 "<tr>"
                 f"<td>{html.escape(row['name'])}</td>"
-                f"<td>{html.escape(row['status'])}</td>"
+                f"<td style='color:{color};font-weight:600'>{html.escape(row['status'])}</td>"
                 f"<td>{html.escape(row['worker_kind'])}</td>"
                 f"<td>{int(row['attempt'])}/{int(row['max_attempts'])}</td>"
                 f"<td>{html.escape(err[:120])}</td>"
                 "</tr>"
             )
 
+        # Look up active task from lease_owner so it shows even without heartbeat_worker
+        running_task_by_worker = {
+            r["lease_owner"]: r["name"]
+            for r in tasks
+            if r["status"] in ("running", "leased") and r["lease_owner"]
+        }
+
         worker_rows = []
         for row in workers:
-            active = row["active_task_id"] or ""
+            active_task = running_task_by_worker.get(row["id"]) or row["active_task_id"] or ""
+            if active_task and len(active_task) > 60:
+                active_task = "…" + active_task[-60:]
             worker_rows.append(
                 "<tr>"
+                f"<td><code style='font-size:10px;user-select:all'>{html.escape(row['id'])}</code></td>"
                 f"<td>{html.escape(row['kind'])}</td>"
                 f"<td>{html.escape(row['endpoint'])}</td>"
                 f"<td>{html.escape(row['status'])}</td>"
-                f"<td>{html.escape(active[-36:])}</td>"
+                f"<td style='font-size:11px'>{html.escape(active_task)}</td>"
                 "</tr>"
             )
 
@@ -547,11 +611,14 @@ def _orchestration_html(active_job_dir: str = "") -> str:
           <tbody>{''.join(task_rows)}</tbody>
         </table>
         <div style="font-size:13px;font-weight:600;margin-top:14px">Workers</div>
+        <div style="font-size:11px;color:#9ca3af;margin-bottom:4px">
+          Copy a worker ID below and paste it into the "Worker ID" field above to change its status.
+        </div>
         <table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:6px">
           <thead><tr style="text-align:left;color:#6b7280">
-            <th>Kind</th><th>Endpoint</th><th>Status</th><th>Active Task</th>
+            <th>ID</th><th>Kind</th><th>Endpoint</th><th>Status</th><th>Active Task</th>
           </tr></thead>
-          <tbody>{''.join(worker_rows) or '<tr><td colspan="4">No workers registered yet.</td></tr>'}</tbody>
+          <tbody>{''.join(worker_rows) or '<tr><td colspan="5">No workers registered yet.</td></tr>'}</tbody>
         </table>
         """
     except Exception as exc:
@@ -790,6 +857,82 @@ def _jump_scene(
     return (next_id, *_load_scene_editor(job_id, next_id))
 
 
+# ── YouTube cover image ──────────────────────────────────────────────────────
+# _overlay_title_on_image and _cover_prompt are imported from pipeline.cover
+
+
+def on_generate_cover_image(video_title: str, style: str, job_id: str):
+    """Generate a YouTube cover image for the current video.
+
+    If the pipeline already produced cover.png during generation, show it immediately
+    without hitting the ComfyUI worker again.
+    """
+    title = (video_title or "").strip()
+    if not title:
+        yield gr.update(value="Enter a Video Title first."), gr.update(visible=False)
+        return
+
+    work_dir = _job_work_dir(job_id) if job_id else None
+    if work_dir is None:
+        work_dir = _latest_work_dir()
+    if work_dir is None:
+        yield gr.update(value="No job found. Generate a script first."), gr.update(visible=False)
+        return
+
+    cover_path = work_dir / "cover.png"
+
+    # If the pipeline already generated the cover image, return it immediately.
+    if cover_path.exists() and cover_path.stat().st_size > 1000:
+        yield (
+            gr.update(value="Cover image ready (generated during video production)."),
+            gr.update(value=str(cover_path), visible=True),
+        )
+        return
+
+    worker_urls = _preview_worker_urls()
+    if not worker_urls:
+        yield gr.update(value="No cluster workers reachable — add workers in Settings."), gr.update(visible=False)
+        return
+
+    cfg = load_config()
+    prompt = _cover_prompt(title, style or "")
+
+    yield (
+        gr.update(value=f"Generating cover image for '{title}'…"),
+        gr.update(visible=False),
+    )
+
+    try:
+        worker_pool = WorkerPool(worker_urls)
+        base_path = work_dir / "cover_base.png"
+        url = worker_pool.acquire()
+        try:
+            generate_scene_image(
+                prompt, base_path,
+                width=_COVER_W, height=_COVER_H,
+                steps=int(cfg.get("flux_steps", 4)),
+                flux_model=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                clip_t5=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                clip_l=cfg.get("flux_clip_l", "clip_l.safetensors"),
+                flux_vae=cfg.get("flux_vae", "ae.safetensors"),
+                comfy_url=url,
+            )
+        finally:
+            worker_pool.release(url)
+
+        _overlay_title_on_image(base_path, cover_path, title)
+        yield (
+            gr.update(value=f"Cover image saved: {cover_path.name}"),
+            gr.update(value=str(cover_path), visible=True),
+        )
+    except Exception as e:
+        logger.warning("Cover image generation failed: %s", e)
+        yield (
+            gr.update(value=f"Cover image failed: {html.escape(str(e)[:160])}"),
+            gr.update(visible=False),
+        )
+
+
 # ── TTS wrapper ──────────────────────────────────────────────────────────────
 
 def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -> None:
@@ -800,12 +943,13 @@ def _tts(text: str, out: Path, voice_ref: str | None, host: str = "localhost") -
 
 # ── Script generation ────────────────────────────────────────────────────────
 
-def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
-    if not title.strip():
-        raise gr.Error("Please describe what you want to create.")
+def on_generate_script(video_title: str, title: str, n_scenes: int, auto_approve: bool):
+    topic = title.strip() or video_title.strip()
+    if not topic:
+        raise gr.Error("Please enter a Video Title or describe what you want to create.")
 
-    logger.info("on_generate_script — title=%r n_scenes=%d auto_approve=%s",
-                title, n_scenes, auto_approve)
+    logger.info("on_generate_script — video_title=%r title=%r n_scenes=%d auto_approve=%s",
+                video_title, title, n_scenes, auto_approve)
 
     _no_op = (gr.update(),) * 17
 
@@ -813,7 +957,11 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
     # Without this, long Claude API calls (30 scenes ≈ 3 min) cause Gradio's
     # WebSocket to time out and the page resets to the Create tab.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(generate_script, title.strip(), int(n_scenes))
+        fut = pool.submit(
+            generate_script, topic, int(n_scenes),
+            None,  # style_hint
+            video_title.strip() or None,
+        )
         while not fut.done():
             yield _no_op
             time.sleep(3)
@@ -831,8 +979,9 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
 
     try:
         next_tab = "progress" if auto_approve else "script"
+        display_title = video_title.strip() or topic
 
-        work_dir = _script_work_dir(title.strip())
+        work_dir = _script_work_dir(display_title)
         job_id = job_id_from_work_dir(work_dir)
         scenes_list = [
             {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
@@ -846,8 +995,9 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
             store.create_or_update_job(
                 job_id,
                 work_dir,
-                title.strip(),
-                config={"title": title.strip(), "phase": "script_review"},
+                display_title,
+                config={"title": display_title, "video_title": video_title.strip(),
+                        "topic": topic, "phase": "script_review"},
                 metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
             )
             store.upsert_scenes(job_id, scenes_list)
@@ -864,7 +1014,7 @@ def on_generate_script(title: str, n_scenes: int, auto_approve: bool):
             music_desc,   # → music_desc_state
             style,        # → style_box
             style,        # → style_state
-            f"### {title.strip()}\n\n{len(scenes_list)} scenes · {work_dir.name}",
+            f"### {display_title}\n\n{len(scenes_list)} scenes · {work_dir.name}",
             *scene_outputs,
         )
         logger.info("on_generate_script returning %d scenes, next_tab=%r", len(scenes), next_tab)
@@ -1144,7 +1294,7 @@ def on_regen_active_scene(job_id: str, scene_id: int, resolution: str, style: st
 _GEN_OUT_COUNT = 8
 
 
-def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
+def on_generate(video_title, title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
                 job_id: str, work_dir_str: str, current_scene_id: int,
                 scene_title: str, image_prompt: str, video_prompt: str, narration: str):
     active_job_dir = work_dir_str or ""
@@ -1212,6 +1362,8 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         job_cfg["voice_ref"] = voice_ref or ""
         job_cfg["music_desc"] = music_desc or ""
         job_cfg["title"] = title
+        job_cfg["video_title"] = (video_title or "").strip()
+        job_cfg["style"] = style_clean
         (work_dir / "job_config.json").write_text(json.dumps(job_cfg, indent=2))
         (work_dir / "progress.json").write_text(
             json.dumps({"pct": 0, "msg": "Generation job queued", "ts": time.time()})
@@ -1272,13 +1424,14 @@ def on_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, 
         )
 
 
-def _auto_generate(title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
+def _auto_generate(video_title, title, n_scenes_val, voice_name, resolution, music_desc, style, auto_approve,
                    job_id: str, work_dir_str: str, current_scene_id: int,
                    scene_title: str, image_prompt: str, video_prompt: str, narration: str):
     if not auto_approve:
         yield (gr.update(),) * _GEN_OUT_COUNT
         return
     yield from on_generate(
+        video_title,
         title,
         n_scenes_val,
         voice_name,
@@ -1543,26 +1696,23 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
 
 _PERSIST_JS = """
 () => {
-    const KEY = 'spielbot_title';
-    function setup() {
-        const el = document.getElementById('title_input');
-        if (!el) { setTimeout(setup, 150); return; }
-        const ta = el.querySelector('textarea');
-        if (!ta) { setTimeout(setup, 150); return; }
+    function persistField(elemId, storageKey) {
+        const el = document.getElementById(elemId);
+        if (!el) { setTimeout(() => persistField(elemId, storageKey), 150); return; }
+        const ta = el.querySelector('textarea, input');
+        if (!ta) { setTimeout(() => persistField(elemId, storageKey), 150); return; }
 
-        // Save on every keystroke
-        ta.addEventListener('input', () => { if (ta.value) localStorage.setItem(KEY, ta.value); });
+        ta.addEventListener('input', () => { if (ta.value) localStorage.setItem(storageKey, ta.value); });
 
-        // Restore: poll until value is stable (Gradio has finished initialising)
-        const saved = localStorage.getItem(KEY);
+        const saved = localStorage.getItem(storageKey);
         if (!saved) return;
         let prev = ta.value, ticks = 0;
         const iv = setInterval(() => {
             if (ta.value === prev) {
                 ticks++;
-                if (ticks >= 4) {          // stable for ~400 ms
+                if (ticks >= 4) {
                     clearInterval(iv);
-                    if (!ta.value) {       // only restore if Gradio left it empty
+                    if (!ta.value) {
                         ta.value = saved;
                         ta.dispatchEvent(new Event('input', { bubbles: true }));
                     }
@@ -1572,7 +1722,8 @@ _PERSIST_JS = """
             }
         }, 100);
     }
-    setup();
+    persistField('video_title_input', 'spielbot_video_title');
+    persistField('title_input', 'spielbot_title');
     return [];
 }
 """
@@ -1613,13 +1764,20 @@ def build_ui() -> gr.Blocks:
             with gr.Tab("🎬 Create", id="create"):
                 with gr.Row():
                     with gr.Column(scale=3):
-                        title_in = gr.Textbox(
-                            label="Describe what you want to create",
-                            placeholder="e.g.  The History of the Roman Empire",
-                            elem_id="title_input",
+                        video_title_in = gr.Textbox(
+                            label="Video Title",
+                            placeholder="e.g.  The Rise and Fall of the Roman Empire",
+                            elem_id="video_title_input",
                         )
                     with gr.Column(scale=1):
                         n_scenes_in = gr.Slider(1, MAX_SCENES, value=5, step=1, label="Scenes")
+                with gr.Row():
+                    with gr.Column(scale=3):
+                        title_in = gr.Textbox(
+                            label="Prompt / Description (optional — adds detail beyond the title)",
+                            placeholder="e.g.  Focus on the economic decline, military defeats, and rise of Christianity",
+                            elem_id="title_input",
+                        )
 
                 with gr.Row():
                     voice_dropdown = gr.Dropdown(
@@ -1657,7 +1815,7 @@ def build_ui() -> gr.Blocks:
                         script_resolution_in = gr.Dropdown(
                             label="Preview Image Resolution",
                             choices=list(_RESOLUTIONS.keys()),
-                            value="Landscape Fast (512×288)",
+                            value=_fast_preview_resolution(cfg.get("resolution", _DEFAULT_RESOLUTION)),
                         )
                         regen_scene_btn = gr.Button(
                             "↺ Regenerate current scene image", variant="secondary"
@@ -1717,6 +1875,18 @@ def build_ui() -> gr.Blocks:
                     label="Background Music", visible=False, interactive=False
                 )
 
+                gr.Markdown("#### YouTube Cover Image")
+                gr.Markdown(
+                    "_Generated automatically alongside the video — "
+                    "appears here once ready (usually after music generation)._"
+                )
+                progress_cover_image = gr.Image(
+                    label="Cover Image (1280×720)",
+                    visible=False,
+                    height=280,
+                    interactive=False,
+                )
+
             # ── Remix (formerly Output) ──────────────────────────────────
             with gr.Tab("🎛️ Remix", id="output"):
                 final_video_out = gr.Video(
@@ -1746,6 +1916,18 @@ def build_ui() -> gr.Blocks:
                     )
                 remix_btn    = gr.Button("Re-mix Video", variant="primary")
                 remix_status = gr.Markdown("")
+
+                gr.Markdown("### YouTube Cover Image")
+                gr.Markdown(
+                    "Generate a 1280×720 cover image for your YouTube video. "
+                    "Uses FLUX to create artwork in the video's visual style, then overlays the video title."
+                )
+                gen_cover_btn = gr.Button("Generate Cover Image", variant="secondary")
+                cover_status = gr.Markdown("")
+                cover_image_out = gr.Image(
+                    label="Cover Image (1280×720)", visible=False,
+                    height=360, interactive=False,
+                )
 
             # ── Upscale ──────────────────────────────────────────────────
             with gr.Tab("🔍 Upscale", id="upscale"):
@@ -2001,6 +2183,11 @@ def build_ui() -> gr.Blocks:
             inputs=[active_job_state],
             outputs=[orchestration_status],
         )
+        progress_timer.tick(
+            fn=_poll_cover_image,
+            inputs=[active_job_state],
+            outputs=[progress_cover_image],
+        )
         resume_job_btn.click(
             fn=on_resume_active_job,
             inputs=[active_job_state],
@@ -2032,7 +2219,7 @@ def build_ui() -> gr.Blocks:
             inputs=[], outputs=[gen_script_btn],
         ).then(
             fn=on_generate_script,
-            inputs=[title_in, n_scenes_in, auto_approve_in],
+            inputs=[video_title_in, title_in, n_scenes_in, auto_approve_in],
             outputs=script_outputs,
         ).then(
             fn=on_generate_scene_previews,
@@ -2045,7 +2232,7 @@ def build_ui() -> gr.Blocks:
         ).then(
             fn=_auto_generate,
             inputs=[
-                title_in, n_scenes_in, voice_dropdown, resolution_in,
+                video_title_in, title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 script_job_id_state, script_work_dir_state, current_scene_state,
                 scene_title_box, scene_image_prompt_box,
@@ -2069,7 +2256,7 @@ def build_ui() -> gr.Blocks:
         ).then(
             fn=on_generate,
             inputs=[
-                title_in, n_scenes_in, voice_dropdown, resolution_in,
+                video_title_in, title_in, n_scenes_in, voice_dropdown, resolution_in,
                 music_desc_state, style_state, auto_approve_in,
                 script_job_id_state, script_work_dir_state, current_scene_state,
                 scene_title_box, scene_image_prompt_box,
@@ -2083,6 +2270,14 @@ def build_ui() -> gr.Blocks:
 
         # Keep style_state in sync when user edits style_box directly
         style_box.change(fn=lambda v: v, inputs=[style_box], outputs=[style_state])
+
+        # Auto-sync Script-tab preview resolution to the correct aspect ratio when the
+        # user changes the video resolution in the Create tab.
+        resolution_in.change(
+            fn=_fast_preview_resolution,
+            inputs=[resolution_in],
+            outputs=[script_resolution_in],
+        )
 
         regen_scene_btn.click(
             fn=on_regen_active_scene,
@@ -2156,6 +2351,12 @@ def build_ui() -> gr.Blocks:
             inputs=[combined_state, music_state, ambient_state,
                     remix_voice_vol, remix_music_vol, remix_ambient_vol],
             outputs=[final_video_out, combined_state, music_state, ambient_state, remix_status],
+        )
+
+        gen_cover_btn.click(
+            fn=on_generate_cover_image,
+            inputs=[video_title_in, style_state, script_job_id_state],
+            outputs=[cover_status, cover_image_out],
         )
 
         load_for_upscale_btn.click(

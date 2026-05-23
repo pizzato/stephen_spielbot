@@ -29,10 +29,12 @@ logging.basicConfig(level=logging.WARNING, handlers=[_file_handler, _stream_hand
 logger = logging.getLogger("video_gen")
 logger.setLevel(logging.DEBUG)
 
+from PIL import Image as _PILImage
+
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT
-from pipeline.comfyui import generate_music, StuckJobError
+from pipeline.comfyui import generate_music, generate_scene_image, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio,
     concat_audio, concatenate_scenes,
@@ -46,9 +48,24 @@ from pipeline.orchestrator import (
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
+from pipeline.cover import (
+    overlay_title_on_image as _overlay_title_on_image,
+    build_cover_prompt as _cover_prompt,
+    COVER_WIDTH as _COVER_W,
+    COVER_HEIGHT as _COVER_H,
+)
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.json"
 OUTPUT_DIR  = Path.home() / "videos"
+
+
+def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
+    """Return True only if *path* is a readable image with exactly width×height pixels."""
+    try:
+        with _PILImage.open(path) as img:
+            return img.size == (width, height)
+    except Exception:
+        return False
 
 _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                         "ConnectionRefused", "RemoteDisconnected")
@@ -341,6 +358,45 @@ def main(work_dir: Path) -> None:
                     f"retrying. {first_line}",
                 )
 
+    write_progress(status_file, 35, "Music ready. Generating cover image and scene videos…")
+
+    # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
+    cover_path = work_dir / "cover.png"
+    cover_base = work_dir / "cover_base.png"
+    video_title = cfg.get("video_title", "").strip() or title
+    style_clean = cfg.get("style", "").strip()
+
+    if not cover_path.exists():
+        logger.info("Generating YouTube cover image for '%s'", video_title)
+        _cover_url: str | None = None
+        try:
+            _cover_url = worker_pool.acquire()
+            generate_scene_image(
+                _cover_prompt(video_title, style_clean),
+                cover_base,
+                width=_COVER_W,
+                height=_COVER_H,
+                steps=flux_cfg["steps"],
+                flux_model=flux_cfg["model"],
+                clip_t5=flux_cfg["clip_t5"],
+                clip_l=flux_cfg["clip_l"],
+                flux_vae=flux_cfg["vae"],
+                comfy_url=_cover_url,
+            )
+            worker_pool.release(_cover_url)
+            _cover_url = None
+            _overlay_title_on_image(cover_base, cover_path, video_title)
+            logger.info("Cover image saved: %s", cover_path)
+        except Exception as _cover_err:
+            logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)
+            if _cover_url is not None:
+                try:
+                    worker_pool.release(_cover_url)
+                except Exception:
+                    pass
+    else:
+        logger.info("Cover image already exists, skipping: %s", cover_path)
+
     write_progress(status_file, 35, "Music ready. Generating scene videos…")
 
     # ── Video generation (35–90%) ────────────────────────────────────────────
@@ -376,13 +432,21 @@ def main(work_dir: Path) -> None:
             store.record_artifact(durable_job_id, video_task, "scene_video", single_clip, duration_seconds=_get_duration(single_clip))
             return scene.id, single_clip, amb if amb.exists() else None
 
-        # Check if a preview image exists for this scene
+        # Check if a preview image exists for this scene and matches the target resolution.
+        # Images generated during Script review may be at a different (landscape) resolution —
+        # if they don't match we force regeneration at the correct resolution.
         scene_first_frame: Path | None = None
         for ext in ("_preview.png", "_first_frame.png"):
             p = work_dir / f"scene_{scene.id:02d}{ext}"
-            if p.exists():
+            if not p.exists():
+                continue
+            if _image_matches_resolution(p, vid_width, vid_height):
                 scene_first_frame = p
                 break
+            logger.info(
+                "Scene %d: ignoring %s — dimensions don't match target %dx%d, will regenerate",
+                scene.id, p.name, vid_width, vid_height,
+            )
 
         last_err: Exception | None = None
         for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):

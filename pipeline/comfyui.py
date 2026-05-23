@@ -209,12 +209,14 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
-_QUEUE_CHECK_INTERVAL      = 60    # seconds between /queue health checks
-_STUCK_TIMEOUT             = 7200  # seconds of silence from a *running* job → StuckJobError
+_QUEUE_CHECK_INTERVAL      = 30    # seconds between /queue health checks (was 60)
+_STUCK_TIMEOUT             = 1800  # seconds of WS silence from a *running* job → StuckJobError (was 7200)
 _PENDING_TIMEOUT           = 180   # seconds a job may sit *pending* before we try another worker
-_HEARTBEAT_INTERVAL        = 300   # seconds between GPU idle checks (only when job is running)
+_HEARTBEAT_INTERVAL        = 90    # seconds between GPU idle checks when job is running (was 300)
+_HEARTBEAT_INITIAL_DELAY   = 120   # seconds to skip heartbeat after job start (model load warmup)
 _HEARTBEAT_IDLE_THRESHOLD  = 15    # GPU utilisation % below this is considered idle
-_HEARTBEAT_IDLE_SAMPLES    = 3     # consecutive idle heartbeats required to declare stuck
+_HEARTBEAT_IDLE_SAMPLES    = 2     # consecutive idle heartbeats required to declare stuck (was 3)
+_HEARTBEAT_SSH_FAIL_LIMIT  = 5     # consecutive SSH failures before logging a WARNING
 
 
 def _hostname_from_url(url: str) -> str:
@@ -258,11 +260,20 @@ def _wait_for_completion(
 ) -> None:
     """Block until ComfyUI finishes executing prompt_id.
 
-    Actively monitors the job:
-    - WebSocket progress/executing messages reset a "last-seen-activity" timer.
-    - /queue is polled every 60 s:
-        * 'absent' and not in /history → DroppedJobError (re-queued by caller)
-        * 'running' with no activity for _STUCK_TIMEOUT → StuckJobError (retried by caller)
+    Actively monitors the job via two independent stuck-detection paths:
+
+    1. WebSocket silence: /queue is polled every _QUEUE_CHECK_INTERVAL s.
+       If the job is running but no WS activity has been seen for _STUCK_TIMEOUT s
+       (reset by any progress/executing message), raises StuckJobError.
+
+    2. GPU heartbeat (primary fast-path): every _HEARTBEAT_INTERVAL s (after an
+       initial _HEARTBEAT_INITIAL_DELAY warm-up for model loading), SSH to the
+       worker and run nvidia-smi.  If GPU utilisation stays below
+       _HEARTBEAT_IDLE_THRESHOLD for _HEARTBEAT_IDLE_SAMPLES consecutive samples,
+       interrupt the job and raise StuckJobError immediately.
+       Detection time: _HEARTBEAT_INITIAL_DELAY + _HEARTBEAT_IDLE_SAMPLES *
+       _HEARTBEAT_INTERVAL = 120 + 2*90 = ~5 min (vs old ~15 min).
+
     Falls back to polling /history if the WebSocket drops.
     """
     ws = websocket.WebSocket()
@@ -272,8 +283,11 @@ def _wait_for_completion(
     last_activity_at: float | None = None   # None until the job actually starts executing
     last_queue_check = time.time()
     nodes_done       = 0
-    last_heartbeat_at = start
+    # Schedule first heartbeat after the initial warm-up delay so that model-loading
+    # time (where the GPU may be at 0 %) doesn't trigger a false stuck detection.
+    last_heartbeat_at = start - _HEARTBEAT_INTERVAL + _HEARTBEAT_INITIAL_DELAY
     consecutive_idle  = 0
+    consecutive_ssh_failures = 0
     host              = _hostname_from_url(comfy_url)
 
     try:
@@ -319,6 +333,7 @@ def _wait_for_completion(
                             # Reset the idle counter and treat it as WebSocket activity
                             # so the silence-based stuck timer doesn't fire.
                             consecutive_idle = 0
+                            consecutive_ssh_failures = 0
                             last_activity_at = now
                             logger.info(
                                 "[comfy] job %s… heartbeat OK — GPU active on %s",
@@ -326,20 +341,38 @@ def _wait_for_completion(
                             )
                         elif gpu_idle is True:
                             consecutive_idle += 1
+                            consecutive_ssh_failures = 0
                             logger.warning(
-                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s",
+                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s "
+                                "(elapsed %.0fs)",
                                 prompt_id[:8], consecutive_idle,
                                 _HEARTBEAT_IDLE_SAMPLES, _HEARTBEAT_IDLE_THRESHOLD, host,
+                                now - start,
                             )
                             if consecutive_idle >= _HEARTBEAT_IDLE_SAMPLES:
                                 _interrupt_running_prompt(prompt_id, comfy_url)
                                 raise StuckJobError(
                                     f"Job {prompt_id} on {comfy_url}: GPU idle for "
                                     f"{consecutive_idle} consecutive heartbeats "
-                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%)"
-                                    f" — worker appears hung, will re-submit"
+                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%) "
+                                    f"after {now - start:.0f}s — worker appears hung, will re-submit"
                                 )
-                        # gpu_idle is None → SSH failed → skip, don't update counters
+                        else:
+                            # gpu_idle is None → SSH to worker failed
+                            consecutive_ssh_failures += 1
+                            if consecutive_ssh_failures >= _HEARTBEAT_SSH_FAIL_LIMIT:
+                                logger.warning(
+                                    "[comfy] job %s… heartbeat: SSH to %s failed %d consecutive "
+                                    "times — GPU monitoring unavailable, relying on WS silence "
+                                    "timeout (%ds)",
+                                    prompt_id[:8], host, consecutive_ssh_failures, _STUCK_TIMEOUT,
+                                )
+                            else:
+                                logger.debug(
+                                    "[comfy] job %s… heartbeat: SSH to %s failed (%d/%d)",
+                                    prompt_id[:8], host,
+                                    consecutive_ssh_failures, _HEARTBEAT_SSH_FAIL_LIMIT,
+                                )
 
                     # Stuck detection: fires when WebSocket has been silent too long.
                     # GPU heartbeats above reset last_activity_at when the GPU is busy,
