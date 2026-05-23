@@ -10,18 +10,39 @@ COVER_WIDTH  = 1280
 COVER_HEIGHT = 720
 
 
+_COVER_NEGATIVE = (
+    "blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, "
+    "random text, watermark, logo, messy layout, too much clutter, distorted faces, "
+    "deformed hands, boring flat lighting, plain background"
+)
+
+
 def build_cover_prompt(title: str, style: str = "") -> str:
     """Build a FLUX prompt for a YouTube documentary cover image."""
-    style_clean = style.strip().rstrip(".")
-    suffix = "cinematic key art, compelling composition, high contrast, dramatic lighting"
-    if style_clean:
-        return (
-            f"{style_clean}. YouTube video thumbnail cover art for a documentary "
-            f"titled '{title}', {suffix}"
-        )
-    return (
-        f"YouTube video thumbnail cover art for a documentary titled '{title}', {suffix}"
+    style_note = style.strip().rstrip(".")
+    style_line = f"Video visual style: {style_note}. " if style_note else ""
+    prompt = (
+        f"Create a high-impact YouTube documentary thumbnail in 16:9 landscape format. "
+        f"{style_line}"
+        f"Thumbnail style: cinematic historical montage, dramatic lighting, ultra-detailed, bold contrast, "
+        f"rich colors, professional YouTube thumbnail design, epic documentary poster look, "
+        f"sharp focus, high resolution. "
+        f"Composition: large readable title text dominates the centre, with supporting "
+        f"historical/subject imagery arranged around it in a dramatic collage. Use depth, "
+        f"smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. "
+        f"The image should look exciting, educational, and clickable at small YouTube size. "
+        f'Text: include the exact title: "{title}". '
+        f"The title must be spelled correctly, large, clean, bold, and easy to read. "
+        f"Use thick block lettering with strong shadow or outline. Do not add any extra words, "
+        f"fake letters, random symbols, or misspelled text. "
+        f"Visual content: show the key eras, people, objects, places, and technologies related "
+        f"to the topic. Make the image feel like a complete visual summary of the story. "
+        f"Layout: avoid clutter, keep the subject clear, make the title readable first, then "
+        f"the background details. Leave safe margins around the edges. No watermark, no logo, "
+        f"no UI elements. "
+        f"Avoid: {_COVER_NEGATIVE}."
     )
+    return prompt
 
 
 def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:
