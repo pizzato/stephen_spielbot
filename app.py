@@ -1487,6 +1487,66 @@ def _auto_generate(video_title, title, n_scenes_val, voice_name, resolution, mus
 
 # ── Session restore ──────────────────────────────────────────────────────────
 
+def _list_recent_jobs(max_results: int = 10) -> list[tuple[str, str]]:
+    """Return list of (label, work_dir_str) for completed jobs, newest first."""
+    results = []
+    try:
+        dirs = sorted(
+            (d for d in OUTPUT_DIR.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs:
+            combined = d / "combined.mp4"
+            music = d / "background_music.wav"
+            if combined.exists() and music.exists():
+                # Human-readable label: un-slug the directory name
+                label = d.name.replace("-", " ").title()
+                results.append((label, str(d)))
+            if len(results) >= max_results:
+                break
+    except Exception:
+        pass
+    return results
+
+
+def _load_job_for_remix(work_dir_str: str):
+    """Load a job directory into Remix tab. Returns same shape as on_restore_session."""
+    if not work_dir_str:
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(), gr.update(),
+                "No job selected.")
+    work_dir = Path(work_dir_str)
+    combined = work_dir / "combined.mp4"
+    music = work_dir / "background_music.wav"
+    ambient = work_dir / "ambient.wav"
+    if not combined.exists() or not music.exists():
+        return (gr.update(), gr.update(), gr.update(), gr.update(),
+                gr.update(), gr.update(), gr.update(),
+                f"Required files not found in {work_dir.name}.")
+
+    candidates = sorted(work_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+    final_vid = next(
+        (p for p in candidates if not p.name.startswith("scene_") and not p.name.startswith("remixed")),
+        None,
+    )
+    cfg = load_config()
+    amb_str = str(ambient) if ambient.exists() else ""
+    save_session(str(combined), str(music), amb_str,
+                 cfg.get("voice_vol", 100), cfg.get("music_vol", 18), cfg.get("ambient_vol", 0))
+    logger.info("Remix: loaded job from %s", work_dir)
+    return (
+        gr.update(value=str(final_vid), visible=True) if final_vid else gr.update(visible=False),
+        str(combined),
+        str(music),
+        amb_str,
+        gr.update(value=cfg.get("voice_vol", 100)),
+        gr.update(value=cfg.get("music_vol", 18)),
+        gr.update(value=cfg.get("ambient_vol", 0)),
+        f"Loaded: {work_dir.name}",
+    )
+
+
 def on_restore_session():
     session = load_session()
     if not session:
@@ -2582,6 +2642,16 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     restore_btn    = gr.Button("↩ Restore Last Session", variant="secondary", size="sm")
                     restore_status = gr.Markdown("")
+                with gr.Row():
+                    _recent_jobs = _list_recent_jobs()
+                    recent_job_dropdown = gr.Dropdown(
+                        choices=[(lbl, wdir) for lbl, wdir in _recent_jobs],
+                        label="Load recent video",
+                        value=None,
+                        interactive=True,
+                        scale=4,
+                    )
+                    load_recent_btn = gr.Button("Load", variant="secondary", size="sm", scale=1)
 
                 gr.Markdown("### Re-mix Audio")
                 gr.Markdown(
@@ -3182,6 +3252,16 @@ def build_ui() -> gr.Blocks:
                      restore_status],
         )
 
+        _remix_load_outputs = [final_video_out, combined_state, music_state, ambient_state,
+                               remix_voice_vol, remix_music_vol, remix_ambient_vol,
+                               restore_status]
+
+        load_recent_btn.click(
+            fn=_load_job_for_remix,
+            inputs=[recent_job_dropdown],
+            outputs=_remix_load_outputs,
+        )
+
         cfg_llm_backend.change(
             fn=lambda b: (gr.update(open=(b == "local")), gr.update(open=(b == "claude"))),
             inputs=[cfg_llm_backend],
@@ -3290,8 +3370,7 @@ def build_ui() -> gr.Blocks:
             outputs=_post_load_outputs,
         )
 
-        # Single combined tab-select handler — activates progress timer only on
-        # Handles per-tab auto-fills in one server round-trip.
+        # Single combined tab-select handler — handles per-tab auto-fills in one round-trip.
         def _on_tab_select(evt: gr.SelectData, job_dir: str):
             # evt.value may be the tab label (str) or tab index (int) depending
             # on Gradio version — normalise to str to avoid TypeError in `in` checks.
@@ -3301,16 +3380,22 @@ def build_ui() -> gr.Blocks:
                 if ("YouTube" in selected or selected == "youtube")
                 else gr.update()
             )
+            on_remix_tab = "Remix" in selected or selected == "output"
+            recent_choices = (
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_recent_jobs()])
+                if on_remix_tab
+                else gr.update()
+            )
             if "Post" in selected or selected == "post":
                 post_vals = on_post_load(job_dir)
             else:
                 post_vals = (gr.update(),) * 7
-            return (yt_html,) + tuple(post_vals)
+            return (yt_html, recent_choices) + tuple(post_vals)
 
         tabs.select(
             fn=_on_tab_select,
             inputs=[active_job_state],
-            outputs=[yt_auth_status] + _post_load_outputs,
+            outputs=[yt_auth_status, recent_job_dropdown] + _post_load_outputs,
         )
 
         post_regen_desc_btn.click(
