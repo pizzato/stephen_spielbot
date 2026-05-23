@@ -2158,11 +2158,15 @@ def _post_status_html(msg: str, kind: str = "info") -> str:
     )
 
 
-def on_post_load(active_job_dir: str) -> tuple:
-    """Load Post tab fields from the active job. Returns 7 values (includes cover_path_state)."""
+def on_post_load(active_job_dir: str):
+    """Load Post tab fields from the active job.
+
+    Generator: yields immediately with video/title/cover, then a second yield
+    adds the LLM-generated description so the cover is never blocked by the LLM.
+    """
     work_dir = _preferred_work_dir(active_job_dir)
     if work_dir is None:
-        return (
+        yield (
             gr.update(value=""),
             gr.update(value="No active job — generate a video first."),
             gr.update(value=""),
@@ -2171,6 +2175,7 @@ def on_post_load(active_job_dir: str) -> tuple:
             gr.update(value=""),
             "",  # post_cover_path_state
         )
+        return
     try:
         final_path = _final_path_for_work_dir(work_dir)
         video_path = str(final_path) if final_path.exists() else ""
@@ -2195,18 +2200,48 @@ def on_post_load(active_job_dir: str) -> tuple:
         )
 
         status_msg = f"Loaded from {work_dir.name}" + ("" if video_path else " (video not ready yet)")
-        return (
+
+        # First yield — immediately shows video path, title, cover.
+        yield (
             gr.update(value=video_path),
             gr.update(value=video_title),
-            gr.update(value=""),   # description generated on demand via Regenerate button
-            cover_update,
-            _post_status_html(status_msg + " — click Regenerate Description to generate.", "success" if video_path else "info"),
             gr.update(value=""),
-            cover_str,  # post_cover_path_state
+            cover_update,
+            _post_status_html(status_msg + " — generating description…", "success" if video_path else "info"),
+            gr.update(value=""),
+            cover_str,
         )
+
+        # Second yield — LLM description (may take a few seconds but cover is already visible).
+        description = ""
+        store = DurableStore.default()
+        try:
+            job = store.get_job_by_work_dir(str(work_dir))
+            if job:
+                scenes = store.scene_rows(job["id"])
+                if scenes:
+                    description = generate_youtube_description(
+                        title=video_title,
+                        scenes=scenes,
+                        style=style,
+                        music_desc=music_desc,
+                    )
+        finally:
+            store.close()
+
+        yield (
+            gr.update(),
+            gr.update(),
+            gr.update(value=description),
+            gr.update(),
+            _post_status_html(status_msg, "success" if video_path else "info"),
+            gr.update(),
+            gr.update(),
+        )
+
     except Exception as exc:
         logger.warning("on_post_load failed: %s", exc)
-        return (
+        yield (
             gr.update(value=""),
             gr.update(value=""),
             gr.update(value=""),
