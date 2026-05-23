@@ -411,6 +411,34 @@ def upload_video(
         return {"video_id": "", "url": "", "error": str(exc)[:400]}
 
 
+# ── Comment replies ───────────────────────────────────────────────────────────
+
+def reply_to_comment(client_secrets_path: str, parent_comment_id: str, text: str) -> dict:
+    """Post a reply to a top-level comment thread. Returns {success, error}."""
+    if not parent_comment_id or not text:
+        return {"success": False, "error": "Missing comment ID or reply text"}
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return {"success": False, "error": "Not authenticated"}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        youtube.comments().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "parentId": parent_comment_id,
+                    "textOriginal": text,
+                }
+            },
+        ).execute()
+        logger.info("Replied to comment %s", parent_comment_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.warning("reply_to_comment failed: %s", exc)
+        return {"success": False, "error": str(exc)[:300]}
+
+
 # ── Comments cache ────────────────────────────────────────────────────────────
 
 def load_comments_cache() -> list[dict]:
