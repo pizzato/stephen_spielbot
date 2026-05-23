@@ -2194,29 +2194,13 @@ def on_post_load(active_job_dir: str) -> tuple:
             else gr.update(value=None, visible=False)
         )
 
-        description = ""
-        store = DurableStore.default()
-        try:
-            job = store.get_job_by_work_dir(str(work_dir))
-            if job:
-                scenes = store.scene_rows(job["id"])
-                if scenes:
-                    description = generate_youtube_description(
-                        title=video_title,
-                        scenes=scenes,
-                        style=style,
-                        music_desc=music_desc,
-                    )
-        finally:
-            store.close()
-
         status_msg = f"Loaded from {work_dir.name}" + ("" if video_path else " (video not ready yet)")
         return (
             gr.update(value=video_path),
             gr.update(value=video_title),
-            gr.update(value=description),
+            gr.update(value=""),   # description generated on demand via Regenerate button
             cover_update,
-            _post_status_html(status_msg, "success" if video_path else "info"),
+            _post_status_html(status_msg + " — click Regenerate Description to generate.", "success" if video_path else "info"),
             gr.update(value=""),
             cover_str,  # post_cover_path_state
         )
