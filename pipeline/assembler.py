@@ -50,6 +50,50 @@ def _get_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def _get_video_dimensions(path: Path) -> tuple[int, int]:
+    result = subprocess.run(
+        [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=s=x:p=0",
+            str(path),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed:\n{result.stderr[-2000:]}")
+    width_s, height_s = result.stdout.strip().split("x", 1)
+    return int(width_s), int(height_s)
+
+
+def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
+    """Reframe final output to the exact selected resolution when a backend rounds it."""
+    actual_w, actual_h = _get_video_dimensions(video_path)
+    if (actual_w, actual_h) == (width, height):
+        return video_path
+
+    tmp_path = video_path.with_name(f"{video_path.stem}.{width}x{height}.tmp{video_path.suffix}")
+    logger.info(
+        "[ffmpeg] normalize_resolution: %dx%d → %dx%d (%s)",
+        actual_w, actual_h, width, height, video_path.name,
+    )
+    _run([
+        "ffmpeg", "-y",
+        "-i", str(video_path),
+        "-vf", (
+            f"scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1"
+        ),
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(tmp_path),
+    ], timeout=1800)
+    tmp_path.replace(video_path)
+    return video_path
+
+
 def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
     """Concatenate multiple short clips with stream copy (hard cuts, no re-encode)."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -125,12 +169,22 @@ def concat_audio(audio_paths: list[Path], output_path: Path) -> Path:
 
 
 def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
-    """Mux video with narration audio, discarding any audio track on the video."""
+    """Mux video with narration audio, discarding any audio track on the video.
+
+    Both branches re-encode the video so the output duration exactly matches the
+    audio duration.  Stream copy (-c:v copy) cannot cut at non-keyframe
+    boundaries, leaving the video track a full frame (~40 ms at 25 fps) longer
+    than the audio track.  Across many scenes this drift accumulates: narration
+    starts noticeably early relative to the video.
+    """
     audio_dur = _get_duration(audio_path)
     video_dur = _get_duration(video_path)
 
     if video_dur >= audio_dur:
-        # Video covers the full narration — simple stream copy, trim to audio length.
+        logger.debug(
+            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs — trimming to audio",
+            video_dur, audio_dur,
+        )
         _run([
             "ffmpeg", "-y",
             "-i", str(video_path),
@@ -138,7 +192,7 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
             "-map", "0:v:0",
             "-map", "1:a:0",
             "-t", str(audio_dur),
-            "-c:v", "copy",
+            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
             "-c:a", "aac", "-b:a", "192k",
             str(output_path),
         ])
