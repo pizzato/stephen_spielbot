@@ -34,7 +34,6 @@ DEFAULT_WIDTH  = 832
 DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
 DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
-MAX_LENGTH     = LTX_FPS * 20 + 1  # 501 frames ≈ 20 seconds
 
 # First-pass sigma schedules.
 # The 8-step schedule is the distilled LoRA preset (trained specifically for these values).
@@ -50,6 +49,12 @@ def _gen_first_pass_sigmas(steps: int) -> str:
         return _DISTILLED_SIGMAS
     vals = [round(1.0 - i / steps, 6) for i in range(steps + 1)]
     return ", ".join(str(v) for v in vals)
+
+
+def _video_timeout_seconds(width: int, height: int, length: int) -> int:
+    base_px = DEFAULT_WIDTH * DEFAULT_HEIGHT
+    base_frames = DEFAULT_LENGTH
+    return max(900, int(900 * (width * height) / base_px * (length / base_frames)))
 
 
 # Second-pass (refinement) sigma schedules.
@@ -146,6 +151,48 @@ def _check_queue(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
+def _post_json(path: str, payload: dict | None, comfy_url: str = COMFYUI_URL, timeout: int = 10) -> None:
+    data = json.dumps(payload or {}).encode()
+    req = urllib.request.Request(
+        f"{comfy_url}{path}",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout):
+        pass
+
+
+def _delete_pending_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL) -> None:
+    """Remove a prompt from ComfyUI's pending queue."""
+    try:
+        _post_json("/queue", {"delete": [prompt_id]}, comfy_url=comfy_url)
+        logger.info("[comfy] deleted pending job %s… on %s", prompt_id[:8], comfy_url)
+    except Exception as exc:
+        logger.warning("[comfy] could not delete pending job %s… on %s: %s",
+                       prompt_id[:8], comfy_url, exc)
+
+
+def _interrupt_running_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL) -> None:
+    """Interrupt the currently running prompt on a worker."""
+    try:
+        _post_json("/interrupt", {}, comfy_url=comfy_url)
+        logger.info("[comfy] interrupted running job %s… on %s", prompt_id[:8], comfy_url)
+    except Exception as exc:
+        logger.warning("[comfy] could not interrupt running job %s… on %s: %s",
+                       prompt_id[:8], comfy_url, exc)
+
+
+def _cleanup_prompt(prompt_id: str, comfy_url: str = COMFYUI_URL, reason: str = "") -> None:
+    q_status = _check_queue(prompt_id, comfy_url)
+    if q_status == "pending":
+        _delete_pending_prompt(prompt_id, comfy_url)
+    elif q_status == "running":
+        logger.warning("[comfy] interrupting job %s… on %s (%s)",
+                       prompt_id[:8], comfy_url, reason or "cleanup")
+        _interrupt_running_prompt(prompt_id, comfy_url)
+
+
 def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     """Return 'completed', 'error', or 'absent' from /history."""
     try:
@@ -162,12 +209,14 @@ def _check_history(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
     return "absent"
 
 
-_QUEUE_CHECK_INTERVAL      = 60    # seconds between /queue health checks
-_STUCK_TIMEOUT             = 7200  # seconds of silence from a *running* job → StuckJobError
+_QUEUE_CHECK_INTERVAL      = 30    # seconds between /queue health checks (was 60)
+_STUCK_TIMEOUT             = 1800  # seconds of WS silence from a *running* job → StuckJobError (was 7200)
 _PENDING_TIMEOUT           = 180   # seconds a job may sit *pending* before we try another worker
-_HEARTBEAT_INTERVAL        = 300   # seconds between GPU idle checks (only when job is running)
+_HEARTBEAT_INTERVAL        = 90    # seconds between GPU idle checks when job is running (was 300)
+_HEARTBEAT_INITIAL_DELAY   = 120   # seconds to skip heartbeat after job start (model load warmup)
 _HEARTBEAT_IDLE_THRESHOLD  = 15    # GPU utilisation % below this is considered idle
-_HEARTBEAT_IDLE_SAMPLES    = 3     # consecutive idle heartbeats required to declare stuck
+_HEARTBEAT_IDLE_SAMPLES    = 2     # consecutive idle heartbeats required to declare stuck (was 3)
+_HEARTBEAT_SSH_FAIL_LIMIT  = 5     # consecutive SSH failures before logging a WARNING
 
 
 def _hostname_from_url(url: str) -> str:
@@ -211,11 +260,20 @@ def _wait_for_completion(
 ) -> None:
     """Block until ComfyUI finishes executing prompt_id.
 
-    Actively monitors the job:
-    - WebSocket progress/executing messages reset a "last-seen-activity" timer.
-    - /queue is polled every 60 s:
-        * 'absent' and not in /history → DroppedJobError (re-queued by caller)
-        * 'running' with no activity for _STUCK_TIMEOUT → StuckJobError (retried by caller)
+    Actively monitors the job via two independent stuck-detection paths:
+
+    1. WebSocket silence: /queue is polled every _QUEUE_CHECK_INTERVAL s.
+       If the job is running but no WS activity has been seen for _STUCK_TIMEOUT s
+       (reset by any progress/executing message), raises StuckJobError.
+
+    2. GPU heartbeat (primary fast-path): every _HEARTBEAT_INTERVAL s (after an
+       initial _HEARTBEAT_INITIAL_DELAY warm-up for model loading), SSH to the
+       worker and run nvidia-smi.  If GPU utilisation stays below
+       _HEARTBEAT_IDLE_THRESHOLD for _HEARTBEAT_IDLE_SAMPLES consecutive samples,
+       interrupt the job and raise StuckJobError immediately.
+       Detection time: _HEARTBEAT_INITIAL_DELAY + _HEARTBEAT_IDLE_SAMPLES *
+       _HEARTBEAT_INTERVAL = 120 + 2*90 = ~5 min (vs old ~15 min).
+
     Falls back to polling /history if the WebSocket drops.
     """
     ws = websocket.WebSocket()
@@ -225,8 +283,11 @@ def _wait_for_completion(
     last_activity_at: float | None = None   # None until the job actually starts executing
     last_queue_check = time.time()
     nodes_done       = 0
-    last_heartbeat_at = start
+    # Schedule first heartbeat after the initial warm-up delay so that model-loading
+    # time (where the GPU may be at 0 %) doesn't trigger a false stuck detection.
+    last_heartbeat_at = start - _HEARTBEAT_INTERVAL + _HEARTBEAT_INITIAL_DELAY
     consecutive_idle  = 0
+    consecutive_ssh_failures = 0
     host              = _hostname_from_url(comfy_url)
 
     try:
@@ -255,6 +316,7 @@ def _wait_for_completion(
 
                 # Pending timeout: worker's queue is blocked by another job.
                 if q_status == "pending" and now - start > _PENDING_TIMEOUT:
+                    _delete_pending_prompt(prompt_id, comfy_url)
                     raise StuckJobError(
                         f"Job {prompt_id} on {comfy_url} has been pending in queue for"
                         f" {now - start:.0f}s (limit {_PENDING_TIMEOUT}s)"
@@ -271,6 +333,7 @@ def _wait_for_completion(
                             # Reset the idle counter and treat it as WebSocket activity
                             # so the silence-based stuck timer doesn't fire.
                             consecutive_idle = 0
+                            consecutive_ssh_failures = 0
                             last_activity_at = now
                             logger.info(
                                 "[comfy] job %s… heartbeat OK — GPU active on %s",
@@ -278,19 +341,38 @@ def _wait_for_completion(
                             )
                         elif gpu_idle is True:
                             consecutive_idle += 1
+                            consecutive_ssh_failures = 0
                             logger.warning(
-                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s",
+                                "[comfy] job %s… heartbeat IDLE %d/%d — GPU < %d%% on %s "
+                                "(elapsed %.0fs)",
                                 prompt_id[:8], consecutive_idle,
                                 _HEARTBEAT_IDLE_SAMPLES, _HEARTBEAT_IDLE_THRESHOLD, host,
+                                now - start,
                             )
                             if consecutive_idle >= _HEARTBEAT_IDLE_SAMPLES:
+                                _interrupt_running_prompt(prompt_id, comfy_url)
                                 raise StuckJobError(
                                     f"Job {prompt_id} on {comfy_url}: GPU idle for "
                                     f"{consecutive_idle} consecutive heartbeats "
-                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%)"
-                                    f" — worker appears hung, will re-submit"
+                                    f"({_HEARTBEAT_INTERVAL}s apart, threshold {_HEARTBEAT_IDLE_THRESHOLD}%) "
+                                    f"after {now - start:.0f}s — worker appears hung, will re-submit"
                                 )
-                        # gpu_idle is None → SSH failed → skip, don't update counters
+                        else:
+                            # gpu_idle is None → SSH to worker failed
+                            consecutive_ssh_failures += 1
+                            if consecutive_ssh_failures >= _HEARTBEAT_SSH_FAIL_LIMIT:
+                                logger.warning(
+                                    "[comfy] job %s… heartbeat: SSH to %s failed %d consecutive "
+                                    "times — GPU monitoring unavailable, relying on WS silence "
+                                    "timeout (%ds)",
+                                    prompt_id[:8], host, consecutive_ssh_failures, _STUCK_TIMEOUT,
+                                )
+                            else:
+                                logger.debug(
+                                    "[comfy] job %s… heartbeat: SSH to %s failed (%d/%d)",
+                                    prompt_id[:8], host,
+                                    consecutive_ssh_failures, _HEARTBEAT_SSH_FAIL_LIMIT,
+                                )
 
                     # Stuck detection: fires when WebSocket has been silent too long.
                     # GPU heartbeats above reset last_activity_at when the GPU is busy,
@@ -298,6 +380,7 @@ def _wait_for_completion(
                     baseline = last_activity_at if last_activity_at is not None else start
                     stalled = now - baseline
                     if stalled > _STUCK_TIMEOUT:
+                        _cleanup_prompt(prompt_id, comfy_url, reason="node activity timeout")
                         raise StuckJobError(
                             f"Job {prompt_id} on {comfy_url} has been running but produced no"
                             f" node activity for {stalled:.0f}s (limit {_STUCK_TIMEOUT}s)"
@@ -336,7 +419,11 @@ def _wait_for_completion(
         except Exception:
             pass
 
-    _poll_completion(prompt_id, deadline, comfy_url=comfy_url)
+    try:
+        _poll_completion(prompt_id, deadline, comfy_url=comfy_url)
+    except Exception:
+        _cleanup_prompt(prompt_id, comfy_url, reason="completion timeout")
+        raise
 
 
 def _get_outputs(prompt_id: str, comfy_url: str = COMFYUI_URL) -> list[dict]:
@@ -407,7 +494,7 @@ def generate_video_clip(
 ) -> Path:
     """Generate a video clip using LTX 2.3 T2V and save to output_path."""
     if duration_seconds is not None:
-        length = min(int(duration_seconds * LTX_FPS) + 1, MAX_LENGTH)
+        length = max(1, int(duration_seconds * LTX_FPS) + 1)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -431,10 +518,11 @@ def generate_video_clip(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
-    # Timeout scales with pixel count: 15 min baseline at 832×480, capped at 60 min.
-    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT   # 399 360
-    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
-    logger.info("[comfy] generate_video_clip %dx%d timeout=%ds", width, height, _video_timeout)
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info(
+        "[comfy] generate_video_clip %dx%d length=%d timeout=%ds",
+        width, height, length, _video_timeout,
+    )
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
@@ -467,7 +555,7 @@ def generate_video_continuation(
 ) -> Path:
     """Continue a video clip from its last frame using LTX 2.3 I2V."""
     if duration_seconds is not None:
-        length = min(int(duration_seconds * LTX_FPS) + 1, MAX_LENGTH)
+        length = max(1, int(duration_seconds * LTX_FPS) + 1)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -494,9 +582,11 @@ def generate_video_continuation(
     workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
-    _base_px  = DEFAULT_WIDTH * DEFAULT_HEIGHT
-    _video_timeout = min(3600, max(900, int(900 * (width * height) / _base_px)))
-    logger.info("[comfy] generate_video_continuation %dx%d timeout=%ds", width, height, _video_timeout)
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info(
+        "[comfy] generate_video_continuation %dx%d length=%d timeout=%ds",
+        width, height, length, _video_timeout,
+    )
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
