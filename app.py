@@ -2273,7 +2273,7 @@ def on_post_upload(
     cfg = load_config()
     secrets = cfg.get("youtube_client_secrets", "")
 
-    if not secrets or not Path(secrets).exists():
+    if not secrets or not Path(secrets).expanduser().exists():
         yield (
             _post_status_html("YouTube not connected. Configure client_secrets.json in Config tab.", "error"),
             gr.update(value="", visible=False),
