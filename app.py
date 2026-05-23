@@ -2048,8 +2048,10 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
         queue = yt.load_queue()
         return _yt_refresh_outputs(cache, queue, "All comments already evaluated.")
 
+    secrets = cfg.get("youtube_client_secrets", "")
     auto_threshold = 0.7
     auto_approved_count = 0
+    thank_replied_count = 0
     for comment in unevaluated:
         result = yt.evaluate_comment(comment.get("text", ""), comment.get("commenter", ""), cfg)
         comment.update({
@@ -2060,6 +2062,16 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
             "reason": result["reason"],
             "status": "evaluated" if comment.get("status") == "new" else comment.get("status"),
         })
+        # Auto-reply "Thanks for the suggestion!" to new requests (once per comment)
+        if result["is_request"] and not comment.get("thanked"):
+            reply = yt.reply_to_comment(
+                secrets,
+                comment.get("comment_id", ""),
+                f"Thanks for the suggestion! We'll look into making a video about this. 🎬",
+            )
+            if reply.get("success"):
+                comment["thanked"] = True
+                thank_replied_count += 1
         if (auto_approve and result["is_request"]
                 and result["confidence"] >= auto_threshold
                 and comment.get("status") not in ("approved", "rejected")):
@@ -2076,6 +2088,8 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
     yt.save_comments_cache(cache)
     queue = yt.load_queue()
     msg = f"Evaluated {len(unevaluated)} comments."
+    if thank_replied_count:
+        msg += f" Replied 'Thanks for the suggestion!' to {thank_replied_count} request(s)."
     if auto_approved_count:
         msg += f" Auto-approved {auto_approved_count} request(s)."
     return _yt_refresh_outputs(cache, queue, msg)
@@ -2295,6 +2309,42 @@ def on_post_regen_description(active_job_dir: str, video_title: str) -> tuple:
         return gr.update(), _post_status_html(f"Error: {str(exc)[:200]}", "error")
 
 
+def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: str, yt_url: str) -> None:
+    """If this video was generated from a comment request, reply to that comment with the video link."""
+    try:
+        work_dir = _preferred_work_dir(active_job_dir)
+        if not work_dir:
+            return
+        queue = yt.load_queue()
+        # Find the queue entry whose work_dir or final_title matches this job
+        work_dir_str = str(work_dir)
+        match = next(
+            (q for q in queue
+             if q.get("work_dir") == work_dir_str
+             or q.get("final_title", "").lower() == video_title.lower()),
+            None,
+        )
+        if not match:
+            return
+        comment_id = match.get("comment_id", "")
+        if not comment_id:
+            return
+        if match.get("notified"):
+            return  # already replied
+        reply_text = (
+            f"Your suggested video is now live! 🎬 Watch it here: {yt_url}\n"
+            f"Thanks again for the great suggestion!"
+        )
+        result = yt.reply_to_comment(secrets, comment_id, reply_text)
+        if result.get("success"):
+            yt.update_queue_item(match["id"], notified=True, youtube_url=yt_url)
+            logger.info("Notified comment requester for %s", video_title)
+        else:
+            logger.warning("Failed to notify comment requester: %s", result.get("error"))
+    except Exception as exc:
+        logger.warning("_notify_comment_requester error: %s", exc)
+
+
 def on_post_upload(
     active_job_dir: str,
     video_path: str,
@@ -2367,6 +2417,10 @@ def on_post_upload(
         )
 
     yt_url = result["url"]
+
+    # Reply to the originating comment (if any) with the video link
+    _notify_comment_requester(secrets, active_job_dir, title or "Untitled Video", yt_url)
+
     url_html = (
         f'<div style="padding:8px 12px;border-radius:6px;background:#dcfce7;'
         f'border:1px solid #86efac;font-size:14px;font-weight:600;color:#15803d">'
