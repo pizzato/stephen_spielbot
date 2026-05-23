@@ -2,6 +2,7 @@
 """Gradio web interface for the AI video generator."""
 
 import concurrent.futures
+import threading
 import html
 import json
 import logging
@@ -40,7 +41,8 @@ logger.info("Logging to %s", LOG_FILE)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import generate_script, Scene, NEGATIVE_PROMPT
+from pipeline.llm import generate_script, generate_youtube_description, generate_video_prompt, Scene, NEGATIVE_PROMPT
+import pipeline.youtube as yt
 from pipeline.comfyui import (
     generate_video_clip, generate_video_continuation, generate_music,
     generate_scene_image, StuckJobError,
@@ -135,6 +137,16 @@ DEFAULT_CFG = {
     # Each worker handles one video generation job at a time.
     "comfy_workers": [],
     "tts_workers":   [],
+    # Generation defaults
+    "default_voice": "",
+    "default_n_scenes": 5,
+    "default_visual_style": "",
+    # YouTube integration
+    "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
+    "youtube_auto_approve_comments": False,
+    "youtube_auto_post": False,
+    "youtube_post_privacy": "private",
+    "youtube_post_category": "22",
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
@@ -491,9 +503,27 @@ def _poll_job_outputs(active_job_dir: str):
     work_dir = _preferred_work_dir(active_job_dir)
     if work_dir is None:
         return (_progress_html(0, "Waiting to start…"), gr.update(), gr.update(),
-                gr.update(), gr.update(), gr.update(), "")
+                gr.update(), gr.update(), gr.update(), "", False)
     final, comb, mus, amb, tabs_upd = _collect_job_outputs(work_dir)
-    return (_poll_progress(str(work_dir)), final, comb, mus, amb, tabs_upd, str(work_dir))
+
+    # Detect a fresh completion transition (status just became "done" this tick)
+    auto_post_trigger = False
+    try:
+        meta = _read_json(_job_meta_path(work_dir))
+        just_done = (
+            meta.get("status") == "done"
+            and not meta.get("youtube_video_id")
+            and not meta.get("_auto_post_triggered")
+        )
+        if just_done and load_config().get("youtube_auto_post"):
+            # Mark so we don't re-trigger on the next tick
+            _write_job_meta(work_dir, _auto_post_triggered=True)
+            tabs_upd = gr.update(selected="post")
+            auto_post_trigger = True
+    except Exception:
+        pass
+
+    return (_poll_progress(str(work_dir)), final, comb, mus, amb, tabs_upd, str(work_dir), auto_post_trigger)
 
 
 def _poll_cover_image(active_job_dir: str):
@@ -959,7 +989,7 @@ def on_generate_script(video_title: str, title: str, n_scenes: int, auto_approve
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(
             generate_script, topic, int(n_scenes),
-            None,  # style_hint
+            load_config().get("default_visual_style", "") or None,  # style_hint
             video_title.strip() or None,
         )
         while not fut.done():
@@ -1082,8 +1112,11 @@ def _generate_active_scene_preview(
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
     )
     style_clean = style.strip().rstrip(".") if style and style.strip() else ""
+    default_style = cfg.get("default_visual_style", "").strip().rstrip(".")
+    combined_parts = [p for p in [style_clean, default_style] if p]
+    combined_style = ". ".join(combined_parts)
     base_prompt = image_prompt or scene.get("image_prompt") or title
-    prompt = f"{style_clean}. {base_prompt}" if style_clean else base_prompt
+    prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
 
     url = worker_pool.acquire()
     try:
@@ -1327,13 +1360,16 @@ def on_generate(video_title, title, n_scenes_val, voice_name, resolution, music_
             resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (832, 480)
         )
         style_clean = style.strip().rstrip(".") if style and style.strip() else ""
+        default_style = cfg.get("default_visual_style", "").strip().rstrip(".")
+        combined_parts = [p for p in [style_clean, default_style] if p]
+        combined_style = ". ".join(combined_parts)
         scenes = [
             Scene(
                 id=int(row["id"]),
                 title=row.get("title") or f"Scene {int(row['id'])}",
                 image_prompt=(
-                    f"{style_clean}. {row.get('image_prompt') or title}"
-                    if style_clean
+                    f"{combined_style}. {row.get('image_prompt') or title}"
+                    if combined_style
                     else (row.get("image_prompt") or title)
                 ),
                 video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
@@ -1660,7 +1696,15 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    claude_api_key: str, claude_model: str,
                    flux_model: str, flux_vae: str,
                    flux_clip_t5: str, flux_clip_l: str,
-                   flux_steps: int):
+                   flux_steps: int,
+                   default_visual_style: str = "",
+                   default_voice: str = "",
+                   default_n_scenes: int = 5,
+                   youtube_client_secrets: str = "",
+                   youtube_auto_approve_comments: bool = False,
+                   youtube_auto_post: bool = False,
+                   youtube_post_privacy: str = "private",
+                   youtube_post_category: str = "People & Blogs"):
     cfg = load_config()
     cfg["music_vol"]          = int(music_vol)
     cfg["voice_vol"]          = int(voice_vol)
@@ -1686,10 +1730,607 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["flux_clip_t5"]       = flux_clip_t5.strip() or "t5xxl_fp8_e4m3fn.safetensors"
     cfg["flux_clip_l"]        = flux_clip_l.strip() or "clip_l.safetensors"
     cfg["flux_steps"]         = int(flux_steps)
+    cfg["default_visual_style"]            = (default_visual_style or "").strip()
+    cfg["default_voice"]                   = "" if (default_voice or "").strip() == F5TTS_DEFAULT_OPTION else (default_voice or "").strip()
+    cfg["default_n_scenes"]               = max(1, int(default_n_scenes))
+    cfg["youtube_client_secrets"]          = (youtube_client_secrets or "").strip()
+    cfg["youtube_auto_approve_comments"]   = bool(youtube_auto_approve_comments)
+    cfg["youtube_auto_post"]               = bool(youtube_auto_post)
+    cfg["youtube_post_privacy"]            = youtube_post_privacy or "private"
+    # Store category as ID for API use
+    cfg["youtube_post_category"] = yt.CATEGORY_OPTIONS.get(youtube_post_category, youtube_post_category) or "22"
     save_config(cfg)
     logger.info("Config saved: lora=%.2f workers=%s tts=%s",
                 lora_strength, cfg["comfy_workers"], cfg["tts_workers"])
-    return f"Settings saved ✓  ({len(cfg['comfy_workers'])} video, {len(cfg['tts_workers'])} TTS worker(s))"
+    status = f"Settings saved ✓  ({len(cfg['comfy_workers'])} video, {len(cfg['tts_workers'])} TTS worker(s))"
+    voice_val = cfg["default_voice"] or F5TTS_DEFAULT_OPTION
+    voice_choices = get_voice_choices()
+    return status, gr.update(value=voice_val, choices=voice_choices), gr.update(value=cfg["default_n_scenes"])
+
+
+# ── YouTube tab handlers ─────────────────────────────────────────────────────
+
+def _yt_auth_html(status: dict) -> str:
+    if status["connected"]:
+        name = html.escape(status["channel_name"])
+        return (
+            f'<div style="padding:6px 8px;border-radius:6px;background:#dcfce7;'
+            f'border:1px solid #86efac;font-size:13px;color:#15803d">'
+            f'Connected to <strong>{name}</strong></div>'
+        )
+    err = html.escape(status["error"] or "Not connected")
+    return (
+        f'<div style="padding:6px 8px;border-radius:6px;background:#fef2f2;'
+        f'border:1px solid #fca5a5;font-size:13px;color:#dc2626">{err}</div>'
+    )
+
+
+def _comments_html(cache: list[dict]) -> str:
+    if not cache:
+        return '<div style="color:#6b7280;font-size:13px;padding:8px 0">No comments fetched yet. Click Fetch Comments.</div>'
+    parts = []
+    for i, c in enumerate(cache):
+        is_req = c.get("is_request")
+        status = c.get("status", "new")
+        evaluated = c.get("evaluated", False)
+
+        if is_req is True and status not in ("rejected",):
+            border = "#22c55e"
+            badge_bg = "#dcfce7"
+            badge_color = "#15803d"
+            badge = "Video Request"
+        elif is_req is False:
+            border = "#d1d5db"
+            badge_bg = "#f3f4f6"
+            badge_color = "#6b7280"
+            badge = "Not a Request"
+        else:
+            border = "#fde68a"
+            badge_bg = "#fef9c3"
+            badge_color = "#a16207"
+            badge = "Pending Evaluation"
+
+        if status == "rejected":
+            border = "#e5e7eb"
+            badge_bg = "#f3f4f6"
+            badge_color = "#9ca3af"
+            badge = "Rejected"
+
+        commenter = html.escape(c.get("commenter", "Unknown"))
+        text = html.escape((c.get("text", "") or "")[:200])
+        if len(c.get("text", "")) > 200:
+            text += "…"
+        suggested = html.escape(c.get("suggested_title", "") or "")
+        confidence = c.get("confidence", 0.0)
+        conf_str = f" ({confidence:.0%})" if evaluated and is_req else ""
+
+        suggested_html = (
+            f'<div style="font-size:11px;color:#374151;margin-top:2px">'
+            f'Suggested title: <em>{suggested}</em>{conf_str}</div>'
+            if suggested else ""
+        )
+        reason = html.escape((c.get("reason", "") or "")[:120])
+        reason_html = (
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px">{reason}</div>'
+            if reason and evaluated else ""
+        )
+
+        parts.append(
+            f'<div style="border-left:4px solid {border};padding:8px 12px;margin-bottom:8px;'
+            f'background:#fafafa;border-radius:0 6px 6px 0">'
+            f'<div style="display:flex;justify-content:space-between;align-items:center">'
+            f'<span style="font-size:12px;font-weight:600;color:#374151">'
+            f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>{commenter}</span>'
+            f'<span style="font-size:11px;padding:2px 8px;border-radius:9999px;'
+            f'background:{badge_bg};color:{badge_color}">{badge}</span>'
+            f'</div>'
+            f'<div style="font-size:13px;color:#374151;margin-top:4px">{text}</div>'
+            f'{suggested_html}{reason_html}'
+            f'</div>'
+        )
+    return (
+        '<div style="max-height:400px;overflow-y:auto;padding-right:4px">'
+        + "".join(parts)
+        + "</div>"
+    )
+
+
+def _queue_html(queue: list[dict]) -> str:
+    if not queue:
+        return '<div style="color:#6b7280;font-size:13px;padding:4px 0">Queue is empty.</div>'
+    _STATUS_COLOR = {
+        "pending": "#9333ea",
+        "creating": "#0ea5e9",
+        "done": "#22c55e",
+    }
+    rows = []
+    for i, item in enumerate(queue):
+        title = html.escape(item.get("final_title", "") or "")
+        commenter = html.escape(item.get("commenter", "") or "")
+        status = item.get("status", "pending")
+        color = _STATUS_COLOR.get(status, "#6b7280")
+        yt_url = item.get("youtube_url", "")
+        url_html = (
+            f' — <a href="{html.escape(yt_url)}" target="_blank" '
+            f'style="color:#2563eb">View on YouTube</a>'
+            if yt_url else ""
+        )
+        rows.append(
+            f'<div style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">'
+            f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>'
+            f'<strong>{title}</strong>'
+            f'<span style="font-size:11px;margin-left:8px;padding:1px 6px;border-radius:9999px;'
+            f'background:{color}22;color:{color}">{status}</span>'
+            f'<span style="color:#9ca3af;font-size:11px;margin-left:6px">from {commenter}</span>'
+            f'{url_html}'
+            f'</div>'
+        )
+    return (
+        '<div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;max-height:240px;overflow-y:auto">'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
+def _pending_requests_html(cache: list[dict]) -> str:
+    """Numbered list of comments evaluated as video requests (not yet approved/rejected)."""
+    pending = [
+        c for c in cache
+        if c.get("is_request") and c.get("status") not in ("approved", "rejected")
+    ]
+    if not pending:
+        return '<div style="color:#6b7280;font-size:13px;padding:4px 0">No pending requests. Fetch and evaluate comments first.</div>'
+    rows = []
+    for i, c in enumerate(pending):
+        title = html.escape(c.get("suggested_title", "") or "")
+        commenter = html.escape(c.get("commenter", "") or "")
+        conf = c.get("confidence", 0)
+        rows.append(
+            f'<div style="padding:5px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">'
+            f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>'
+            f'<strong>{title}</strong>'
+            f'<span style="color:#9ca3af;font-size:11px;margin-left:6px">from {commenter} · {conf:.0%} confident</span>'
+            f'</div>'
+        )
+    return (
+        '<div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;max-height:180px;overflow-y:auto">'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
+def on_yt_check_status() -> str:
+    cfg = load_config()
+    status = yt.check_auth_status(cfg.get("youtube_client_secrets", ""))
+    return _yt_auth_html(status)
+
+
+def on_yt_connect() -> tuple:
+    cfg = load_config()
+    msg = yt.start_auth_flow(cfg.get("youtube_client_secrets", ""))
+    status_html = (
+        f'<div style="padding:6px 8px;border-radius:6px;background:#fef3c7;'
+        f'border:1px solid #fcd34d;font-size:13px;color:#92400e">{html.escape(msg)}</div>'
+    )
+    return status_html, gr.update(active=True)
+
+
+def on_yt_poll_auth() -> tuple:
+    result = yt.poll_auth_flow()
+    if result["running"]:
+        status_html = (
+            '<div style="padding:6px 8px;border-radius:6px;background:#fef3c7;'
+            'border:1px solid #fcd34d;font-size:13px;color:#92400e">'
+            'Waiting for browser authorization…</div>'
+        )
+        return status_html, gr.update(active=True)
+    # Auth flow complete — force a fresh API check to get channel name
+    cfg = load_config()
+    auth_status = yt.check_auth_status(cfg.get("youtube_client_secrets", ""), force=True)
+    return _yt_auth_html(auth_status), gr.update(active=False)
+
+
+def on_yt_disconnect() -> str:
+    yt.disconnect_youtube()
+    return _yt_auth_html({"connected": False, "channel_name": "", "error": "Disconnected."})
+
+
+def _yt_refresh_outputs(cache: list[dict], queue: list[dict], status: str) -> tuple:
+    return _comments_html(cache), _pending_requests_html(cache), _queue_html(queue), status
+
+
+def on_yt_fetch_comments() -> tuple:
+    cfg = load_config()
+    secrets = cfg.get("youtube_client_secrets", "")
+    try:
+        fetched = yt.fetch_channel_comments(secrets, max_results=50)
+        cache = yt.load_comments_cache()
+        existing_ids = {c["comment_id"] for c in cache}
+        new_count = 0
+        for c in fetched:
+            if c["comment_id"] not in existing_ids:
+                cache.insert(0, {
+                    **c,
+                    "evaluated": False,
+                    "is_request": None,
+                    "suggested_title": "",
+                    "confidence": 0.0,
+                    "reason": "",
+                    "status": "new",
+                })
+                new_count += 1
+        yt.save_comments_cache(cache)
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, f"Fetched {len(fetched)} comments ({new_count} new).")
+    except Exception as exc:
+        logger.warning("Fetch comments failed: %s", exc)
+        cache = yt.load_comments_cache()
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, f"Error: {str(exc)[:200]}")
+
+
+def on_yt_evaluate_all(auto_approve: bool) -> tuple:
+    cfg = load_config()
+    cache = yt.load_comments_cache()
+    unevaluated = [c for c in cache if not c.get("evaluated")]
+    if not unevaluated:
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, "All comments already evaluated.")
+
+    auto_threshold = 0.7
+    auto_approved_count = 0
+    for comment in unevaluated:
+        result = yt.evaluate_comment(comment.get("text", ""), comment.get("commenter", ""), cfg)
+        comment.update({
+            "evaluated": True,
+            "is_request": result["is_request"],
+            "suggested_title": result["suggested_title"],
+            "confidence": result["confidence"],
+            "reason": result["reason"],
+            "status": "evaluated" if comment.get("status") == "new" else comment.get("status"),
+        })
+        if (auto_approve and result["is_request"]
+                and result["confidence"] >= auto_threshold
+                and comment.get("status") not in ("approved", "rejected")):
+            comment["status"] = "approved"
+            queue_item = yt.add_to_queue(comment, result["suggested_title"])
+            if queue_item:
+                threading.Thread(
+                    target=_prefetch_video_prompt,
+                    args=(queue_item["id"], result["suggested_title"], comment.get("text", "")),
+                    daemon=True,
+                ).start()
+            auto_approved_count += 1
+
+    yt.save_comments_cache(cache)
+    queue = yt.load_queue()
+    msg = f"Evaluated {len(unevaluated)} comments."
+    if auto_approved_count:
+        msg += f" Auto-approved {auto_approved_count} request(s)."
+    return _yt_refresh_outputs(cache, queue, msg)
+
+
+def _prefetch_video_prompt(queue_item_id: str, title: str, comment_text: str) -> None:
+    """Background thread: generate directorial brief and store in queue item."""
+    try:
+        prompt = generate_video_prompt(title, comment_text)
+        yt.update_queue_item(queue_item_id, video_prompt=prompt)
+    except Exception as exc:
+        logger.warning("Background prompt generation failed for %s: %s", queue_item_id, exc)
+
+
+def on_yt_approve(row_idx: int, title_override: str) -> tuple:
+    cache = yt.load_comments_cache()
+    requests = [c for c in cache if c.get("is_request") and c.get("status") not in ("approved", "rejected")]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(requests):
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, f"Row {row_idx} not found in pending requests.")
+    comment = requests[idx]
+    final_title = (title_override or "").strip() or comment.get("suggested_title", "")
+    comment["status"] = "approved"
+    yt.save_comments_cache(cache)
+    queue_item = yt.add_to_queue(comment, final_title)
+    # Start generating the directorial brief in the background so it's ready by the time the user clicks Launch
+    threading.Thread(
+        target=_prefetch_video_prompt,
+        args=(queue_item["id"], final_title, comment.get("text", "")),
+        daemon=True,
+    ).start()
+    queue = yt.load_queue()
+    return _yt_refresh_outputs(cache, queue, f"Approved: {html.escape(final_title)}")
+
+
+def on_yt_reject(row_idx: int) -> tuple:
+    cache = yt.load_comments_cache()
+    requests = [c for c in cache if c.get("is_request") and c.get("status") not in ("approved", "rejected")]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(requests):
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, f"Row {row_idx} not found in pending requests.")
+    comment = requests[idx]
+    comment["status"] = "rejected"
+    yt.save_comments_cache(cache)
+    queue = yt.load_queue()
+    return _yt_refresh_outputs(cache, queue, f"Rejected comment from {html.escape(comment.get('commenter', ''))}")
+
+
+def on_yt_launch_video(row_idx: int) -> tuple:
+    queue = yt.load_queue()
+    pending = [q for q in queue if q.get("status") == "pending"]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(pending):
+        return gr.update(), gr.update(), gr.update(), f"Row {row_idx} not found in queue.", gr.update(), gr.update(), gr.update(), gr.update()
+    item = pending[idx]
+    title = item.get("final_title", "")
+    # Use pre-generated directorial brief (set by background thread at approval time)
+    video_prompt = item.get("video_prompt") or item.get("comment_text", "")
+    cfg = load_config()
+    default_style = cfg.get("default_visual_style", "")
+    n_scenes = item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
+    voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
+    return (
+        gr.update(selected="create"),
+        gr.update(value=title),
+        gr.update(value=video_prompt),
+        f"Loaded: {html.escape(title)} ({n_scenes} scenes)",
+        gr.update(value=default_style),
+        default_style,
+        gr.update(value=int(n_scenes)),
+        gr.update(value=voice, choices=get_voice_choices()),
+    )
+
+
+# ── Post tab handlers ─────────────────────────────────────────────────────────
+
+def _post_status_html(msg: str, kind: str = "info") -> str:
+    colors = {
+        "info":    ("#eff6ff", "#bfdbfe", "#1d4ed8"),
+        "success": ("#dcfce7", "#86efac", "#15803d"),
+        "error":   ("#fef2f2", "#fca5a5", "#dc2626"),
+        "working": ("#fef3c7", "#fcd34d", "#92400e"),
+    }
+    bg, border, text = colors.get(kind, colors["info"])
+    return (
+        f'<div style="padding:8px 12px;border-radius:6px;background:{bg};'
+        f'border:1px solid {border};font-size:13px;color:{text}">'
+        f'{html.escape(msg)}</div>'
+    )
+
+
+def on_post_load(active_job_dir: str) -> tuple:
+    """Load Post tab fields from the active job. Returns 7 values (includes cover_path_state)."""
+    work_dir = _preferred_work_dir(active_job_dir)
+    if work_dir is None:
+        return (
+            gr.update(value=""),
+            gr.update(value="No active job — generate a video first."),
+            gr.update(value=""),
+            gr.update(value=None, visible=False),
+            _post_status_html("No active job found. Generate a video first.", "info"),
+            gr.update(value=""),
+            "",  # post_cover_path_state
+        )
+    try:
+        final_path = _final_path_for_work_dir(work_dir)
+        video_path = str(final_path) if final_path.exists() else ""
+
+        job_cfg_path = work_dir / "job_config.json"
+        job_cfg = {}
+        if job_cfg_path.exists():
+            try:
+                job_cfg = _read_json(job_cfg_path)
+            except Exception:
+                pass
+        video_title = job_cfg.get("video_title", "") or job_cfg.get("title", "") or work_dir.name
+        style = job_cfg.get("style", "")
+        music_desc = job_cfg.get("music_desc", "")
+
+        cover_path = work_dir / "cover.png"
+        cover_str = str(cover_path) if cover_path.exists() and cover_path.stat().st_size > 1000 else ""
+        cover_update = (
+            gr.update(value=cover_str, visible=True)
+            if cover_str
+            else gr.update(value=None, visible=False)
+        )
+
+        description = ""
+        store = DurableStore.default()
+        try:
+            job = store.get_job_by_work_dir(str(work_dir))
+            if job:
+                scenes = store.scene_rows(job["id"])
+                if scenes:
+                    description = generate_youtube_description(
+                        title=video_title,
+                        scenes=scenes,
+                        style=style,
+                        music_desc=music_desc,
+                    )
+        finally:
+            store.close()
+
+        status_msg = f"Loaded from {work_dir.name}" + ("" if video_path else " (video not ready yet)")
+        return (
+            gr.update(value=video_path),
+            gr.update(value=video_title),
+            gr.update(value=description),
+            cover_update,
+            _post_status_html(status_msg, "success" if video_path else "info"),
+            gr.update(value=""),
+            cover_str,  # post_cover_path_state
+        )
+    except Exception as exc:
+        logger.warning("on_post_load failed: %s", exc)
+        return (
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=""),
+            gr.update(value=None, visible=False),
+            _post_status_html(f"Error loading job: {str(exc)[:200]}", "error"),
+            gr.update(value=""),
+            "",  # post_cover_path_state
+        )
+
+
+def on_post_regen_description(active_job_dir: str, video_title: str) -> tuple:
+    work_dir = _preferred_work_dir(active_job_dir)
+    if work_dir is None:
+        return gr.update(), _post_status_html("No active job.", "info")
+    try:
+        job_cfg_path = work_dir / "job_config.json"
+        job_cfg = _read_json(job_cfg_path) if job_cfg_path.exists() else {}
+        style = job_cfg.get("style", "")
+        music_desc = job_cfg.get("music_desc", "")
+        store = DurableStore.default()
+        try:
+            job = store.get_job_by_work_dir(str(work_dir))
+            scenes = store.scene_rows(job["id"]) if job else []
+        finally:
+            store.close()
+        description = generate_youtube_description(
+            title=video_title or job_cfg.get("video_title", ""),
+            scenes=scenes,
+            style=style,
+            music_desc=music_desc,
+        )
+        return gr.update(value=description), _post_status_html("Description regenerated.", "success")
+    except Exception as exc:
+        return gr.update(), _post_status_html(f"Error: {str(exc)[:200]}", "error")
+
+
+def on_post_upload(
+    active_job_dir: str,
+    video_path: str,
+    title: str,
+    description: str,
+    privacy: str,
+    category: str,
+    cover_image_path: str,
+    tags_str: str,
+):
+    """Generator: yields (status_html, url_html) progress updates then final result."""
+    cfg = load_config()
+    secrets = cfg.get("youtube_client_secrets", "")
+
+    if not secrets or not Path(secrets).exists():
+        yield (
+            _post_status_html("YouTube not connected. Configure client_secrets.json in Config tab.", "error"),
+            gr.update(value="", visible=False),
+        )
+        return
+
+    if not video_path or not Path(video_path).exists():
+        yield (
+            _post_status_html("No video file selected. Load from current job or select a file.", "error"),
+            gr.update(value="", visible=False),
+        )
+        return
+
+    tags = [t.strip() for t in (tags_str or "").split(",") if t.strip()]
+    category_id = yt.CATEGORY_OPTIONS.get(category, "22") if category in yt.CATEGORY_OPTIONS else category
+
+    yield (
+        _post_status_html(f"Starting upload of {Path(video_path).name}…", "working"),
+        gr.update(value="", visible=False),
+    )
+
+    last_pct = [0.0]
+
+    def _progress(pct, msg):
+        last_pct[0] = pct
+
+    result = yt.upload_video(
+        client_secrets_path=secrets,
+        video_path=video_path,
+        title=title or "Untitled Video",
+        description=description or "",
+        tags=tags,
+        category_id=category_id,
+        privacy_status=privacy or "private",
+        thumbnail_path=cover_image_path if cover_image_path and Path(cover_image_path).exists() else None,
+        progress_callback=_progress,
+    )
+
+    if result["error"]:
+        yield (
+            _post_status_html(f"Upload failed: {result['error']}", "error"),
+            gr.update(value="", visible=False),
+        )
+        return
+
+    # Persist youtube metadata to job.json
+    work_dir = _preferred_work_dir(active_job_dir)
+    if work_dir:
+        _write_job_meta(
+            work_dir,
+            youtube_video_id=result["video_id"],
+            youtube_url=result["url"],
+            youtube_upload_status="uploaded",
+            youtube_privacy=privacy,
+        )
+
+    yt_url = result["url"]
+    url_html = (
+        f'<div style="padding:8px 12px;border-radius:6px;background:#dcfce7;'
+        f'border:1px solid #86efac;font-size:14px;font-weight:600;color:#15803d">'
+        f'Uploaded! <a href="{html.escape(yt_url)}" target="_blank" '
+        f'style="color:#2563eb;text-decoration:underline">{html.escape(yt_url)}</a></div>'
+    )
+    yield (
+        _post_status_html(f"Upload complete: {title}", "success"),
+        gr.update(value=url_html, visible=True),
+    )
+
+
+def _auto_post_chain(active_job_dir: str):
+    """Called when auto-post is triggered. Loads job data and uploads. Generator."""
+    cfg = load_config()
+    work_dir = _preferred_work_dir(active_job_dir)
+    if work_dir is None:
+        yield (
+            _post_status_html("Auto-post: no active job found.", "error"),
+            gr.update(value="", visible=False),
+        )
+        return
+
+    try:
+        final_path = _final_path_for_work_dir(work_dir)
+        video_path = str(final_path) if final_path.exists() else ""
+        job_cfg_path = work_dir / "job_config.json"
+        job_cfg = _read_json(job_cfg_path) if job_cfg_path.exists() else {}
+        video_title = job_cfg.get("video_title", "") or job_cfg.get("title", "") or work_dir.name
+        style = job_cfg.get("style", "")
+        music_desc = job_cfg.get("music_desc", "")
+        cover_path = work_dir / "cover.png"
+        thumbnail = str(cover_path) if cover_path.exists() else ""
+
+        store = DurableStore.default()
+        try:
+            job = store.get_job_by_work_dir(str(work_dir))
+            scenes = store.scene_rows(job["id"]) if job else []
+        finally:
+            store.close()
+        description = generate_youtube_description(
+            title=video_title, scenes=scenes, style=style, music_desc=music_desc
+        )
+    except Exception as exc:
+        yield (
+            _post_status_html(f"Auto-post prep failed: {str(exc)[:200]}", "error"),
+            gr.update(value="", visible=False),
+        )
+        return
+
+    yield from on_post_upload(
+        active_job_dir=active_job_dir,
+        video_path=video_path,
+        title=video_title,
+        description=description,
+        privacy=cfg.get("youtube_post_privacy", "private"),
+        category=cfg.get("youtube_post_category", "22"),
+        cover_image_path=thumbnail,
+        tags_str="",
+    )
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -1748,17 +2389,62 @@ def build_ui() -> gr.Blocks:
                 """)
 
         # Shared state for remix and the active script review session.
-        combined_state      = gr.State("")
-        music_state         = gr.State("")
-        ambient_state       = gr.State("")
-        music_desc_state    = gr.State("")
-        style_state         = gr.State("")
-        script_job_id_state = gr.State("")
-        script_work_dir_state = gr.State("")
-        current_scene_state = gr.State(1)
-        active_job_state    = gr.State("")
+        combined_state          = gr.State("")
+        music_state             = gr.State("")
+        ambient_state           = gr.State("")
+        music_desc_state        = gr.State("")
+        style_state             = gr.State("")
+        script_job_id_state     = gr.State("")
+        script_work_dir_state   = gr.State("")
+        current_scene_state     = gr.State(1)
+        active_job_state        = gr.State("")
+        post_auto_trigger_state = gr.State(False)
+        post_cover_path_state   = gr.State("")
 
         with gr.Tabs(elem_id="main_tabs") as tabs:
+
+            # ── YouTube ──────────────────────────────────────────────────
+            with gr.Tab("📺 YouTube", id="youtube"):
+                gr.Markdown("### Channel Comments & Video Requests")
+                gr.Markdown(
+                    "Fetch recent comments from your YouTube channel, evaluate them with AI, "
+                    "and approve video requests to add them to the creation queue."
+                )
+
+                yt_auth_status = gr.HTML(value=on_yt_check_status())
+                with gr.Row():
+                    yt_connect_btn    = gr.Button("Connect YouTube", variant="primary", scale=2)
+                    yt_disconnect_btn = gr.Button("Disconnect", variant="stop", scale=1)
+                yt_auth_timer = gr.Timer(value=2, active=False)
+
+                gr.Markdown("---")
+                gr.Markdown("### Recent Comments")
+                with gr.Row():
+                    yt_fetch_btn    = gr.Button("Fetch Comments", variant="secondary")
+                    yt_evaluate_btn = gr.Button("Evaluate All with AI", variant="secondary")
+                yt_auto_approve_cb = gr.Checkbox(
+                    label="Auto-approve requests with confidence ≥ 70%",
+                    value=cfg.get("youtube_auto_approve_comments", False),
+                )
+                yt_comments_status = gr.Markdown("")
+                yt_comments_html = gr.HTML(value=_comments_html(yt.load_comments_cache()))
+
+                gr.Markdown("### Pending Requests")
+                gr.Markdown("_Rows numbered from the green-highlighted cards above._")
+                yt_pending_html = gr.HTML(value='<div style="color:#6b7280;font-size:13px">No pending requests.</div>')
+                with gr.Row():
+                    yt_row_num      = gr.Number(value=1, label="Request #", minimum=1, step=1, scale=1)
+                    yt_title_override = gr.Textbox(
+                        label="Title override (leave blank to use suggested)", scale=3
+                    )
+                with gr.Row():
+                    yt_approve_btn  = gr.Button("Approve", variant="primary", scale=1)
+                    yt_reject_btn   = gr.Button("Reject", variant="stop", scale=1)
+                    yt_launch_btn   = gr.Button("Launch in Create tab →", variant="secondary", scale=2)
+                yt_action_status = gr.Markdown("")
+
+                gr.Markdown("### Video Queue")
+                yt_queue_html = gr.HTML(value=_queue_html(yt.load_queue()))
 
             # ── Create ───────────────────────────────────────────────────
             with gr.Tab("🎬 Create", id="create"):
@@ -1770,7 +2456,7 @@ def build_ui() -> gr.Blocks:
                             elem_id="video_title_input",
                         )
                     with gr.Column(scale=1):
-                        n_scenes_in = gr.Slider(1, MAX_SCENES, value=5, step=1, label="Scenes")
+                        n_scenes_in = gr.Slider(1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1, label="Scenes")
                 with gr.Row():
                     with gr.Column(scale=3):
                         title_in = gr.Textbox(
@@ -1783,7 +2469,7 @@ def build_ui() -> gr.Blocks:
                     voice_dropdown = gr.Dropdown(
                         label="Narrator Voice",
                         choices=get_voice_choices(),
-                        value=F5TTS_DEFAULT_OPTION,
+                        value=cfg.get("default_voice") or F5TTS_DEFAULT_OPTION,
                     )
                     resolution_in = gr.Dropdown(
                         label="Resolution",
@@ -1853,7 +2539,7 @@ def build_ui() -> gr.Blocks:
             # ── Progress ─────────────────────────────────────────────────
             with gr.Tab("⏳ Progress", id="progress"):
                 progress_bar = gr.HTML(value=_progress_html(0, "Waiting to start…"))
-                progress_timer = gr.Timer(value=3, active=True)
+                progress_timer = gr.Timer(value=3, active=False)
 
                 gr.Markdown("#### Durable Orchestration")
                 orchestration_status = gr.HTML(value=_orchestration_html(""))
@@ -1953,6 +2639,68 @@ def build_ui() -> gr.Blocks:
                     label="Upscaled Result", visible=False, height=480
                 )
 
+            # ── Post to YouTube ──────────────────────────────────────────
+            with gr.Tab("📤 Post", id="post"):
+                gr.Markdown("### Post Video to YouTube")
+                gr.Markdown(
+                    "Fields are auto-populated from the active job when you switch to this tab. "
+                    "Edit as needed, then click Post to YouTube."
+                )
+
+                with gr.Row():
+                    post_video_path = gr.Textbox(
+                        label="Video File Path",
+                        placeholder="Auto-populated from active job…",
+                        scale=4,
+                        interactive=True,
+                    )
+                    post_load_btn = gr.Button("Load from Current Job", variant="secondary", scale=1)
+
+                post_title = gr.Textbox(label="Title", placeholder="Video title…", max_lines=1)
+
+                with gr.Row():
+                    post_description = gr.Textbox(
+                        label="Description (AI-generated, editable)",
+                        placeholder="Auto-generated from scene narrations…",
+                        lines=8,
+                        scale=4,
+                    )
+                post_regen_desc_btn = gr.Button("↺ Regenerate Description", variant="secondary", size="sm")
+
+                gr.Markdown("#### Cover Image / Thumbnail")
+                post_cover_image = gr.Image(
+                    label="Thumbnail (auto-populated from cover.png)",
+                    visible=False,
+                    height=280,
+                    interactive=False,
+                )
+                post_regen_cover_btn = gr.Button("↺ Regenerate Cover Image", variant="secondary", size="sm")
+
+                gr.Markdown("#### Publishing Options")
+                with gr.Row():
+                    post_privacy = gr.Dropdown(
+                        label="Privacy",
+                        choices=["private", "unlisted", "public"],
+                        value=cfg.get("youtube_post_privacy", "private"),
+                    )
+                    post_category = gr.Dropdown(
+                        label="Category",
+                        choices=list(yt.CATEGORY_OPTIONS.keys()),
+                        value=next(
+                            (k for k, v in yt.CATEGORY_OPTIONS.items() if v == cfg.get("youtube_post_category", "22")),
+                            "People & Blogs",
+                        ),
+                    )
+                post_tags = gr.Textbox(
+                    label="Tags (comma-separated)",
+                    placeholder="documentary, ai, history",
+                    max_lines=1,
+                )
+
+                post_btn = gr.Button("Post to YouTube", variant="primary", size="lg")
+                post_status_html = gr.HTML(value="")
+                post_url_html = gr.HTML(value="", visible=False)
+
             # ── Config ───────────────────────────────────────────────────
             with gr.Tab("⚙️ Config", id="config"):
                 gr.Markdown("### Default Volume Settings")
@@ -1968,6 +2716,18 @@ def build_ui() -> gr.Blocks:
                     cfg_ambient_vol = gr.Slider(
                         0, 100, value=cfg.get("ambient_vol", 0), step=1,
                         label="Default Ambient Volume %",
+                    )
+
+                gr.Markdown("### Generation Defaults")
+                with gr.Row():
+                    cfg_default_voice = gr.Dropdown(
+                        label="Default Narrator Voice",
+                        choices=get_voice_choices(),
+                        value=cfg.get("default_voice") or F5TTS_DEFAULT_OPTION,
+                    )
+                    cfg_default_n_scenes = gr.Slider(
+                        1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1,
+                        label="Default Number of Scenes",
                     )
 
                 gr.Markdown("### Generation Quality & Speed")
@@ -2106,6 +2866,48 @@ def build_ui() -> gr.Blocks:
                 save_cfg_btn = gr.Button("Save Defaults", variant="secondary", visible=False)
                 cfg_status   = gr.Markdown("")
 
+                gr.Markdown("### Default Visual Style")
+                cfg_default_visual_style = gr.Textbox(
+                    label="Default visual style — prepended to every image prompt in all videos",
+                    value=cfg.get("default_visual_style", ""),
+                    lines=2,
+                    placeholder="e.g.  photorealistic, 8K resolution, cinematic lighting, no text, no watermarks, film grain",
+                )
+
+                gr.Markdown("### YouTube Integration")
+                gr.Markdown(
+                    "Connect Stephen Spielbot to your YouTube channel to fetch comments and post videos. "
+                    "See [docs/youtube_setup.md](docs/youtube_setup.md) for setup instructions."
+                )
+                cfg_yt_secrets = gr.Textbox(
+                    label="client_secrets.json path",
+                    value=cfg.get("youtube_client_secrets", ""),
+                    placeholder="/path/to/client_secrets.json",
+                )
+                with gr.Row():
+                    cfg_yt_auto_approve = gr.Checkbox(
+                        label="Auto-approve comment requests (confidence ≥ 70%)",
+                        value=cfg.get("youtube_auto_approve_comments", False),
+                    )
+                    cfg_yt_auto_post = gr.Checkbox(
+                        label="Auto-post to YouTube when generation completes",
+                        value=cfg.get("youtube_auto_post", False),
+                    )
+                with gr.Row():
+                    cfg_yt_privacy = gr.Dropdown(
+                        label="Default Privacy",
+                        choices=["private", "unlisted", "public"],
+                        value=cfg.get("youtube_post_privacy", "private"),
+                    )
+                    cfg_yt_category = gr.Dropdown(
+                        label="Default Category",
+                        choices=list(yt.CATEGORY_OPTIONS.keys()),
+                        value=next(
+                            (k for k, v in yt.CATEGORY_OPTIONS.items() if v == cfg.get("youtube_post_category", "22")),
+                            "People & Blogs",
+                        ),
+                    )
+
                 gr.Markdown("### Voice Library")
                 voices_table = gr.Dataframe(
                     headers=["Name", "Path"],
@@ -2176,7 +2978,8 @@ def build_ui() -> gr.Blocks:
             fn=_poll_job_outputs,
             inputs=[active_job_state],
             outputs=[progress_bar, final_video_out, combined_state,
-                     music_state, ambient_state, tabs, active_job_state],
+                     music_state, ambient_state, tabs, active_job_state,
+                     post_auto_trigger_state],
         )
         progress_timer.tick(
             fn=_orchestration_html,
@@ -2395,12 +3198,18 @@ def build_ui() -> gr.Blocks:
                        cfg_claude_key, cfg_claude_model,
                        cfg_flux_model, cfg_flux_vae,
                        cfg_flux_clip_t5, cfg_flux_clip_l,
-                       cfg_flux_steps]
+                       cfg_flux_steps,
+                       cfg_default_visual_style,
+                       cfg_default_voice, cfg_default_n_scenes,
+                       cfg_yt_secrets, cfg_yt_auto_approve, cfg_yt_auto_post,
+                       cfg_yt_privacy, cfg_yt_category]
+
+        _cfg_outputs = [cfg_status, voice_dropdown, n_scenes_in]
 
         for _inp in _cfg_inputs:
-            _inp.change(fn=on_save_config, inputs=_cfg_inputs, outputs=[cfg_status])
+            _inp.change(fn=on_save_config, inputs=_cfg_inputs, outputs=_cfg_outputs)
 
-        save_cfg_btn.click(fn=on_save_config, inputs=_cfg_inputs, outputs=[cfg_status])
+        save_cfg_btn.click(fn=on_save_config, inputs=_cfg_inputs, outputs=_cfg_outputs)
 
         add_voice_btn.click(
             fn=on_add_voice,
@@ -2413,6 +3222,145 @@ def build_ui() -> gr.Blocks:
             fn=on_remove_voice,
             inputs=[remove_voice_dd],
             outputs=[voices_table, voice_dropdown, remove_voice_dd, cfg_status],
+        )
+
+        # ── YouTube tab wiring ────────────────────────────────────────────────
+
+        _yt_comment_outputs = [yt_comments_html, yt_pending_html, yt_queue_html, yt_comments_status]
+        _yt_approve_outputs = [yt_comments_html, yt_pending_html, yt_queue_html, yt_action_status]
+
+        yt_connect_btn.click(
+            fn=on_yt_connect,
+            inputs=[],
+            outputs=[yt_auth_status, yt_auth_timer],
+        )
+        yt_auth_timer.tick(
+            fn=on_yt_poll_auth,
+            inputs=[],
+            outputs=[yt_auth_status, yt_auth_timer],
+        )
+        yt_disconnect_btn.click(
+            fn=on_yt_disconnect,
+            inputs=[],
+            outputs=[yt_auth_status],
+        )
+        yt_fetch_btn.click(
+            fn=on_yt_fetch_comments,
+            inputs=[],
+            outputs=_yt_comment_outputs,
+        )
+        yt_evaluate_btn.click(
+            fn=on_yt_evaluate_all,
+            inputs=[yt_auto_approve_cb],
+            outputs=_yt_comment_outputs,
+        )
+        yt_approve_btn.click(
+            fn=on_yt_approve,
+            inputs=[yt_row_num, yt_title_override],
+            outputs=_yt_approve_outputs,
+        )
+        yt_reject_btn.click(
+            fn=on_yt_reject,
+            inputs=[yt_row_num],
+            outputs=_yt_approve_outputs,
+        )
+        yt_launch_btn.click(
+            fn=on_yt_launch_video,
+            inputs=[yt_row_num],
+            outputs=[tabs, video_title_in, title_in, yt_action_status, style_box, style_state, n_scenes_in, voice_dropdown],
+        )
+        # Keep auto-approve checkbox in sync with config
+        yt_auto_approve_cb.change(
+            fn=lambda v: v,
+            inputs=[yt_auto_approve_cb],
+            outputs=[cfg_yt_auto_approve],
+        )
+
+        # ── Post tab wiring ───────────────────────────────────────────────────
+
+        _post_load_outputs = [
+            post_video_path, post_title, post_description,
+            post_cover_image, post_status_html, post_url_html,
+            post_cover_path_state,
+        ]
+
+        post_load_btn.click(
+            fn=on_post_load,
+            inputs=[active_job_state],
+            outputs=_post_load_outputs,
+        )
+
+        # Single combined tab-select handler — activates progress timer only on
+        # Progress tab (prevents timer from queuing events on other tabs) and
+        # handles per-tab auto-fills in one server round-trip.
+        def _on_tab_select(evt: gr.SelectData, job_dir: str):
+            # evt.value may be the tab label (str) or tab index (int) depending
+            # on Gradio version — normalise to str to avoid TypeError in `in` checks.
+            selected = str(getattr(evt, "value", "") or "")
+            on_progress = "Progress" in selected or selected == "progress"
+            yt_html = (
+                on_yt_check_status()
+                if ("YouTube" in selected or selected == "youtube")
+                else gr.update()
+            )
+            if "Post" in selected or selected == "post":
+                post_vals = on_post_load(job_dir)
+            else:
+                post_vals = (gr.update(),) * 7
+            return (gr.update(active=on_progress), yt_html) + tuple(post_vals)
+
+        tabs.select(
+            fn=_on_tab_select,
+            inputs=[active_job_state],
+            outputs=[progress_timer, yt_auth_status] + _post_load_outputs,
+        )
+
+        post_regen_desc_btn.click(
+            fn=on_post_regen_description,
+            inputs=[active_job_state, post_title],
+            outputs=[post_description, post_status_html],
+        )
+
+        def _post_regen_cover_wrap(video_title: str, style: str, job_id: str, active_job_dir: str):
+            """Wrap cover regen to also update the cover path state."""
+            work_dir = _preferred_work_dir(active_job_dir)
+            cover_path_str = str(work_dir / "cover.png") if work_dir else ""
+            for status_upd, img_upd in on_generate_cover_image(video_title, style, job_id):
+                # After generation, try to pick up the actual cover path
+                actual = ""
+                if work_dir:
+                    cp = work_dir / "cover.png"
+                    if cp.exists() and cp.stat().st_size > 1000:
+                        actual = str(cp)
+                yield status_upd, img_upd, actual or cover_path_str
+
+        post_regen_cover_btn.click(
+            fn=_post_regen_cover_wrap,
+            inputs=[post_title, style_state, script_job_id_state, active_job_state],
+            outputs=[post_status_html, post_cover_image, post_cover_path_state],
+        )
+
+        post_btn.click(
+            fn=on_post_upload,
+            inputs=[
+                active_job_state, post_video_path, post_title,
+                post_description, post_privacy, post_category,
+                post_cover_path_state, post_tags,
+            ],
+            outputs=[post_status_html, post_url_html],
+        )
+
+        # Auto-post: fires when post_auto_trigger_state flips to True
+        def _maybe_auto_post(trigger: bool, job_dir: str):
+            if trigger:
+                yield from _auto_post_chain(job_dir)
+            else:
+                yield gr.update(), gr.update()
+
+        post_auto_trigger_state.change(
+            fn=_maybe_auto_post,
+            inputs=[post_auto_trigger_state, active_job_state],
+            outputs=[post_status_html, post_url_html],
         )
 
         demo.load(fn=None, js=_PERSIST_JS)
