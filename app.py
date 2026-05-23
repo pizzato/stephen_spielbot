@@ -2582,7 +2582,7 @@ def build_ui() -> gr.Blocks:
 
                 gr.Markdown("### Pending Requests")
                 gr.Markdown("_Rows numbered from the green-highlighted cards above._")
-                yt_pending_html = gr.HTML(value='<div style="color:#6b7280;font-size:13px">No pending requests.</div>')
+                yt_pending_html = gr.HTML(value=_pending_requests_html(yt.load_comments_cache()))
                 with gr.Row():
                     yt_row_num      = gr.Number(value=1, label="Request #", minimum=1, step=1, scale=1)
                     yt_title_override = gr.Textbox(
