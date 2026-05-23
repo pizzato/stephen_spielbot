@@ -154,7 +154,8 @@ def _claude_call(client, model: str, system: str, user_msg: str,
 
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
-                     api_key: str, model: str) -> tuple[list[Scene], str, str]:
+                     api_key: str, model: str,
+                     video_title: str | None = None) -> tuple[list[Scene], str, str]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -175,9 +176,12 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
         if is_last_batch else ""
     )
+    title_line = f'Topic: "{title}"\n'
+    if video_title and video_title.strip():
+        title_line = f'YouTube Video Title: "{video_title}"\nTopic/Description: "{title}"\n'
     user_msg = (
-        f'Topic: "{title}"\n'
-        f"Total video length: {n_scenes} scenes. "
+        title_line
+        + f"Total video length: {n_scenes} scenes. "
         f"THIS REQUEST: generate ONLY scenes 1 to {first_batch} "
         f"(the remaining scenes will be requested separately). "
         f"Output exactly {first_batch} scene objects in the 'scenes' array — no more, no fewer.{style_note}{conclusion_note}"
@@ -205,6 +209,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
 
     # ── Continuation batches ──────────────────────────────────────────────────
     batch_start = first_batch + 1
+    topic_ref = f'"{video_title}"' if video_title and video_title.strip() else f'"{title}"'
     while batch_start <= n_scenes:
         batch_end   = min(batch_start + _CLAUDE_BATCH_SIZE - 1, n_scenes)
         is_last     = batch_end == n_scenes
@@ -221,7 +226,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             if is_last else ""
         )
         cont_msg = (
-            f'Continue the {n_scenes}-scene video script for: "{title}"\n'
+            f'Continue the {n_scenes}-scene video script for: {topic_ref}\n'
             f"Generate scenes {batch_start} to {batch_end} "
             f"(scene IDs {batch_start}–{batch_end}).\n\n"
             f"Previous scenes for narrative continuity:\n{ctx_str}{conclusion_note}"
@@ -248,6 +253,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
 # ══════════════════════════════════════════════════════════════════════════════
 # Local vLLM backend (plain-text, two-stage)
 # ══════════════════════════════════════════════════════════════════════════════
+
 
 _STORY_SYSTEM = """\
 You are a video script writer specialising in YouTube documentary content. Write a complete narrated story for an AI-generated documentary video, optimised for viewer retention.
@@ -342,14 +348,20 @@ def _get_field(text: str, key: str) -> str:
 
 
 def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
-                          url: str, model: str) -> dict:
+                          url: str, model: str,
+                          video_title: str | None = None) -> dict:
     style_note = (
         f"\nIMPORTANT: Use exactly this text for the STYLE line: {style_hint}"
         if style_hint and style_hint.strip()
         else ""
     )
+    title_context = (
+        f'YouTube Video Title: "{video_title}"\nTopic/Description: "{title}"'
+        if video_title and video_title.strip()
+        else f'the topic: "{title}"'
+    )
     user_msg = (
-        f'Write a {n_scenes}-scene narrated story for the topic: "{title}"\n'
+        f'Write a {n_scenes}-scene narrated story for {title_context}\n'
         f"Output exactly {n_scenes} scenes using the TITLE_N / NARRATION_N pattern.{style_note}"
     )
     raw = _local_llm(
@@ -404,7 +416,8 @@ def _local_generate_visual(title: str, style: str,
 
 
 def _local_generate(title: str, n_scenes: int,
-                    style_hint: str | None) -> tuple[list[Scene], str, str]:
+                    style_hint: str | None,
+                    video_title: str | None = None) -> tuple[list[Scene], str, str]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -415,7 +428,7 @@ def _local_generate(title: str, n_scenes: int,
             "Set the URL in Config → LLM Backend → Local LLM URL."
         )
 
-    story      = _local_generate_story(title, n_scenes, style_hint, url, model)
+    story      = _local_generate_story(title, n_scenes, style_hint, url, model, video_title=video_title)
     style      = (style_hint.strip() if style_hint and style_hint.strip()
                   else story.get("style", ""))
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
@@ -463,10 +476,12 @@ def generate_script(
     title: str,
     n_scenes: int,
     style_hint: str | None = None,
+    video_title: str | None = None,
 ) -> tuple[list[Scene], str, str]:
     """Return (scenes, music_description, style).
 
     Backend is chosen from config: llm_backend = "claude" | "local".
+    video_title is the short YouTube title; title is the full topic/description.
     """
     cfg     = _load_cfg()
     backend = cfg.get("llm_backend", "local")
@@ -479,7 +494,7 @@ def generate_script(
             )
         model = cfg.get("claude_model", "claude-sonnet-4-6")
         logger.info("Using Claude backend: model=%s", model)
-        return _claude_generate(title, n_scenes, style_hint, api_key, model)
+        return _claude_generate(title, n_scenes, style_hint, api_key, model, video_title=video_title)
 
     logger.info("Using local vLLM backend")
-    return _local_generate(title, n_scenes, style_hint)
+    return _local_generate(title, n_scenes, style_hint, video_title=video_title)
