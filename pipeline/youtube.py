@@ -372,7 +372,7 @@ def upload_video(
                 "tags": tags or [],
                 "categoryId": category_id,
             },
-            "status": {"privacyStatus": privacy_status},
+            "status": {"privacyStatus": privacy_status, "selfDeclaredMadeForKids": False},
         }
         media = MediaFileUpload(
             video_path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024
