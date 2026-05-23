@@ -2539,7 +2539,7 @@ def build_ui() -> gr.Blocks:
             # ── Progress ─────────────────────────────────────────────────
             with gr.Tab("⏳ Progress", id="progress"):
                 progress_bar = gr.HTML(value=_progress_html(0, "Waiting to start…"))
-                progress_timer = gr.Timer(value=3, active=False)
+                progress_timer = gr.Timer(value=3, active=True)
 
                 gr.Markdown("#### Durable Orchestration")
                 orchestration_status = gr.HTML(value=_orchestration_html(""))
@@ -3291,13 +3291,11 @@ def build_ui() -> gr.Blocks:
         )
 
         # Single combined tab-select handler — activates progress timer only on
-        # Progress tab (prevents timer from queuing events on other tabs) and
-        # handles per-tab auto-fills in one server round-trip.
+        # Handles per-tab auto-fills in one server round-trip.
         def _on_tab_select(evt: gr.SelectData, job_dir: str):
             # evt.value may be the tab label (str) or tab index (int) depending
             # on Gradio version — normalise to str to avoid TypeError in `in` checks.
             selected = str(getattr(evt, "value", "") or "")
-            on_progress = "Progress" in selected or selected == "progress"
             yt_html = (
                 on_yt_check_status()
                 if ("YouTube" in selected or selected == "youtube")
@@ -3307,12 +3305,12 @@ def build_ui() -> gr.Blocks:
                 post_vals = on_post_load(job_dir)
             else:
                 post_vals = (gr.update(),) * 7
-            return (gr.update(active=on_progress), yt_html) + tuple(post_vals)
+            return (yt_html,) + tuple(post_vals)
 
         tabs.select(
             fn=_on_tab_select,
             inputs=[active_job_state],
-            outputs=[progress_timer, yt_auth_status] + _post_load_outputs,
+            outputs=[yt_auth_status] + _post_load_outputs,
         )
 
         post_regen_desc_btn.click(
