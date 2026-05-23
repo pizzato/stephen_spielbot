@@ -2692,17 +2692,6 @@ def build_ui() -> gr.Blocks:
                 remix_btn    = gr.Button("Re-mix Video", variant="primary")
                 remix_status = gr.Markdown("")
 
-                gr.Markdown("### YouTube Cover Image")
-                gr.Markdown(
-                    "Generate a 1280×720 cover image for your YouTube video. "
-                    "Uses FLUX to create artwork in the video's visual style, then overlays the video title."
-                )
-                gen_cover_btn = gr.Button("Generate Cover Image", variant="secondary")
-                cover_status = gr.Markdown("")
-                cover_image_out = gr.Image(
-                    label="Cover Image (1280×720)", visible=False,
-                    height=360, interactive=False,
-                )
 
             # ── Upscale ──────────────────────────────────────────────────
             with gr.Tab("🔍 Upscale", id="upscale"):
@@ -3245,12 +3234,6 @@ def build_ui() -> gr.Blocks:
             outputs=[final_video_out, combined_state, music_state, ambient_state, remix_status],
         )
 
-        gen_cover_btn.click(
-            fn=on_generate_cover_image,
-            inputs=[video_title_in, style_state, script_job_id_state],
-            outputs=[cover_status, cover_image_out],
-        )
-
         load_for_upscale_btn.click(
             fn=on_load_for_upscale,
             inputs=[],
@@ -3423,22 +3406,62 @@ def build_ui() -> gr.Blocks:
             outputs=[post_description, post_status_html],
         )
 
-        def _post_regen_cover_wrap(video_title: str, style: str, job_id: str, active_job_dir: str):
-            """Wrap cover regen to also update the cover path state."""
+        def _on_post_regen_cover(title: str, active_job_dir: str):
             work_dir = _preferred_work_dir(active_job_dir)
-            cover_path_str = str(work_dir / "cover.png") if work_dir else ""
-            for status_upd, img_upd in on_generate_cover_image(video_title, style, job_id):
-                # After generation, try to pick up the actual cover path
-                actual = ""
-                if work_dir:
-                    cp = work_dir / "cover.png"
-                    if cp.exists() and cp.stat().st_size > 1000:
-                        actual = str(cp)
-                yield status_upd, img_upd, actual or cover_path_str
+            if not work_dir:
+                yield _post_status_html("No active job.", "info"), gr.update(), ""
+                return
+            job_cfg = {}
+            if (work_dir / "job_config.json").exists():
+                try:
+                    job_cfg = _read_json(work_dir / "job_config.json")
+                except Exception:
+                    pass
+            style = job_cfg.get("style", "")
+            title = (title or job_cfg.get("video_title", "") or work_dir.name).strip()
+
+            worker_urls = _preview_worker_urls()
+            if not worker_urls:
+                yield _post_status_html("No cluster workers reachable — add workers in Config.", "error"), gr.update(), ""
+                return
+
+            cfg = load_config()
+            cover_path = work_dir / "cover.png"
+            cover_base = work_dir / "cover_base.png"
+            prompt = _cover_prompt(title, style)
+
+            yield _post_status_html(f"Generating cover image for '{title}'…", "info"), gr.update(), ""
+
+            try:
+                worker_pool = WorkerPool(worker_urls)
+                url = worker_pool.acquire()
+                try:
+                    generate_scene_image(
+                        prompt, cover_base,
+                        width=_COVER_W, height=_COVER_H,
+                        steps=int(cfg.get("flux_steps", 4)),
+                        flux_model=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                        clip_t5=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                        clip_l=cfg.get("flux_clip_l", "clip_l.safetensors"),
+                        flux_vae=cfg.get("flux_vae", "ae.safetensors"),
+                        comfy_url=url,
+                    )
+                finally:
+                    worker_pool.release(url)
+                _overlay_title_on_image(cover_base, cover_path, title)
+                cover_str = str(cover_path)
+                yield (
+                    _post_status_html("Cover image ready.", "success"),
+                    gr.update(value=cover_str, visible=True),
+                    cover_str,
+                )
+            except Exception as exc:
+                logger.warning("Post cover regen failed: %s", exc)
+                yield _post_status_html(f"Cover generation failed: {str(exc)[:200]}", "error"), gr.update(), ""
 
         post_regen_cover_btn.click(
-            fn=_post_regen_cover_wrap,
-            inputs=[post_title, style_state, script_job_id_state, active_job_state],
+            fn=_on_post_regen_cover,
+            inputs=[post_title, active_job_state],
             outputs=[post_status_html, post_cover_image, post_cover_path_state],
         )
 
