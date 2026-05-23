@@ -141,12 +141,14 @@ DEFAULT_CFG = {
     "default_voice": "",
     "default_n_scenes": 5,
     "default_visual_style": "",
+    "script_extra_instructions": "",
     # YouTube integration
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
     "youtube_auto_approve_comments": False,
     "youtube_auto_post": False,
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
+    "description_suffix": "",
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
@@ -983,13 +985,18 @@ def on_generate_script(video_title: str, title: str, n_scenes: int, auto_approve
 
     _no_op = (gr.update(),) * 17
 
+    cfg = load_config()
+    extra = cfg.get("script_extra_instructions", "").strip()
+    if extra:
+        topic = f"{topic}\n\n{extra}"
+
     # Run generate_script in a thread so we can yield keep-alives while waiting.
     # Without this, long Claude API calls (30 scenes ≈ 3 min) cause Gradio's
     # WebSocket to time out and the page resets to the Create tab.
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         fut = pool.submit(
             generate_script, topic, int(n_scenes),
-            load_config().get("default_visual_style", "") or None,  # style_hint
+            cfg.get("default_visual_style", "") or None,  # style_hint
             video_title.strip() or None,
         )
         while not fut.done():
@@ -1764,7 +1771,9 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    youtube_auto_approve_comments: bool = False,
                    youtube_auto_post: bool = False,
                    youtube_post_privacy: str = "private",
-                   youtube_post_category: str = "People & Blogs"):
+                   youtube_post_category: str = "People & Blogs",
+                   script_extra_instructions: str = "",
+                   description_suffix: str = ""):
     cfg = load_config()
     cfg["music_vol"]          = int(music_vol)
     cfg["voice_vol"]          = int(voice_vol)
@@ -1799,6 +1808,8 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["youtube_post_privacy"]            = youtube_post_privacy or "private"
     # Store category as ID for API use
     cfg["youtube_post_category"] = yt.CATEGORY_OPTIONS.get(youtube_post_category, youtube_post_category) or "22"
+    cfg["script_extra_instructions"] = (script_extra_instructions or "").strip()
+    cfg["description_suffix"]        = (description_suffix or "").strip()
     save_config(cfg)
     logger.info("Config saved: lora=%.2f workers=%s tts=%s",
                 lora_strength, cfg["comfy_workers"], cfg["tts_workers"])
@@ -2228,6 +2239,9 @@ def on_post_load(active_job_dir: str):
                     )
         finally:
             store.close()
+        suffix = load_config().get("description_suffix", "").strip()
+        if suffix and description:
+            description = f"{description}\n\n{suffix}"
 
         yield (
             gr.update(),
@@ -2273,6 +2287,9 @@ def on_post_regen_description(active_job_dir: str, video_title: str) -> tuple:
             style=style,
             music_desc=music_desc,
         )
+        suffix = load_config().get("description_suffix", "").strip()
+        if suffix and description:
+            description = f"{description}\n\n{suffix}"
         return gr.update(value=description), _post_status_html("Description regenerated.", "success")
     except Exception as exc:
         return gr.update(), _post_status_html(f"Error: {str(exc)[:200]}", "error")
@@ -2781,7 +2798,36 @@ def build_ui() -> gr.Blocks:
 
             # ── Config ───────────────────────────────────────────────────
             with gr.Tab("⚙️ Config", id="config"):
-                gr.Markdown("### Default Volume Settings")
+                save_cfg_btn = gr.Button("Save Defaults", variant="secondary", visible=False)
+                cfg_status   = gr.Markdown("")
+
+                # ── Script & Content ──────────────────────────────────────
+                gr.Markdown("### Script & Content")
+                with gr.Row():
+                    cfg_default_n_scenes = gr.Slider(
+                        1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1,
+                        label="Default Number of Scenes",
+                    )
+                cfg_default_visual_style = gr.Textbox(
+                    label="Default Visual Style — prepended to every image prompt",
+                    value=cfg.get("default_visual_style", ""),
+                    lines=2,
+                    placeholder="e.g.  photorealistic, 8K resolution, cinematic lighting, no text, no watermarks, film grain",
+                )
+                cfg_script_extra = gr.Textbox(
+                    label="Script Extra Instructions — always appended to every script generation prompt",
+                    value=cfg.get("script_extra_instructions", ""),
+                    lines=3,
+                    placeholder="e.g.  Always include a strong call to action at the end of each video. Avoid mentioning competitor brands.",
+                )
+
+                # ── Narrator & Audio ──────────────────────────────────────
+                gr.Markdown("### Narrator & Audio")
+                cfg_default_voice = gr.Dropdown(
+                    label="Default Narrator Voice",
+                    choices=get_voice_choices(),
+                    value=cfg.get("default_voice") or F5TTS_DEFAULT_OPTION,
+                )
                 with gr.Row():
                     cfg_music_vol = gr.Slider(
                         0, 100, value=cfg.get("music_vol", 18), step=1,
@@ -2796,39 +2842,23 @@ def build_ui() -> gr.Blocks:
                         label="Default Ambient Volume %",
                     )
 
-                gr.Markdown("### Generation Defaults")
-                with gr.Row():
-                    cfg_default_voice = gr.Dropdown(
-                        label="Default Narrator Voice",
-                        choices=get_voice_choices(),
-                        value=cfg.get("default_voice") or F5TTS_DEFAULT_OPTION,
-                    )
-                    cfg_default_n_scenes = gr.Slider(
-                        1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1,
-                        label="Default Number of Scenes",
-                    )
-
-                gr.Markdown("### Generation Quality & Speed")
+                # ── Video Generation ──────────────────────────────────────
+                gr.Markdown("### Video Generation")
                 cfg_resolution = gr.Dropdown(
                     choices=list(_RESOLUTIONS.keys()),
                     value=cfg.get("resolution", _DEFAULT_RESOLUTION),
                     label="Resolution  —  higher = better quality, slower",
                 )
-                with gr.Row():
-                    cfg_max_clip = gr.Slider(
-                        0, 120, value=cfg.get("max_clip_secs", 0), step=1,
-                        label="Legacy Max Clip Duration (s)  —  0 = one clip for full scene",
-                    )
-                    cfg_lora = gr.Slider(
-                        0.0, 1.0, value=cfg.get("lora_strength", 0.5), step=0.05,
-                        label="LoRA Strength  —  0 = pure dev model, 0.5–1.0 = distilled",
-                    )
                 gr.Markdown(
                     "**First-pass (distilled LoRA mode)** — "
                     "LoRA Strength > 0 with Steps=8, CFG=1.0 is the fast distilled mode. "
                     "To use the pure dev model: set LoRA Strength=0, Steps=20–30, CFG=3–5."
                 )
                 with gr.Row():
+                    cfg_lora = gr.Slider(
+                        0.0, 1.0, value=cfg.get("lora_strength", 0.5), step=0.05,
+                        label="LoRA Strength  —  0 = pure dev model, 0.5–1.0 = distilled",
+                    )
                     cfg_first_pass_cfg = gr.Slider(
                         1.0, 8.0, value=cfg.get("first_pass_cfg", 1.0), step=0.5,
                         label="First-pass CFG  —  1.0 for distilled, 3–5 for dev model",
@@ -2844,37 +2874,34 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     cfg_second_pass_cfg = gr.Slider(
                         1.0, 8.0, value=cfg.get("second_pass_cfg", 3.0), step=0.5,
-                        label="Refinement CFG  —  1.0 = current default, 3–5 = more detail",
+                        label="Refinement CFG  —  3–5 = more detail",
                     )
                     cfg_second_pass_steps = gr.Slider(
                         3, 8, value=cfg.get("second_pass_steps", 6), step=1,
                         label="Refinement Steps  —  3 = fast, 6 = balanced, 8 = best",
                     )
+                    cfg_max_clip = gr.Slider(
+                        0, 120, value=cfg.get("max_clip_secs", 0), step=1,
+                        label="Max Clip Duration (s)  —  0 = one clip per scene",
+                    )
 
-                gr.Markdown("### ComfyUI Workers")
-                gr.Markdown(
-                    "One URL per line. Each worker handles one video generation job at a time. "
-                    "Scenes are distributed across all online workers in parallel. "
-                    "Run `bash scripts/install_comfyui_worker.sh <hostname>` to provision a new worker."
-                )
-                cfg_workers = gr.Textbox(
-                    label="ComfyUI Worker URLs (one per line)",
-                    value="\n".join(cfg.get("comfy_workers", ["http://localhost:8188"])),
-                    lines=5,
-                    placeholder="http://localhost:8188\nhttp://s1:8188\nhttp://s2:8188",
-                )
-                gr.Markdown("### TTS Workers")
-                gr.Markdown(
-                    "Hostnames for parallel narration generation. "
-                    "Each host must have F5-TTS installed in `~/f5tts-env`."
-                )
-                cfg_tts_workers = gr.Textbox(
-                    label="TTS Hosts (one per line)",
-                    value="\n".join(cfg.get("tts_workers", ["localhost"])),
-                    lines=4,
-                    placeholder="localhost\ns1\ns2",
-                )
+                # ── Infrastructure ────────────────────────────────────────
+                gr.Markdown("### Infrastructure")
+                with gr.Row():
+                    cfg_workers = gr.Textbox(
+                        label="ComfyUI Worker URLs (one per line)",
+                        value="\n".join(cfg.get("comfy_workers", ["http://localhost:8188"])),
+                        lines=4,
+                        placeholder="http://localhost:8188\nhttp://s1:8188\nhttp://s2:8188",
+                    )
+                    cfg_tts_workers = gr.Textbox(
+                        label="TTS Hosts (one per line)",
+                        value="\n".join(cfg.get("tts_workers", ["localhost"])),
+                        lines=4,
+                        placeholder="localhost\ns1\ns2",
+                    )
 
+                # ── LLM Backend ───────────────────────────────────────────
                 gr.Markdown("### LLM Backend")
                 cfg_llm_backend = gr.Radio(
                     choices=["local", "claude"],
@@ -2905,17 +2932,16 @@ def build_ui() -> gr.Blocks:
                         placeholder="claude-sonnet-4-6",
                     )
 
-                gr.Markdown("### Scene Preview Images (FLUX.1-schnell)")
+                # ── FLUX Image Models ─────────────────────────────────────
+                gr.Markdown("### FLUX Image Models")
                 gr.Markdown(
-                    "FLUX.1-schnell generates a first-frame image for every scene before video generation. "
-                    "Video is always I2V (image-to-video) — T2V is never used. "
-                    "The checkbox in the Create tab controls whether images are shown here; "
-                    "generation always runs. Model files must be in ComfyUI's models directory — "
+                    "Used for scene preview images and the video cover/thumbnail. "
+                    "Model files must be in each ComfyUI worker's models directory — "
                     "run `make download-flux` to download them."
                 )
                 with gr.Row():
                     cfg_flux_model = gr.Textbox(
-                        label="FLUX UNet model (models/unet/)",
+                        label="FLUX UNet (models/unet/)",
                         value=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
                         placeholder="flux1-schnell-fp8.safetensors",
                     )
@@ -2935,42 +2961,22 @@ def build_ui() -> gr.Blocks:
                         value=cfg.get("flux_clip_l", "clip_l.safetensors"),
                         placeholder="clip_l.safetensors",
                     )
-                with gr.Row():
-                    cfg_flux_steps = gr.Slider(
-                        1, 20, value=cfg.get("flux_steps", 4), step=1,
-                        label="FLUX steps  —  4 = schnell (fast), 20 = dev (slow)",
-                    )
-
-                save_cfg_btn = gr.Button("Save Defaults", variant="secondary", visible=False)
-                cfg_status   = gr.Markdown("")
-
-                gr.Markdown("### Default Visual Style")
-                cfg_default_visual_style = gr.Textbox(
-                    label="Default visual style — prepended to every image prompt in all videos",
-                    value=cfg.get("default_visual_style", ""),
-                    lines=2,
-                    placeholder="e.g.  photorealistic, 8K resolution, cinematic lighting, no text, no watermarks, film grain",
+                cfg_flux_steps = gr.Slider(
+                    1, 20, value=cfg.get("flux_steps", 4), step=1,
+                    label="FLUX steps  —  4 = schnell (fast), 20 = dev (slow)",
                 )
 
-                gr.Markdown("### YouTube Integration")
+                # ── YouTube ───────────────────────────────────────────────
+                gr.Markdown("### YouTube")
                 gr.Markdown(
-                    "Connect Stephen Spielbot to your YouTube channel to fetch comments and post videos. "
-                    "See [docs/youtube_setup.md](docs/youtube_setup.md) for setup instructions."
+                    "Connect to your YouTube channel to fetch comments and post videos. "
+                    "See [docs/youtube_setup.md](docs/youtube_setup.md) for OAuth setup."
                 )
                 cfg_yt_secrets = gr.Textbox(
                     label="client_secrets.json path",
                     value=cfg.get("youtube_client_secrets", ""),
-                    placeholder="/path/to/client_secrets.json",
+                    placeholder="~/.config/video-generator/client_secrets.json",
                 )
-                with gr.Row():
-                    cfg_yt_auto_approve = gr.Checkbox(
-                        label="Auto-approve comment requests (confidence ≥ 70%)",
-                        value=cfg.get("youtube_auto_approve_comments", False),
-                    )
-                    cfg_yt_auto_post = gr.Checkbox(
-                        label="Auto-post to YouTube when generation completes",
-                        value=cfg.get("youtube_auto_post", False),
-                    )
                 with gr.Row():
                     cfg_yt_privacy = gr.Dropdown(
                         label="Default Privacy",
@@ -2985,6 +2991,21 @@ def build_ui() -> gr.Blocks:
                             "People & Blogs",
                         ),
                     )
+                with gr.Row():
+                    cfg_yt_auto_approve = gr.Checkbox(
+                        label="Auto-approve comment requests (confidence ≥ 70%)",
+                        value=cfg.get("youtube_auto_approve_comments", False),
+                    )
+                    cfg_yt_auto_post = gr.Checkbox(
+                        label="Auto-post to YouTube when generation completes",
+                        value=cfg.get("youtube_auto_post", False),
+                    )
+                cfg_description_suffix = gr.Textbox(
+                    label="Description Suffix — always appended to every YouTube description",
+                    value=cfg.get("description_suffix", ""),
+                    lines=3,
+                    placeholder="e.g.  Subscribe for more AI documentaries → https://youtube.com/@yourchannel\n\n#documentary #aigenerated",
+                )
 
                 gr.Markdown("### Voice Library")
                 voices_table = gr.Dataframe(
@@ -3284,7 +3305,8 @@ def build_ui() -> gr.Blocks:
                        cfg_default_visual_style,
                        cfg_default_voice, cfg_default_n_scenes,
                        cfg_yt_secrets, cfg_yt_auto_approve, cfg_yt_auto_post,
-                       cfg_yt_privacy, cfg_yt_category]
+                       cfg_yt_privacy, cfg_yt_category,
+                       cfg_script_extra, cfg_description_suffix]
 
         _cfg_outputs = [cfg_status, voice_dropdown, n_scenes_in]
 
