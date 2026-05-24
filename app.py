@@ -145,8 +145,12 @@ DEFAULT_CFG = {
     "script_extra_instructions": "",
     # YouTube integration
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
-    "youtube_auto_approve_comments": False,
-    "youtube_auto_post": False,
+    "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
+    "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
+    "youtube_auto_start_job": False,           # auto-launch best pending job after approval
+    "youtube_auto_approve_script": False,      # skip script review, go straight to video gen
+    "youtube_auto_post": False,               # auto-publish when video generation completes
+    "youtube_fully_automated": False,          # master toggle — sets all five flags above
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
     "description_suffix": "",
@@ -165,6 +169,39 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 # trigger before the first one's _write_job_meta() flush reaches disk.
 _auto_post_triggered: set[str] = set()
 _auto_post_lock = threading.Lock()
+
+
+def _is_job_running() -> bool:
+    """Return True if any video generation job is currently in progress."""
+    try:
+        cutoff = time.time() - 86400  # ignore stale jobs older than 24 h
+        for d in OUTPUT_DIR.iterdir():
+            if not d.is_dir():
+                continue
+            cfg_file = d / "job_config.json"
+            combined = d / "combined.mp4"
+            if cfg_file.exists() and not combined.exists():
+                if cfg_file.stat().st_mtime > cutoff:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _best_pending_queue_item() -> dict | None:
+    """Return the highest-interestingness pending queue item, or None."""
+    try:
+        queue = yt.load_queue()
+        pending = [q for q in queue if q.get("status") == "pending"]
+        if not pending:
+            return None
+        pending.sort(
+            key=lambda q: (q.get("interestingness", 0.5), q.get("created_at", 0)),
+            reverse=True,
+        )
+        return {**pending[0]}  # fresh copy so Gradio detects the change
+    except Exception:
+        return None
 
 
 # ── Config helpers ───────────────────────────────────────────────────────────
@@ -1780,8 +1817,12 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    default_voice: str = "",
                    default_n_scenes: int = 5,
                    youtube_client_secrets: str = "",
+                   youtube_auto_fetch_evaluate: bool = False,
                    youtube_auto_approve_comments: bool = False,
+                   youtube_auto_start_job: bool = False,
+                   youtube_auto_approve_script: bool = False,
                    youtube_auto_post: bool = False,
+                   youtube_fully_automated: bool = False,
                    youtube_post_privacy: str = "private",
                    youtube_post_category: str = "People & Blogs",
                    script_extra_instructions: str = "",
@@ -1815,8 +1856,12 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["default_voice"]                   = "" if (default_voice or "").strip() == F5TTS_DEFAULT_OPTION else (default_voice or "").strip()
     cfg["default_n_scenes"]               = max(1, int(default_n_scenes))
     cfg["youtube_client_secrets"]          = (youtube_client_secrets or "").strip()
+    cfg["youtube_auto_fetch_evaluate"]     = bool(youtube_auto_fetch_evaluate)
     cfg["youtube_auto_approve_comments"]   = bool(youtube_auto_approve_comments)
+    cfg["youtube_auto_start_job"]          = bool(youtube_auto_start_job)
+    cfg["youtube_auto_approve_script"]     = bool(youtube_auto_approve_script)
     cfg["youtube_auto_post"]               = bool(youtube_auto_post)
+    cfg["youtube_fully_automated"]         = bool(youtube_fully_automated)
     cfg["youtube_post_privacy"]            = youtube_post_privacy or "private"
     # Store category as ID for API use
     cfg["youtube_post_category"] = yt.CATEGORY_OPTIONS.get(youtube_post_category, youtube_post_category) or "22"
@@ -1957,23 +2002,32 @@ def _queue_html(queue: list[dict]) -> str:
 
 
 def _pending_requests_html(cache: list[dict]) -> str:
-    """Numbered list of comments evaluated as video requests (not yet approved/rejected)."""
+    """Numbered list of video requests sorted by interestingness (highest first)."""
     pending = [
         c for c in cache
         if c.get("is_request") and c.get("status") not in ("approved", "rejected")
     ]
     if not pending:
         return '<div style="color:#6b7280;font-size:13px;padding:4px 0">No pending requests. Fetch and evaluate comments first.</div>'
+    # Sort: highest interestingness first, then confidence as tiebreaker
+    pending = sorted(
+        pending,
+        key=lambda c: (c.get("interestingness", 0.0), c.get("confidence", 0.0)),
+        reverse=True,
+    )
     rows = []
     for i, c in enumerate(pending):
         title = html.escape(c.get("suggested_title", "") or "")
         commenter = html.escape(c.get("commenter", "") or "")
         conf = c.get("confidence", 0)
+        interest = c.get("interestingness", 0.0)
+        interest_color = "#15803d" if interest >= 0.7 else ("#92400e" if interest >= 0.5 else "#6b7280")
         rows.append(
             f'<div style="padding:5px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">'
             f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>'
             f'<strong>{title}</strong>'
-            f'<span style="color:#9ca3af;font-size:11px;margin-left:6px">from {commenter} · {conf:.0%} confident</span>'
+            f'<span style="color:#9ca3af;font-size:11px;margin-left:6px">from {commenter} · {conf:.0%} confidence</span>'
+            f'<span style="font-size:11px;margin-left:8px;color:{interest_color}">★ {interest:.0%} interest</span>'
             f'</div>'
         )
     return (
@@ -2023,46 +2077,38 @@ def _yt_refresh_outputs(cache: list[dict], queue: list[dict], status: str) -> tu
     return _comments_html(cache), _pending_requests_html(cache), _queue_html(queue), status
 
 
-def on_yt_fetch_comments() -> tuple:
-    cfg = load_config()
+def _yt_fetch_new_comments(cfg: dict) -> tuple[list, int]:
+    """Fetch comments from YouTube and merge into cache. Returns (cache, new_count)."""
     secrets = cfg.get("youtube_client_secrets", "")
-    try:
-        fetched = yt.fetch_channel_comments(secrets, max_results=50)
-        cache = yt.load_comments_cache()
-        existing_ids = {c["comment_id"] for c in cache}
-        new_count = 0
-        for c in fetched:
-            if c["comment_id"] not in existing_ids:
-                cache.insert(0, {
-                    **c,
-                    "evaluated": False,
-                    "is_request": None,
-                    "suggested_title": "",
-                    "confidence": 0.0,
-                    "reason": "",
-                    "status": "new",
-                })
-                new_count += 1
-        yt.save_comments_cache(cache)
-        queue = yt.load_queue()
-        return _yt_refresh_outputs(cache, queue, f"Fetched {len(fetched)} comments ({new_count} new).")
-    except Exception as exc:
-        logger.warning("Fetch comments failed: %s", exc)
-        cache = yt.load_comments_cache()
-        queue = yt.load_queue()
-        return _yt_refresh_outputs(cache, queue, f"Error: {str(exc)[:200]}")
-
-
-def on_yt_evaluate_all(auto_approve: bool) -> tuple:
-    cfg = load_config()
+    fetched = yt.fetch_channel_comments(secrets, max_results=50)
     cache = yt.load_comments_cache()
-    unevaluated = [c for c in cache if not c.get("evaluated")]
-    if not unevaluated:
-        queue = yt.load_queue()
-        return _yt_refresh_outputs(cache, queue, "All comments already evaluated.")
+    existing_ids = {c["comment_id"] for c in cache}
+    new_count = 0
+    for c in fetched:
+        if c["comment_id"] not in existing_ids:
+            cache.insert(0, {
+                **c,
+                "evaluated": False,
+                "is_request": None,
+                "suggested_title": "",
+                "confidence": 0.0,
+                "interestingness": 0.0,
+                "reason": "",
+                "status": "new",
+            })
+            new_count += 1
+    yt.save_comments_cache(cache)
+    return cache, new_count
 
+
+def _yt_evaluate_unevaluated(cache: list, cfg: dict, auto_approve: bool) -> tuple[list, str]:
+    """Evaluate unevaluated comments, auto-approve if requested. Returns (updated_cache, status_msg)."""
     secrets = cfg.get("youtube_client_secrets", "")
     auto_threshold = 0.7
+    unevaluated = [c for c in cache if not c.get("evaluated")]
+    if not unevaluated:
+        return cache, "All comments already evaluated."
+
     auto_approved_count = 0
     thank_replied_count = 0
     for comment in unevaluated:
@@ -2072,6 +2118,7 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
             "is_request": result["is_request"],
             "suggested_title": result["suggested_title"],
             "confidence": result["confidence"],
+            "interestingness": result.get("interestingness", 0.0),
             "reason": result["reason"],
             "status": "evaluated" if comment.get("status") == "new" else comment.get("status"),
         })
@@ -2080,7 +2127,7 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
             reply = yt.reply_to_comment(
                 secrets,
                 comment.get("comment_id", ""),
-                f"Thanks for the suggestion! We'll look into making a video about this. 🎬",
+                "Thanks for the suggestion! We'll look into making a video about this. 🎬",
             )
             if reply.get("success"):
                 comment["thanked"] = True
@@ -2099,13 +2146,39 @@ def on_yt_evaluate_all(auto_approve: bool) -> tuple:
             auto_approved_count += 1
 
     yt.save_comments_cache(cache)
-    queue = yt.load_queue()
-    msg = f"Evaluated {len(unevaluated)} comments."
+    msg = f"Evaluated {len(unevaluated)} comment(s)."
     if thank_replied_count:
-        msg += f" Replied 'Thanks for the suggestion!' to {thank_replied_count} request(s)."
+        msg += f" Thanked {thank_replied_count} requester(s)."
     if auto_approved_count:
         msg += f" Auto-approved {auto_approved_count} request(s)."
-    return _yt_refresh_outputs(cache, queue, msg)
+    return cache, msg
+
+
+def on_yt_fetch_and_evaluate(auto_approve: bool) -> tuple:
+    """Fetch new comments + evaluate all unevaluated ones in one action.
+    Returns 5-tuple: (comments_html, pending_html, queue_html, status, auto_start_trigger).
+    """
+    cfg = load_config()
+    try:
+        cache, new_count = _yt_fetch_new_comments(cfg)
+        fetch_msg = f"Fetched {new_count} new comment(s). "
+    except Exception as exc:
+        logger.warning("Fetch comments failed: %s", exc)
+        cache = yt.load_comments_cache()
+        fetch_msg = f"Fetch error: {str(exc)[:120]}. "
+
+    cache, eval_msg = _yt_evaluate_unevaluated(cache, cfg, auto_approve)
+    queue = yt.load_queue()
+    msg = fetch_msg + eval_msg
+
+    # Determine auto-start trigger
+    trigger = None
+    if cfg.get("youtube_auto_start_job", False) and not _is_job_running():
+        trigger = _best_pending_queue_item()
+        if trigger:
+            msg += f" Auto-starting: {trigger.get('final_title', '')}."
+
+    return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
 
 
 def _prefetch_video_prompt(queue_item_id: str, title: str, comment_text: str) -> None:
@@ -2118,25 +2191,41 @@ def _prefetch_video_prompt(queue_item_id: str, title: str, comment_text: str) ->
 
 
 def on_yt_approve(row_idx: int, title_override: str) -> tuple:
+    """Approve a pending request. Returns 5-tuple including auto_start_trigger."""
+    cfg = load_config()
     cache = yt.load_comments_cache()
-    requests = [c for c in cache if c.get("is_request") and c.get("status") not in ("approved", "rejected")]
+    # Sort pending requests the same way the UI does (interestingness DESC)
+    requests = sorted(
+        [c for c in cache if c.get("is_request") and c.get("status") not in ("approved", "rejected")],
+        key=lambda c: (c.get("interestingness", 0.0), c.get("confidence", 0.0)),
+        reverse=True,
+    )
     idx = int(row_idx or 1) - 1
     if idx < 0 or idx >= len(requests):
         queue = yt.load_queue()
-        return _yt_refresh_outputs(cache, queue, f"Row {row_idx} not found in pending requests.")
+        return _yt_refresh_outputs(cache, queue, f"Row {row_idx} not found in pending requests.") + (None,)
     comment = requests[idx]
     final_title = (title_override or "").strip() or comment.get("suggested_title", "")
     comment["status"] = "approved"
     yt.save_comments_cache(cache)
     queue_item = yt.add_to_queue(comment, final_title)
-    # Start generating the directorial brief in the background so it's ready by the time the user clicks Launch
+    # Start generating the directorial brief in the background
     threading.Thread(
         target=_prefetch_video_prompt,
         args=(queue_item["id"], final_title, comment.get("text", "")),
         daemon=True,
     ).start()
     queue = yt.load_queue()
-    return _yt_refresh_outputs(cache, queue, f"Approved: {html.escape(final_title)}")
+    msg = f"Approved: {html.escape(final_title)}"
+
+    # Auto-start trigger
+    trigger = None
+    if cfg.get("youtube_auto_start_job", False) and not _is_job_running():
+        trigger = _best_pending_queue_item()
+        if trigger:
+            msg += f" — auto-starting job."
+
+    return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
 
 
 def on_yt_reject(row_idx: int) -> tuple:
@@ -2176,6 +2265,24 @@ def on_yt_launch_video(row_idx: int) -> tuple:
         default_style,
         gr.update(value=int(n_scenes)),
         gr.update(value=voice, choices=get_voice_choices()),
+    )
+
+
+def _prepare_auto_start(queue_item: dict | None) -> tuple:
+    """Populate Create-tab fields from a queue item, forcing auto-approve=True.
+    Returns (video_title_in, title_in, n_scenes_in, auto_approve_in) updates.
+    """
+    if not queue_item:
+        return gr.update(), gr.update(), gr.update(), gr.update()
+    title = queue_item.get("final_title", "")
+    prompt = queue_item.get("video_prompt") or queue_item.get("comment_text", "")
+    n_scenes = queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 5)
+    logger.info("Auto-starting job: %r (%d scenes)", title, n_scenes)
+    return (
+        gr.update(value=title),
+        gr.update(value=prompt),
+        gr.update(value=int(n_scenes)),
+        gr.update(value=True),  # force auto-approve so the pipeline runs unattended
     )
 
 
@@ -2555,6 +2662,26 @@ _PERSIST_JS = """
 """
 
 
+def _on_startup_auto_fetch() -> tuple:
+    """Runs on app load. Fetch+evaluate if auto_fetch_evaluate is configured."""
+    cfg = load_config()
+    if not cfg.get("youtube_auto_fetch_evaluate", False):
+        cache = yt.load_comments_cache()
+        queue = yt.load_queue()
+        return _yt_refresh_outputs(cache, queue, "") + (None,)
+    auto_approve = cfg.get("youtube_auto_approve_comments", False)
+    return on_yt_fetch_and_evaluate(auto_approve)
+
+
+def _on_post_done_refetch() -> tuple:
+    """Runs after a post completes. Fetch+evaluate new comments if configured."""
+    cfg = load_config()
+    if not cfg.get("youtube_auto_fetch_evaluate", False):
+        return (gr.update(),) * 5
+    auto_approve = cfg.get("youtube_auto_approve_comments", False)
+    return on_yt_fetch_and_evaluate(auto_approve)
+
+
 def build_ui() -> gr.Blocks:
     cfg = load_config()
 
@@ -2603,19 +2730,47 @@ def build_ui() -> gr.Blocks:
                 yt_auth_timer = gr.Timer(value=2, active=False)
 
                 gr.Markdown("---")
-                gr.Markdown("### Recent Comments")
-                with gr.Row():
-                    yt_fetch_btn    = gr.Button("Fetch Comments", variant="secondary")
-                    yt_evaluate_btn = gr.Button("Evaluate All with AI", variant="secondary")
-                yt_auto_approve_cb = gr.Checkbox(
-                    label="Auto-approve requests with confidence ≥ 70%",
-                    value=cfg.get("youtube_auto_approve_comments", False),
+                gr.Markdown("### 🤖 Automation")
+                yt_fully_automated_cb = gr.Checkbox(
+                    label="⚡ Fully automated mode — enables all automation below",
+                    value=cfg.get("youtube_fully_automated", False),
                 )
+                with gr.Row():
+                    yt_auto_fetch_cb = gr.Checkbox(
+                        label="Auto fetch & evaluate on startup and after each post",
+                        value=cfg.get("youtube_auto_fetch_evaluate", False),
+                        scale=1,
+                    )
+                    yt_auto_approve_cb = gr.Checkbox(
+                        label="Auto-approve requests (confidence ≥ 70%)",
+                        value=cfg.get("youtube_auto_approve_comments", False),
+                        scale=1,
+                    )
+                with gr.Row():
+                    yt_auto_start_cb = gr.Checkbox(
+                        label="Auto-start job when approved (highest interest first)",
+                        value=cfg.get("youtube_auto_start_job", False),
+                        scale=1,
+                    )
+                    yt_auto_script_cb = gr.Checkbox(
+                        label="Auto-approve script (skip review)",
+                        value=cfg.get("youtube_auto_approve_script", False),
+                        scale=1,
+                    )
+                    yt_auto_post_cb = gr.Checkbox(
+                        label="Auto-post to YouTube when generation completes",
+                        value=cfg.get("youtube_auto_post", False),
+                        scale=1,
+                    )
+
+                gr.Markdown("---")
+                gr.Markdown("### Recent Comments")
+                yt_fetch_evaluate_btn = gr.Button("🔄 Fetch & Evaluate Comments", variant="primary")
                 yt_comments_status = gr.Markdown("")
                 yt_comments_html = gr.HTML(value=_comments_html(yt.load_comments_cache()))
 
                 gr.Markdown("### Pending Requests")
-                gr.Markdown("_Rows numbered from the green-highlighted cards above._")
+                gr.Markdown("_Sorted by interestingness ★ — highest first. Row number used for Approve/Reject._")
                 yt_pending_html = gr.HTML(value=_pending_requests_html(yt.load_comments_cache()))
                 with gr.Row():
                     yt_row_num      = gr.Number(value=1, label="Request #", minimum=1, step=1, scale=1)
@@ -2663,7 +2818,8 @@ def build_ui() -> gr.Blocks:
                     )
                 with gr.Row():
                     auto_approve_in = gr.Checkbox(
-                        label="Auto-approve script (skip review)", value=False,
+                        label="Auto-approve script (skip review)",
+                        value=cfg.get("youtube_auto_approve_script", False),
                     )
 
                 gen_script_btn = gr.Button(
@@ -3080,10 +3236,28 @@ def build_ui() -> gr.Blocks:
                             "People & Blogs",
                         ),
                     )
+                gr.Markdown("**Automation defaults** — control individual steps of the pipeline:")
+                cfg_yt_fully_automated = gr.Checkbox(
+                    label="⚡ Fully automated mode (enables all automation below)",
+                    value=cfg.get("youtube_fully_automated", False),
+                )
                 with gr.Row():
+                    cfg_yt_auto_fetch = gr.Checkbox(
+                        label="Auto fetch & evaluate on startup and after posting",
+                        value=cfg.get("youtube_auto_fetch_evaluate", False),
+                    )
                     cfg_yt_auto_approve = gr.Checkbox(
-                        label="Auto-approve comment requests (confidence ≥ 70%)",
+                        label="Auto-approve requests (confidence ≥ 70%)",
                         value=cfg.get("youtube_auto_approve_comments", False),
+                    )
+                with gr.Row():
+                    cfg_yt_auto_start = gr.Checkbox(
+                        label="Auto-start job when approved",
+                        value=cfg.get("youtube_auto_start_job", False),
+                    )
+                    cfg_yt_auto_script = gr.Checkbox(
+                        label="Auto-approve script (skip review)",
+                        value=cfg.get("youtube_auto_approve_script", False),
                     )
                     cfg_yt_auto_post = gr.Checkbox(
                         label="Auto-post to YouTube when generation completes",
@@ -3393,7 +3567,10 @@ def build_ui() -> gr.Blocks:
                        cfg_flux_steps,
                        cfg_default_visual_style,
                        cfg_default_voice, cfg_default_n_scenes,
-                       cfg_yt_secrets, cfg_yt_auto_approve, cfg_yt_auto_post,
+                       cfg_yt_secrets,
+                       cfg_yt_auto_fetch, cfg_yt_auto_approve,
+                       cfg_yt_auto_start, cfg_yt_auto_script, cfg_yt_auto_post,
+                       cfg_yt_fully_automated,
                        cfg_yt_privacy, cfg_yt_category,
                        cfg_script_extra, cfg_description_suffix]
 
@@ -3419,8 +3596,13 @@ def build_ui() -> gr.Blocks:
 
         # ── YouTube tab wiring ────────────────────────────────────────────────
 
+        # State that holds the queue item to auto-start (None = no pending auto-start)
+        yt_auto_start_trigger = gr.State(None)
+
         _yt_comment_outputs = [yt_comments_html, yt_pending_html, yt_queue_html, yt_comments_status]
         _yt_approve_outputs = [yt_comments_html, yt_pending_html, yt_queue_html, yt_action_status]
+        _yt_comment_outputs_ext = _yt_comment_outputs + [yt_auto_start_trigger]
+        _yt_approve_outputs_ext = _yt_approve_outputs + [yt_auto_start_trigger]
 
         yt_connect_btn.click(
             fn=on_yt_connect,
@@ -3437,20 +3619,15 @@ def build_ui() -> gr.Blocks:
             inputs=[],
             outputs=[yt_auth_status],
         )
-        yt_fetch_btn.click(
-            fn=on_yt_fetch_comments,
-            inputs=[],
-            outputs=_yt_comment_outputs,
-        )
-        yt_evaluate_btn.click(
-            fn=on_yt_evaluate_all,
+        yt_fetch_evaluate_btn.click(
+            fn=on_yt_fetch_and_evaluate,
             inputs=[yt_auto_approve_cb],
-            outputs=_yt_comment_outputs,
+            outputs=_yt_comment_outputs_ext,
         )
         yt_approve_btn.click(
             fn=on_yt_approve,
             inputs=[yt_row_num, yt_title_override],
-            outputs=_yt_approve_outputs,
+            outputs=_yt_approve_outputs_ext,
         )
         yt_reject_btn.click(
             fn=on_yt_reject,
@@ -3462,11 +3639,73 @@ def build_ui() -> gr.Blocks:
             inputs=[yt_row_num],
             outputs=[tabs, video_title_in, title_in, yt_action_status, style_box, style_state, n_scenes_in, voice_dropdown],
         )
-        # Keep auto-approve checkbox in sync with config
-        yt_auto_approve_cb.change(
-            fn=lambda v: v,
-            inputs=[yt_auto_approve_cb],
-            outputs=[cfg_yt_auto_approve],
+
+        # Auto-start chain: when yt_auto_start_trigger changes, populate Create tab
+        # and run the full script→video pipeline unattended.
+        yt_auto_start_trigger.change(
+            fn=_prepare_auto_start,
+            inputs=[yt_auto_start_trigger],
+            outputs=[video_title_in, title_in, n_scenes_in, auto_approve_in],
+        ).then(
+            fn=on_generate_script,
+            inputs=[video_title_in, title_in, n_scenes_in, auto_approve_in],
+            outputs=script_outputs,
+        ).then(
+            fn=on_generate_scene_previews,
+            inputs=[
+                script_job_id_state, current_scene_state, script_resolution_in,
+                style_state, scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box, auto_approve_in,
+            ],
+            outputs=img_gen_outputs,
+        ).then(
+            fn=_auto_generate,
+            inputs=[
+                video_title_in, title_in, n_scenes_in, voice_dropdown, resolution_in,
+                music_desc_state, style_state, auto_approve_in,
+                script_job_id_state, script_work_dir_state, current_scene_state,
+                scene_title_box, scene_image_prompt_box,
+                scene_video_prompt_box, scene_narration_box,
+            ],
+            outputs=gen_outputs,
+        ).then(
+            fn=lambda: gr.update(selected="progress"),
+            inputs=[], outputs=[tabs],
+        ).then(
+            fn=lambda: None,  # reset trigger so next auto-start fires cleanly
+            inputs=[], outputs=[yt_auto_start_trigger],
+        )
+
+        # Keep YouTube-tab automation checkboxes in sync with Config tab (bidirectional)
+        def _sync_auto_flags(*vals):
+            fetch, approve, start, script, post, fully = vals
+            return fetch, approve, start, script, post, fully
+
+        _auto_flag_yt  = [yt_auto_fetch_cb, yt_auto_approve_cb, yt_auto_start_cb,
+                          yt_auto_script_cb, yt_auto_post_cb, yt_fully_automated_cb]
+        _auto_flag_cfg = [cfg_yt_auto_fetch, cfg_yt_auto_approve, cfg_yt_auto_start,
+                          cfg_yt_auto_script, cfg_yt_auto_post, cfg_yt_fully_automated]
+
+        for _yt_cb, _cfg_cb in zip(_auto_flag_yt, _auto_flag_cfg):
+            _yt_cb.change(fn=lambda v: v, inputs=[_yt_cb], outputs=[_cfg_cb])
+            _cfg_cb.change(fn=lambda v: v, inputs=[_cfg_cb], outputs=[_yt_cb])
+
+        # "Fully automated" master toggle sets all five individual flags
+        def _on_fully_auto(enabled: bool):
+            v = gr.update(value=enabled)
+            return v, v, v, v, v
+
+        yt_fully_automated_cb.change(
+            fn=_on_fully_auto,
+            inputs=[yt_fully_automated_cb],
+            outputs=[yt_auto_fetch_cb, yt_auto_approve_cb, yt_auto_start_cb,
+                     yt_auto_script_cb, yt_auto_post_cb],
+        )
+        cfg_yt_fully_automated.change(
+            fn=_on_fully_auto,
+            inputs=[cfg_yt_fully_automated],
+            outputs=[cfg_yt_auto_fetch, cfg_yt_auto_approve, cfg_yt_auto_start,
+                     cfg_yt_auto_script, cfg_yt_auto_post],
         )
 
         # ── Post tab wiring ───────────────────────────────────────────────────
@@ -3584,6 +3823,10 @@ def build_ui() -> gr.Blocks:
                 post_cover_path_state, post_tags,
             ],
             outputs=[post_status_html, post_url_html],
+        ).then(
+            fn=_on_post_done_refetch,
+            inputs=[],
+            outputs=_yt_comment_outputs_ext,
         )
 
         # Auto-post: fires when post_auto_trigger_state flips to True
@@ -3597,8 +3840,18 @@ def build_ui() -> gr.Blocks:
             fn=_maybe_auto_post,
             inputs=[post_auto_trigger_state, active_job_state],
             outputs=[post_status_html, post_url_html],
+        ).then(
+            fn=_on_post_done_refetch,
+            inputs=[],
+            outputs=_yt_comment_outputs_ext,
         )
 
+        # On startup: fetch & evaluate if auto_fetch_evaluate is configured
+        demo.load(
+            fn=_on_startup_auto_fetch,
+            inputs=[],
+            outputs=_yt_comment_outputs_ext,
+        )
         demo.load(fn=None, js=_PERSIST_JS)
 
     return demo
