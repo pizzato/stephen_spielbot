@@ -1973,7 +1973,8 @@ def _queue_html(queue: list[dict]) -> str:
         "posted": "#16a34a",
     }
     rows = []
-    for i, item in enumerate(queue):
+    removable_idx = 0  # 1-based counter for non-posted items (matches Queue # input)
+    for item in queue:
         title = html.escape(item.get("final_title", "") or "")
         commenter = html.escape(item.get("commenter", "") or "")
         status = item.get("status", "pending")
@@ -1984,9 +1985,14 @@ def _queue_html(queue: list[dict]) -> str:
             f'style="color:#2563eb">View on YouTube</a>'
             if yt_url else ""
         )
+        if status != "posted":
+            removable_idx += 1
+            num_label = f'<span style="color:#6b7280;margin-right:6px">#{removable_idx}</span>'
+        else:
+            num_label = '<span style="color:#d1d5db;margin-right:6px">—</span>'
         rows.append(
             f'<div style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px">'
-            f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>'
+            f'{num_label}'
             f'<strong>{title}</strong>'
             f'<span style="font-size:11px;margin-left:8px;padding:1px 6px;border-radius:9999px;'
             f'background:{color}22;color:{color}">{status}</span>'
@@ -2221,38 +2227,14 @@ def on_yt_approve(row_idx: int, title_override: str) -> tuple:
     queue = yt.load_queue()
     msg = f"Approved: {html.escape(final_title)}"
 
-    # Auto-start trigger (when auto_start_job is on the chain handles navigation)
+    # Auto-start trigger
     trigger = None
-    auto_start = cfg.get("youtube_auto_start_job", False)
-    if auto_start and not _is_job_running():
+    if cfg.get("youtube_auto_start_job", False) and not _is_job_running():
         trigger = _best_pending_queue_item()
         if trigger:
             msg += " — auto-starting job."
 
-    # Navigate to Create tab and populate fields (skip when auto-start handles it)
-    if not auto_start:
-        video_prompt = video_brief or ""
-        n_scenes = queue_item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
-        default_style = cfg.get("default_visual_style", "")
-        voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
-        tab_upd        = gr.update(selected="create")
-        title_upd      = gr.update(value=final_title)
-        prompt_upd     = gr.update(value=video_prompt)
-        n_scenes_upd   = gr.update(value=int(n_scenes))
-        voice_upd      = gr.update(value=voice, choices=get_voice_choices())
-        style_box_upd  = gr.update(value=default_style)
-        style_state_v  = default_style
-    else:
-        tab_upd = style_box_upd = title_upd = prompt_upd = n_scenes_upd = voice_upd = gr.update()
-        style_state_v = gr.update()
-
-    return (
-        _yt_refresh_outputs(cache, queue, msg)   # 4-tuple
-        + (trigger,)                              # auto_start_trigger
-        + (tab_upd, title_upd, prompt_upd,        # Create tab navigation
-           n_scenes_upd, voice_upd,
-           style_box_upd, style_state_v)
-    )
+    return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
 
 
 def on_yt_reject(row_idx: int) -> tuple:
@@ -2269,17 +2251,14 @@ def on_yt_reject(row_idx: int) -> tuple:
     return _yt_refresh_outputs(cache, queue, f"Rejected comment from {html.escape(comment.get('commenter', ''))}")
 
 
-def on_yt_launch_video(row_idx: int) -> tuple:
-    queue = yt.load_queue()
-    pending = [q for q in queue if q.get("status") == "pending"]
-    idx = int(row_idx or 1) - 1
-    if idx < 0 or idx >= len(pending):
-        return gr.update(), gr.update(), gr.update(), f"Row {row_idx} not found in queue.", gr.update(), gr.update(), gr.update(), gr.update()
-    item = pending[idx]
-    title = item.get("final_title", "")
-    # Use pre-generated directorial brief (never fall back to raw comment text)
-    video_prompt = item.get("video_prompt") or ""
+def _load_queue_item_into_create(item: dict) -> tuple:
+    """Return Create-tab navigation tuple for a queue item.
+    Outputs: (tabs, video_title_in, title_in, yt_action_status,
+              style_box, style_state, n_scenes_in, voice_dropdown)
+    """
     cfg = load_config()
+    title = item.get("final_title", "")
+    video_prompt = item.get("video_prompt") or ""
     default_style = cfg.get("default_visual_style", "")
     n_scenes = item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
     voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
@@ -2293,6 +2272,42 @@ def on_yt_launch_video(row_idx: int) -> tuple:
         gr.update(value=int(n_scenes)),
         gr.update(value=voice, choices=get_voice_choices()),
     )
+
+
+def on_yt_start_next_video() -> tuple:
+    """Start the highest-interestingness pending queue item in the Create tab."""
+    queue = yt.load_queue()
+    pending = sorted(
+        [q for q in queue if q.get("status") == "pending"],
+        key=lambda q: (q.get("interestingness", 0.5), q.get("created_at", 0)),
+        reverse=True,
+    )
+    if not pending:
+        return (gr.update(),) * 8  # no pending items — no-op
+    return _load_queue_item_into_create(pending[0])
+
+
+def on_yt_remove_from_queue(row_idx: int) -> tuple:
+    """Remove a queue item by position (1-based). Returns updated queue HTML + status."""
+    queue = yt.load_queue()
+    # Only non-posted items are numbered in the UI
+    removable = [q for q in queue if q.get("status") not in ("posted",)]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(removable):
+        return _queue_html(queue), f"Row {row_idx} not found in queue."
+    item = removable[idx]
+    title = item.get("final_title", "")
+    # Remove from queue list and save
+    queue = [q for q in queue if q.get("id") != item.get("id")]
+    yt.save_queue(queue)
+    # Also revert the comment status so it can be re-approved later if needed
+    cache = yt.load_comments_cache()
+    for c in cache:
+        if c.get("comment_id") == item.get("comment_id"):
+            c["status"] = "evaluated"
+            break
+    yt.save_comments_cache(cache)
+    return _queue_html(queue), f"Removed from queue: {html.escape(title)}"
 
 
 def _prepare_auto_start(queue_item: dict | None) -> tuple:
@@ -2805,12 +2820,17 @@ def build_ui() -> gr.Blocks:
                         label="Title override (leave blank to use suggested)", scale=3
                     )
                 with gr.Row():
-                    yt_approve_btn  = gr.Button("Approve & Open in Create tab →", variant="primary", scale=2)
+                    yt_approve_btn  = gr.Button("Approve", variant="primary", scale=1)
                     yt_reject_btn   = gr.Button("Reject", variant="stop", scale=1)
                 yt_action_status = gr.Markdown("")
 
                 gr.Markdown("### Video Queue")
                 yt_queue_html = gr.HTML(value=_queue_html(yt.load_queue()))
+                with gr.Row():
+                    yt_start_next_btn = gr.Button("▶ Start Next Video in Queue", variant="primary", scale=2)
+                    yt_queue_row_num  = gr.Number(value=1, label="Queue #", minimum=1, step=1, scale=1)
+                    yt_remove_queue_btn = gr.Button("🗑 Remove from Queue", variant="stop", scale=1)
+                yt_queue_action_status = gr.Markdown("")
 
             # ── Create ───────────────────────────────────────────────────
             with gr.Tab("🎬 Create", id="create"):
@@ -3653,16 +3673,23 @@ def build_ui() -> gr.Blocks:
         yt_approve_btn.click(
             fn=on_yt_approve,
             inputs=[yt_row_num, yt_title_override],
-            outputs=(
-                _yt_approve_outputs_ext
-                + [tabs, video_title_in, title_in, n_scenes_in, voice_dropdown,
-                   style_box, style_state]
-            ),
+            outputs=_yt_approve_outputs_ext,
         )
         yt_reject_btn.click(
             fn=on_yt_reject,
             inputs=[yt_row_num],
             outputs=_yt_approve_outputs,
+        )
+        yt_start_next_btn.click(
+            fn=on_yt_start_next_video,
+            inputs=[],
+            outputs=[tabs, video_title_in, title_in, yt_action_status,
+                     style_box, style_state, n_scenes_in, voice_dropdown],
+        )
+        yt_remove_queue_btn.click(
+            fn=on_yt_remove_from_queue,
+            inputs=[yt_queue_row_num],
+            outputs=[yt_queue_html, yt_queue_action_status],
         )
 
         # Auto-start chain: when yt_auto_start_trigger changes, populate Create tab
