@@ -3023,12 +3023,37 @@ def _on_startup_auto_fetch() -> tuple:
 
 
 def _on_post_done_refetch() -> tuple:
-    """Runs after a post completes. Fetch+evaluate new comments if configured."""
+    """Runs after a post completes. Fetch+evaluate new comments if configured.
+
+    Always attempts to continue the automation loop:
+    - If youtube_auto_fetch_evaluate is on  → full fetch + evaluate + pick next
+    - If only youtube_auto_start_job is on  → skip API fetch, pick from current queue/suggestions
+    - Otherwise                             → no-op
+    """
     cfg = load_config()
-    if not cfg.get("youtube_auto_fetch_evaluate", False):
-        return (gr.update(),) * 5
-    auto_approve = cfg.get("youtube_auto_approve_comments", False)
-    return on_yt_fetch_and_evaluate(auto_approve)
+    auto_start = cfg.get("youtube_auto_start_job", False)
+    auto_fetch  = cfg.get("youtube_auto_fetch_evaluate", False)
+
+    if auto_fetch:
+        auto_approve = cfg.get("youtube_auto_approve_comments", False)
+        logger.info("_on_post_done_refetch: fetching + evaluating new YouTube comments")
+        return on_yt_fetch_and_evaluate(auto_approve)
+
+    if auto_start and not _is_job_running():
+        # Fetch not enabled — skip the API call but still pick the next job
+        logger.info("_on_post_done_refetch: auto_fetch off, checking queue/suggestions for next job")
+        queue = yt.load_queue()
+        cache = yt.load_comments_cache()
+        trigger = _best_pending_queue_item()
+        if not trigger:
+            trigger = _auto_pick_suggestion(cfg)
+        msg = (
+            f"Auto-starting: {trigger.get('final_title', '')}." if trigger
+            else "No pending items or suggestions."
+        )
+        return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
+
+    return (gr.update(),) * 5
 
 
 def build_ui() -> gr.Blocks:
@@ -4225,6 +4250,11 @@ def build_ui() -> gr.Blocks:
             ],
             outputs=[post_status_html, post_url_html],
         ).then(
+            fn=lambda: (gr.update(selected="youtube"),
+                        "⏳ Video posted! Fetching new comments and evaluating requests…"),
+            inputs=[],
+            outputs=[tabs, yt_comments_status],
+        ).then(
             fn=_on_post_done_refetch,
             inputs=[],
             outputs=_yt_comment_outputs_ext,
@@ -4241,10 +4271,30 @@ def build_ui() -> gr.Blocks:
             else:
                 yield gr.update(), gr.update()
 
+        def _navigate_to_yt_after_autopost(auto_post_active: bool):
+            """Navigate to the YouTube tab so the user can see the fetch-evaluate
+            cycle happening.  Skipped on the reset-to-False trigger firing."""
+            if not auto_post_active:
+                return gr.update(), gr.update()
+            cfg = load_config()
+            if not cfg.get("youtube_auto_fetch_evaluate", False):
+                return gr.update(), gr.update()
+            return (
+                gr.update(selected="youtube"),
+                "⏳ Video posted! Fetching new comments and evaluating requests…",
+            )
+
         post_auto_trigger_state.change(
             fn=_maybe_auto_post,
             inputs=[post_auto_trigger_state, active_job_state],
             outputs=[post_status_html, post_url_html],
+        ).then(
+            # Navigate to YouTube tab so the full loop is visually confirmed.
+            # Reads post_auto_trigger_state: if it's already False (the reset
+            # firing) this is a no-op, preventing a spurious tab switch.
+            fn=_navigate_to_yt_after_autopost,
+            inputs=[post_auto_trigger_state],
+            outputs=[tabs, yt_comments_status],
         ).then(
             fn=_on_post_done_refetch,
             inputs=[],
