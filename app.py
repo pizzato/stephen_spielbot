@@ -4115,22 +4115,43 @@ def build_ui() -> gr.Blocks:
             _yt_cb.change(fn=lambda v: v, inputs=[_yt_cb], outputs=[_cfg_cb])
             _cfg_cb.change(fn=lambda v: v, inputs=[_cfg_cb], outputs=[_yt_cb])
 
-        # "Fully automated" master toggle sets all five individual flags
+        # "Fully automated" master toggle sets all five individual flags in BOTH tabs,
+        # then forces a config save so the values are persisted immediately.
+        # Updating both tabs in one step avoids a race where on_save_config reads the
+        # old (False) values before the cfg checkboxes have been written.
         def _on_fully_auto(enabled: bool):
-            v = gr.update(value=enabled)
-            return v, v, v, v, v
+            return tuple(gr.update(value=enabled) for _ in range(10))
+
+        _fully_auto_yt_outputs = [
+            yt_auto_fetch_cb, yt_auto_approve_cb, yt_auto_start_cb,
+            yt_auto_script_cb, yt_auto_post_cb,
+            cfg_yt_auto_fetch, cfg_yt_auto_approve, cfg_yt_auto_start,
+            cfg_yt_auto_script, cfg_yt_auto_post,
+        ]
+        _fully_auto_cfg_outputs = [
+            cfg_yt_auto_fetch, cfg_yt_auto_approve, cfg_yt_auto_start,
+            cfg_yt_auto_script, cfg_yt_auto_post,
+            yt_auto_fetch_cb, yt_auto_approve_cb, yt_auto_start_cb,
+            yt_auto_script_cb, yt_auto_post_cb,
+        ]
 
         yt_fully_automated_cb.change(
             fn=_on_fully_auto,
             inputs=[yt_fully_automated_cb],
-            outputs=[yt_auto_fetch_cb, yt_auto_approve_cb, yt_auto_start_cb,
-                     yt_auto_script_cb, yt_auto_post_cb],
+            outputs=_fully_auto_yt_outputs,
+        ).then(
+            fn=on_save_config,
+            inputs=_cfg_inputs,
+            outputs=_cfg_outputs,
         )
         cfg_yt_fully_automated.change(
             fn=_on_fully_auto,
             inputs=[cfg_yt_fully_automated],
-            outputs=[cfg_yt_auto_fetch, cfg_yt_auto_approve, cfg_yt_auto_start,
-                     cfg_yt_auto_script, cfg_yt_auto_post],
+            outputs=_fully_auto_cfg_outputs,
+        ).then(
+            fn=on_save_config,
+            inputs=_cfg_inputs,
+            outputs=_cfg_outputs,
         )
 
         # ── Post tab wiring ───────────────────────────────────────────────────
