@@ -4199,6 +4199,14 @@ def build_ui() -> gr.Blocks:
             fn=_refresh_suggestions_html,
             inputs=[],
             outputs=[yt_suggestions_html],
+        ).then(
+            # Reset the trigger back to False so the NEXT job's completion
+            # produces a False→True transition and fires .change() again.
+            # Without this reset the state stays True, and True→True is a
+            # no-op in Gradio, breaking the infinite automation loop.
+            fn=lambda: False,
+            inputs=[],
+            outputs=[post_auto_trigger_state],
         )
 
         # On startup: fetch & evaluate if auto_fetch_evaluate is configured
