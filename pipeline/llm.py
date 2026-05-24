@@ -503,34 +503,36 @@ def generate_script(
 # ── YouTube video prompt generation (director's brief) ───────────────────────
 
 _DIRECTOR_SYSTEM = """\
-You are a documentary film director writing style and approach notes for your creative team.
+You are a documentary film director writing a concise production-style brief for your creative team.
 
-Your job is to define HOW the video should be made — not WHAT it covers. The script writer will handle the content; you handle the craft.
+Your ONLY job is to define HOW the film should be made — never WHAT it is about.
+The script writer handles all content, facts, people, and events. You handle craft and style only.
 
-Write 3-5 sentences covering:
-- Tone and editorial stance (objective/emotional/provocative/reverent, opinion-free or opinionated, etc.)
-- Visual treatment (period-accurate, stylised, archival-feeling, contemporary, etc.)
-- Narrative voice and pacing (detached narrator, intimate, urgent, slow-burn, etc.)
-- Any specific filmmaking constraints or aesthetic rules that should apply throughout
+Write 3–5 short, direct sentences. Each sentence must be a clear, actionable filmmaking instruction. Cover:
+1. Editorial stance — e.g. "Present facts without opinion or judgement."
+2. Visual treatment — e.g. "Use footage that feels period-accurate, as if shot at the time."
+3. Narrative voice and pacing — e.g. "Calm, authoritative narrator; slow deliberate pace."
+4. One or two hard aesthetic rules — e.g. "No talking-head interviews. No modern graphics."
 
-Do NOT mention specific facts, events, people, or subject matter. Do NOT describe what scenes should show. This is purely the "how to make it" brief — the stylistic rulebook that applies regardless of what topic the script covers.
+STRICT RULES:
+- Do NOT name any person, place, event, technology, or subject matter — not even the topic implied by the title.
+- Do NOT describe what any scene should show or what story points to cover.
+- Do NOT use flowery or poetic language — be direct and prescriptive, like a filmmaker's style guide.
+- Every sentence should make sense applied to ANY documentary, not just this one.
 
-Output only the brief text, no labels or headings."""
+Output only the brief, no labels, headings, or preamble."""
 
 _DIRECTOR_PROMPT = """\
 Video title: "{title}"
-Viewer request: "{comment}"
 
-Write the directorial style notes for this video — the approach, tone, and visual treatment the creative team should follow."""
+Write the directorial style brief for this production."""
 
 
-def generate_video_prompt(title: str, comment: str) -> str:
-    """Generate a rich director's production brief for use as the video description/prompt."""
+def generate_video_prompt(title: str, comment: str) -> str:  # noqa: ARG001
+    """Generate a directorial style brief (how to make it, not what it covers)."""
     cfg = _load_cfg()
-    prompt = _DIRECTOR_PROMPT.format(
-        title=title or "Untitled",
-        comment=comment.strip() or title,
-    )
+    # Note: comment is intentionally ignored — the brief must be topic-agnostic.
+    prompt = _DIRECTOR_PROMPT.format(title=title or "Untitled")
     backend = cfg.get("llm_backend", "local")
     try:
         if backend == "claude":
@@ -545,7 +547,7 @@ def generate_video_prompt(title: str, comment: str) -> str:
                 cfg.get("claude_model", "claude-sonnet-4-6"),
                 _DIRECTOR_SYSTEM,
                 prompt,
-                max_tokens=400,
+                max_tokens=200,
                 label="video_prompt",
             )
             return text.strip()
@@ -553,13 +555,13 @@ def generate_video_prompt(title: str, comment: str) -> str:
         model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
         return _local_llm(
             [{"role": "system", "content": _DIRECTOR_SYSTEM}, {"role": "user", "content": prompt}],
-            max_tokens=400,
+            max_tokens=200,
             url=url,
             model=model,
         ).strip()
     except Exception as exc:
         logger.warning("generate_video_prompt failed: %s", exc)
-        return comment.strip() or title
+        return ""  # empty string — caller should show Create tab without a pre-filled prompt
 
 
 # ── YouTube description generation ───────────────────────────────────────────
