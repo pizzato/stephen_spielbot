@@ -17,6 +17,19 @@ _COVER_NEGATIVE = (
 )
 
 
+def shorten_title_for_cover(title: str, max_chars: int = 40) -> str:
+    """Return a thumbnail-friendly title: drop subtitle after ':' or '—', then cap length."""
+    for sep in (":", "—", " - "):
+        if sep in title:
+            title = title.split(sep, 1)[0].strip()
+            break
+    if len(title) <= max_chars:
+        return title
+    # truncate at last word boundary within max_chars
+    truncated = title[:max_chars].rsplit(" ", 1)[0].rstrip(",;")
+    return truncated
+
+
 def build_cover_prompt(title: str, style: str = "") -> str:
     """Build a FLUX prompt for a YouTube documentary cover image."""
     style_note = style.strip().rstrip(".")
