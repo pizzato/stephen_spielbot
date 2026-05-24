@@ -2184,8 +2184,9 @@ def on_yt_fetch_and_evaluate(auto_approve: bool) -> tuple:
 def _prefetch_video_prompt(queue_item_id: str, title: str, comment_text: str) -> None:
     """Background thread: generate directorial brief and store in queue item."""
     try:
-        prompt = generate_video_prompt(title, comment_text)
-        yt.update_queue_item(queue_item_id, video_prompt=prompt)
+        prompt = generate_video_prompt(title, comment_text)  # comment_text now ignored by LLM
+        if prompt:
+            yt.update_queue_item(queue_item_id, video_prompt=prompt)
     except Exception as exc:
         logger.warning("Background prompt generation failed for %s: %s", queue_item_id, exc)
 
@@ -2209,12 +2210,14 @@ def on_yt_approve(row_idx: int, title_override: str) -> tuple:
     comment["status"] = "approved"
     yt.save_comments_cache(cache)
     queue_item = yt.add_to_queue(comment, final_title)
-    # Start generating the directorial brief in the background
-    threading.Thread(
-        target=_prefetch_video_prompt,
-        args=(queue_item["id"], final_title, comment.get("text", "")),
-        daemon=True,
-    ).start()
+
+    # Generate the directorial brief synchronously so it's ready before navigating
+    # to the Create tab.  Previous approach used a background thread which meant
+    # the queue_item had no video_prompt yet when on_yt_approve returned.
+    video_brief = generate_video_prompt(final_title, comment.get("text", ""))
+    if video_brief:
+        yt.update_queue_item(queue_item["id"], video_prompt=video_brief)
+
     queue = yt.load_queue()
     msg = f"Approved: {html.escape(final_title)}"
 
@@ -2228,7 +2231,7 @@ def on_yt_approve(row_idx: int, title_override: str) -> tuple:
 
     # Navigate to Create tab and populate fields (skip when auto-start handles it)
     if not auto_start:
-        video_prompt = queue_item.get("video_prompt") or comment.get("text", "")
+        video_prompt = video_brief or ""
         n_scenes = queue_item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
         default_style = cfg.get("default_visual_style", "")
         voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
@@ -2274,8 +2277,8 @@ def on_yt_launch_video(row_idx: int) -> tuple:
         return gr.update(), gr.update(), gr.update(), f"Row {row_idx} not found in queue.", gr.update(), gr.update(), gr.update(), gr.update()
     item = pending[idx]
     title = item.get("final_title", "")
-    # Use pre-generated directorial brief (set by background thread at approval time)
-    video_prompt = item.get("video_prompt") or item.get("comment_text", "")
+    # Use pre-generated directorial brief (never fall back to raw comment text)
+    video_prompt = item.get("video_prompt") or ""
     cfg = load_config()
     default_style = cfg.get("default_visual_style", "")
     n_scenes = item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
@@ -2299,7 +2302,7 @@ def _prepare_auto_start(queue_item: dict | None) -> tuple:
     if not queue_item:
         return gr.update(), gr.update(), gr.update(), gr.update()
     title = queue_item.get("final_title", "")
-    prompt = queue_item.get("video_prompt") or queue_item.get("comment_text", "")
+    prompt = queue_item.get("video_prompt") or ""  # never use raw comment text
     n_scenes = queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 5)
     logger.info("Auto-starting job: %r (%d scenes)", title, n_scenes)
     return (
