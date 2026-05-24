@@ -31,6 +31,7 @@ _CONFIG_DIR = Path.home() / ".config" / "video-generator"
 _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
+SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -541,3 +542,59 @@ def remove_queue_item(item_id: str) -> bool:
         return False
     save_queue(new_q)
     return True
+
+
+# ── Suggestions ───────────────────────────────────────────────────────────────
+
+def load_suggestions() -> list[dict]:
+    """Load LLM-generated video topic suggestions from disk."""
+    try:
+        return json.loads(SUGGESTIONS_PATH.read_text())
+    except Exception:
+        return []
+
+
+def save_suggestions(suggestions: list[dict]) -> None:
+    SUGGESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SUGGESTIONS_PATH.write_text(json.dumps(suggestions, indent=2))
+
+
+# ── Channel video title fetching ──────────────────────────────────────────────
+
+def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50) -> list[str]:
+    """Return titles of videos uploaded to the authenticated user's channel (newest first)."""
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return []
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+
+        # Get the uploads playlist ID for this channel
+        ch_resp = youtube.channels().list(part="contentDetails", mine=True).execute()
+        items = ch_resp.get("items", [])
+        if not items:
+            return []
+        uploads_id = items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        titles: list[str] = []
+        next_page: str | None = None
+        while len(titles) < max_results:
+            resp = youtube.playlistItems().list(
+                part="snippet",
+                playlistId=uploads_id,
+                maxResults=min(50, max_results - len(titles)),
+                pageToken=next_page,
+            ).execute()
+            for item in resp.get("items", []):
+                t = item["snippet"].get("title", "")
+                if t and t not in ("Private video", "Deleted video"):
+                    titles.append(t)
+            next_page = resp.get("nextPageToken")
+            if not next_page:
+                break
+        logger.info("Fetched %d channel video titles", len(titles))
+        return titles
+    except Exception as exc:
+        logger.warning("fetch_channel_video_titles failed: %s", exc)
+        return []
