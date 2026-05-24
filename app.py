@@ -171,6 +171,11 @@ _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 _auto_post_triggered: set[str] = set()
 _auto_post_lock = threading.Lock()
 
+# Flag that prevents two simultaneous yt_auto_start_trigger.change chains
+# (e.g. one from demo.load startup fetch, one from the user pressing the
+# button at the same time) from both launching full pipelines concurrently.
+_auto_start_in_progress = threading.Event()
+
 
 def _is_job_running() -> bool:
     """Return True if any video generation job is currently in progress."""
@@ -322,12 +327,17 @@ def _final_path_for_work_dir(work_dir: Path) -> Path:
             (p.stat().st_mtime for p in (meta_path, status_path) if p.exists()),
             default=0.0,
         )
-        recent = [
-            p for p in OUTPUT_DIR.glob("*.mp4")
-            if p.stat().st_size > 10_000 and p.stat().st_mtime >= marker_mtime - 600
-        ]
-        if recent:
-            return max(recent, key=lambda p: p.stat().st_mtime)
+        # Only use the recency heuristic when we have a real anchor time.
+        # If marker_mtime == 0 it means neither job.json nor progress.json
+        # exists yet (job just started), so marker_mtime - 600 == -600 and
+        # every .mp4 in OUTPUT_DIR would match — returning the wrong video.
+        if marker_mtime > 0:
+            recent = [
+                p for p in OUTPUT_DIR.glob("*.mp4")
+                if p.stat().st_size > 10_000 and p.stat().st_mtime >= marker_mtime - 600
+            ]
+            if recent:
+                return max(recent, key=lambda p: p.stat().st_mtime)
     except Exception:
         pass
 
@@ -2359,6 +2369,13 @@ def _prepare_auto_start(queue_item: dict | None) -> tuple:
     """
     if not queue_item:
         return gr.update(), gr.update(), gr.update(), gr.update()
+    # Guard against duplicate chains (e.g. demo.load startup fetch + button
+    # click firing simultaneously).  The first caller sets the event; any
+    # second concurrent call sees it already set and bails out as a no-op.
+    if _auto_start_in_progress.is_set():
+        logger.info("_prepare_auto_start: another chain already in progress, skipping")
+        return gr.update(), gr.update(), gr.update(), gr.update()
+    _auto_start_in_progress.set()
     title = queue_item.get("final_title", "")
     prompt = queue_item.get("video_prompt") or ""  # never use raw comment text
     n_scenes = max(6, queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 6))
@@ -4033,6 +4050,9 @@ def build_ui() -> gr.Blocks:
         ).then(
             fn=lambda: None,  # reset trigger so next auto-start fires cleanly
             inputs=[], outputs=[yt_auto_start_trigger],
+        ).then(
+            fn=lambda: _auto_start_in_progress.clear(),  # allow next auto-start chain
+            inputs=[], outputs=[],
         )
 
         # Keep YouTube-tab automation checkboxes in sync with Config tab (bidirectional)
