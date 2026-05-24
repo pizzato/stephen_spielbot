@@ -2218,14 +2218,38 @@ def on_yt_approve(row_idx: int, title_override: str) -> tuple:
     queue = yt.load_queue()
     msg = f"Approved: {html.escape(final_title)}"
 
-    # Auto-start trigger
+    # Auto-start trigger (when auto_start_job is on the chain handles navigation)
     trigger = None
-    if cfg.get("youtube_auto_start_job", False) and not _is_job_running():
+    auto_start = cfg.get("youtube_auto_start_job", False)
+    if auto_start and not _is_job_running():
         trigger = _best_pending_queue_item()
         if trigger:
-            msg += f" — auto-starting job."
+            msg += " — auto-starting job."
 
-    return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
+    # Navigate to Create tab and populate fields (skip when auto-start handles it)
+    if not auto_start:
+        video_prompt = queue_item.get("video_prompt") or comment.get("text", "")
+        n_scenes = queue_item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
+        default_style = cfg.get("default_visual_style", "")
+        voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
+        tab_upd        = gr.update(selected="create")
+        title_upd      = gr.update(value=final_title)
+        prompt_upd     = gr.update(value=video_prompt)
+        n_scenes_upd   = gr.update(value=int(n_scenes))
+        voice_upd      = gr.update(value=voice, choices=get_voice_choices())
+        style_box_upd  = gr.update(value=default_style)
+        style_state_v  = default_style
+    else:
+        tab_upd = style_box_upd = title_upd = prompt_upd = n_scenes_upd = voice_upd = gr.update()
+        style_state_v = gr.update()
+
+    return (
+        _yt_refresh_outputs(cache, queue, msg)   # 4-tuple
+        + (trigger,)                              # auto_start_trigger
+        + (tab_upd, title_upd, prompt_upd,        # Create tab navigation
+           n_scenes_upd, voice_upd,
+           style_box_upd, style_state_v)
+    )
 
 
 def on_yt_reject(row_idx: int) -> tuple:
@@ -2778,9 +2802,8 @@ def build_ui() -> gr.Blocks:
                         label="Title override (leave blank to use suggested)", scale=3
                     )
                 with gr.Row():
-                    yt_approve_btn  = gr.Button("Approve", variant="primary", scale=1)
+                    yt_approve_btn  = gr.Button("Approve & Open in Create tab →", variant="primary", scale=2)
                     yt_reject_btn   = gr.Button("Reject", variant="stop", scale=1)
-                    yt_launch_btn   = gr.Button("Launch in Create tab →", variant="secondary", scale=2)
                 yt_action_status = gr.Markdown("")
 
                 gr.Markdown("### Video Queue")
@@ -3627,17 +3650,16 @@ def build_ui() -> gr.Blocks:
         yt_approve_btn.click(
             fn=on_yt_approve,
             inputs=[yt_row_num, yt_title_override],
-            outputs=_yt_approve_outputs_ext,
+            outputs=(
+                _yt_approve_outputs_ext
+                + [tabs, video_title_in, title_in, n_scenes_in, voice_dropdown,
+                   style_box, style_state]
+            ),
         )
         yt_reject_btn.click(
             fn=on_yt_reject,
             inputs=[yt_row_num],
             outputs=_yt_approve_outputs,
-        )
-        yt_launch_btn.click(
-            fn=on_yt_launch_video,
-            inputs=[yt_row_num],
-            outputs=[tabs, video_title_in, title_in, yt_action_status, style_box, style_state, n_scenes_in, voice_dropdown],
         )
 
         # Auto-start chain: when yt_auto_start_trigger changes, populate Create tab
