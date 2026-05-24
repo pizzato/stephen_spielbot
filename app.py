@@ -3388,16 +3388,19 @@ def build_ui() -> gr.Blocks:
             outputs=[progress_bar, final_video_out, combined_state,
                      music_state, ambient_state, tabs, active_job_state,
                      post_auto_trigger_state],
+            concurrency_limit=1,  # drop extra ticks instead of queuing them up
         )
         progress_timer.tick(
             fn=_orchestration_html,
             inputs=[active_job_state],
             outputs=[orchestration_status],
+            concurrency_limit=1,
         )
         progress_timer.tick(
             fn=_poll_cover_image,
             inputs=[active_job_state],
             outputs=[progress_cover_image],
+            concurrency_limit=1,
         )
         resume_job_btn.click(
             fn=on_resume_active_job,
@@ -3800,6 +3803,7 @@ def build_ui() -> gr.Blocks:
             fn=_on_tab_select,
             inputs=[active_job_state],
             outputs=[yt_auth_status, recent_job_dropdown] + _post_load_outputs,
+            queue=False,  # tab navigation is always instant, never blocked by the queue
         )
 
         post_regen_desc_btn.click(
