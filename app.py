@@ -58,6 +58,7 @@ from pipeline.worker_pool import WorkerPool, alive_workers
 from pipeline.cover import (
     overlay_title_on_image as _overlay_title_on_image,
     build_cover_prompt as _cover_prompt,
+    shorten_title_for_cover as _shorten_title,
     COVER_WIDTH as _COVER_W,
     COVER_HEIGHT as _COVER_H,
 )
@@ -927,7 +928,7 @@ def on_generate_cover_image(video_title: str, style: str, job_id: str):
         return
 
     cfg = load_config()
-    prompt = _cover_prompt(title, style or "")
+    prompt = _cover_prompt(_shorten_title(title), style or "")
 
     yield (
         gr.update(value=f"Generating cover image for '{title}'…"),
@@ -3505,7 +3506,7 @@ def build_ui() -> gr.Blocks:
             cfg = load_config()
             cover_path = work_dir / "cover.png"
             cover_base = work_dir / "cover_base.png"
-            prompt = _cover_prompt(title, style)
+            prompt = _cover_prompt(_shorten_title(title), style)
 
             yield _post_status_html(f"Generating cover image for '{title}'…", "info"), gr.update(), ""
 

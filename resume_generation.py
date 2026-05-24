@@ -51,6 +51,7 @@ from pipeline.worker_pool import WorkerPool, alive_workers
 from pipeline.cover import (
     overlay_title_on_image as _overlay_title_on_image,
     build_cover_prompt as _cover_prompt,
+    shorten_title_for_cover as _shorten_title,
     COVER_WIDTH as _COVER_W,
     COVER_HEIGHT as _COVER_H,
 )
@@ -372,7 +373,7 @@ def main(work_dir: Path) -> None:
         try:
             _cover_url = worker_pool.acquire()
             generate_scene_image(
-                _cover_prompt(video_title, style_clean),
+                _cover_prompt(_shorten_title(video_title), style_clean),
                 cover_base,
                 width=_COVER_W,
                 height=_COVER_H,
