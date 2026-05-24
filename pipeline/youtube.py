@@ -247,7 +247,8 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50) -> l
 # ── LLM evaluation ────────────────────────────────────────────────────────────
 
 _EVAL_PROMPT = """\
-You are evaluating a YouTube comment to determine if it is requesting a specific video topic.
+You are evaluating a YouTube comment for an educational/documentary channel that produces \
+high-quality AI-generated documentary videos on history, science, culture, and biography.
 
 Comment from "{commenter}":
 {comment_text}
@@ -255,12 +256,18 @@ Comment from "{commenter}":
 Respond with a JSON object with EXACTLY these fields:
 - "is_request": boolean — is this comment clearly asking for a video about a specific, identifiable topic?
 - "suggested_title": string — if is_request is true, a clear YouTube video title (e.g. "The Rise and Fall of the Ottoman Empire"); otherwise ""
-- "confidence": number 0.0–1.0
-- "reason": string — one sentence explanation
-- "suggested_scene_count": integer 3–15 — if is_request is true, estimate how many scenes (each ~30–60 seconds) would be needed to properly cover this topic with adequate depth; otherwise 5. A simple topic needs 3–5 scenes; a complex historical or scientific topic needs 8–15.
+- "confidence": number 0.0–1.0 — how confident you are this is a genuine video request
+- "interestingness": number 0.0–1.0 — if is_request is true, how interesting and suitable this topic is \
+for an educational documentary channel (consider: educational value, broad audience appeal, \
+documentary potential, topic depth, likely view count, uniqueness vs over-done topics); otherwise 0.0
+- "reason": string — one sentence explanation covering both the request classification and interestingness rating
+- "suggested_scene_count": integer 3–15 — if is_request is true, estimate how many scenes (each ~30–60 seconds) \
+would be needed to properly cover this topic; otherwise 5. Simple topics need 3–5; complex historical or scientific topics need 8–15.
 
 Classify as is_request=true ONLY if the comment explicitly asks for a video about a named topic.
 Vague compliments, questions about the channel, spam, or off-topic messages are NOT requests.
+For interestingness: 0.9–1.0 = outstanding topic with broad appeal; 0.7–0.9 = solid documentary topic; \
+0.5–0.7 = decent but niche; below 0.5 = poor fit for documentary format.
 
 Output ONLY the JSON object, no other text."""
 
@@ -268,6 +275,7 @@ _SAFE_DEFAULT = {
     "is_request": False,
     "suggested_title": "",
     "confidence": 0.0,
+    "interestingness": 0.0,
     "reason": "Could not parse LLM response",
     "suggested_scene_count": 5,
 }
@@ -282,6 +290,7 @@ def _parse_eval(text: str) -> dict:
                 "is_request": bool(result.get("is_request", False)),
                 "suggested_title": str(result.get("suggested_title", "")),
                 "confidence": float(result.get("confidence", 0.0)),
+                "interestingness": float(result.get("interestingness", 0.0)),
                 "reason": str(result.get("reason", "")),
                 "suggested_scene_count": max(3, min(15, int(result.get("suggested_scene_count", 5)))),
             }
@@ -503,6 +512,7 @@ def add_to_queue(comment: dict, final_title: str) -> dict:
         "comment_text": comment.get("text", ""),
         "final_title": final_title,
         "suggested_scene_count": comment.get("suggested_scene_count", 5),
+        "interestingness": float(comment.get("interestingness", 0.5)),
         "status": "pending",
         "created_at": time.time(),
         "video_job_id": None,
