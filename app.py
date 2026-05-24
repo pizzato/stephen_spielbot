@@ -160,6 +160,12 @@ COMFYUI_PORT = 8188
 # Thread pool for long blocking operations — keeps SSE alive via heartbeat yields
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
+# Set of work-dir paths that have already fired the auto-post trigger this
+# process lifetime.  Guards against two rapid timer ticks both claiming the
+# trigger before the first one's _write_job_meta() flush reaches disk.
+_auto_post_triggered: set[str] = set()
+_auto_post_lock = threading.Lock()
+
 
 # ── Config helpers ───────────────────────────────────────────────────────────
 
@@ -519,10 +525,15 @@ def _poll_job_outputs(active_job_dir: str):
             and not meta.get("_auto_post_triggered")
         )
         if just_done and load_config().get("youtube_auto_post"):
-            # Mark so we don't re-trigger on the next tick
-            _write_job_meta(work_dir, _auto_post_triggered=True)
-            tabs_upd = gr.update(selected="post")
-            auto_post_trigger = True
+            # Use an in-process lock + set to guard against two rapid timer
+            # ticks both reading _auto_post_triggered=False before the first
+            # write reaches disk (race condition → double upload).
+            with _auto_post_lock:
+                if str(work_dir) not in _auto_post_triggered:
+                    _auto_post_triggered.add(str(work_dir))
+                    _write_job_meta(work_dir, _auto_post_triggered=True)
+                    tabs_upd = gr.update(selected="post")
+                    auto_post_trigger = True
     except Exception:
         pass
 
@@ -2367,6 +2378,28 @@ def on_post_upload(
             gr.update(value="", visible=False),
         )
         return
+
+    # Guard: refuse to re-upload a job that already has a YouTube video ID
+    work_dir_check = _preferred_work_dir(active_job_dir)
+    if work_dir_check:
+        existing_meta = _read_json(_job_meta_path(work_dir_check))
+        if existing_meta.get("youtube_video_id"):
+            existing_url = existing_meta.get("youtube_url", "")
+            yield (
+                _post_status_html(
+                    f"Already uploaded — video ID {existing_meta['youtube_video_id']} exists. "
+                    f"Delete the job record to force re-upload.",
+                    "error",
+                ),
+                gr.update(
+                    value=(
+                        f'<a href="{html.escape(existing_url)}" target="_blank">'
+                        f'{html.escape(existing_url)}</a>'
+                    ) if existing_url else "",
+                    visible=bool(existing_url),
+                ),
+            )
+            return
 
     if not video_path or not Path(video_path).exists():
         yield (
