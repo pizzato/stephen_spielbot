@@ -183,6 +183,16 @@ def _is_job_running() -> bool:
             combined = d / "combined.mp4"
             if cfg_file.exists() and not combined.exists():
                 if cfg_file.stat().st_mtime > cutoff:
+                    # Skip jobs that have already errored or been cancelled —
+                    # they have no combined.mp4 but are not "running".
+                    job_file = d / "job.json"
+                    if job_file.exists():
+                        try:
+                            job_data = json.loads(job_file.read_text())
+                            if job_data.get("status") in ("error", "cancelled"):
+                                continue
+                        except Exception:
+                            pass
                     return True
     except Exception:
         pass
@@ -2303,17 +2313,21 @@ def _load_queue_item_into_create(item: dict) -> tuple:
     )
 
 
-def on_yt_start_next_video() -> tuple:
-    """Start the highest-interestingness pending queue item in the Create tab."""
-    queue = yt.load_queue()
-    pending = sorted(
-        [q for q in queue if q.get("status") == "pending"],
-        key=lambda q: (q.get("interestingness", 0.5), q.get("created_at", 0)),
-        reverse=True,
-    )
-    if not pending:
-        return (gr.update(),) * 8  # no pending items — no-op
-    return _load_queue_item_into_create(pending[0])
+def on_yt_start_next_video() -> dict | None:
+    """Trigger the next pending queue item through the full auto-start chain.
+
+    Returns a queue-item dict (to set yt_auto_start_trigger) or None if there
+    is nothing to start or a job is already running.
+    """
+    if _is_job_running():
+        logger.info("on_yt_start_next_video: job already running, skipping")
+        return None
+    item = _best_pending_queue_item()
+    if not item:
+        # No pending user requests — fall back to AI suggestions
+        cfg = load_config()
+        item = _auto_pick_suggestion(cfg)
+    return item  # None or a queue item dict → drives yt_auto_start_trigger
 
 
 def on_yt_remove_from_queue(row_idx: int) -> tuple:
@@ -3966,8 +3980,7 @@ def build_ui() -> gr.Blocks:
         yt_start_next_btn.click(
             fn=on_yt_start_next_video,
             inputs=[],
-            outputs=[tabs, video_title_in, title_in, yt_action_status,
-                     style_box, style_state, n_scenes_in, voice_dropdown],
+            outputs=[yt_auto_start_trigger],
         )
         yt_remove_queue_btn.click(
             fn=on_yt_remove_from_queue,
