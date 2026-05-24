@@ -564,6 +564,109 @@ def generate_video_prompt(title: str, comment: str) -> str:  # noqa: ARG001
         return ""  # empty string — caller should show Create tab without a pre-filled prompt
 
 
+# ── Video topic suggestions ───────────────────────────────────────────────────
+
+_SUGGESTIONS_SYSTEM = """\
+You are a video topic advisor for an educational documentary YouTube channel that produces
+AI-generated documentary videos on history, science, culture, and biography.
+
+Your job is to recommend fresh, complementary video topics that fill gaps in the channel's
+existing library — different time periods, geographies, domains, or perspectives.
+
+For each suggestion consider: educational value, broad audience appeal, documentary potential,
+topic depth, and uniqueness versus topics already covered.
+
+Return ONLY a JSON array of exactly 5 objects, each with:
+- "title": string — a clear YouTube video title (e.g. "The Rise and Fall of the Ottoman Empire")
+- "reason": string — one sentence explaining why this topic would complement the existing library
+- "interestingness": number 0.0–1.0 — estimated audience appeal and documentary potential
+  (0.9–1.0 = outstanding broad appeal; 0.7–0.9 = solid; 0.5–0.7 = decent but niche; below 0.5 = poor fit)
+
+Output only the raw JSON array, no other text."""
+
+_SUGGESTIONS_PROMPT = """\
+Recommend 5 video topics that would make great new additions to my documentary YouTube channel.
+
+Previous videos I have already made:
+{titles_list}
+
+Suggest topics that are complementary but clearly distinct — different eras, regions, or subject \
+areas that would round out the library and attract new viewers. Avoid anything too similar to the \
+existing list."""
+
+
+def _parse_suggestions(text: str) -> list[dict]:
+    try:
+        m = re.search(r"\[.*\]", text, re.DOTALL)
+        if m:
+            data = json.loads(m.group())
+            if isinstance(data, list):
+                result = []
+                for item in data[:5]:
+                    if isinstance(item, dict) and item.get("title"):
+                        result.append({
+                            "title": str(item["title"]),
+                            "reason": str(item.get("reason", "")),
+                            "interestingness": float(item.get("interestingness", 0.7)),
+                        })
+                return result
+    except Exception:
+        pass
+    return []
+
+
+def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None) -> list[dict]:
+    """Generate 5 video topic suggestions complementary to the channel's existing content.
+
+    Returns a list of dicts with keys: title, reason, interestingness.
+    """
+    if cfg is None:
+        cfg = _load_cfg()
+    titles_list = (
+        "\n".join(f'- "{t}"' for t in previous_titles)
+        if previous_titles
+        else "(no previous videos yet — suggest a varied starting set)"
+    )
+    prompt = _SUGGESTIONS_PROMPT.format(titles_list=titles_list)
+    backend = cfg.get("llm_backend", "local")
+    try:
+        if backend == "claude":
+            api_key = cfg.get("claude_api_key", "")
+            if not api_key:
+                raise RuntimeError("No Claude API key configured")
+            import anthropic
+            import httpx
+            timeout = httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=30.0)
+            client = anthropic.Anthropic(
+                api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout)
+            )
+            text = _claude_call(
+                client,
+                cfg.get("claude_model", "claude-sonnet-4-6"),
+                _SUGGESTIONS_SYSTEM,
+                prompt,
+                max_tokens=700,
+                label="video_suggestions",
+            )
+            return _parse_suggestions(text)
+        # Local backend
+        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
+        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
+        text = _local_llm(
+            [
+                {"role": "system", "content": _SUGGESTIONS_SYSTEM},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=700,
+            url=url,
+            model=model,
+        )
+        return _parse_suggestions(text)
+    except Exception as exc:
+        logger.warning("generate_video_suggestions failed: %s", exc)
+        return []
+
+
 # ── YouTube description generation ───────────────────────────────────────────
 
 _DESC_SYSTEM = """\

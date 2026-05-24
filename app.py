@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -41,7 +42,7 @@ logger.info("Logging to %s", LOG_FILE)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import generate_script, generate_youtube_description, generate_video_prompt, Scene, NEGATIVE_PROMPT
+from pipeline.llm import generate_script, generate_youtube_description, generate_video_prompt, generate_video_suggestions, Scene, NEGATIVE_PROMPT
 import pipeline.youtube as yt
 from pipeline.comfyui import (
     generate_video_clip, generate_video_continuation, generate_music,
@@ -1456,6 +1457,28 @@ def on_generate(video_title, title, n_scenes_val, voice_name, resolution, music_
         job_cfg["title"] = title
         job_cfg["video_title"] = (video_title or "").strip()
         job_cfg["style"] = style_clean
+
+        # Link this job to its originating YouTube queue item (if any) so that
+        # _notify_comment_requester can find the right queue entry by stable ID
+        # even if the video title is later changed before posting.
+        _queue_item_id_for_job = ""
+        try:
+            _title_key = (video_title or "").strip().lower()
+            if _title_key:
+                _queue_snapshot = yt.load_queue()
+                _q_match = next(
+                    (q for q in _queue_snapshot
+                     if q.get("status") == "pending"
+                     and q.get("final_title", "").lower() == _title_key),
+                    None,
+                )
+                if _q_match:
+                    _queue_item_id_for_job = _q_match["id"]
+                    logger.info("Linked job to queue item %s (%r)", _queue_item_id_for_job, video_title)
+        except Exception:
+            pass
+        job_cfg["queue_item_id"] = _queue_item_id_for_job
+
         (work_dir / "job_config.json").write_text(json.dumps(job_cfg, indent=2))
         (work_dir / "progress.json").write_text(
             json.dumps({"pct": 0, "msg": "Generation job queued", "ts": time.time()})
@@ -2183,6 +2206,12 @@ def on_yt_fetch_and_evaluate(auto_approve: bool) -> tuple:
         trigger = _best_pending_queue_item()
         if trigger:
             msg += f" Auto-starting: {trigger.get('final_title', '')}."
+        else:
+            # No pending user requests — fall back to AI-generated suggestions
+            suggestion_item = _auto_pick_suggestion(cfg)
+            if suggestion_item:
+                trigger = suggestion_item
+                msg += f" No requests — auto-starting from AI suggestion: {trigger.get('final_title', '')}."
 
     return _yt_refresh_outputs(cache, queue, msg) + (trigger,)
 
@@ -2260,7 +2289,7 @@ def _load_queue_item_into_create(item: dict) -> tuple:
     title = item.get("final_title", "")
     video_prompt = item.get("video_prompt") or ""
     default_style = cfg.get("default_visual_style", "")
-    n_scenes = item.get("suggested_scene_count") or cfg.get("default_n_scenes", 5)
+    n_scenes = max(6, item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6))
     voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
     return (
         gr.update(selected="create"),
@@ -2318,7 +2347,7 @@ def _prepare_auto_start(queue_item: dict | None) -> tuple:
         return gr.update(), gr.update(), gr.update(), gr.update()
     title = queue_item.get("final_title", "")
     prompt = queue_item.get("video_prompt") or ""  # never use raw comment text
-    n_scenes = queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 5)
+    n_scenes = max(6, queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 6))
     logger.info("Auto-starting job: %r (%d scenes)", title, n_scenes)
     return (
         gr.update(value=title),
@@ -2478,15 +2507,38 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
         if not work_dir:
             return
         queue = yt.load_queue()
-        # Find the queue entry whose work_dir or final_title matches this job
-        work_dir_str = str(work_dir)
-        match = next(
-            (q for q in queue
-             if q.get("work_dir") == work_dir_str
-             or q.get("final_title", "").lower() == video_title.lower()),
-            None,
-        )
+
+        # Primary match: stable queue_item_id written to job_config.json at job-start
+        # time (before the title might be changed on the Post tab).
+        queue_item_id = ""
+        job_cfg_path = work_dir / "job_config.json"
+        if job_cfg_path.exists():
+            try:
+                job_cfg_data = _read_json(job_cfg_path)
+                queue_item_id = job_cfg_data.get("queue_item_id", "")
+            except Exception:
+                pass
+
+        match = None
+        if queue_item_id:
+            match = next((q for q in queue if q.get("id") == queue_item_id), None)
+            if match:
+                logger.debug("_notify_comment_requester: matched by queue_item_id=%s", queue_item_id)
+
+        # Fallback: title match (works as long as user did not rename the video)
         if not match:
+            match = next(
+                (q for q in queue
+                 if q.get("final_title", "").lower() == video_title.lower()
+                 and q.get("status") != "posted"),
+                None,
+            )
+            if match:
+                logger.debug("_notify_comment_requester: matched by title %r", video_title)
+
+        if not match:
+            logger.debug("_notify_comment_requester: no queue match for %r (queue_item_id=%r)",
+                         video_title, queue_item_id)
             return
         # Always mark the queue item as posted with the URL
         yt.update_queue_item(match["id"], status="posted", youtube_url=yt_url)
@@ -2704,6 +2756,209 @@ _PERSIST_JS = """
 """
 
 
+# ── Video Suggestions ─────────────────────────────────────────────────────────
+
+def _suggestions_html(suggestions: list[dict]) -> str:
+    if not suggestions:
+        return (
+            '<div style="color:#6b7280;font-size:13px;padding:4px 0">'
+            'No suggestions yet. Click <strong>Refresh Suggestions</strong> to generate ideas.</div>'
+        )
+    rows = []
+    unused_idx = 0
+    for s in suggestions:
+        used = s.get("used", False)
+        title = html.escape(s.get("title", ""))
+        reason = html.escape(s.get("reason", ""))
+        interest = s.get("interestingness", 0.7)
+        interest_color = "#15803d" if interest >= 0.7 else ("#92400e" if interest >= 0.5 else "#6b7280")
+        if not used:
+            unused_idx += 1
+            num_label = f'<span style="color:#6b7280;margin-right:6px">#{unused_idx}</span>'
+            used_badge = ""
+            opacity = ""
+        else:
+            num_label = '<span style="color:#d1d5db;margin-right:6px">—</span>'
+            used_badge = '<span style="font-size:10px;color:#9ca3af;margin-left:6px">[queued]</span>'
+            opacity = "opacity:0.55;"
+        rows.append(
+            f'<div style="padding:6px 8px;border-bottom:1px solid #e5e7eb;font-size:13px;{opacity}">'
+            f'{num_label}'
+            f'<strong>{title}</strong>'
+            f'<span style="font-size:11px;margin-left:8px;color:{interest_color}">★ {interest:.0%}</span>'
+            f'{used_badge}'
+            f'<div style="font-size:11px;color:#6b7280;margin-top:2px">{reason}</div>'
+            f'</div>'
+        )
+    return (
+        '<div style="border:1px solid #e5e7eb;border-radius:6px;overflow:hidden;'
+        'max-height:260px;overflow-y:auto">'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
+def _channel_video_titles(cfg: dict) -> list[str]:
+    """Collect known video titles: YouTube API first, posted queue items as fallback."""
+    secrets = cfg.get("youtube_client_secrets", "")
+    titles: list[str] = []
+    try:
+        titles = yt.fetch_channel_video_titles(secrets, max_results=50)
+    except Exception as exc:
+        logger.warning("fetch_channel_video_titles error: %s", exc)
+    # Supplement with posted queue items in case the API call failed or is partial
+    try:
+        queue = yt.load_queue()
+        for q in queue:
+            t = q.get("final_title", "")
+            if q.get("status") == "posted" and t and t not in titles:
+                titles.append(t)
+    except Exception:
+        pass
+    return titles
+
+
+def on_refresh_suggestions() -> tuple:
+    """Fetch channel titles and ask the LLM for 5 fresh video topic suggestions.
+    Returns (suggestions_html, status_msg).
+    """
+    cfg = load_config()
+    existing_titles = _channel_video_titles(cfg)
+    suggestions_data = generate_video_suggestions(existing_titles, cfg)
+    if not suggestions_data:
+        current = yt.load_suggestions()
+        return _suggestions_html(current), "⚠️ Failed to generate suggestions — check LLM settings."
+
+    suggestions = [
+        {
+            "id": str(uuid.uuid4())[:8],
+            "title": s["title"],
+            "reason": s["reason"],
+            "interestingness": s["interestingness"],
+            "created_at": time.time(),
+            "used": False,
+        }
+        for s in suggestions_data
+    ]
+    yt.save_suggestions(suggestions)
+    logger.info("Refreshed %d video suggestions", len(suggestions))
+    return _suggestions_html(suggestions), f"Generated {len(suggestions)} suggestions."
+
+
+def on_add_suggestion_to_queue(row_idx: int) -> tuple:
+    """Add a suggestion (by 1-based unused-row index) to the video queue.
+    Returns (suggestions_html, queue_html, status_msg).
+    """
+    suggestions = yt.load_suggestions()
+    unused = [s for s in suggestions if not s.get("used")]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(unused):
+        queue = yt.load_queue()
+        return (
+            _suggestions_html(suggestions),
+            _queue_html(queue),
+            f"Row {row_idx} not found — only {len(unused)} unused suggestion(s).",
+        )
+    suggestion = unused[idx]
+    # Mark used
+    for s in suggestions:
+        if s.get("id") == suggestion.get("id"):
+            s["used"] = True
+            break
+    yt.save_suggestions(suggestions)
+
+    # Add to queue (no originating comment)
+    fake_comment = {
+        "comment_id": "",
+        "video_id": "",
+        "commenter": "AI Suggestion",
+        "text": suggestion.get("reason", ""),
+        "suggested_scene_count": 6,
+        "interestingness": suggestion.get("interestingness", 0.7),
+    }
+    queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
+    if queue_item:
+        threading.Thread(
+            target=_prefetch_video_prompt,
+            args=(queue_item["id"], suggestion["title"], suggestion.get("reason", "")),
+            daemon=True,
+        ).start()
+
+    queue = yt.load_queue()
+    return (
+        _suggestions_html(suggestions),
+        _queue_html(queue),
+        f"Added to queue: {html.escape(suggestion['title'])}",
+    )
+
+
+def _auto_pick_suggestion(cfg: dict) -> dict | None:
+    """Pick the first unused suggestion (generating new ones if needed) and add it to the queue.
+
+    Returns the new pending queue item dict, or None on failure.
+    Called only when there are no pending user requests and auto-start is enabled.
+    """
+    suggestions = yt.load_suggestions()
+    unused = [s for s in suggestions if not s.get("used")]
+
+    if not unused:
+        # Ask the LLM for a fresh batch of 5
+        logger.info("No unused suggestions — generating a new batch")
+        existing_titles = _channel_video_titles(cfg)
+        new_data = generate_video_suggestions(existing_titles, cfg)
+        if not new_data:
+            logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
+            return None
+        suggestions = [
+            {
+                "id": str(uuid.uuid4())[:8],
+                "title": s["title"],
+                "reason": s["reason"],
+                "interestingness": s["interestingness"],
+                "created_at": time.time(),
+                "used": False,
+            }
+            for s in new_data
+        ]
+        yt.save_suggestions(suggestions)
+        unused = suggestions
+
+    suggestion = unused[0]
+    # Mark as used in the persisted list
+    all_suggestions = yt.load_suggestions()
+    for s in all_suggestions:
+        if s.get("id") == suggestion.get("id"):
+            s["used"] = True
+            break
+    yt.save_suggestions(all_suggestions)
+
+    # Add to queue
+    fake_comment = {
+        "comment_id": "",
+        "video_id": "",
+        "commenter": "AI Suggestion",
+        "text": suggestion.get("reason", ""),
+        "suggested_scene_count": 6,
+        "interestingness": suggestion.get("interestingness", 0.7),
+    }
+    queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
+    if not queue_item:
+        logger.warning("_auto_pick_suggestion: add_to_queue returned empty for %r", suggestion["title"])
+        return None
+
+    # Generate directorial brief synchronously (we're already in a background context)
+    try:
+        prompt = generate_video_prompt(suggestion["title"], suggestion.get("reason", ""))
+        if prompt:
+            yt.update_queue_item(queue_item["id"], video_prompt=prompt)
+            queue_item["video_prompt"] = prompt
+    except Exception as exc:
+        logger.warning("_auto_pick_suggestion: prompt generation failed: %s", exc)
+
+    logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
+    return queue_item
+
+
 def _on_startup_auto_fetch() -> tuple:
     """Runs on app load. Fetch+evaluate if auto_fetch_evaluate is configured."""
     cfg = load_config()
@@ -2823,6 +3078,24 @@ def build_ui() -> gr.Blocks:
                     yt_approve_btn  = gr.Button("Approve", variant="primary", scale=1)
                     yt_reject_btn   = gr.Button("Reject", variant="stop", scale=1)
                 yt_action_status = gr.Markdown("")
+
+                gr.Markdown("### 💡 AI Video Suggestions")
+                gr.Markdown(
+                    "_LLM-generated topic ideas that complement your existing videos. "
+                    "Use row # to add any to the queue._"
+                )
+                yt_suggestions_html = gr.HTML(value=_suggestions_html(yt.load_suggestions()))
+                with gr.Row():
+                    yt_refresh_suggestions_btn = gr.Button(
+                        "↺ Refresh Suggestions", variant="secondary", scale=2
+                    )
+                    yt_suggestion_row_num = gr.Number(
+                        value=1, label="Suggestion #", minimum=1, step=1, scale=1
+                    )
+                    yt_add_suggestion_btn = gr.Button(
+                        "➕ Add to Queue", variant="primary", scale=1
+                    )
+                yt_suggestions_status = gr.Markdown("")
 
                 gr.Markdown("### Video Queue")
                 yt_queue_html = gr.HTML(value=_queue_html(yt.load_queue()))
@@ -3668,10 +3941,17 @@ def build_ui() -> gr.Blocks:
             inputs=[],
             outputs=[yt_auth_status],
         )
+        def _refresh_suggestions_html():
+            return _suggestions_html(yt.load_suggestions())
+
         yt_fetch_evaluate_btn.click(
             fn=on_yt_fetch_and_evaluate,
             inputs=[yt_auto_approve_cb],
             outputs=_yt_comment_outputs_ext,
+        ).then(
+            fn=_refresh_suggestions_html,
+            inputs=[],
+            outputs=[yt_suggestions_html],
         )
         yt_approve_btn.click(
             fn=on_yt_approve,
@@ -3693,6 +3973,17 @@ def build_ui() -> gr.Blocks:
             fn=on_yt_remove_from_queue,
             inputs=[yt_queue_row_num],
             outputs=[yt_queue_html, yt_queue_action_status],
+        )
+
+        yt_refresh_suggestions_btn.click(
+            fn=on_refresh_suggestions,
+            inputs=[],
+            outputs=[yt_suggestions_html, yt_suggestions_status],
+        )
+        yt_add_suggestion_btn.click(
+            fn=on_add_suggestion_to_queue,
+            inputs=[yt_suggestion_row_num],
+            outputs=[yt_suggestions_html, yt_queue_html, yt_suggestions_status],
         )
 
         # Auto-start chain: when yt_auto_start_trigger changes, populate Create tab
@@ -3883,6 +4174,10 @@ def build_ui() -> gr.Blocks:
             fn=_on_post_done_refetch,
             inputs=[],
             outputs=_yt_comment_outputs_ext,
+        ).then(
+            fn=_refresh_suggestions_html,
+            inputs=[],
+            outputs=[yt_suggestions_html],
         )
 
         # Auto-post: fires when post_auto_trigger_state flips to True
@@ -3900,6 +4195,10 @@ def build_ui() -> gr.Blocks:
             fn=_on_post_done_refetch,
             inputs=[],
             outputs=_yt_comment_outputs_ext,
+        ).then(
+            fn=_refresh_suggestions_html,
+            inputs=[],
+            outputs=[yt_suggestions_html],
         )
 
         # On startup: fetch & evaluate if auto_fetch_evaluate is configured
@@ -3907,6 +4206,10 @@ def build_ui() -> gr.Blocks:
             fn=_on_startup_auto_fetch,
             inputs=[],
             outputs=_yt_comment_outputs_ext,
+        ).then(
+            fn=_refresh_suggestions_html,
+            inputs=[],
+            outputs=[yt_suggestions_html],
         )
         demo.load(fn=None, js=_PERSIST_JS)
 
