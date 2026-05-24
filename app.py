@@ -1565,6 +1565,27 @@ def _auto_generate(video_title, title, n_scenes_val, voice_name, resolution, mus
     if not auto_approve:
         yield (gr.update(),) * _GEN_OUT_COUNT
         return
+    # Guard against duplicate auto-start chains (e.g. demo.load startup trigger
+    # AND a button click both fire before the first job is running).  By the
+    # time this function is reached (after on_generate_script + scene previews),
+    # the first chain will already have written job_config.json, so
+    # _is_job_running() reliably returns True for any second chain.
+    if _is_job_running():
+        logger.info(
+            "_auto_generate: a job is already running — dropping duplicate auto-start for %r",
+            video_title,
+        )
+        # Clean up the orphaned script folder this chain created so the
+        # ~/videos directory does not accumulate spurious timestamped dirs.
+        orphan = Path(work_dir_str) if work_dir_str else None
+        if orphan and orphan.exists() and not (orphan / "job_config.json").exists():
+            try:
+                shutil.rmtree(orphan)
+                logger.info("_auto_generate: removed orphaned script dir %s", orphan.name)
+            except Exception as exc:
+                logger.warning("_auto_generate: could not remove orphan %s: %s", orphan, exc)
+        yield (gr.update(),) * _GEN_OUT_COUNT
+        return
     yield from on_generate(
         video_title,
         title,
