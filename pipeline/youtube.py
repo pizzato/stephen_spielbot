@@ -32,6 +32,7 @@ _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
+UPLOAD_TRACKING_PATH = _CONFIG_DIR / "youtube_daily_uploads.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -262,8 +263,12 @@ Respond with a JSON object with EXACTLY these fields:
 for an educational documentary channel (consider: educational value, broad audience appeal, \
 documentary potential, topic depth, likely view count, uniqueness vs over-done topics); otherwise 0.0
 - "reason": string — one sentence explanation covering both the request classification and interestingness rating
-- "suggested_scene_count": integer 3–15 — if is_request is true, estimate how many scenes (each ~30–60 seconds) \
-would be needed to properly cover this topic; otherwise 5. Simple topics need 3–5; complex historical or scientific topics need 8–15.
+- "suggested_scene_count": integer 6–50 — estimate how many scenes (each ~30–60 seconds) \
+would be needed to properly cover this topic; otherwise 20. Use three tiers: \
+SHORT (6–11 scenes) for simple or very focused topics; \
+MEDIUM (12–39 scenes) for standard documentary topics; \
+LARGE (40–50 scenes) for epic, sweeping, or deeply multi-faceted topics \
+(e.g. entire civilisations, long historical arcs, complex science subjects).
 
 Classify as is_request=true ONLY if the comment explicitly asks for a video about a named topic.
 Vague compliments, questions about the channel, spam, or off-topic messages are NOT requests.
@@ -278,7 +283,7 @@ _SAFE_DEFAULT = {
     "confidence": 0.0,
     "interestingness": 0.0,
     "reason": "Could not parse LLM response",
-    "suggested_scene_count": 5,
+    "suggested_scene_count": 20,
 }
 
 
@@ -293,7 +298,7 @@ def _parse_eval(text: str) -> dict:
                 "confidence": float(result.get("confidence", 0.0)),
                 "interestingness": float(result.get("interestingness", 0.0)),
                 "reason": str(result.get("reason", "")),
-                "suggested_scene_count": max(3, min(15, int(result.get("suggested_scene_count", 5)))),
+                "suggested_scene_count": max(6, min(50, int(result.get("suggested_scene_count", 20)))),
             }
     except Exception:
         pass
@@ -348,6 +353,76 @@ def _eval_local(prompt: str, cfg: dict) -> dict:
     return _parse_eval(data["choices"][0]["message"]["content"])
 
 
+# ── Daily upload tracking ─────────────────────────────────────────────────────
+
+import datetime as _dt
+
+def _today_str() -> str:
+    return _dt.date.today().isoformat()
+
+
+def midnight_timestamp() -> float:
+    """Unix timestamp for the start of tomorrow (midnight tonight)."""
+    tomorrow = _dt.date.today() + _dt.timedelta(days=1)
+    return float(_dt.datetime(tomorrow.year, tomorrow.month, tomorrow.day).timestamp())
+
+
+def get_daily_upload_count() -> int:
+    """Return how many videos have been uploaded today."""
+    try:
+        data = json.loads(UPLOAD_TRACKING_PATH.read_text())
+        return int(data.get(_today_str(), {}).get("count", 0))
+    except Exception:
+        return 0
+
+
+def record_upload() -> int:
+    """Increment today's upload count and persist it. Returns the new count."""
+    try:
+        data: dict = {}
+        if UPLOAD_TRACKING_PATH.exists():
+            data = json.loads(UPLOAD_TRACKING_PATH.read_text())
+        today = _today_str()
+        entry = data.get(today, {"count": 0})
+        entry["count"] = int(entry.get("count", 0)) + 1
+        data[today] = entry
+        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        UPLOAD_TRACKING_PATH.write_text(json.dumps(data, indent=2))
+        logger.info("Daily upload count for %s: %d", today, entry["count"])
+        return entry["count"]
+    except Exception as exc:
+        logger.warning("record_upload failed: %s", exc)
+        return 0
+
+
+def exhaust_daily_limit() -> None:
+    """Mark today's limit as definitely exceeded (e.g. after an API error)."""
+    try:
+        data: dict = {}
+        if UPLOAD_TRACKING_PATH.exists():
+            data = json.loads(UPLOAD_TRACKING_PATH.read_text())
+        today = _today_str()
+        entry = data.get(today, {"count": 0})
+        entry["limit_exceeded"] = True
+        data[today] = entry
+        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        UPLOAD_TRACKING_PATH.write_text(json.dumps(data, indent=2))
+    except Exception as exc:
+        logger.warning("exhaust_daily_limit failed: %s", exc)
+
+
+def is_upload_limit_reached(max_per_day: int) -> bool:
+    """Return True if today's uploads are at or above max_per_day, or the API signalled exceeded."""
+    try:
+        data = json.loads(UPLOAD_TRACKING_PATH.read_text())
+        entry = data.get(_today_str(), {})
+        if entry.get("limit_exceeded"):
+            return True
+        return int(entry.get("count", 0)) >= max_per_day
+    except Exception:
+        return False
+
+
 # ── Video upload ──────────────────────────────────────────────────────────────
 
 def upload_video(
@@ -382,7 +457,11 @@ def upload_video(
                 "tags": tags or [],
                 "categoryId": category_id,
             },
-            "status": {"privacyStatus": privacy_status, "selfDeclaredMadeForKids": False},
+            "status": {
+                "privacyStatus": privacy_status,
+                "selfDeclaredMadeForKids": False,
+                "containsSyntheticMedia": True,
+            },
         }
         media = MediaFileUpload(
             video_path, mimetype="video/mp4", resumable=True, chunksize=5 * 1024 * 1024
@@ -418,7 +497,12 @@ def upload_video(
         }
     except Exception as exc:
         logger.exception("YouTube upload failed")
-        return {"video_id": "", "url": "", "error": str(exc)[:400]}
+        err_str = str(exc)
+        if any(s in err_str for s in ("uploadLimitExceeded", "dailyLimitExceeded",
+                                       "rateLimitExceeded", "Video Uploads per day")):
+            exhaust_daily_limit()
+            return {"video_id": "", "url": "", "error": f"UPLOAD_LIMIT_EXCEEDED: {err_str[:300]}"}
+        return {"video_id": "", "url": "", "error": err_str[:400]}
 
 
 # ── Comment replies ───────────────────────────────────────────────────────────
@@ -512,7 +596,7 @@ def add_to_queue(comment: dict, final_title: str) -> dict:
         "commenter": comment.get("commenter", ""),
         "comment_text": comment.get("text", ""),
         "final_title": final_title,
-        "suggested_scene_count": comment.get("suggested_scene_count", 5),
+        "suggested_scene_count": comment.get("suggested_scene_count", 20),
         "interestingness": float(comment.get("interestingness", 0.5)),
         "status": "pending",
         "created_at": time.time(),
