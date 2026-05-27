@@ -141,7 +141,7 @@ DEFAULT_CFG = {
     "tts_workers":   [],
     # Generation defaults
     "default_voice": "",
-    "default_n_scenes": 5,
+    "default_n_scenes": 20,
     "default_visual_style": "",
     "script_extra_instructions": "",
     # YouTube integration
@@ -154,6 +154,7 @@ DEFAULT_CFG = {
     "youtube_fully_automated": False,          # master toggle — sets all five flags above
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
+    "youtube_daily_upload_limit": 5,
     "description_suffix": "",
 }
 
@@ -450,7 +451,8 @@ def _status_for_work_dir(work_dir: Path) -> tuple[float, str]:
             pass
 
     final_path = _final_path_for_work_dir(work_dir)
-    if final_path.exists() and final_path.stat().st_size > 10_000:
+    combined_check = work_dir / "combined.mp4"
+    if final_path.exists() and final_path.stat().st_size > 10_000 and combined_check.exists():
         return 100.0, f"Done - {final_path.name} ({final_path.stat().st_size / 1024 / 1024:.1f} MB)"
 
     try:
@@ -472,7 +474,10 @@ def _collect_job_outputs(work_dir: Path):
     music = work_dir / "background_music.wav"
     ambient = work_dir / "ambient.wav"
 
-    if not (final_path.exists() and final_path.stat().st_size > 10_000):
+    # combined.mp4 must exist — it's produced by this job's own assembly step.
+    # Without it, final_path may have been found by the recency heuristic and
+    # could belong to a different job, causing a false "done" detection.
+    if not (final_path.exists() and final_path.stat().st_size > 10_000) or not combined.exists():
         return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
 
     try:
@@ -576,11 +581,21 @@ def _poll_job_outputs(active_job_dir: str):
     # Detect a fresh completion transition (status just became "done" this tick)
     auto_post_trigger = False
     try:
+        now = time.time()
         meta = _read_json(_job_meta_path(work_dir))
+        paused_until = float(meta.get("_auto_post_paused_until") or 0)
+        if paused_until and now >= paused_until:
+            # Pause window expired — clear it and unblock the in-memory set so
+            # the job can be auto-posted on the next eligible tick.
+            _write_job_meta(work_dir, _auto_post_paused_until=None)
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
+            meta = _read_json(_job_meta_path(work_dir))  # re-read after update
         just_done = (
             meta.get("status") == "done"
             and not meta.get("youtube_video_id")
             and not meta.get("_auto_post_triggered")
+            and not (paused_until and now < paused_until)
         )
         if just_done and load_config().get("youtube_auto_post"):
             # Use an in-process lock + set to guard against two rapid timer
@@ -1879,7 +1894,7 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    flux_steps: int,
                    default_visual_style: str = "",
                    default_voice: str = "",
-                   default_n_scenes: int = 5,
+                   default_n_scenes: int = 20,
                    youtube_client_secrets: str = "",
                    youtube_auto_fetch_evaluate: bool = False,
                    youtube_auto_approve_comments: bool = False,
@@ -1889,6 +1904,7 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    youtube_fully_automated: bool = False,
                    youtube_post_privacy: str = "private",
                    youtube_post_category: str = "People & Blogs",
+                   youtube_daily_upload_limit: int = 5,
                    script_extra_instructions: str = "",
                    description_suffix: str = ""):
     cfg = load_config()
@@ -1929,6 +1945,7 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["youtube_post_privacy"]            = youtube_post_privacy or "private"
     # Store category as ID for API use
     cfg["youtube_post_category"] = yt.CATEGORY_OPTIONS.get(youtube_post_category, youtube_post_category) or "22"
+    cfg["youtube_daily_upload_limit"] = max(1, int(youtube_daily_upload_limit or 5))
     cfg["script_extra_instructions"] = (script_extra_instructions or "").strip()
     cfg["description_suffix"]        = (description_suffix or "").strip()
     save_config(cfg)
@@ -2034,6 +2051,7 @@ def _queue_html(queue: list[dict]) -> str:
         "pending": "#9333ea",
         "creating": "#0ea5e9",
         "done": "#22c55e",
+        "upload_pending": "#f59e0b",
         "posted": "#16a34a",
     }
     rows = []
@@ -2321,17 +2339,29 @@ def on_yt_reject(row_idx: int) -> tuple:
     return _yt_refresh_outputs(cache, queue, f"Rejected comment from {html.escape(comment.get('commenter', ''))}")
 
 
+def _resolution_for_scene_count(n_scenes: int) -> str:
+    """Return the appropriate resolution key based on scene count tier.
+    Short  (6–11):  Portrait FHD  — vertical format for brief focused content.
+    Medium (12–39): Landscape FHD — standard documentary format.
+    Large  (40–50): Landscape FHD — epic multi-scene format.
+    """
+    if n_scenes < 12:
+        return "Portrait FHD (1080×1920)"
+    return "Landscape FHD (1920×1080)"
+
+
 def _load_queue_item_into_create(item: dict) -> tuple:
     """Return Create-tab navigation tuple for a queue item.
     Outputs: (tabs, video_title_in, title_in, yt_action_status,
-              style_box, style_state, n_scenes_in, voice_dropdown)
+              style_box, style_state, n_scenes_in, voice_dropdown, resolution_in)
     """
     cfg = load_config()
     title = item.get("final_title", "")
     video_prompt = item.get("video_prompt") or ""
     default_style = cfg.get("default_visual_style", "")
-    n_scenes = max(6, item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6))
+    n_scenes = max(6, item.get("suggested_scene_count") or cfg.get("default_n_scenes", 20))
     voice = cfg.get("default_voice") or F5TTS_DEFAULT_OPTION
+    resolution = _resolution_for_scene_count(n_scenes)
     return (
         gr.update(selected="create"),
         gr.update(value=title),
@@ -2341,6 +2371,7 @@ def _load_queue_item_into_create(item: dict) -> tuple:
         default_style,
         gr.update(value=int(n_scenes)),
         gr.update(value=voice, choices=get_voice_choices()),
+        gr.update(value=resolution),
     )
 
 
@@ -2359,6 +2390,40 @@ def on_yt_start_next_video() -> dict | None:
         cfg = load_config()
         item = _auto_pick_suggestion(cfg)
     return item  # None or a queue item dict → drives yt_auto_start_trigger
+
+
+def on_yt_manual_add_to_queue(title: str, prompt: str, n_scenes: int) -> tuple:
+    """Add a manually specified video to the queue. Returns (queue_html, status, title_clear, prompt_clear)."""
+    import uuid as _uuid
+    title = (title or "").strip()
+    if not title:
+        queue = yt.load_queue()
+        return _queue_html(queue), "Title is required.", gr.update(), gr.update()
+    n_scenes = max(6, min(50, int(n_scenes or 20)))
+    prompt = (prompt or "").strip()
+    queue = yt.load_queue()
+    if any(q.get("final_title", "").lower() == title.lower()
+           and q.get("status") not in ("posted",) for q in queue):
+        return _queue_html(queue), f"'{title}' is already in the queue.", gr.update(), gr.update()
+    entry = {
+        "id": _uuid.uuid4().hex[:8],
+        "comment_id": "",
+        "video_id": "",
+        "commenter": "Manual",
+        "comment_text": "",
+        "final_title": title,
+        "video_prompt": prompt,
+        "suggested_scene_count": n_scenes,
+        "interestingness": 0.95,
+        "status": "pending",
+        "created_at": time.time(),
+        "video_job_id": None,
+        "youtube_video_id": None,
+        "youtube_url": None,
+    }
+    queue.insert(0, entry)
+    yt.save_queue(queue)
+    return _queue_html(queue), f"Added to queue: {title}", gr.update(value=""), gr.update(value="")
 
 
 def on_yt_remove_from_queue(row_idx: int) -> tuple:
@@ -2386,30 +2451,110 @@ def on_yt_remove_from_queue(row_idx: int) -> tuple:
 
 def _prepare_auto_start(queue_item: dict | None) -> tuple:
     """Populate Create-tab fields from a queue item, forcing auto-approve=True.
-    Returns (video_title_in, title_in, n_scenes_in, auto_approve_in) updates.
+    Returns (video_title_in, title_in, n_scenes_in, auto_approve_in, resolution_in) updates.
     """
     if not queue_item:
-        return gr.update(), gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     # Guard against duplicate chains (e.g. demo.load startup fetch + button
     # click firing simultaneously).  The first caller sets the event; any
     # second concurrent call sees it already set and bails out as a no-op.
     if _auto_start_in_progress.is_set():
         logger.info("_prepare_auto_start: another chain already in progress, skipping")
-        return gr.update(), gr.update(), gr.update(), gr.update()
+        return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
     _auto_start_in_progress.set()
     title = queue_item.get("final_title", "")
     prompt = queue_item.get("video_prompt") or ""  # never use raw comment text
-    n_scenes = max(6, queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 6))
-    logger.info("Auto-starting job: %r (%d scenes)", title, n_scenes)
+    n_scenes = max(6, queue_item.get("suggested_scene_count") or load_config().get("default_n_scenes", 20))
+    resolution = _resolution_for_scene_count(n_scenes)
+    logger.info("Auto-starting job: %r (%d scenes, %s)", title, n_scenes, resolution)
     return (
         gr.update(value=title),
         gr.update(value=prompt),
         gr.update(value=int(n_scenes)),
         gr.update(value=True),  # force auto-approve so the pipeline runs unattended
+        gr.update(value=resolution),
     )
 
 
 # ── Post tab handlers ─────────────────────────────────────────────────────────
+
+def _list_completed_jobs() -> list[tuple[str, str]]:
+    """Return (label, work_dir_str) pairs for all job dirs that have a final mp4.
+
+    Labels include a status icon:
+      🎬  ready to post  (done, no youtube_video_id)
+      ⏳  upload pending (upload_pending queue status or _auto_post_paused_until set)
+      ✅  already posted (has youtube_video_id)
+    Only jobs whose mp4 still exists on disk are included.
+    Sorted: ready-to-post first, then newest-by-mtime.
+    """
+    import datetime as _dt
+    jobs = []
+    try:
+        for job_dir in sorted(OUTPUT_DIR.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True):
+            if not job_dir.is_dir():
+                continue
+            final_path = _final_path_for_work_dir(job_dir)
+            if not final_path or not final_path.exists() or final_path.stat().st_size < 10_000:
+                continue
+
+            # Read title from job_config.json
+            job_cfg_path = job_dir / "job_config.json"
+            title = job_dir.name
+            if job_cfg_path.exists():
+                try:
+                    cfg_data = _read_json(job_cfg_path)
+                    title = cfg_data.get("video_title", "") or cfg_data.get("title", "") or title
+                except Exception:
+                    pass
+
+            # Read upload/post status from job.json
+            yt_id = ""
+            job_status = ""
+            paused = False
+            try:
+                meta = _read_json(_job_meta_path(job_dir))
+                yt_id = meta.get("youtube_video_id", "") or ""
+                job_status = meta.get("status", "")
+                paused_until = float(meta.get("_auto_post_paused_until") or 0)
+                paused = bool(paused_until and time.time() < paused_until)
+            except Exception:
+                pass
+
+            # Skip cancelled/error jobs
+            if job_status in ("cancelled", "error"):
+                continue
+
+            # Determine status icon
+            if yt_id:
+                icon = "✅"
+                sort_key = 2
+            elif paused or job_status == "upload_pending":
+                icon = "⏳"
+                sort_key = 1
+            else:
+                icon = "🎬"
+                sort_key = 0
+
+            # Size and date
+            try:
+                size_mb = round(final_path.stat().st_size / 1_048_576)
+                mtime = job_dir.stat().st_mtime
+                date_str = _dt.datetime.fromtimestamp(mtime).strftime("%b %d %H:%M")
+            except Exception:
+                size_mb = 0
+                date_str = ""
+
+            label = f"{icon} {title}  ({date_str}, {size_mb} MB)"
+            jobs.append((sort_key, job_dir.stat().st_mtime, label, str(job_dir)))
+    except Exception:
+        pass
+
+    # Sort: ready first (sort_key 0), then upload-pending (1), then posted (2);
+    # within each group newest first.
+    jobs.sort(key=lambda x: (x[0], -x[1]))
+    return [(label, wdir) for _, _, label, wdir in jobs]
+
 
 def _post_status_html(msg: str, kind: str = "info") -> str:
     colors = {
@@ -2426,6 +2571,14 @@ def _post_status_html(msg: str, kind: str = "info") -> str:
     )
 
 
+def on_post_load_from_selection(selected_dir: str):
+    """Load Post tab fields from a specific work_dir chosen in the dropdown."""
+    if not selected_dir:
+        yield from on_post_load("")
+        return
+    yield from _post_load_work_dir(Path(selected_dir))
+
+
 def on_post_load(active_job_dir: str):
     """Load Post tab fields from the active job.
 
@@ -2433,6 +2586,10 @@ def on_post_load(active_job_dir: str):
     adds the LLM-generated description so the cover is never blocked by the LLM.
     """
     work_dir = _preferred_work_dir(active_job_dir)
+    yield from _post_load_work_dir(work_dir)
+
+
+def _post_load_work_dir(work_dir):
     if work_dir is None:
         yield (
             gr.update(value=""),
@@ -2611,6 +2768,31 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
         logger.warning("_notify_comment_requester error: %s", exc)
 
 
+def _find_queue_item_for_job(work_dir: Path, video_title: str) -> dict | None:
+    """Return the queue item linked to this job (by queue_item_id or title), or None."""
+    try:
+        queue_item_id = ""
+        job_cfg_path = work_dir / "job_config.json"
+        if job_cfg_path.exists():
+            try:
+                queue_item_id = _read_json(job_cfg_path).get("queue_item_id", "")
+            except Exception:
+                pass
+        queue = yt.load_queue()
+        if queue_item_id:
+            match = next((q for q in queue if q.get("id") == queue_item_id), None)
+            if match:
+                return match
+        return next(
+            (q for q in queue
+             if q.get("final_title", "").lower() == video_title.lower()
+             and q.get("status") not in ("posted",)),
+            None,
+        )
+    except Exception:
+        return None
+
+
 def on_post_upload(
     active_job_dir: str,
     video_path: str,
@@ -2661,6 +2843,19 @@ def on_post_upload(
         )
         return
 
+    # Check daily upload limit before attempting the upload
+    max_per_day = cfg.get("youtube_daily_upload_limit", 5)
+    if yt.is_upload_limit_reached(max_per_day):
+        import datetime
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        yield (
+            _post_status_html(
+                f"Daily upload limit ({max_per_day}/day) reached. Uploads resume on {tomorrow}.", "error"
+            ),
+            gr.update(value="", visible=False),
+        )
+        return
+
     tags = [t.strip() for t in (tags_str or "").split(",") if t.strip()]
     category_id = yt.CATEGORY_OPTIONS.get(category, "22") if category in yt.CATEGORY_OPTIONS else category
 
@@ -2687,11 +2882,23 @@ def on_post_upload(
     )
 
     if result["error"]:
-        yield (
-            _post_status_html(f"Upload failed: {result['error']}", "error"),
-            gr.update(value="", visible=False),
-        )
+        if result["error"].startswith("UPLOAD_LIMIT_EXCEEDED:"):
+            import datetime
+            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+            yield (
+                _post_status_html(
+                    f"YouTube daily upload limit exceeded. Uploads resume on {tomorrow}.", "error"
+                ),
+                gr.update(value="", visible=False),
+            )
+        else:
+            yield (
+                _post_status_html(f"Upload failed: {result['error']}", "error"),
+                gr.update(value="", visible=False),
+            )
         return
+
+    yt.record_upload()
 
     # Persist youtube metadata to job.json
     work_dir = _preferred_work_dir(active_job_dir)
@@ -2732,6 +2939,25 @@ def _auto_post_chain(active_job_dir: str):
         )
         return
 
+    # Check daily upload limit before doing anything else
+    max_per_day = cfg.get("youtube_daily_upload_limit", 5)
+    if yt.is_upload_limit_reached(max_per_day):
+        import datetime
+        pause_until = yt.midnight_timestamp()
+        _write_job_meta(work_dir, _auto_post_paused_until=pause_until)
+        with _auto_post_lock:
+            _auto_post_triggered.add(str(work_dir))
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        logger.info("Auto-post paused for %s — daily limit (%d) reached, resumes %s",
+                    work_dir.name, max_per_day, tomorrow)
+        yield (
+            _post_status_html(
+                f"Daily upload limit ({max_per_day}/day) reached. Auto-post will retry on {tomorrow}.", "error"
+            ),
+            gr.update(value="", visible=False),
+        )
+        return
+
     try:
         final_path = _final_path_for_work_dir(work_dir)
         video_path = str(final_path) if final_path.exists() else ""
@@ -2742,6 +2968,16 @@ def _auto_post_chain(active_job_dir: str):
         music_desc = job_cfg.get("music_desc", "")
         cover_path = work_dir / "cover.png"
         thumbnail = str(cover_path) if cover_path.exists() else ""
+
+        # Mark the queue item upload_pending immediately — prevents auto-start from
+        # regenerating this video if the upload fails or is paused.
+        try:
+            q_item = _find_queue_item_for_job(work_dir, video_title)
+            if q_item and q_item.get("status") == "pending":
+                yt.update_queue_item(q_item["id"], status="upload_pending")
+                logger.info("Marked queue item %r as upload_pending", video_title)
+        except Exception as _qe:
+            logger.warning("Could not mark queue item upload_pending: %s", _qe)
 
         store = DurableStore.default()
         try:
@@ -2769,6 +3005,331 @@ def _auto_post_chain(active_job_dir: str):
         cover_image_path=thumbnail,
         tags_str="",
     )
+
+    # If the upload hit the daily limit, schedule a retry for tomorrow and
+    # reset _auto_post_triggered so _poll_job_outputs can re-fire after midnight.
+    if yt.is_upload_limit_reached(cfg.get("youtube_daily_upload_limit", 5)):
+        import datetime
+        pause_until = yt.midnight_timestamp()
+        _write_job_meta(work_dir, _auto_post_paused_until=pause_until, _auto_post_triggered=False)
+        with _auto_post_lock:
+            _auto_post_triggered.discard(str(work_dir))
+        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        logger.info("Auto-post will retry tomorrow (%s) for %s", tomorrow, work_dir.name)
+
+
+def _background_start_next_video() -> bool:
+    """Start the next pending queue item from the background thread.
+
+    Consumes on_generate_script as a generator (Gradio update objects are
+    discarded; the file-I/O and process-launch side-effects still happen).
+    Returns True if a job was started, False if nothing to do.
+    """
+    # Atomically check all guards and claim the queue item under the lock so
+    # concurrent background threads can't both pick the same item.
+    item = None
+    with _auto_post_lock:
+        if _is_job_running():
+            logger.info("Background auto-start: a job is already running, skipping")
+            return False
+        if _auto_start_in_progress.is_set():
+            logger.info("Background auto-start: another start already in progress, skipping")
+            return False
+        item = _best_pending_queue_item()
+        if not item:
+            cfg = load_config()
+            item = _auto_pick_suggestion(cfg)
+        if not item:
+            logger.info("Background auto-start: no pending queue items or suggestions")
+            return False
+        # Mark the queue item generating immediately so no other thread re-picks it
+        # before the generation subprocess creates job_config.json.
+        item_id = item.get("id")
+        if item_id:
+            try:
+                yt.update_queue_item(item_id, status="upload_pending")
+            except Exception:
+                pass
+        _auto_start_in_progress.set()
+
+    title = item.get("final_title", "")
+    prompt = item.get("video_prompt") or ""
+    cfg = load_config()
+    n_scenes = max(6, item.get("suggested_scene_count") or cfg.get("default_n_scenes", 20))
+    resolution = _resolution_for_scene_count(n_scenes)
+    voice_name = cfg.get("default_voice", "")
+    logger.info("Background auto-start: starting %r (%d scenes, %s)", title, n_scenes, resolution)
+    try:
+        # Phase 1: generate script and capture the work_dir/job_id from the last yield.
+        # on_generate_script yields Gradio update objects; index 2 = job_id, 3 = work_dir_str,
+        # 5 = music_desc, 7 = style (see result tuple in on_generate_script).
+        last_yield = None
+        for result in on_generate_script(title, prompt, int(n_scenes), auto_approve=True):
+            last_yield = result
+
+        if last_yield is None or not isinstance(last_yield, tuple) or len(last_yield) < 8:
+            logger.error("Background auto-start: on_generate_script returned no usable result for %r", title)
+            raise RuntimeError("on_generate_script produced no output")
+
+        job_id      = last_yield[2]
+        work_dir_str = last_yield[3]
+        music_desc  = last_yield[5]
+        style       = last_yield[7]
+
+        if not job_id or not work_dir_str:
+            raise RuntimeError(f"on_generate_script did not produce job_id/work_dir (got {job_id!r}, {work_dir_str!r})")
+
+        logger.info("Background auto-start: script done for %r, work_dir=%s — launching generation", title, work_dir_str)
+
+        # Phase 2: launch the generation subprocess (mirrors what _auto_generate does in the Gradio chain).
+        # on_generate reads scene data from DurableStore; scene_title/image_prompt/video_prompt/narration
+        # are for saving the "currently edited scene 1" — empty strings are fine here.
+        for _ in on_generate(
+            title, prompt, int(n_scenes), voice_name, resolution,
+            music_desc, style, True,
+            job_id, work_dir_str, 1,
+            "", "", "", "",
+        ):
+            pass
+
+        logger.info("Background auto-start: generation subprocess launched for %r", title)
+        # The subprocess is now running — _is_job_running() returns True, so the
+        # _auto_start_in_progress guard is no longer needed.  Clear it so that if
+        # the generation finishes and another video needs to start, the flag does
+        # not block the next _background_start_next_video call.
+        _auto_start_in_progress.clear()
+        return True
+
+    except Exception as exc:
+        logger.exception("Background auto-start: failed for %r: %s", title, exc)
+        # Restore queue item to pending so it can be retried.
+        if item_id:
+            try:
+                yt.update_queue_item(item_id, status="pending")
+            except Exception:
+                pass
+        _auto_start_in_progress.clear()
+        return False
+
+
+def _do_upload_for_job(work_dir: Path) -> bool:
+    """Upload a completed job to YouTube. Called from the background thread.
+
+    Returns True on successful upload, False on skip/failure.
+    Uses the same guard set as the Gradio-timer path to prevent double-uploads.
+    """
+    import datetime
+    cfg = load_config()
+    try:
+        # Atomically claim this job so neither the timer nor a concurrent
+        # background scan fires a second upload.
+        with _auto_post_lock:
+            if str(work_dir) in _auto_post_triggered:
+                return False
+            meta = _read_json(_job_meta_path(work_dir))
+            if (meta.get("status") != "done"
+                    or meta.get("youtube_video_id")):
+                return False
+            now = time.time()
+            paused_until = float(meta.get("_auto_post_paused_until") or 0)
+            if paused_until and now < paused_until:
+                return False
+            if paused_until and now >= paused_until:
+                _write_job_meta(work_dir, _auto_post_paused_until=None)
+            _auto_post_triggered.add(str(work_dir))
+            _write_job_meta(work_dir, _auto_post_triggered=True)
+
+        job_cfg_path = work_dir / "job_config.json"
+        job_cfg = _read_json(job_cfg_path) if job_cfg_path.exists() else {}
+        video_title = job_cfg.get("video_title", "") or job_cfg.get("title", "") or work_dir.name
+
+        max_per_day = cfg.get("youtube_daily_upload_limit", 5)
+        if yt.is_upload_limit_reached(max_per_day):
+            pause_until = yt.midnight_timestamp()
+            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+            _write_job_meta(work_dir, _auto_post_paused_until=pause_until)
+            # Mark the queue item upload_pending so the auto-start logic doesn't
+            # re-generate the same video while we're waiting for the limit to reset.
+            try:
+                q_item = _find_queue_item_for_job(work_dir, video_title)
+                if q_item and q_item.get("status") == "pending":
+                    yt.update_queue_item(q_item["id"], status="upload_pending")
+                    logger.info("Background auto-post: marked queue item %r upload_pending (daily limit)",
+                                video_title)
+            except Exception as _qe:
+                logger.warning("Background auto-post: could not mark queue item upload_pending: %s", _qe)
+            logger.info("Background auto-post paused — daily limit (%d) reached, resumes %s",
+                        max_per_day, tomorrow)
+            return False
+        style = job_cfg.get("style", "")
+        music_desc = job_cfg.get("music_desc", "")
+        cover_path = work_dir / "cover.png"
+        thumbnail = str(cover_path) if cover_path.exists() else ""
+        final_path = _final_path_for_work_dir(work_dir)
+        video_path = str(final_path) if final_path.exists() else ""
+
+        if not video_path:
+            logger.warning("Background auto-post: no video file for %s — clearing trigger so it can retry",
+                           work_dir.name)
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
+            _write_job_meta(work_dir, _auto_post_triggered=False)
+            return False
+
+        try:
+            q_item = _find_queue_item_for_job(work_dir, video_title)
+            if q_item and q_item.get("status") == "pending":
+                yt.update_queue_item(q_item["id"], status="upload_pending")
+                logger.info("Background auto-post: marked queue item %r upload_pending", video_title)
+        except Exception as _qe:
+            logger.warning("Background auto-post: could not mark queue item upload_pending: %s", _qe)
+
+        try:
+            store = DurableStore.default()
+            try:
+                job = store.get_job_by_work_dir(str(work_dir))
+                scenes = store.scene_rows(job["id"]) if job else []
+            finally:
+                store.close()
+            description = generate_youtube_description(
+                title=video_title, scenes=scenes, style=style, music_desc=music_desc,
+            )
+        except Exception as exc:
+            logger.warning("Background auto-post: description generation failed for %s: %s",
+                           work_dir.name, exc)
+            description = ""
+
+        secrets = cfg.get("youtube_client_secrets", "")
+        if not secrets or not Path(secrets).expanduser().exists():
+            logger.warning("Background auto-post: YouTube not connected — skipping %s", work_dir.name)
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
+            _write_job_meta(work_dir, _auto_post_triggered=False)
+            return False
+
+        privacy = cfg.get("youtube_post_privacy", "private")
+        category = cfg.get("youtube_post_category", "22")
+        category_id = (yt.CATEGORY_OPTIONS.get(category, "22")
+                       if category in yt.CATEGORY_OPTIONS else category)
+
+        logger.info("Background auto-post: uploading %r (%s)", video_title, work_dir.name)
+        result = yt.upload_video(
+            client_secrets_path=secrets,
+            video_path=video_path,
+            title=video_title or "Untitled Video",
+            description=description or "",
+            tags=[],
+            category_id=category_id,
+            privacy_status=privacy or "private",
+            thumbnail_path=thumbnail or None,
+            progress_callback=None,
+        )
+
+        if result["error"]:
+            logger.error("Background auto-post: upload failed for %s: %s", work_dir.name, result["error"])
+            if result["error"].startswith("UPLOAD_LIMIT_EXCEEDED:"):
+                pause_until = yt.midnight_timestamp()
+                tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+                _write_job_meta(work_dir, _auto_post_paused_until=pause_until, _auto_post_triggered=False)
+                with _auto_post_lock:
+                    _auto_post_triggered.discard(str(work_dir))
+                logger.info("Background auto-post: daily limit hit, retrying tomorrow (%s) for %s",
+                            tomorrow, work_dir.name)
+            else:
+                with _auto_post_lock:
+                    _auto_post_triggered.discard(str(work_dir))
+                _write_job_meta(work_dir, _auto_post_triggered=False)
+            return False
+
+        yt.record_upload()
+        _write_job_meta(
+            work_dir,
+            youtube_video_id=result["video_id"],
+            youtube_url=result["url"],
+            youtube_upload_status="uploaded",
+            youtube_privacy=privacy,
+        )
+        _notify_comment_requester(secrets, str(work_dir), video_title, result["url"])
+        logger.info("Background auto-post: uploaded %r → %s", video_title, result["url"])
+
+        # Trigger next video in queue (mirrors what _on_post_done_refetch does
+        # in the Gradio event chain after a manual or timer-driven post).
+        if cfg.get("youtube_auto_start_job"):
+            threading.Thread(
+                target=_background_start_next_video, daemon=True, name="auto-start-bg"
+            ).start()
+
+        if yt.is_upload_limit_reached(cfg.get("youtube_daily_upload_limit", 5)):
+            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+            logger.info("Background auto-post: daily limit reached after upload, pausing until %s", tomorrow)
+
+        return True
+
+    except Exception as exc:
+        logger.exception("Background auto-post: unexpected error for %s: %s", work_dir.name, exc)
+        with _auto_post_lock:
+            _auto_post_triggered.discard(str(work_dir))
+        try:
+            _write_job_meta(work_dir, _auto_post_triggered=False)
+        except Exception:
+            pass
+        return False
+
+
+def _background_auto_post_loop() -> None:
+    """Daemon thread: uploads finished jobs regardless of browser-session state.
+
+    Scans OUTPUT_DIR every 60 s for jobs with status=done and no youtube_video_id.
+    Delegates to _do_upload_for_job which shares the same in-process lock as the
+    Gradio-timer path, so the two paths never race each other.
+    """
+    logger.info("Background auto-post thread started (interval=60s)")
+    while True:
+        try:
+            cfg = load_config()
+            if cfg.get("youtube_auto_post"):
+                now = time.time()
+                candidates = []
+                for job_dir in OUTPUT_DIR.iterdir():
+                    if not job_dir.is_dir():
+                        continue
+                    meta_path = _job_meta_path(job_dir)
+                    if not meta_path.exists():
+                        continue
+                    try:
+                        meta = _read_json(meta_path)
+                    except Exception:
+                        continue
+                    if meta.get("status") != "done":
+                        continue
+                    if meta.get("youtube_video_id"):
+                        continue
+                    with _auto_post_lock:
+                        if str(job_dir) in _auto_post_triggered:
+                            continue
+                    paused_until = float(meta.get("_auto_post_paused_until") or 0)
+                    if paused_until and now < paused_until:
+                        continue
+                    candidates.append(job_dir)
+
+                if candidates:
+                    # Upload the most-recently-modified job first (most likely the just-finished one)
+                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    logger.info("Background auto-post: %d candidate(s) — trying %s",
+                                len(candidates), candidates[0].name)
+                    _do_upload_for_job(candidates[0])
+                elif cfg.get("youtube_auto_start_job") and not _is_job_running():
+                    # No completed jobs waiting to upload and no generation running —
+                    # kick off the next pending queue item so the pipeline keeps moving
+                    # even when no browser session is connected.
+                    if _best_pending_queue_item() or _auto_pick_suggestion(cfg):
+                        logger.info("Background auto-post: idle — starting next video in queue")
+                        threading.Thread(
+                            target=_background_start_next_video, daemon=True, name="auto-start-bg"
+                        ).start()
+        except Exception as exc:
+            logger.exception("Background auto-post loop: unexpected error: %s", exc)
+        time.sleep(60)
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -2925,7 +3486,7 @@ def on_add_suggestion_to_queue(row_idx: int) -> tuple:
         "video_id": "",
         "commenter": "AI Suggestion",
         "text": suggestion.get("reason", ""),
-        "suggested_scene_count": 6,
+        "suggested_scene_count": 20,
         "interestingness": suggestion.get("interestingness", 0.7),
     }
     queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
@@ -2990,7 +3551,7 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
         "video_id": "",
         "commenter": "AI Suggestion",
         "text": suggestion.get("reason", ""),
-        "suggested_scene_count": 6,
+        "suggested_scene_count": 20,
         "interestingness": suggestion.get("interestingness", 0.7),
     }
     queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
@@ -3009,6 +3570,48 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
 
     logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
     return queue_item
+
+
+def _sync_queue_state_on_startup() -> None:
+    """Mark queue items upload_pending for any completed jobs that haven't been uploaded.
+
+    Called once at process start (before Gradio event handlers fire) so that the
+    auto-start logic never re-generates a video that is already sitting completed
+    and waiting for the daily upload limit to reset.
+    """
+    try:
+        now = time.time()
+        for job_dir in OUTPUT_DIR.iterdir():
+            if not job_dir.is_dir():
+                continue
+            meta_path = _job_meta_path(job_dir)
+            if not meta_path.exists():
+                continue
+            try:
+                meta = _read_json(meta_path)
+            except Exception:
+                continue
+            if meta.get("status") != "done":
+                continue
+            if meta.get("youtube_video_id"):
+                continue
+            # Completed job with no upload — find its queue item
+            job_cfg_path = job_dir / "job_config.json"
+            if not job_cfg_path.exists():
+                continue
+            job_cfg = _read_json(job_cfg_path)
+            video_title = (job_cfg.get("video_title", "") or job_cfg.get("title", "") or "")
+            if not video_title:
+                continue
+            try:
+                q_item = _find_queue_item_for_job(job_dir, video_title)
+                if q_item and q_item.get("status") == "pending":
+                    yt.update_queue_item(q_item["id"], status="upload_pending")
+                    logger.info("Startup sync: marked %r upload_pending (completed job waiting)", video_title)
+            except Exception as exc:
+                logger.warning("Startup sync: failed for %s: %s", job_dir.name, exc)
+    except Exception as exc:
+        logger.warning("Startup queue sync failed: %s", exc)
 
 
 def _on_startup_auto_fetch() -> tuple:
@@ -3174,6 +3777,24 @@ def build_ui() -> gr.Blocks:
                     )
                 yt_suggestions_status = gr.Markdown("")
 
+                gr.Markdown("### ✍️ Add Manually")
+                gr.Markdown("_Add any video topic directly to the queue without needing a comment._")
+                yt_manual_title = gr.Textbox(
+                    label="Video Title",
+                    placeholder="e.g.  The History of the Roman Colosseum",
+                )
+                yt_manual_prompt = gr.Textbox(
+                    label="Directorial Prompt (optional)",
+                    placeholder="e.g.  Focus on the gladiatorial games and the social role of public spectacle.",
+                    lines=2,
+                )
+                with gr.Row():
+                    yt_manual_n_scenes = gr.Number(
+                        value=20, label="Number of scenes", minimum=6, maximum=50, step=1, scale=1
+                    )
+                    yt_manual_add_btn = gr.Button("➕ Add to Queue", variant="primary", scale=2)
+                yt_manual_status = gr.Markdown("")
+
                 gr.Markdown("### Video Queue")
                 yt_queue_html = gr.HTML(value=_queue_html(yt.load_queue()))
                 with gr.Row():
@@ -3192,7 +3813,7 @@ def build_ui() -> gr.Blocks:
                             elem_id="video_title_input",
                         )
                     with gr.Column(scale=1):
-                        n_scenes_in = gr.Slider(1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1, label="Scenes")
+                        n_scenes_in = gr.Slider(1, MAX_SCENES, value=cfg.get("default_n_scenes", 20), step=1, label="Scenes")
                 with gr.Row():
                     with gr.Column(scale=3):
                         title_in = gr.Textbox(
@@ -3378,19 +3999,24 @@ def build_ui() -> gr.Blocks:
             # ── Post to YouTube ──────────────────────────────────────────
             with gr.Tab("📤 Post", id="post"):
                 gr.Markdown("### Post Video to YouTube")
-                gr.Markdown(
-                    "Fields are auto-populated from the active job when you switch to this tab. "
-                    "Edit as needed, then click Post to YouTube."
-                )
+
+                with gr.Row():
+                    post_job_dropdown = gr.Dropdown(
+                        label="Select Video",
+                        choices=[(lbl, wdir) for lbl, wdir in _list_completed_jobs()],
+                        value=None,
+                        allow_custom_value=False,
+                        scale=4,
+                    )
+                    post_load_btn = gr.Button("Load from Current Job", variant="secondary", scale=1)
 
                 with gr.Row():
                     post_video_path = gr.Textbox(
                         label="Video File Path",
-                        placeholder="Auto-populated from active job…",
+                        placeholder="Auto-populated from selected job…",
                         scale=4,
                         interactive=True,
                     )
-                    post_load_btn = gr.Button("Load from Current Job", variant="secondary", scale=1)
 
                 post_title = gr.Textbox(label="Title", placeholder="Video title…", max_lines=1)
 
@@ -3446,7 +4072,7 @@ def build_ui() -> gr.Blocks:
                 gr.Markdown("### Script & Content")
                 with gr.Row():
                     cfg_default_n_scenes = gr.Slider(
-                        1, MAX_SCENES, value=cfg.get("default_n_scenes", 5), step=1,
+                        1, MAX_SCENES, value=cfg.get("default_n_scenes", 20), step=1,
                         label="Default Number of Scenes",
                     )
                 cfg_default_visual_style = gr.Textbox(
@@ -3632,6 +4258,12 @@ def build_ui() -> gr.Blocks:
                             "People & Blogs",
                         ),
                     )
+                cfg_yt_daily_limit = gr.Number(
+                    label="Daily upload limit (videos/day)",
+                    value=cfg.get("youtube_daily_upload_limit", 5),
+                    minimum=1, maximum=100, step=1, precision=0,
+                    info="Auto-post pauses when this many videos have been uploaded today. Resets at midnight.",
+                )
                 gr.Markdown("**Automation defaults** — control individual steps of the pipeline:")
                 cfg_yt_fully_automated = gr.Checkbox(
                     label="⚡ Fully automated mode (enables all automation below)",
@@ -3970,7 +4602,7 @@ def build_ui() -> gr.Blocks:
                        cfg_yt_auto_fetch, cfg_yt_auto_approve,
                        cfg_yt_auto_start, cfg_yt_auto_script, cfg_yt_auto_post,
                        cfg_yt_fully_automated,
-                       cfg_yt_privacy, cfg_yt_category,
+                       cfg_yt_privacy, cfg_yt_category, cfg_yt_daily_limit,
                        cfg_script_extra, cfg_description_suffix]
 
         _cfg_outputs = [cfg_status, voice_dropdown, n_scenes_in]
@@ -4061,13 +4693,18 @@ def build_ui() -> gr.Blocks:
             inputs=[yt_suggestion_row_num],
             outputs=[yt_suggestions_html, yt_queue_html, yt_suggestions_status],
         )
+        yt_manual_add_btn.click(
+            fn=on_yt_manual_add_to_queue,
+            inputs=[yt_manual_title, yt_manual_prompt, yt_manual_n_scenes],
+            outputs=[yt_queue_html, yt_manual_status, yt_manual_title, yt_manual_prompt],
+        )
 
         # Auto-start chain: when yt_auto_start_trigger changes, populate Create tab
         # and run the full script→video pipeline unattended.
         yt_auto_start_trigger.change(
             fn=_prepare_auto_start,
             inputs=[yt_auto_start_trigger],
-            outputs=[video_title_in, title_in, n_scenes_in, auto_approve_in],
+            outputs=[video_title_in, title_in, n_scenes_in, auto_approve_in, resolution_in],
         ).then(
             fn=on_generate_script,
             inputs=[video_title_in, title_in, n_scenes_in, auto_approve_in],
@@ -4168,6 +4805,12 @@ def build_ui() -> gr.Blocks:
             outputs=_post_load_outputs,
         )
 
+        post_job_dropdown.change(
+            fn=on_post_load_from_selection,
+            inputs=[post_job_dropdown],
+            outputs=_post_load_outputs,
+        )
+
         # Single combined tab-select handler — handles per-tab auto-fills in one round-trip.
         def _on_tab_select(evt: gr.SelectData, job_dir: str):
             # evt.value may be the tab label (str) or tab index (int) depending
@@ -4184,16 +4827,20 @@ def build_ui() -> gr.Blocks:
                 if on_remix_tab
                 else gr.update()
             )
-            if "Post" in selected or selected == "post":
-                post_vals = on_post_load(job_dir)
-            else:
-                post_vals = (gr.update(),) * 7
-            return (yt_html, recent_choices) + tuple(post_vals)
+            # Refresh the Post-tab dropdown with up-to-date choices; field population
+            # is handled separately by post_job_dropdown.change and post_load_btn.click
+            # so we don't need to call the generator on_post_load here.
+            post_dropdown_update = (
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_completed_jobs()])
+                if ("Post" in selected or selected == "post")
+                else gr.update()
+            )
+            return yt_html, recent_choices, post_dropdown_update
 
         tabs.select(
             fn=_on_tab_select,
             inputs=[active_job_state],
-            outputs=[yt_auth_status, recent_job_dropdown] + _post_load_outputs,
+            outputs=[yt_auth_status, recent_job_dropdown, post_job_dropdown],
             queue=False,  # tab navigation is always instant, never blocked by the queue
         )
 
@@ -4360,6 +5007,11 @@ if __name__ == "__main__":
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--share", action="store_true")
     args = parser.parse_args()
+
+    _sync_queue_state_on_startup()
+
+    _bg_thread = threading.Thread(target=_background_auto_post_loop, daemon=True, name="auto-post-bg")
+    _bg_thread.start()
 
     demo = build_ui()
     demo.queue(status_update_rate=2)
