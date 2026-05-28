@@ -1482,14 +1482,18 @@ def on_generate(video_title, title, n_scenes_val, voice_name, resolution, music_
         if not job_id or not work_dir_str:
             raise gr.Error("No generated script is available. Generate the script again.")
 
-        _save_active_scene(
-            job_id,
-            current_scene_id,
-            scene_title,
-            image_prompt,
-            video_prompt,
-            narration,
-        )
+        # Only persist the currently-edited scene fields when the caller actually has data.
+        # The background auto-start path calls on_generate with empty strings for all four
+        # fields (no UI edits to capture) — saving those would wipe scene 1 in the DB.
+        if any((v or "").strip() for v in (scene_title, image_prompt, video_prompt, narration)):
+            _save_active_scene(
+                job_id,
+                current_scene_id,
+                scene_title,
+                image_prompt,
+                video_prompt,
+                narration,
+            )
         work_dir = Path(work_dir_str)
         store = DurableStore.default()
         try:
