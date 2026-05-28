@@ -88,6 +88,155 @@ def load_job_config(work_dir: Path) -> dict:
     return cfg
 
 
+def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Path) -> None:
+    """Fill missing narration/image_prompt/video_prompt fields before audio generation.
+
+    A scene with empty narration would produce a 0-byte audio clip and a silent video.
+    This recovers from any upstream save bug by calling the LLM to fill what's missing,
+    and falls back to scene title text so generation NEVER produces a silent scene.
+    """
+    bad = [s for s in scenes if not (s.narration or "").strip()
+           or not (s.image_prompt or "").strip()]
+    if not bad:
+        return
+    logger.warning("Self-heal: %d scene(s) with empty fields — filling: %s",
+                   len(bad), [(s.id, not s.narration, not s.image_prompt) for s in bad])
+
+    video_title = cfg.get("video_title") or cfg.get("title") or title
+    # Build minimal context from neighbouring scenes' narrations so the LLM keeps continuity.
+    backend = cfg.get("llm_backend", "claude")
+    try:
+        if backend == "claude" and cfg.get("claude_api_key"):
+            _fill_via_claude(scenes, title, video_title, cfg)
+        else:
+            _fill_via_local(scenes, title, video_title, cfg)
+    except Exception as exc:
+        logger.warning("Self-heal LLM fill failed: %s — falling back to title text", exc)
+
+    # Absolute last resort: never leave a scene with empty narration or image_prompt.
+    for s in scenes:
+        if not (s.narration or "").strip():
+            s.narration = f"{s.title or f'Scene {s.id}'}."
+            logger.warning("Self-heal: scene %d narration still empty after LLM — used title", s.id)
+        if not (s.image_prompt or "").strip():
+            s.image_prompt = s.title or f"Scene {s.id}: {title}"
+            logger.warning("Self-heal: scene %d image_prompt still empty after LLM — used title", s.id)
+        if not (s.video_prompt or "").strip():
+            s.video_prompt = s.image_prompt
+
+    # Persist the healed script so the next resume doesn't have to redo this work.
+    try:
+        (work_dir / "script.json").write_text(json.dumps([
+            {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+             "video_prompt": s.video_prompt, "narration": s.narration}
+            for s in scenes
+        ], indent=2))
+        logger.info("Self-heal: rewrote script.json with %d filled scenes", len(scenes))
+    except Exception as exc:
+        logger.warning("Self-heal: could not rewrite script.json: %s", exc)
+
+
+def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dict) -> None:
+    """Use Claude to fill empty narration/image_prompt fields per scene."""
+    import anthropic, httpx
+    api_key = cfg.get("claude_api_key", "")
+    if not api_key:
+        return
+    model = cfg.get("claude_model", "claude-sonnet-4-6")
+    timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
+    client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
+    for s in scenes:
+        if (s.narration or "").strip() and (s.image_prompt or "").strip():
+            continue
+        prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
+        next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
+        ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
+        if next_narr: ctx.append(f'Next scene: "{next_narr}"')
+        need = []
+        if not (s.narration or "").strip():
+            need.append('"narration": exactly 2 sentences, ~18-22 words, calm documentary tone')
+        if not (s.image_prompt or "").strip():
+            need.append('"image_prompt": 60-100 word static scene description for FLUX, no motion verbs')
+        if not need:
+            continue
+        ctx.append("Output a JSON object with these keys: " + ", ".join(need) + ". No other keys, no markdown.")
+        try:
+            with client.messages.stream(
+                model=model, max_tokens=400,
+                system="You are a documentary scriptwriter filling in missing fields. Output only the JSON object requested.",
+                messages=[{"role": "user", "content": "\n".join(ctx)}],
+            ) as stream:
+                text = "".join(stream.text_stream).strip()
+            if text.startswith("```"):
+                lines = text.splitlines()
+                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            data = json.loads(text)
+            if not (s.narration or "").strip() and data.get("narration"):
+                s.narration = data["narration"].strip()
+                logger.info("Self-heal: filled scene %d narration via Claude: %r", s.id, s.narration[:60])
+            if not (s.image_prompt or "").strip() and data.get("image_prompt"):
+                s.image_prompt = data["image_prompt"].strip()
+                logger.info("Self-heal: filled scene %d image_prompt via Claude", s.id)
+        except Exception as exc:
+            logger.warning("Self-heal: Claude fill failed for scene %d: %s", s.id, exc)
+
+
+def _fill_via_local(scenes: list[Scene], title: str, video_title: str, cfg: dict) -> None:
+    """Use the local LLM to fill empty narration/image_prompt fields per scene."""
+    import urllib.request
+    url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
+    model = cfg.get("local_llm_model", "openai/gpt-oss-120b")
+    for s in scenes:
+        if (s.narration or "").strip() and (s.image_prompt or "").strip():
+            continue
+        ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
+        next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
+        if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
+        if next_narr: ctx.append(f'Next scene: "{next_narr}"')
+        if not (s.narration or "").strip():
+            ctx.append("Write exactly 2 sentences of spoken narration for this scene (~18-22 words). Output ONLY the narration text, no labels.")
+            payload = json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a documentary narrator. Output only the narration sentences."},
+                    {"role": "user", "content": "\n".join(ctx)},
+                ],
+                "max_tokens": 120, "temperature": 0.7,
+            }).encode()
+            try:
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = json.loads(resp.read())
+                text = data["choices"][0]["message"]["content"].strip()
+                if text:
+                    s.narration = text
+                    logger.info("Self-heal: filled scene %d narration via local LLM: %r", s.id, text[:60])
+            except Exception as exc:
+                logger.warning("Self-heal: local LLM narration fill failed for scene %d: %s", s.id, exc)
+        if not (s.image_prompt or "").strip():
+            ctx2 = ctx[:2] + ["Write a 60-100 word static scene description for image generation. No motion verbs. Output only the description."]
+            payload = json.dumps({
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a scene visual designer. Output only the description."},
+                    {"role": "user", "content": "\n".join(ctx2)},
+                ],
+                "max_tokens": 250, "temperature": 0.7,
+            }).encode()
+            try:
+                req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    data = json.loads(resp.read())
+                text = data["choices"][0]["message"]["content"].strip()
+                if text:
+                    s.image_prompt = text
+                    logger.info("Self-heal: filled scene %d image_prompt via local LLM", s.id)
+            except Exception as exc:
+                logger.warning("Self-heal: local LLM image_prompt fill failed for scene %d: %s", s.id, exc)
+
+
 def write_progress(status_file: Path, pct: float, msg: str) -> None:
     try:
         status_file.write_text(json.dumps({"pct": round(pct, 1), "msg": msg, "ts": time.time()}))
@@ -126,6 +275,10 @@ def main(work_dir: Path) -> None:
     n = len(scenes)
     logger.info("Loaded %d scenes from %s", n, work_dir / "script.json")
     title = cfg.get("title") or (scenes[0].title.split(":")[0] if scenes else work_dir.name)
+
+    # Self-heal: any scene with empty narration would produce a 0-byte audio clip
+    # and a silent video. Fill missing fields from the LLM before audio generation.
+    _heal_empty_scenes(scenes, title, cfg, work_dir)
 
     store = DurableStore.default()
     durable_job_id = job_id_from_work_dir(work_dir)
