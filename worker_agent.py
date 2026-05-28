@@ -82,8 +82,15 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
     if store.skip_task_if_artifact_exists(task.id, output, artifact_kind="narration", min_size=1000):
         return
 
+    narration_text = (p.get("narration") or "").strip()
+    if not narration_text:
+        # Fall back to the scene title so TTS never receives blank text,
+        # which causes F5-TTS to emit boilerplate audio.
+        narration_text = (p.get("title") or f"Scene {sid}").strip()
+        logger.warning("Scene %d has empty narration — using title as TTS fallback: %r", sid, narration_text)
+
     ref = Path(p["voice_ref"]).expanduser() if p.get("voice_ref") else None
-    generate_narration(p.get("narration", ""), output, reference_wav=ref, host=endpoint)
+    generate_narration(narration_text, output, reference_wav=ref, host=endpoint)
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
     store.complete_task(task.id, result={"path": str(output), "duration": duration}, message="narration ready")

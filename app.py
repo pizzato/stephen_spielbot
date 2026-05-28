@@ -92,22 +92,6 @@ _RESOLUTIONS = {
 }
 _DEFAULT_RESOLUTION = "Landscape FHD (1920×1080)"
 
-# Map each resolution to its "fast preview" counterpart of the same aspect ratio.
-# Used to auto-sync the Script-tab preview resolution when the user picks a video resolution.
-_FAST_PREVIEW_RESOLUTION: dict[str, str] = {
-    key: (
-        "Portrait Fast (288×512)" if "Portrait" in key
-        else "Square (512×512)"   if "Square"   in key
-        else "Landscape Fast (512×288)"
-    )
-    for key in _RESOLUTIONS
-}
-
-
-def _fast_preview_resolution(video_resolution: str) -> str:
-    """Return the fast-preview resolution key that matches the aspect ratio of *video_resolution*."""
-    return _FAST_PREVIEW_RESOLUTION.get(video_resolution, "Landscape Fast (512×288)")
-
 
 DEFAULT_CFG = {
     "music_vol": 18,
@@ -154,7 +138,6 @@ DEFAULT_CFG = {
     "youtube_fully_automated": False,          # master toggle — sets all five flags above
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
-    "youtube_daily_upload_limit": 5,
     "description_suffix": "",
 }
 
@@ -206,17 +189,11 @@ def _is_job_running() -> bool:
 
 
 def _best_pending_queue_item() -> dict | None:
-    """Return the highest-interestingness pending queue item, or None."""
+    """Return the first pending queue item (respecting queue order)."""
     try:
         queue = yt.load_queue()
-        pending = [q for q in queue if q.get("status") == "pending"]
-        if not pending:
-            return None
-        pending.sort(
-            key=lambda q: (q.get("interestingness", 0.5), q.get("created_at", 0)),
-            reverse=True,
-        )
-        return {**pending[0]}  # fresh copy so Gradio detects the change
+        first = next((q for q in queue if q.get("status") == "pending"), None)
+        return {**first} if first else None  # fresh copy so Gradio detects the change
     except Exception:
         return None
 
@@ -802,6 +779,81 @@ def on_cancel_active_job(active_job_dir: str):
     return f"Cancelled {count} pending/running task(s)."
 
 
+def on_pause_active_job(active_job_dir: str) -> str:
+    """Kill the generation subprocess and re-queue in-progress tasks so the job can be resumed later."""
+    work_dir = _preferred_work_dir(active_job_dir)
+    if not work_dir:
+        return "No active job found."
+    try:
+        meta = _read_json(_job_meta_path(work_dir))
+    except Exception:
+        meta = {}
+    pid = meta.get("pid")
+    killed = False
+    if pid and _process_running(pid):
+        try:
+            os.kill(int(pid), 15)  # SIGTERM
+            killed = True
+        except OSError as exc:
+            logger.warning("Could not signal pid %d: %s", pid, exc)
+    job = _active_job_row(active_job_dir)
+    if job:
+        store = DurableStore.default()
+        try:
+            store.recover_incomplete_tasks(job["id"])
+        finally:
+            store.close()
+    _write_job_meta(work_dir, status="paused", pid=None)
+    return f"Paused {work_dir.name}" + (" — process terminated" if killed else " — process was not running")
+
+
+def _list_resumable_jobs() -> list[tuple[str, str]]:
+    """Jobs that were started (have job.json) but not yet completed (no combined.mp4)."""
+    results = []
+    try:
+        dirs = sorted(
+            (d for d in OUTPUT_DIR.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs:
+            if (d / "job.json").exists() and not (d / "combined.mp4").exists():
+                try:
+                    meta = _read_json(d / "job.json")
+                    if meta.get("status") == "cancelled":
+                        continue
+                except Exception:
+                    pass
+                results.append((_job_folder_label(d), str(d)))
+    except Exception:
+        pass
+    return results
+
+
+def on_load_and_resume_job(work_dir_str: str):
+    """Load a paused/interrupted job, re-queue its incomplete tasks, and restart generation."""
+    if not work_dir_str:
+        return "No job selected.", gr.update(), gr.update()
+    work_dir = Path(work_dir_str)
+    if not work_dir.exists():
+        return f"Directory not found: {work_dir_str}", gr.update(), gr.update()
+    store = DurableStore.default()
+    try:
+        job = store.get_job_by_work_dir(str(work_dir))
+        if job:
+            store.recover_incomplete_tasks(job["id"])
+            store.update_job(job["id"], status="running", progress_message="resumed")
+    finally:
+        store.close()
+    _launch_generation_job(work_dir)
+    _write_job_meta(work_dir, status="running")
+    return (
+        f"Resumed {work_dir.name}",
+        gr.update(selected="progress"),
+        str(work_dir),
+    )
+
+
 def on_set_worker_status(worker_id_value: str, status: str):
     worker_id_value = (worker_id_value or "").strip()
     if not worker_id_value:
@@ -1012,7 +1064,10 @@ def on_generate_cover_image(video_title: str, style: str, job_id: str):
         return
 
     cfg = load_config()
-    prompt = _cover_prompt(_shorten_title(title), style or "")
+    # Load scenes so the cover incorporates actual video aspects, not just the title.
+    scenes_for_cover = _load_scenes_for_work_dir(work_dir)
+    logger.info("Cover gen: loaded %d scenes from %s", len(scenes_for_cover), work_dir.name)
+    prompt = _cover_prompt(_shorten_title(title), style or "", scenes=scenes_for_cover)
 
     yield (
         gr.update(value=f"Generating cover image for '{title}'…"),
@@ -1622,6 +1677,14 @@ def _auto_generate(video_title, title, n_scenes_val, voice_name, resolution, mus
 
 # ── Session restore ──────────────────────────────────────────────────────────
 
+def _job_folder_label(d: Path) -> str:
+    """Human-readable label for a job folder: title without the trailing timestamp."""
+    # Folder names look like: my-great-video-20260528-082307
+    # Strip the trailing -YYYYMMDD-HHMMSS suffix so only the title part remains.
+    name = re.sub(r"-\d{8}-\d{6}(-\d+)?$", "", d.name)
+    return name.replace("-", " ").title()
+
+
 def _list_recent_jobs(max_results: int = 10) -> list[tuple[str, str]]:
     """Return list of (label, work_dir_str) for completed jobs, newest first."""
     results = []
@@ -1633,11 +1696,8 @@ def _list_recent_jobs(max_results: int = 10) -> list[tuple[str, str]]:
         )
         for d in dirs:
             combined = d / "combined.mp4"
-            music = d / "background_music.wav"
-            if combined.exists() and music.exists():
-                # Human-readable label: un-slug the directory name
-                label = d.name.replace("-", " ").title()
-                results.append((label, str(d)))
+            if combined.exists():
+                results.append((_job_folder_label(d), str(d)))
             if len(results) >= max_results:
                 break
     except Exception:
@@ -1645,11 +1705,118 @@ def _list_recent_jobs(max_results: int = 10) -> list[tuple[str, str]]:
     return results
 
 
+def _list_script_jobs() -> list[tuple[str, str]]:
+    """Return list of (label, work_dir_str) for all jobs with a saved script, newest first."""
+    results = []
+    try:
+        dirs = sorted(
+            (d for d in OUTPUT_DIR.iterdir() if d.is_dir()),
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        for d in dirs:
+            if (d / "script.json").exists():
+                results.append((_job_folder_label(d), str(d)))
+    except Exception:
+        pass
+    return results
+
+
+def on_load_script(work_dir_str: str):
+    """Load a saved script into the Script tab for review/editing."""
+    _no_op = (gr.update(),) * 19
+    if not work_dir_str:
+        return _no_op
+    work_dir = Path(work_dir_str)
+    script_path = work_dir / "script.json"
+    if not script_path.exists():
+        gr.Warning("No script found in the selected folder.")
+        return _no_op
+
+    scenes_list = json.loads(script_path.read_text())
+    n_scenes = len(scenes_list)
+
+    # Read metadata from DurableStore (written at script-generation time)
+    job_id = job_id_from_work_dir(work_dir)
+    video_title = work_dir.name.replace("-", " ").title()
+    style = ""
+    music_desc = ""
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        if job:
+            d = dict(job)
+            cfg = json.loads(d.get("config_json") or "{}")
+            meta = json.loads(d.get("metadata_json") or "{}")
+            video_title = cfg.get("video_title") or d.get("title") or video_title
+            style = meta.get("style", "")
+            music_desc = meta.get("music_desc", "")
+        store.create_or_update_job(
+            job_id, work_dir, video_title,
+            config={"video_title": video_title, "phase": "script_review"},
+            metadata={"scene_count": n_scenes, "music_desc": music_desc, "style": style},
+        )
+        store.upsert_scenes(job_id, scenes_list)
+    finally:
+        store.close()
+
+    scene_outputs = _load_scene_editor(job_id, 1)
+    return (
+        gr.update(selected="script"),   # tabs
+        gr.update(visible=True),        # script_col
+        job_id,                         # script_job_id_state
+        str(work_dir),                  # script_work_dir_state
+        1,                              # current_scene_state
+        music_desc,                     # music_desc_state
+        style,                          # style_box
+        style,                          # style_state
+        f"### {video_title}\n\n{n_scenes} scenes · {work_dir.name} *(loaded)*",
+        *scene_outputs,                 # scene_picker … scene_summary_html (8 values)
+        video_title,                    # video_title_in
+        n_scenes,                       # n_scenes_in
+    )
+
+
+def _get_scene_df_rows(work_dir: Path) -> list[list]:
+    """Return DataFrame rows [[include, order, label], ...] for the remix scene table."""
+    found = sorted(work_dir.glob("scene_??_final.mp4"))
+    if not found:
+        return []
+    store = DurableStore()
+    job_id = job_id_from_work_dir(work_dir)
+    scene_titles: dict[int, str] = {}
+    try:
+        db_rows = store.scene_rows(job_id)
+        for row in db_rows:
+            scene_titles[int(row["id"])] = row.get("title", "")
+    except Exception:
+        pass
+    rows = []
+    for order, p in enumerate(found, start=1):
+        try:
+            num = int(p.stem.split("_")[1])
+        except (IndexError, ValueError):
+            num = order
+        title = scene_titles.get(num, "")
+        label = f"Scene {num:02d}: {title}" if title else f"Scene {num:02d}"
+        rows.append([True, order, label])
+    return rows
+
+
+# Keep for backward compat with _remix_select_all
+def _get_scene_choices(work_dir: Path) -> tuple[list, list]:
+    rows = _get_scene_df_rows(work_dir)
+    choices = [(r[2], r[2]) for r in rows]
+    values = [r[2] for r in rows]
+    return choices, values
+
+
 def _load_job_for_remix(work_dir_str: str):
     """Load a job directory into Remix tab. Returns same shape as on_restore_session."""
     if not work_dir_str:
         return (gr.update(), gr.update(), gr.update(), gr.update(),
                 gr.update(), gr.update(), gr.update(),
+                gr.update(value=[]),
                 "No job selected.")
     work_dir = Path(work_dir_str)
     combined = work_dir / "combined.mp4"
@@ -1658,6 +1825,7 @@ def _load_job_for_remix(work_dir_str: str):
     if not combined.exists() or not music.exists():
         return (gr.update(), gr.update(), gr.update(), gr.update(),
                 gr.update(), gr.update(), gr.update(),
+                gr.update(value=[]),
                 f"Required files not found in {work_dir.name}.")
 
     candidates = sorted(work_dir.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1669,7 +1837,8 @@ def _load_job_for_remix(work_dir_str: str):
     amb_str = str(ambient) if ambient.exists() else ""
     save_session(str(combined), str(music), amb_str,
                  cfg.get("voice_vol", 100), cfg.get("music_vol", 18), cfg.get("ambient_vol", 0))
-    logger.info("Remix: loaded job from %s", work_dir)
+    df_rows = _get_scene_df_rows(work_dir)
+    logger.info("Remix: loaded job from %s (%d scenes)", work_dir, len(df_rows))
     return (
         gr.update(value=str(final_vid), visible=True) if final_vid else gr.update(visible=False),
         str(combined),
@@ -1678,6 +1847,7 @@ def _load_job_for_remix(work_dir_str: str):
         gr.update(value=cfg.get("voice_vol", 100)),
         gr.update(value=cfg.get("music_vol", 18)),
         gr.update(value=cfg.get("ambient_vol", 0)),
+        gr.update(value=df_rows),
         f"Loaded: {work_dir.name}",
     )
 
@@ -1687,6 +1857,7 @@ def on_restore_session():
     if not session:
         return (gr.update(), gr.update(), gr.update(), gr.update(),
                 gr.update(), gr.update(), gr.update(),
+                gr.update(value=[]),
                 "No saved session found.")
     # Locate the most recent final video in the same work directory
     combined = Path(session["combined"])
@@ -1696,7 +1867,8 @@ def on_restore_session():
                         and not p.name.startswith("remixed")]
     final_vid = final_candidates[0] if final_candidates else None
 
-    logger.info("Restoring session from %s", work_dir)
+    df_rows = _get_scene_df_rows(work_dir)
+    logger.info("Restoring session from %s (%d scenes)", work_dir, len(df_rows))
     return (
         gr.update(value=str(final_vid), visible=True) if final_vid else gr.update(visible=False),
         session["combined"],          # → combined_state
@@ -1705,6 +1877,7 @@ def on_restore_session():
         gr.update(value=session.get("voice_vol", 100)),    # → remix_voice_vol
         gr.update(value=session.get("music_vol", 18)),     # → remix_music_vol
         gr.update(value=session.get("ambient_vol", 0)),    # → remix_ambient_vol
+        gr.update(value=df_rows),
         f"Session restored from {work_dir.name}",
     )
 
@@ -1712,7 +1885,10 @@ def on_restore_session():
 # ── Remix ────────────────────────────────────────────────────────────────────
 
 def on_remix(combined_path_str: str, music_path_str: str, ambient_path_str: str,
-             voice_vol_pct: float, music_vol_pct: float, ambient_vol_pct: float):
+             voice_vol_pct: float, music_vol_pct: float, ambient_vol_pct: float,
+             scenes_df=None):
+    import pandas as pd
+
     # Fall back to persisted session if Gradio state is empty (reconnect / first remix)
     if not combined_path_str or not music_path_str:
         session = load_session()
@@ -1732,13 +1908,69 @@ def on_remix(combined_path_str: str, music_path_str: str, ambient_path_str: str,
     if not music_path.exists():
         raise gr.Error(f"Music file not found: {music_path}\nRe-generate the video.")
 
+    work_dir = combined.parent
+    all_scene_finals = sorted(work_dir.glob("scene_??_final.mp4"))
+    total_scenes = len(all_scene_finals)
+
+    # Parse the scenes DataFrame → ordered list of included scene paths
+    source = combined
+    temp_combined: Path | None = None
+    scene_subset: list[Path] | None = None
+
+    if scenes_df is not None and total_scenes > 0:
+        if isinstance(scenes_df, pd.DataFrame) and not scenes_df.empty:
+            rows = scenes_df.values.tolist()
+        elif isinstance(scenes_df, list) and scenes_df:
+            rows = scenes_df
+        else:
+            rows = []
+
+        if rows:
+            # Each row: [include(bool), order(num), label(str)]
+            included = []
+            for row in rows:
+                include = row[0]
+                if include is True or include == "true" or str(include).lower() == "true":
+                    try:
+                        order = float(row[1])
+                    except (TypeError, ValueError):
+                        order = 999
+                    label = str(row[2])
+                    m = re.search(r'Scene\s+(\d+)', label)
+                    num = int(m.group(1)) if m else 0
+                    path = work_dir / f"scene_{num:02d}_final.mp4"
+                    if path.exists():
+                        included.append((order, path))
+
+            included.sort(key=lambda x: x[0])
+            scene_subset = [p for _, p in included]
+
+    needs_reconcat = scene_subset is not None and (
+        len(scene_subset) != total_scenes
+        or [p.name for p in scene_subset] != [p.name for p in all_scene_finals]
+    )
+
+    if needs_reconcat:
+        if not scene_subset:
+            raise gr.Error("No valid scenes selected — select at least one scene.")
+        stamp_pre = datetime.now().strftime("%Y%m%d-%H%M%S")
+        temp_combined = work_dir / f"remixed_combined_{stamp_pre}.mp4"
+        logger.info("Remix: re-concatenating %d/%d scenes (reordered=%s) → %s",
+                    len(scene_subset), total_scenes,
+                    [p.name for p in scene_subset] != [p.name for p in all_scene_finals],
+                    temp_combined.name)
+        concatenate_scenes(scene_subset, temp_combined)
+        source = temp_combined
+
+    # Write to a temp file first, then atomically replace the canonical final video.
+    final_video = OUTPUT_DIR / f"{work_dir.name}.mp4"
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    out   = combined.parent / f"remixed-{stamp}.mp4"
-    logger.info("Remixing: voice=%.0f%% music=%.0f%% ambient=%.0f%% combined=%s",
-                voice_vol_pct, music_vol_pct, ambient_vol_pct, combined.name)
+    tmp_out = work_dir / f"remixed_tmp_{stamp}.mp4"
+    logger.info("Remixing: voice=%.0f%% music=%.0f%% ambient=%.0f%% source=%s → %s",
+                voice_vol_pct, music_vol_pct, ambient_vol_pct, source.name, final_video.name)
     try:
         mix_background_music(
-            combined, music_path, out,
+            source, music_path, tmp_out,
             volume=music_vol_pct / 100.0,
             voice_volume=voice_vol_pct / 100.0,
             ambient_path=ambient_path,
@@ -1747,6 +1979,9 @@ def on_remix(combined_path_str: str, music_path_str: str, ambient_path_str: str,
     except Exception as e:
         logger.exception("on_remix failed")
         first_line = str(e).split("\n")[0][:200]
+        if temp_combined and temp_combined.exists():
+            temp_combined.unlink(missing_ok=True)
+        tmp_out.unlink(missing_ok=True)
         return (
             gr.update(),
             str(combined_path_str),
@@ -1754,14 +1989,19 @@ def on_remix(combined_path_str: str, music_path_str: str, ambient_path_str: str,
             str(ambient_path_str),
             f"❌ Remix failed: {first_line}",
         )
-    size_mb = out.stat().st_size / 1024 / 1024
-    logger.info("Remix done: %s (%.1f MB)", out.name, size_mb)
+    if temp_combined and temp_combined.exists():
+        temp_combined.unlink(missing_ok=True)
+    shutil.move(str(tmp_out), str(final_video))
+    size_mb = final_video.stat().st_size / 1024 / 1024
+    n_included = len(scene_subset) if scene_subset is not None else total_scenes
+    scene_note = f" ({n_included}/{total_scenes} scenes)" if n_included < total_scenes else ""
+    logger.info("Remix done: %s (%.1f MB)%s", final_video.name, size_mb, scene_note)
     return (
-        gr.update(value=str(out), visible=True),
+        gr.update(value=str(final_video), visible=True),
         str(combined_path_str),   # → combined_state
         str(music_path_str),      # → music_state
         str(ambient_path_str),    # → ambient_state
-        f"Remixed: {out.name} ({size_mb:.1f} MB)",
+        f"Remixed: {final_video.name} ({size_mb:.1f} MB){scene_note}",
     )
 
 
@@ -1904,7 +2144,6 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
                    youtube_fully_automated: bool = False,
                    youtube_post_privacy: str = "private",
                    youtube_post_category: str = "People & Blogs",
-                   youtube_daily_upload_limit: int = 5,
                    script_extra_instructions: str = "",
                    description_suffix: str = ""):
     cfg = load_config()
@@ -1945,7 +2184,6 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     cfg["youtube_post_privacy"]            = youtube_post_privacy or "private"
     # Store category as ID for API use
     cfg["youtube_post_category"] = yt.CATEGORY_OPTIONS.get(youtube_post_category, youtube_post_category) or "22"
-    cfg["youtube_daily_upload_limit"] = max(1, int(youtube_daily_upload_limit or 5))
     cfg["script_extra_instructions"] = (script_extra_instructions or "").strip()
     cfg["description_suffix"]        = (description_suffix or "").strip()
     save_config(cfg)
@@ -2029,7 +2267,7 @@ def _comments_html(cache: list[dict]) -> str:
             f'background:#fafafa;border-radius:0 6px 6px 0">'
             f'<div style="display:flex;justify-content:space-between;align-items:center">'
             f'<span style="font-size:12px;font-weight:600;color:#374151">'
-            f'<span style="color:#6b7280;margin-right:6px">#{i+1}</span>{commenter}</span>'
+            f'<span style="color:#6b7280;margin-right:6px">#{len(cache) - i}</span>{commenter}</span>'
             f'<span style="font-size:11px;padding:2px 8px;border-radius:9999px;'
             f'background:{badge_bg};color:{badge_color}">{badge}</span>'
             f'</div>'
@@ -2054,12 +2292,18 @@ def _queue_html(queue: list[dict]) -> str:
         "upload_pending": "#f59e0b",
         "posted": "#16a34a",
     }
+    _SOURCE_BADGE = {
+        "comment": '<span style="font-size:10px;margin-left:6px;padding:1px 5px;border-radius:9999px;background:#dbeafe;color:#1d4ed8">💬 request</span>',
+        "suggestion": '<span style="font-size:10px;margin-left:6px;padding:1px 5px;border-radius:9999px;background:#f3f4f6;color:#374151">🤖 suggestion</span>',
+        "manual": '<span style="font-size:10px;margin-left:6px;padding:1px 5px;border-radius:9999px;background:#fef9c3;color:#854d0e">✏️ manual</span>',
+    }
     rows = []
     removable_idx = 0  # 1-based counter for non-posted items (matches Queue # input)
     for item in queue:
         title = html.escape(item.get("final_title", "") or "")
         commenter = html.escape(item.get("commenter", "") or "")
         status = item.get("status", "pending")
+        source = item.get("source", "")
         color = _STATUS_COLOR.get(status, "#6b7280")
         yt_url = item.get("youtube_url", "")
         url_html = (
@@ -2067,6 +2311,7 @@ def _queue_html(queue: list[dict]) -> str:
             f'style="color:#2563eb">View on YouTube</a>'
             if yt_url else ""
         )
+        source_badge = _SOURCE_BADGE.get(source, "")
         if status != "posted":
             removable_idx += 1
             num_label = f'<span style="color:#6b7280;margin-right:6px">#{removable_idx}</span>'
@@ -2078,6 +2323,7 @@ def _queue_html(queue: list[dict]) -> str:
             f'<strong>{title}</strong>'
             f'<span style="font-size:11px;margin-left:8px;padding:1px 6px;border-radius:9999px;'
             f'background:{color}22;color:{color}">{status}</span>'
+            f'{source_badge}'
             f'<span style="color:#9ca3af;font-size:11px;margin-left:6px">from {commenter}</span>'
             f'{url_html}'
             f'</div>'
@@ -2224,7 +2470,7 @@ def _yt_evaluate_unevaluated(cache: list, cfg: dict, auto_approve: bool) -> tupl
                 and result["confidence"] >= auto_threshold
                 and comment.get("status") not in ("approved", "rejected")):
             comment["status"] = "approved"
-            queue_item = yt.add_to_queue(comment, result["suggested_title"])
+            queue_item = yt.add_to_queue(comment, result["suggested_title"], source="comment")
             if queue_item:
                 threading.Thread(
                     target=_prefetch_video_prompt,
@@ -2303,7 +2549,7 @@ def on_yt_approve(row_idx: int, title_override: str) -> tuple:
     final_title = (title_override or "").strip() or comment.get("suggested_title", "")
     comment["status"] = "approved"
     yt.save_comments_cache(cache)
-    queue_item = yt.add_to_queue(comment, final_title)
+    queue_item = yt.add_to_queue(comment, final_title, source="comment")
 
     # Generate the directorial brief synchronously so it's ready before navigating
     # to the Create tab.  Previous approach used a background thread which meant
@@ -2415,6 +2661,7 @@ def on_yt_manual_add_to_queue(title: str, prompt: str, n_scenes: int) -> tuple:
         "video_prompt": prompt,
         "suggested_scene_count": n_scenes,
         "interestingness": 0.95,
+        "source": "manual",
         "status": "pending",
         "created_at": time.time(),
         "video_job_id": None,
@@ -2447,6 +2694,32 @@ def on_yt_remove_from_queue(row_idx: int) -> tuple:
             break
     yt.save_comments_cache(cache)
     return _queue_html(queue), f"Removed from queue: {html.escape(title)}"
+
+
+def on_yt_move_in_queue(row_idx: int, direction: int) -> tuple:
+    """Move a pending queue item up (direction=-1) or down (direction=1). row_idx is 1-based."""
+    queue = yt.load_queue()
+    removable = [q for q in queue if q.get("status") not in ("posted",)]
+    idx = int(row_idx or 1) - 1
+    if idx < 0 or idx >= len(removable):
+        return _queue_html(queue), f"Row {row_idx} not found in queue."
+    item = removable[idx]
+    if item.get("status") != "pending":
+        return _queue_html(queue), "Only pending items can be reordered."
+    moved = yt.move_queue_item(item["id"], direction)
+    queue = yt.load_queue()
+    if moved:
+        label = "up" if direction == -1 else "down"
+        return _queue_html(queue), f"Moved #{row_idx} {label}."
+    return _queue_html(queue), "Cannot move — already at the boundary."
+
+
+def on_yt_sort_queue() -> tuple:
+    """Sort the queue so comment requests come first (oldest first), then suggestions."""
+    queue = yt.load_queue()
+    sorted_q = yt.sort_queue_by_priority(queue)
+    yt.save_queue(sorted_q)
+    return _queue_html(sorted_q), "Queue sorted: comment requests first, then suggestions."
 
 
 def _prepare_auto_start(queue_item: dict | None) -> tuple:
@@ -2680,10 +2953,58 @@ def _post_load_work_dir(work_dir):
         )
 
 
-def on_post_regen_description(active_job_dir: str, video_title: str) -> tuple:
-    work_dir = _preferred_work_dir(active_job_dir)
+def _post_tab_work_dir(post_video_path: str, active_job_dir: str) -> Path | None:
+    """Derive the work_dir for the video CURRENTLY displayed on the Post tab.
+
+    Prefers the post tab's video path (what the user actually sees), and only
+    falls back to active_job_state when the post tab has no video loaded.
+    """
+    if post_video_path:
+        p = Path(post_video_path).expanduser()
+        if p.exists():
+            return p.parent
+        if p.parent.exists():
+            return p.parent
+    return _preferred_work_dir(active_job_dir)
+
+
+def _load_scenes_for_work_dir(work_dir: Path) -> list[dict]:
+    """Return scene dicts for a work_dir.
+
+    Tries DurableStore first; falls back to reading script.json from disk so
+    older jobs (predating the DB) or jobs after a DB wipe still get usable
+    image_prompts for cover regeneration.
+    """
+    # DurableStore path
+    try:
+        store = DurableStore.default()
+        try:
+            job = store.get_job_by_work_dir(str(work_dir))
+            if job:
+                rows = store.scene_rows(job["id"]) or []
+                if rows:
+                    return rows
+        finally:
+            store.close()
+    except Exception as exc:
+        logger.debug("DurableStore scene lookup failed for %s: %s", work_dir, exc)
+
+    # script.json fallback
+    script_path = work_dir / "script.json"
+    if script_path.exists():
+        try:
+            data = json.loads(script_path.read_text())
+            if isinstance(data, list):
+                return data
+        except Exception as exc:
+            logger.debug("script.json read failed for %s: %s", work_dir, exc)
+    return []
+
+
+def on_post_regen_description(post_video_path: str, active_job_dir: str, video_title: str) -> tuple:
+    work_dir = _post_tab_work_dir(post_video_path, active_job_dir)
     if work_dir is None:
-        return gr.update(), _post_status_html("No active job.", "info")
+        return gr.update(), _post_status_html("No video selected.", "info")
     try:
         job_cfg_path = work_dir / "job_config.json"
         job_cfg = _read_json(job_cfg_path) if job_cfg_path.exists() else {}
@@ -2710,15 +3031,19 @@ def on_post_regen_description(active_job_dir: str, video_title: str) -> tuple:
 
 
 def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: str, yt_url: str) -> None:
-    """If this video was generated from a comment request, reply to that comment with the video link."""
+    """If this video was generated from a comment request, reply to that comment with the video link.
+
+    Identification is STRICT — only uses the stable queue_item_id written into
+    job_config.json at job-start time. No title-based fallback: replying to the
+    wrong commenter (because of a coincidental title match or any cached state)
+    is a worse outcome than not replying at all.
+    """
     try:
         work_dir = _preferred_work_dir(active_job_dir)
         if not work_dir:
             return
         queue = yt.load_queue()
 
-        # Primary match: stable queue_item_id written to job_config.json at job-start
-        # time (before the title might be changed on the Post tab).
         queue_item_id = ""
         job_cfg_path = work_dir / "job_config.json"
         if job_cfg_path.exists():
@@ -2728,27 +3053,32 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
             except Exception:
                 pass
 
-        match = None
-        if queue_item_id:
-            match = next((q for q in queue if q.get("id") == queue_item_id), None)
-            if match:
-                logger.debug("_notify_comment_requester: matched by queue_item_id=%s", queue_item_id)
-
-        # Fallback: title match (works as long as user did not rename the video)
-        if not match:
-            match = next(
-                (q for q in queue
-                 if q.get("final_title", "").lower() == video_title.lower()
-                 and q.get("status") != "posted"),
-                None,
-            )
-            if match:
-                logger.debug("_notify_comment_requester: matched by title %r", video_title)
-
-        if not match:
-            logger.debug("_notify_comment_requester: no queue match for %r (queue_item_id=%r)",
-                         video_title, queue_item_id)
+        if not queue_item_id:
+            logger.info("_notify_comment_requester: no queue_item_id in %s/job_config.json — "
+                        "skipping comment reply (no safe way to identify originating comment)",
+                        work_dir.name)
             return
+
+        match = next((q for q in queue if q.get("id") == queue_item_id), None)
+        if not match:
+            logger.warning("_notify_comment_requester: queue_item_id=%s in %s/job_config.json "
+                           "does not match any current queue entry — skipping reply",
+                           queue_item_id, work_dir.name)
+            return
+
+        # Verify the match really is for THIS uploaded video: the queue item's title
+        # must match the video title (case-insensitive). If not, the link was likely
+        # corrupted by an earlier bug — refuse to reply rather than reply to the wrong commenter.
+        queue_title = (match.get("final_title", "") or "").strip().lower()
+        actual_title = (video_title or "").strip().lower()
+        if queue_title and actual_title and queue_title != actual_title:
+            logger.warning(
+                "_notify_comment_requester: queue_item_id=%s links to title %r but this video "
+                "is %r — refusing to reply (mismatch suggests corrupted link)",
+                queue_item_id, match.get("final_title"), video_title,
+            )
+            return
+        logger.debug("_notify_comment_requester: matched by queue_item_id=%s", queue_item_id)
         # Always mark the queue item as posted with the URL
         yt.update_queue_item(match["id"], status="posted", youtube_url=yt_url)
         comment_id = match.get("comment_id", "")
@@ -2783,12 +3113,23 @@ def _find_queue_item_for_job(work_dir: Path, video_title: str) -> dict | None:
             match = next((q for q in queue if q.get("id") == queue_item_id), None)
             if match:
                 return match
-        return next(
-            (q for q in queue
-             if q.get("final_title", "").lower() == video_title.lower()
-             and q.get("status") not in ("posted",)),
-            None,
-        )
+        # Title fallback: only when the match is UNAMBIGUOUS (exactly one non-posted
+        # queue entry with this title). Multiple matches → bail, to avoid touching
+        # the wrong queue item (which previously caused replies to go to the wrong commenter).
+        title_key = (video_title or "").strip().lower()
+        if not title_key:
+            return None
+        candidates = [
+            q for q in queue
+            if q.get("final_title", "").strip().lower() == title_key
+            and q.get("status") not in ("posted",)
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            logger.warning("_find_queue_item_for_job: %d ambiguous title matches for %r — bailing",
+                           len(candidates), video_title)
+        return None
     except Exception:
         return None
 
@@ -2814,43 +3155,72 @@ def on_post_upload(
         )
         return
 
-    # Guard: refuse to re-upload a job that already has a YouTube video ID
-    work_dir_check = _preferred_work_dir(active_job_dir)
-    if work_dir_check:
-        existing_meta = _read_json(_job_meta_path(work_dir_check))
-        if existing_meta.get("youtube_video_id"):
-            existing_url = existing_meta.get("youtube_url", "")
-            yield (
-                _post_status_html(
-                    f"Already uploaded — video ID {existing_meta['youtube_video_id']} exists. "
-                    f"Delete the job record to force re-upload.",
-                    "error",
-                ),
-                gr.update(
-                    value=(
-                        f'<a href="{html.escape(existing_url)}" target="_blank">'
-                        f'{html.escape(existing_url)}</a>'
-                    ) if existing_url else "",
-                    visible=bool(existing_url),
-                ),
-            )
-            return
+    # Guard: refuse to re-upload a job that already has a YouTube video ID, and claim
+    # the upload slot under _auto_post_lock so the background auto-post thread can't
+    # race us to upload the same video at the same time.
+    # CRITICAL: derive work_dir from the video being uploaded, NOT active_job_state —
+    # the user may have selected a different completed video on the Post tab while a
+    # newer job is the active one. Using active_job_dir here would write youtube_video_id
+    # to the wrong job.json, leaving the actual uploaded video marked as "needs upload"
+    # which then triggers a duplicate upload from the auto-post loop.
+    work_dir = _post_tab_work_dir(video_path, active_job_dir)
+    manual_claimed = False
+    if work_dir:
+        with _auto_post_lock:
+            meta_path = _job_meta_path(work_dir)
+            try:
+                existing_meta = _read_json(meta_path)
+            except Exception:
+                existing_meta = {}
+            if existing_meta.get("youtube_video_id"):
+                existing_url = existing_meta.get("youtube_url", "")
+                yield (
+                    _post_status_html(
+                        f"Already uploaded — video ID {existing_meta['youtube_video_id']} exists. "
+                        f"Delete the job record to force re-upload.",
+                        "error",
+                    ),
+                    gr.update(
+                        value=(
+                            f'<a href="{html.escape(existing_url)}" target="_blank">'
+                            f'{html.escape(existing_url)}</a>'
+                        ) if existing_url else "",
+                        visible=bool(existing_url),
+                    ),
+                )
+                return
+            if str(work_dir) in _auto_post_triggered:
+                yield (
+                    _post_status_html(
+                        "Auto-post is currently uploading this video — please wait.", "error"
+                    ),
+                    gr.update(value="", visible=False),
+                )
+                return
+            # Claim the slot so the background thread won't start a concurrent upload.
+            _auto_post_triggered.add(str(work_dir))
+            manual_claimed = True
 
     if not video_path or not Path(video_path).exists():
+        if manual_claimed and work_dir:
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
         yield (
             _post_status_html("No video file selected. Load from current job or select a file.", "error"),
             gr.update(value="", visible=False),
         )
         return
 
-    # Check daily upload limit before attempting the upload
-    max_per_day = cfg.get("youtube_daily_upload_limit", 5)
-    if yt.is_upload_limit_reached(max_per_day):
-        import datetime
-        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+    # Check upload backoff (set when YouTube returns a rate-limit error)
+    remaining = yt.upload_backoff_remaining()
+    if remaining > 0:
+        mins = int(remaining / 60) + 1
+        if manual_claimed and work_dir:
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
         yield (
             _post_status_html(
-                f"Daily upload limit ({max_per_day}/day) reached. Uploads resume on {tomorrow}.", "error"
+                f"YouTube upload blocked after a previous error — retry in ~{mins} min.", "error"
             ),
             gr.update(value="", visible=False),
         )
@@ -2882,12 +3252,14 @@ def on_post_upload(
     )
 
     if result["error"]:
+        # Release the claim so auto-post can retry later if needed.
+        if manual_claimed and work_dir:
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
         if result["error"].startswith("UPLOAD_LIMIT_EXCEEDED:"):
-            import datetime
-            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
             yield (
                 _post_status_html(
-                    f"YouTube daily upload limit exceeded. Uploads resume on {tomorrow}.", "error"
+                    "YouTube rate limit hit — uploads blocked for ~2 hours. Auto-post will retry automatically.", "error"
                 ),
                 gr.update(value="", visible=False),
             )
@@ -2898,10 +3270,8 @@ def on_post_upload(
             )
         return
 
-    yt.record_upload()
-
-    # Persist youtube metadata to job.json
-    work_dir = _preferred_work_dir(active_job_dir)
+    # Persist youtube metadata to job.json.
+    # Keep work_dir in _auto_post_triggered so the background loop won't attempt a duplicate upload.
     if work_dir:
         _write_job_meta(
             work_dir,
@@ -2913,8 +3283,15 @@ def on_post_upload(
 
     yt_url = result["url"]
 
-    # Reply to the originating comment (if any) with the video link
-    _notify_comment_requester(secrets, active_job_dir, title or "Untitled Video", yt_url)
+    # Reply to the originating comment (if any) with the video link.
+    # Pass the resolved work_dir so the queue lookup uses the uploaded video's job,
+    # not the unrelated active job.
+    _notify_comment_requester(
+        secrets,
+        str(work_dir) if work_dir else active_job_dir,
+        title or "Untitled Video",
+        yt_url,
+    )
 
     url_html = (
         f'<div style="padding:8px 12px;border-radius:6px;background:#dcfce7;'
@@ -2940,19 +3317,18 @@ def _auto_post_chain(active_job_dir: str):
         return
 
     # Check daily upload limit before doing anything else
-    max_per_day = cfg.get("youtube_daily_upload_limit", 5)
-    if yt.is_upload_limit_reached(max_per_day):
-        import datetime
-        pause_until = yt.midnight_timestamp()
+    remaining = yt.upload_backoff_remaining()
+    if remaining > 0:
+        pause_until = time.time() + remaining
         _write_job_meta(work_dir, _auto_post_paused_until=pause_until)
         with _auto_post_lock:
             _auto_post_triggered.add(str(work_dir))
-        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-        logger.info("Auto-post paused for %s — daily limit (%d) reached, resumes %s",
-                    work_dir.name, max_per_day, tomorrow)
+        mins = int(remaining / 60) + 1
+        logger.info("Auto-post paused for %s — upload backoff active for ~%d more min",
+                    work_dir.name, mins)
         yield (
             _post_status_html(
-                f"Daily upload limit ({max_per_day}/day) reached. Auto-post will retry on {tomorrow}.", "error"
+                f"YouTube upload blocked after a previous error — auto-post will retry in ~{mins} min.", "error"
             ),
             gr.update(value="", visible=False),
         )
@@ -3006,16 +3382,16 @@ def _auto_post_chain(active_job_dir: str):
         tags_str="",
     )
 
-    # If the upload hit the daily limit, schedule a retry for tomorrow and
-    # reset _auto_post_triggered so _poll_job_outputs can re-fire after midnight.
-    if yt.is_upload_limit_reached(cfg.get("youtube_daily_upload_limit", 5)):
-        import datetime
-        pause_until = yt.midnight_timestamp()
+    # If a backoff is active after the upload attempt, schedule a per-job retry
+    # and reset _auto_post_triggered so _poll_job_outputs can re-fire when the backoff clears.
+    remaining = yt.upload_backoff_remaining()
+    if remaining > 0:
+        pause_until = time.time() + remaining
         _write_job_meta(work_dir, _auto_post_paused_until=pause_until, _auto_post_triggered=False)
         with _auto_post_lock:
             _auto_post_triggered.discard(str(work_dir))
-        tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-        logger.info("Auto-post will retry tomorrow (%s) for %s", tomorrow, work_dir.name)
+        mins = int(remaining / 60) + 1
+        logger.info("Auto-post will retry for %s in ~%d min", work_dir.name, mins)
 
 
 def _background_start_next_video() -> bool:
@@ -3118,7 +3494,6 @@ def _do_upload_for_job(work_dir: Path) -> bool:
     Returns True on successful upload, False on skip/failure.
     Uses the same guard set as the Gradio-timer path to prevent double-uploads.
     """
-    import datetime
     cfg = load_config()
     try:
         # Atomically claim this job so neither the timer nor a concurrent
@@ -3143,23 +3518,12 @@ def _do_upload_for_job(work_dir: Path) -> bool:
         job_cfg = _read_json(job_cfg_path) if job_cfg_path.exists() else {}
         video_title = job_cfg.get("video_title", "") or job_cfg.get("title", "") or work_dir.name
 
-        max_per_day = cfg.get("youtube_daily_upload_limit", 5)
-        if yt.is_upload_limit_reached(max_per_day):
-            pause_until = yt.midnight_timestamp()
-            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+        remaining = yt.upload_backoff_remaining()
+        if remaining > 0:
+            pause_until = time.time() + remaining
             _write_job_meta(work_dir, _auto_post_paused_until=pause_until)
-            # Mark the queue item upload_pending so the auto-start logic doesn't
-            # re-generate the same video while we're waiting for the limit to reset.
-            try:
-                q_item = _find_queue_item_for_job(work_dir, video_title)
-                if q_item and q_item.get("status") == "pending":
-                    yt.update_queue_item(q_item["id"], status="upload_pending")
-                    logger.info("Background auto-post: marked queue item %r upload_pending (daily limit)",
-                                video_title)
-            except Exception as _qe:
-                logger.warning("Background auto-post: could not mark queue item upload_pending: %s", _qe)
-            logger.info("Background auto-post paused — daily limit (%d) reached, resumes %s",
-                        max_per_day, tomorrow)
+            mins = int(remaining / 60) + 1
+            logger.info("Background auto-post paused — upload backoff active for ~%d more min", mins)
             return False
         style = job_cfg.get("style", "")
         music_desc = job_cfg.get("music_desc", "")
@@ -3212,6 +3576,13 @@ def _do_upload_for_job(work_dir: Path) -> bool:
         category_id = (yt.CATEGORY_OPTIONS.get(category, "22")
                        if category in yt.CATEGORY_OPTIONS else category)
 
+        # Final guard: re-read meta in case a manual upload completed while we were setting up.
+        if _read_json(_job_meta_path(work_dir)).get("youtube_video_id"):
+            logger.info("Background auto-post: %s was manually uploaded — skipping", work_dir.name)
+            with _auto_post_lock:
+                _auto_post_triggered.discard(str(work_dir))
+            return False
+
         logger.info("Background auto-post: uploading %r (%s)", video_title, work_dir.name)
         result = yt.upload_video(
             client_secrets_path=secrets,
@@ -3228,20 +3599,20 @@ def _do_upload_for_job(work_dir: Path) -> bool:
         if result["error"]:
             logger.error("Background auto-post: upload failed for %s: %s", work_dir.name, result["error"])
             if result["error"].startswith("UPLOAD_LIMIT_EXCEEDED:"):
-                pause_until = yt.midnight_timestamp()
-                tomorrow = datetime.date.today() + datetime.timedelta(days=1)
+                remaining = yt.upload_backoff_remaining()
+                pause_until = time.time() + max(remaining, 1)
                 _write_job_meta(work_dir, _auto_post_paused_until=pause_until, _auto_post_triggered=False)
                 with _auto_post_lock:
                     _auto_post_triggered.discard(str(work_dir))
-                logger.info("Background auto-post: daily limit hit, retrying tomorrow (%s) for %s",
-                            tomorrow, work_dir.name)
+                mins = int(max(remaining, 1) / 60) + 1
+                logger.info("Background auto-post: rate limit hit — retrying for %s in ~%d min",
+                            work_dir.name, mins)
             else:
                 with _auto_post_lock:
                     _auto_post_triggered.discard(str(work_dir))
                 _write_job_meta(work_dir, _auto_post_triggered=False)
             return False
 
-        yt.record_upload()
         _write_job_meta(
             work_dir,
             youtube_video_id=result["video_id"],
@@ -3252,16 +3623,10 @@ def _do_upload_for_job(work_dir: Path) -> bool:
         _notify_comment_requester(secrets, str(work_dir), video_title, result["url"])
         logger.info("Background auto-post: uploaded %r → %s", video_title, result["url"])
 
-        # Trigger next video in queue (mirrors what _on_post_done_refetch does
-        # in the Gradio event chain after a manual or timer-driven post).
         if cfg.get("youtube_auto_start_job"):
             threading.Thread(
                 target=_background_start_next_video, daemon=True, name="auto-start-bg"
             ).start()
-
-        if yt.is_upload_limit_reached(cfg.get("youtube_daily_upload_limit", 5)):
-            tomorrow = datetime.date.today() + datetime.timedelta(days=1)
-            logger.info("Background auto-post: daily limit reached after upload, pausing until %s", tomorrow)
 
         return True
 
@@ -3334,39 +3699,6 @@ def _background_auto_post_loop() -> None:
 
 # ── UI ────────────────────────────────────────────────────────────────────────
 
-_PERSIST_JS = """
-() => {
-    function persistField(elemId, storageKey) {
-        const el = document.getElementById(elemId);
-        if (!el) { setTimeout(() => persistField(elemId, storageKey), 150); return; }
-        const ta = el.querySelector('textarea, input');
-        if (!ta) { setTimeout(() => persistField(elemId, storageKey), 150); return; }
-
-        ta.addEventListener('input', () => { if (ta.value) localStorage.setItem(storageKey, ta.value); });
-
-        const saved = localStorage.getItem(storageKey);
-        if (!saved) return;
-        let prev = ta.value, ticks = 0;
-        const iv = setInterval(() => {
-            if (ta.value === prev) {
-                ticks++;
-                if (ticks >= 4) {
-                    clearInterval(iv);
-                    if (!ta.value) {
-                        ta.value = saved;
-                        ta.dispatchEvent(new Event('input', { bubbles: true }));
-                    }
-                }
-            } else {
-                prev = ta.value; ticks = 0;
-            }
-        }, 100);
-    }
-    persistField('video_title_input', 'spielbot_video_title');
-    persistField('title_input', 'spielbot_title');
-    return [];
-}
-"""
 
 
 # ── Video Suggestions ─────────────────────────────────────────────────────────
@@ -3489,7 +3821,7 @@ def on_add_suggestion_to_queue(row_idx: int) -> tuple:
         "suggested_scene_count": 20,
         "interestingness": suggestion.get("interestingness", 0.7),
     }
-    queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
+    queue_item = yt.add_to_queue(fake_comment, suggestion["title"], source="suggestion")
     if queue_item:
         threading.Thread(
             target=_prefetch_video_prompt,
@@ -3554,7 +3886,7 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
         "suggested_scene_count": 20,
         "interestingness": suggestion.get("interestingness", 0.7),
     }
-    queue_item = yt.add_to_queue(fake_comment, suggestion["title"])
+    queue_item = yt.add_to_queue(fake_comment, suggestion["title"], source="suggestion")
     if not queue_item:
         logger.warning("_auto_pick_suggestion: add_to_queue returned empty for %r", suggestion["title"])
         return None
@@ -3800,7 +4132,11 @@ def build_ui() -> gr.Blocks:
                 with gr.Row():
                     yt_start_next_btn = gr.Button("▶ Start Next Video in Queue", variant="primary", scale=2)
                     yt_queue_row_num  = gr.Number(value=1, label="Queue #", minimum=1, step=1, scale=1)
-                    yt_remove_queue_btn = gr.Button("🗑 Remove from Queue", variant="stop", scale=1)
+                    yt_move_up_btn = gr.Button("↑ Move Up", scale=1)
+                    yt_move_down_btn = gr.Button("↓ Move Down", scale=1)
+                    yt_remove_queue_btn = gr.Button("🗑 Remove", variant="stop", scale=1)
+                with gr.Row():
+                    yt_sort_priority_btn = gr.Button("🔀 Sort by Priority (comments first)", scale=2)
                 yt_queue_action_status = gr.Markdown("")
 
             # ── Create ───────────────────────────────────────────────────
@@ -3843,6 +4179,16 @@ def build_ui() -> gr.Blocks:
                     "1. Generate Script →", variant="primary", size="lg"
                 )
 
+                with gr.Row():
+                    load_script_dropdown = gr.Dropdown(
+                        label="Or load an existing script",
+                        choices=[(lbl, wdir) for lbl, wdir in _list_script_jobs()],
+                        value=None,
+                        allow_custom_value=False,
+                        scale=4,
+                    )
+                    load_script_btn = gr.Button("Load Script →", variant="secondary", scale=1)
+
             # ── Script Review ────────────────────────────────────────────
             with gr.Tab("📝 Script", id="script"):
                 with gr.Column(visible=False) as script_col:
@@ -3859,7 +4205,7 @@ def build_ui() -> gr.Blocks:
                         script_resolution_in = gr.Dropdown(
                             label="Preview Image Resolution",
                             choices=list(_RESOLUTIONS.keys()),
-                            value=_fast_preview_resolution(cfg.get("resolution", _DEFAULT_RESOLUTION)),
+                            value=cfg.get("resolution", _DEFAULT_RESOLUTION),
                         )
                         regen_scene_btn = gr.Button(
                             "↺ Regenerate current scene image", variant="secondary"
@@ -3899,6 +4245,24 @@ def build_ui() -> gr.Blocks:
                 progress_bar = gr.HTML(value=_progress_html(0, "Waiting to start…"))
                 progress_timer = gr.Timer(value=3, active=True)
 
+                with gr.Row():
+                    pause_job_btn = gr.Button("⏸ Pause", variant="secondary")
+                    stop_job_btn  = gr.Button("⏹ Stop",  variant="stop")
+                pause_stop_status = gr.Markdown("")
+
+                gr.Markdown("---")
+                gr.Markdown("#### Resume a Paused Job")
+                with gr.Row():
+                    resumable_job_dropdown = gr.Dropdown(
+                        label="Select job to resume",
+                        choices=[(lbl, wdir) for lbl, wdir in _list_resumable_jobs()],
+                        value=None,
+                        allow_custom_value=False,
+                        scale=4,
+                    )
+                    load_resume_btn = gr.Button("▶ Load & Resume", variant="primary", scale=1)
+
+                gr.Markdown("---")
                 gr.Markdown("#### Durable Orchestration")
                 orchestration_status = gr.HTML(value=_orchestration_html(""))
                 with gr.Row():
@@ -3950,6 +4314,26 @@ def build_ui() -> gr.Blocks:
                         scale=4,
                     )
                     load_recent_btn = gr.Button("Load", variant="secondary", size="sm", scale=1)
+
+                gr.Markdown("### Scene Selection & Order")
+                gr.Markdown(
+                    "Check/uncheck scenes to include or exclude them. "
+                    "Edit the **Order** column numbers to reorder — lower numbers come first."
+                )
+                with gr.Row():
+                    remix_select_all_btn   = gr.Button("Select All",   size="sm", variant="secondary")
+                    remix_deselect_all_btn = gr.Button("Deselect All", size="sm", variant="secondary")
+                    remix_reset_order_btn  = gr.Button("Reset Order",  size="sm", variant="secondary")
+                remix_scenes_check = gr.Dataframe(
+                    headers=["Include", "Order", "Scene"],
+                    datatype=["bool", "number", "str"],
+                    col_count=(3, "fixed"),
+                    row_count=(0, "dynamic"),
+                    value=[],
+                    interactive=True,
+                    label="Scenes",
+                    column_widths=["80px", "80px", None],
+                )
 
                 gr.Markdown("### Re-mix Audio")
                 gr.Markdown(
@@ -4258,12 +4642,6 @@ def build_ui() -> gr.Blocks:
                             "People & Blogs",
                         ),
                     )
-                cfg_yt_daily_limit = gr.Number(
-                    label="Daily upload limit (videos/day)",
-                    value=cfg.get("youtube_daily_upload_limit", 5),
-                    minimum=1, maximum=100, step=1, precision=0,
-                    info="Auto-post pauses when this many videos have been uploaded today. Resets at midnight.",
-                )
                 gr.Markdown("**Automation defaults** — control individual steps of the pipeline:")
                 cfg_yt_fully_automated = gr.Checkbox(
                     label="⚡ Fully automated mode (enables all automation below)",
@@ -4346,6 +4724,8 @@ def build_ui() -> gr.Blocks:
             selected_scene_preview, scene_summary_html,
         ]
 
+        _load_script_outputs = script_outputs + [video_title_in, n_scenes_in]
+
         # Outputs for the scene image generation step
         img_gen_outputs = [
             image_gen_status,
@@ -4383,6 +4763,25 @@ def build_ui() -> gr.Blocks:
             inputs=[active_job_state],
             outputs=[progress_cover_image],
             concurrency_limit=1,
+        )
+        pause_job_btn.click(
+            fn=on_pause_active_job,
+            inputs=[active_job_state],
+            outputs=[pause_stop_status],
+        ).then(
+            fn=lambda: gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_resumable_jobs()]),
+            inputs=[],
+            outputs=[resumable_job_dropdown],
+        )
+        stop_job_btn.click(
+            fn=on_cancel_active_job,
+            inputs=[active_job_state],
+            outputs=[pause_stop_status],
+        )
+        load_resume_btn.click(
+            fn=on_load_and_resume_job,
+            inputs=[resumable_job_dropdown],
+            outputs=[pause_stop_status, tabs, active_job_state],
         )
         resume_job_btn.click(
             fn=on_resume_active_job,
@@ -4443,6 +4842,12 @@ def build_ui() -> gr.Blocks:
             inputs=[], outputs=[gen_script_btn],
         )
 
+        load_script_btn.click(
+            fn=on_load_script,
+            inputs=[load_script_dropdown],
+            outputs=_load_script_outputs,
+        )
+
         approve_btn.click(
             fn=lambda: gr.update(interactive=False, value="⏳ Generating video…"),
             inputs=[], outputs=[approve_btn],
@@ -4467,10 +4872,9 @@ def build_ui() -> gr.Blocks:
         # Keep style_state in sync when user edits style_box directly
         style_box.change(fn=lambda v: v, inputs=[style_box], outputs=[style_state])
 
-        # Auto-sync Script-tab preview resolution to the correct aspect ratio when the
-        # user changes the video resolution in the Create tab.
+        # Auto-sync Script-tab preview resolution to match the video resolution.
         resolution_in.change(
-            fn=_fast_preview_resolution,
+            fn=lambda r: r,
             inputs=[resolution_in],
             outputs=[script_resolution_in],
         )
@@ -4545,7 +4949,8 @@ def build_ui() -> gr.Blocks:
         remix_btn.click(
             fn=on_remix,
             inputs=[combined_state, music_state, ambient_state,
-                    remix_voice_vol, remix_music_vol, remix_ambient_vol],
+                    remix_voice_vol, remix_music_vol, remix_ambient_vol,
+                    remix_scenes_check],
             outputs=[final_video_out, combined_state, music_state, ambient_state, remix_status],
         )
 
@@ -4566,17 +4971,63 @@ def build_ui() -> gr.Blocks:
             inputs=[],
             outputs=[final_video_out, combined_state, music_state, ambient_state,
                      remix_voice_vol, remix_music_vol, remix_ambient_vol,
-                     restore_status],
+                     remix_scenes_check, restore_status],
         )
 
         _remix_load_outputs = [final_video_out, combined_state, music_state, ambient_state,
                                remix_voice_vol, remix_music_vol, remix_ambient_vol,
-                               restore_status]
+                               remix_scenes_check, restore_status]
 
         load_recent_btn.click(
             fn=_load_job_for_remix,
             inputs=[recent_job_dropdown],
             outputs=_remix_load_outputs,
+        )
+
+        import pandas as pd
+
+        def _remix_select_all(df):
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                return gr.update()
+            rows = df.values.tolist() if isinstance(df, pd.DataFrame) else (df or [])
+            updated = [[True, r[1], r[2]] for r in rows]
+            return gr.update(value=updated)
+
+        def _remix_deselect_all(df):
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                return gr.update()
+            rows = df.values.tolist() if isinstance(df, pd.DataFrame) else (df or [])
+            updated = [[False, r[1], r[2]] for r in rows]
+            return gr.update(value=updated)
+
+        def _remix_reset_order(df):
+            if df is None or (isinstance(df, pd.DataFrame) and df.empty):
+                return gr.update()
+            rows = df.values.tolist() if isinstance(df, pd.DataFrame) else (df or [])
+            # Sort by scene number extracted from label, reassign sequential order
+            def scene_num(row):
+                m = re.search(r'Scene\s+(\d+)', str(row[2]))
+                return int(m.group(1)) if m else 999
+            rows_sorted = sorted(rows, key=scene_num)
+            updated = [[r[0], i + 1, r[2]] for i, r in enumerate(rows_sorted)]
+            return gr.update(value=updated)
+
+        remix_select_all_btn.click(
+            fn=_remix_select_all,
+            inputs=[remix_scenes_check],
+            outputs=[remix_scenes_check],
+        )
+
+        remix_deselect_all_btn.click(
+            fn=_remix_deselect_all,
+            inputs=[remix_scenes_check],
+            outputs=[remix_scenes_check],
+        )
+
+        remix_reset_order_btn.click(
+            fn=_remix_reset_order,
+            inputs=[remix_scenes_check],
+            outputs=[remix_scenes_check],
         )
 
         cfg_llm_backend.change(
@@ -4602,7 +5053,7 @@ def build_ui() -> gr.Blocks:
                        cfg_yt_auto_fetch, cfg_yt_auto_approve,
                        cfg_yt_auto_start, cfg_yt_auto_script, cfg_yt_auto_post,
                        cfg_yt_fully_automated,
-                       cfg_yt_privacy, cfg_yt_category, cfg_yt_daily_limit,
+                       cfg_yt_privacy, cfg_yt_category,
                        cfg_script_extra, cfg_description_suffix]
 
         _cfg_outputs = [cfg_status, voice_dropdown, n_scenes_in]
@@ -4680,6 +5131,21 @@ def build_ui() -> gr.Blocks:
         yt_remove_queue_btn.click(
             fn=on_yt_remove_from_queue,
             inputs=[yt_queue_row_num],
+            outputs=[yt_queue_html, yt_queue_action_status],
+        )
+        yt_move_up_btn.click(
+            fn=lambda row: on_yt_move_in_queue(row, -1),
+            inputs=[yt_queue_row_num],
+            outputs=[yt_queue_html, yt_queue_action_status],
+        )
+        yt_move_down_btn.click(
+            fn=lambda row: on_yt_move_in_queue(row, 1),
+            inputs=[yt_queue_row_num],
+            outputs=[yt_queue_html, yt_queue_action_status],
+        )
+        yt_sort_priority_btn.click(
+            fn=on_yt_sort_queue,
+            inputs=[],
             outputs=[yt_queue_html, yt_queue_action_status],
         )
 
@@ -4812,7 +5278,8 @@ def build_ui() -> gr.Blocks:
         )
 
         # Single combined tab-select handler — handles per-tab auto-fills in one round-trip.
-        def _on_tab_select(evt: gr.SelectData, job_dir: str):
+        # Must be a generator so the Post tab can yield twice (instant + description).
+        def _on_tab_select(evt: gr.SelectData, job_dir: str, combined_path: str):
             # evt.value may be the tab label (str) or tab index (int) depending
             # on Gradio version — normalise to str to avoid TypeError in `in` checks.
             selected = str(getattr(evt, "value", "") or "")
@@ -4827,34 +5294,97 @@ def build_ui() -> gr.Blocks:
                 if on_remix_tab
                 else gr.update()
             )
-            # Refresh the Post-tab dropdown with up-to-date choices; field population
-            # is handled separately by post_job_dropdown.change and post_load_btn.click
-            # so we don't need to call the generator on_post_load here.
-            post_dropdown_update = (
-                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_completed_jobs()])
-                if ("Post" in selected or selected == "post")
+            # Auto-populate scene list when switching to Remix tab
+            if on_remix_tab and combined_path and Path(combined_path).exists():
+                work_dir = Path(combined_path).parent
+                df_rows = _get_scene_df_rows(work_dir)
+                scenes_update = gr.update(value=df_rows)
+            else:
+                scenes_update = gr.update()
+            load_script_dropdown_update = (
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_script_jobs()])
+                if ("Create" in selected or selected == "create")
                 else gr.update()
             )
-            return yt_html, recent_choices, post_dropdown_update
+            resumable_dropdown_update = (
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_resumable_jobs()])
+                if ("Progress" in selected or selected == "progress")
+                else gr.update()
+            )
+
+            on_post_tab = "Post" in selected or selected == "post"
+            if not on_post_tab:
+                yield (yt_html, recent_choices, scenes_update, gr.update(),
+                       load_script_dropdown_update, resumable_dropdown_update,
+                       *(gr.update() for _ in _post_load_outputs))
+                return
+
+            # Post tab: refresh choices, pick the best job, set the value, and load
+            # all content inline so the user sees it immediately without any manual step.
+            completed = list(_list_completed_jobs())
+            # Prefer the currently active job if it's in the completed list; else take first.
+            best_dir = ""
+            if job_dir and any(wdir == job_dir for _, wdir in completed):
+                best_dir = job_dir
+            elif completed:
+                best_dir = completed[0][1]
+
+            post_dropdown_update = gr.update(choices=completed, value=best_dir or None)
+            non_post_base = (yt_html, recent_choices, scenes_update, post_dropdown_update,
+                             load_script_dropdown_update, resumable_dropdown_update)
+
+            if not best_dir:
+                yield non_post_base + (
+                    gr.update(value=""),
+                    gr.update(value="No completed videos found."),
+                    gr.update(value=""),
+                    gr.update(value=None, visible=False),
+                    _post_status_html("No completed videos found. Generate a video first.", "info"),
+                    gr.update(value=""),
+                    "",
+                )
+                return
+
+            first = True
+            for post_outputs in _post_load_work_dir(Path(best_dir)):
+                if first:
+                    yield non_post_base + post_outputs
+                    first = False
+                else:
+                    yield (*(gr.update() for _ in non_post_base), *post_outputs)
 
         tabs.select(
             fn=_on_tab_select,
-            inputs=[active_job_state],
-            outputs=[yt_auth_status, recent_job_dropdown, post_job_dropdown],
-            queue=False,  # tab navigation is always instant, never blocked by the queue
+            inputs=[active_job_state, combined_state],
+            outputs=[yt_auth_status, recent_job_dropdown, remix_scenes_check, post_job_dropdown,
+                     load_script_dropdown, resumable_job_dropdown,
+                     *_post_load_outputs],
         )
 
         post_regen_desc_btn.click(
             fn=on_post_regen_description,
-            inputs=[active_job_state, post_title],
+            inputs=[post_video_path, active_job_state, post_title],
             outputs=[post_description, post_status_html],
         )
 
-        def _on_post_regen_cover(title: str, active_job_dir: str):
-            work_dir = _preferred_work_dir(active_job_dir)
-            if not work_dir:
-                yield _post_status_html("No active job.", "info"), gr.update(), ""
+        def _on_post_regen_cover(title: str, post_video_path: str, active_job_dir: str):
+            # STRICT: cover regen on the Post tab MUST use the video the user is
+            # actually viewing. Refuse to fall back to active_job_state — that
+            # fallback caused covers to be generated from a completely different
+            # video's scenes (e.g. KISS title + Cold War content).
+            if not post_video_path or not Path(post_video_path).expanduser().exists():
+                yield (
+                    _post_status_html(
+                        "No video loaded on the Post tab — select a video from the dropdown first.",
+                        "error",
+                    ),
+                    gr.update(),
+                    "",
+                )
                 return
+            work_dir = Path(post_video_path).expanduser().parent
+            logger.info("Cover regen using work_dir=%s (post_video_path=%s)",
+                        work_dir, post_video_path)
             job_cfg = {}
             if (work_dir / "job_config.json").exists():
                 try:
@@ -4872,9 +5402,19 @@ def build_ui() -> gr.Blocks:
             cfg = load_config()
             cover_path = work_dir / "cover.png"
             cover_base = work_dir / "cover_base.png"
-            prompt = _cover_prompt(_shorten_title(title), style)
+            scenes_for_cover = _load_scenes_for_work_dir(work_dir)
+            logger.info("Cover regen: loaded %d scenes from %s", len(scenes_for_cover), work_dir.name)
+            prompt = _cover_prompt(_shorten_title(title), style, scenes=scenes_for_cover)
 
-            yield _post_status_html(f"Generating cover image for '{title}'…", "info"), gr.update(), ""
+            yield (
+                _post_status_html(
+                    f"Generating cover for '{title}' from <code>{html.escape(work_dir.name)}</code> "
+                    f"({len(scenes_for_cover)} scenes)…",
+                    "info",
+                ),
+                gr.update(),
+                "",
+            )
 
             try:
                 worker_pool = WorkerPool(worker_urls)
@@ -4905,7 +5445,7 @@ def build_ui() -> gr.Blocks:
 
         post_regen_cover_btn.click(
             fn=_on_post_regen_cover,
-            inputs=[post_title, active_job_state],
+            inputs=[post_title, post_video_path, active_job_state],
             outputs=[post_status_html, post_cover_image, post_cover_path_state],
         )
 
@@ -4981,8 +5521,17 @@ def build_ui() -> gr.Blocks:
             outputs=[post_auto_trigger_state],
         )
 
-        # On startup: fetch & evaluate if auto_fetch_evaluate is configured
+        # On startup: refresh dropdowns that depend on the videos folder, then
+        # fetch & evaluate if auto_fetch_evaluate is configured.
         demo.load(
+            fn=lambda: (
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_recent_jobs()]),
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_script_jobs()]),
+                gr.update(choices=[(lbl, wdir) for lbl, wdir in _list_resumable_jobs()]),
+            ),
+            inputs=[],
+            outputs=[recent_job_dropdown, load_script_dropdown, resumable_job_dropdown],
+        ).then(
             fn=_on_startup_auto_fetch,
             inputs=[],
             outputs=_yt_comment_outputs_ext,
@@ -4991,7 +5540,6 @@ def build_ui() -> gr.Blocks:
             inputs=[],
             outputs=[yt_suggestions_html],
         )
-        demo.load(fn=None, js=_PERSIST_JS)
 
     return demo
 

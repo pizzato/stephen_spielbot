@@ -373,7 +373,7 @@ def main(work_dir: Path) -> None:
         try:
             _cover_url = worker_pool.acquire()
             generate_scene_image(
-                _cover_prompt(_shorten_title(video_title), style_clean),
+                _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=_COVER_W,
                 height=_COVER_H,

@@ -353,74 +353,42 @@ def _eval_local(prompt: str, cfg: dict) -> dict:
     return _parse_eval(data["choices"][0]["message"]["content"])
 
 
-# ── Daily upload tracking ─────────────────────────────────────────────────────
+# ── Upload error backoff ──────────────────────────────────────────────────────
 
-import datetime as _dt
+def set_upload_backoff(hours: float = 2.0) -> None:
+    """Record a backoff timestamp after a YouTube upload error. Retries are blocked until it expires."""
+    try:
+        retry_after = time.time() + hours * 3600
+        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
+        UPLOAD_TRACKING_PATH.write_text(json.dumps({"retry_after": retry_after}))
+        logger.info("Upload backoff set — retries blocked for %.0f hours (until %.0f)", hours, retry_after)
+    except Exception as exc:
+        logger.warning("set_upload_backoff failed: %s", exc)
 
-def _today_str() -> str:
-    return _dt.date.today().isoformat()
+
+def clear_upload_backoff() -> None:
+    """Clear any active upload backoff (e.g. user manually resets)."""
+    try:
+        if UPLOAD_TRACKING_PATH.exists():
+            UPLOAD_TRACKING_PATH.write_text(json.dumps({}))
+    except Exception as exc:
+        logger.warning("clear_upload_backoff failed: %s", exc)
 
 
-def midnight_timestamp() -> float:
-    """Unix timestamp for the start of tomorrow (midnight tonight)."""
-    tomorrow = _dt.date.today() + _dt.timedelta(days=1)
-    return float(_dt.datetime(tomorrow.year, tomorrow.month, tomorrow.day).timestamp())
-
-
-def get_daily_upload_count() -> int:
-    """Return how many videos have been uploaded today."""
+def upload_backoff_remaining() -> float:
+    """Return seconds until the upload backoff expires, or 0 if not blocked."""
     try:
         data = json.loads(UPLOAD_TRACKING_PATH.read_text())
-        return int(data.get(_today_str(), {}).get("count", 0))
+        retry_after = float(data.get("retry_after", 0))
+        remaining = retry_after - time.time()
+        return max(0.0, remaining)
     except Exception:
-        return 0
+        return 0.0
 
 
-def record_upload() -> int:
-    """Increment today's upload count and persist it. Returns the new count."""
-    try:
-        data: dict = {}
-        if UPLOAD_TRACKING_PATH.exists():
-            data = json.loads(UPLOAD_TRACKING_PATH.read_text())
-        today = _today_str()
-        entry = data.get(today, {"count": 0})
-        entry["count"] = int(entry.get("count", 0)) + 1
-        data[today] = entry
-        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        UPLOAD_TRACKING_PATH.write_text(json.dumps(data, indent=2))
-        logger.info("Daily upload count for %s: %d", today, entry["count"])
-        return entry["count"]
-    except Exception as exc:
-        logger.warning("record_upload failed: %s", exc)
-        return 0
-
-
-def exhaust_daily_limit() -> None:
-    """Mark today's limit as definitely exceeded (e.g. after an API error)."""
-    try:
-        data: dict = {}
-        if UPLOAD_TRACKING_PATH.exists():
-            data = json.loads(UPLOAD_TRACKING_PATH.read_text())
-        today = _today_str()
-        entry = data.get(today, {"count": 0})
-        entry["limit_exceeded"] = True
-        data[today] = entry
-        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        UPLOAD_TRACKING_PATH.write_text(json.dumps(data, indent=2))
-    except Exception as exc:
-        logger.warning("exhaust_daily_limit failed: %s", exc)
-
-
-def is_upload_limit_reached(max_per_day: int) -> bool:
-    """Return True if today's uploads are at or above max_per_day, or the API signalled exceeded."""
-    try:
-        data = json.loads(UPLOAD_TRACKING_PATH.read_text())
-        entry = data.get(_today_str(), {})
-        if entry.get("limit_exceeded"):
-            return True
-        return int(entry.get("count", 0)) >= max_per_day
-    except Exception:
-        return False
+def is_upload_blocked() -> bool:
+    """Return True if uploads are currently blocked due to a recent API error backoff."""
+    return upload_backoff_remaining() > 0
 
 
 # ── Video upload ──────────────────────────────────────────────────────────────
@@ -500,7 +468,7 @@ def upload_video(
         err_str = str(exc)
         if any(s in err_str for s in ("uploadLimitExceeded", "dailyLimitExceeded",
                                        "rateLimitExceeded", "Video Uploads per day")):
-            exhaust_daily_limit()
+            set_upload_backoff(hours=2)
             return {"video_id": "", "url": "", "error": f"UPLOAD_LIMIT_EXCEEDED: {err_str[:300]}"}
         return {"video_id": "", "url": "", "error": err_str[:400]}
 
@@ -582,13 +550,34 @@ def save_queue(queue: list[dict]) -> None:
     QUEUE_PATH.write_text(json.dumps(queue, indent=2))
 
 
-def add_to_queue(comment: dict, final_title: str) -> dict:
-    """Add an approved video request to the queue. Returns the new entry (or {} if duplicate)."""
+def _queue_sort_key(item: dict) -> tuple:
+    """Sort key for pending queue items: comment requests first (oldest first), then the rest."""
+    source = item.get("source", "suggestion")
+    group = 0 if source == "comment" else 1
+    return (group, item.get("created_at", 0))
+
+
+def sort_queue_by_priority(queue: list[dict]) -> list[dict]:
+    """Return queue with pending items sorted by priority; non-pending items stay at the end."""
+    non_pending = [q for q in queue if q.get("status") not in ("pending",)]
+    pending = [q for q in queue if q.get("status") == "pending"]
+    pending.sort(key=_queue_sort_key)
+    return pending + non_pending
+
+
+def add_to_queue(comment: dict, final_title: str, source: str = "") -> dict:
+    """Add an approved video request to the queue. Returns the new entry (or {} if duplicate).
+
+    source: "comment" | "suggestion" | "manual". Inferred from comment_id if not provided.
+    Comment requests are inserted before suggestions (FIFO within each group).
+    """
     queue = load_queue()
     existing_ids = {e.get("comment_id") for e in queue if e.get("comment_id")}
     comment_id = comment.get("comment_id", "")
     if comment_id and comment_id in existing_ids:
         return {}
+    if not source:
+        source = "comment" if comment_id else "suggestion"
     entry = {
         "id": str(uuid.uuid4())[:8],
         "comment_id": comment_id,
@@ -598,15 +587,48 @@ def add_to_queue(comment: dict, final_title: str) -> dict:
         "final_title": final_title,
         "suggested_scene_count": comment.get("suggested_scene_count", 20),
         "interestingness": float(comment.get("interestingness", 0.5)),
+        "source": source,
         "status": "pending",
         "created_at": time.time(),
         "video_job_id": None,
         "youtube_video_id": None,
         "youtube_url": None,
     }
-    queue.insert(0, entry)
+    # Insert at the correct priority position among pending items.
+    # Non-pending items (creating/done/posted) stay at the end.
+    pending_indices = [i for i, q in enumerate(queue) if q.get("status") == "pending"]
+    if source == "comment":
+        # After the last existing pending comment, before the first pending suggestion
+        insert_at = next(
+            (i for i in pending_indices if queue[i].get("source", "suggestion") != "comment"),
+            pending_indices[-1] + 1 if pending_indices else 0,
+        )
+    else:
+        # After all pending items
+        insert_at = pending_indices[-1] + 1 if pending_indices else 0
+    queue.insert(insert_at, entry)
     save_queue(queue)
     return entry
+
+
+def move_queue_item(item_id: str, direction: int) -> bool:
+    """Move a pending queue item up (direction=-1) or down (direction=1) among pending items."""
+    queue = load_queue()
+    pending_indices = [i for i, q in enumerate(queue) if q.get("status") == "pending"]
+    try:
+        item_idx = next(i for i, q in enumerate(queue) if q.get("id") == item_id)
+    except StopIteration:
+        return False
+    pos_in_pending = pending_indices.index(item_idx) if item_idx in pending_indices else -1
+    if pos_in_pending == -1:
+        return False  # item is not pending, cannot reorder
+    target_pos = pos_in_pending + direction
+    if target_pos < 0 or target_pos >= len(pending_indices):
+        return False
+    other_idx = pending_indices[target_pos]
+    queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
+    save_queue(queue)
+    return True
 
 
 def update_queue_item(item_id: str, **updates) -> bool:

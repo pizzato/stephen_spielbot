@@ -153,6 +153,46 @@ def _claude_call(client, model: str, system: str, user_msg: str,
     raise last_exc
 
 
+def _fill_empty_narrations(client, model: str, scenes: list[Scene],
+                           title: str, video_title: str | None) -> None:
+    """For any scene with empty narration, make a targeted Claude call to fill it.
+
+    Mutates the scenes list in place. Prioritises scene 1 which is most likely
+    to be left empty by the main generation pass.
+    """
+    topic = video_title or title
+    empty = [s for s in scenes if not (s.narration or "").strip()]
+    if not empty:
+        return
+    logger.warning("Scenes with empty narration after generation: %s — filling", [s.id for s in empty])
+    for scene in empty:
+        prev_narr = next((s.narration for s in scenes if s.id == scene.id - 1 and s.narration), "")
+        next_narr = next((s.narration for s in scenes if s.id == scene.id + 1 and s.narration), "")
+        ctx_parts = [f'Topic: "{topic}"', f'Scene {scene.id} title: "{scene.title}"']
+        if prev_narr:
+            ctx_parts.append(f'Previous scene ends with: "{prev_narr}"')
+        if next_narr:
+            ctx_parts.append(f'Next scene begins with: "{next_narr}"')
+        ctx_parts.append(
+            "Write ONLY a 2-sentence spoken narration for this scene (~18-22 words total, "
+            "~9 seconds at a calm documentary pace). No JSON, no labels — just the 2 sentences."
+        )
+        try:
+            narration = _claude_call(
+                client, model,
+                "You are a documentary narrator. Output only the 2-sentence narration, nothing else.",
+                "\n".join(ctx_parts),
+                max_tokens=120,
+                label=f"fill narration scene {scene.id}",
+                retries=2,
+            ).strip()
+            if narration:
+                scene.narration = narration
+                logger.info("Filled narration for scene %d: %r", scene.id, narration[:60])
+        except Exception as exc:
+            logger.warning("Could not fill narration for scene %d: %s", scene.id, exc)
+
+
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str,
                      video_title: str | None = None) -> tuple[list[Scene], str, str]:
@@ -247,7 +287,14 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             ))
         batch_start = batch_end + 1
 
-    return scenes[:n_scenes], music_desc, style
+    final_scenes = scenes[:n_scenes]
+    _fill_empty_narrations(client, model, final_scenes, title, video_title)
+    # Absolute last-resort safety net: no Scene leaves with empty narration.
+    for s in final_scenes:
+        if not (s.narration or "").strip():
+            s.narration = f"{s.title or f'Scene {s.id}'}."
+            logger.warning("Scene %d still empty after Claude fill — used title", s.id)
+    return final_scenes, music_desc, style
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -343,8 +390,21 @@ def _local_llm(messages: list[dict], max_tokens: int,
 
 
 def _get_field(text: str, key: str) -> str:
+    """Get value for KEY: from `KEY: value` lines.
+
+    Handles two formats the LLM occasionally produces:
+      1. Same line:  `KEY: value`
+      2. Next line:  `KEY:\n  value`  (with optional blank lines between)
+    """
+    # Same-line format
     m = re.search(rf"^{re.escape(key)}:\s*(.+)", text, re.MULTILINE)
-    return m.group(1).strip() if m else ""
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    # Next-line format (key followed by blank/whitespace, value on a later line)
+    m = re.search(rf"^{re.escape(key)}:\s*\n+\s*([^\n][^\n]*)", text, re.MULTILINE)
+    if m and m.group(1).strip():
+        return m.group(1).strip()
+    return ""
 
 
 def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
@@ -385,6 +445,71 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
     if not scenes:
         raise RuntimeError(f"Story call returned no scenes.\nRaw response:\n{raw[:600]}")
     return result
+
+
+def _fill_empty_outlines_local(outlines: list[dict], title: str, video_title: str | None,
+                                 url: str, model: str) -> None:
+    """Fill any outline dicts whose narration is empty via a targeted local-LLM call.
+
+    Operates BEFORE visual generation so that downstream image/video prompts have
+    proper narration context. Mutates the outlines list in place.
+    """
+    topic = video_title or title
+    empty = [o for o in outlines if not (o.get("narration") or "").strip()]
+    if not empty:
+        return
+    logger.warning("Outlines with empty narration after story pass: %s — filling",
+                   [o.get("id") for o in empty])
+    for o in empty:
+        sid = o.get("id", 0)
+        prev_narr = next((x.get("narration", "") for x in outlines
+                          if x.get("id") == sid - 1 and (x.get("narration") or "").strip()), "")
+        next_narr = next((x.get("narration", "") for x in outlines
+                          if x.get("id") == sid + 1 and (x.get("narration") or "").strip()), "")
+        scene_title = o.get("title") or f"Scene {sid}"
+        ctx_parts = [f'Topic: "{topic}"', f'Scene {sid} title: "{scene_title}"']
+        if sid == 1:
+            ctx_parts.append(
+                "This is SCENE 1 — open with a compelling hook that teases the most "
+                "surprising or emotionally resonant moment from later in the video."
+            )
+        if prev_narr:
+            ctx_parts.append(f'Previous scene narration: "{prev_narr}"')
+        if next_narr:
+            ctx_parts.append(f'Next scene narration: "{next_narr}"')
+        ctx_parts.append(
+            "Write ONLY a 2-sentence spoken narration for this scene (~18-22 words, "
+            "~9 seconds at a calm documentary pace). No labels, no quotes, no markdown — "
+            "just the 2 sentences as plain prose."
+        )
+        try:
+            narration = _local_llm(
+                [
+                    {"role": "system",
+                     "content": "You are a documentary narrator. Output only the narration text, nothing else."},
+                    {"role": "user", "content": "\n".join(ctx_parts)},
+                ],
+                max_tokens=200,
+                url=url,
+                model=model,
+                retries=2,
+            ).strip()
+            # Strip any stray label/quote the LLM might prepend
+            for prefix in ("NARRATION:", "Narration:", "NARRATOR:", f"NARRATION_{sid}:"):
+                if narration.upper().startswith(prefix.upper()):
+                    narration = narration[len(prefix):].strip()
+                    break
+            narration = narration.strip().strip('"').strip("'").strip()
+            if narration:
+                o["narration"] = narration
+                logger.info("Filled narration for scene %d: %r", sid, narration[:80])
+            else:
+                # Last-resort: use the scene title as narration so TTS isn't blank
+                o["narration"] = f"{scene_title}."
+                logger.warning("Local LLM returned empty fill for scene %d — using title fallback", sid)
+        except Exception as exc:
+            logger.warning("Could not fill narration for scene %d: %s — using title fallback", sid, exc)
+            o["narration"] = f"{scene_title}."
 
 
 def _local_generate_visual(title: str, style: str,
@@ -434,6 +559,10 @@ def _local_generate(title: str, n_scenes: int,
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
     outlines   = story["scenes"]
 
+    # Critical: fill any empty narrations BEFORE visual generation so the image/video
+    # prompts get proper context. Scene 1 is particularly prone to being left blank.
+    _fill_empty_outlines_local(outlines, title, video_title, url, model)
+
     logger.info("Story: %d scenes, style=%r", len(outlines), style)
 
     def _fetch(outline: dict) -> tuple[int, str, str]:
@@ -465,6 +594,13 @@ def _local_generate(title: str, n_scenes: int,
     ]
     if not scenes:
         raise RuntimeError("No scenes assembled")
+
+    # Absolute last-resort safety net: no Scene leaves this function with empty narration.
+    for s in scenes:
+        if not (s.narration or "").strip():
+            s.narration = f"{s.title or f'Scene {s.id}'}."
+            logger.warning("Scene %d still had empty narration at assembly — used title", s.id)
+
     return scenes, music_desc, style
 
 
@@ -674,20 +810,16 @@ You are a YouTube video description writer. Write engaging, informative video de
 that accurately represent the content and help viewers decide whether to watch."""
 
 _DESC_PROMPT = """\
-Write a YouTube video description for a documentary titled "{title}".
+Write a SHORT YouTube video description for "{title}".
 
-The video covers these scenes (in order):
+The video covers:
 {narrations}
 
-Visual style: {style}
-Background music: {music_desc}
-
-Write 2-3 engaging paragraphs that:
-- Open with a hook that draws viewers in
-- Summarize what the video covers
-- End with an invitation to watch
-
-Keep it under 300 words. Do not use hashtags. Write only the description text, no labels."""
+Requirements:
+- 2-3 sentences, MAX 50 words total
+- One compelling hook sentence + one factual summary sentence
+- Plain prose, no labels, no hashtags, no "watch now" / "subscribe" boilerplate
+- Output ONLY the description text"""
 
 
 def generate_youtube_description(
@@ -726,7 +858,7 @@ def generate_youtube_description(
                 cfg.get("claude_model", "claude-sonnet-4-6"),
                 _DESC_SYSTEM,
                 prompt,
-                max_tokens=512,
+                max_tokens=160,
                 label="youtube_description",
             )
             return text.strip()
@@ -735,7 +867,7 @@ def generate_youtube_description(
         model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
         return _local_llm(
             [{"role": "system", "content": _DESC_SYSTEM}, {"role": "user", "content": prompt}],
-            max_tokens=512,
+            max_tokens=160,
             url=url,
             model=model,
         ).strip()
