@@ -2701,21 +2701,34 @@ def on_yt_remove_from_queue(row_idx: int) -> tuple:
 
 
 def on_yt_move_in_queue(row_idx: int, direction: int) -> tuple:
-    """Move a pending queue item up (direction=-1) or down (direction=1). row_idx is 1-based."""
+    """Move a pending queue item up (direction=-1) or down (direction=1). row_idx is 1-based.
+
+    Returns (html, status, new_row_num) — new_row_num is the moved item's new position
+    so the Queue # field follows the item, enabling repeated moves on the same item.
+    """
     queue = yt.load_queue()
     removable = [q for q in queue if q.get("status") not in ("posted",)]
     idx = int(row_idx or 1) - 1
     if idx < 0 or idx >= len(removable):
-        return _queue_html(queue), f"Row {row_idx} not found in queue."
+        return _queue_html(queue), f"Row {row_idx} not found in queue.", gr.update()
     item = removable[idx]
     if item.get("status") != "pending":
-        return _queue_html(queue), "Only pending items can be reordered."
+        return _queue_html(queue), "Only pending items can be reordered.", gr.update()
     moved = yt.move_queue_item(item["id"], direction)
     queue = yt.load_queue()
-    if moved:
-        label = "up" if direction == -1 else "down"
-        return _queue_html(queue), f"Moved #{row_idx} {label}."
-    return _queue_html(queue), "Cannot move — already at the boundary."
+    if not moved:
+        return _queue_html(queue), "Cannot move — already at the boundary.", gr.update()
+    # Find the item's new 1-based position in the post-move removable list so
+    # the Queue # input follows it (clicking Move Up/Down repeatedly keeps acting
+    # on the same item).
+    new_removable = [q for q in queue if q.get("status") not in ("posted",)]
+    new_pos_idx = next(
+        (i for i, q in enumerate(new_removable) if q.get("id") == item["id"]),
+        idx,
+    )
+    new_row_num = new_pos_idx + 1
+    label = "up" if direction == -1 else "down"
+    return _queue_html(queue), f"Moved #{row_idx} {label} → now #{new_row_num}.", new_row_num
 
 
 def on_yt_sort_queue() -> tuple:
@@ -5140,12 +5153,12 @@ def build_ui() -> gr.Blocks:
         yt_move_up_btn.click(
             fn=lambda row: on_yt_move_in_queue(row, -1),
             inputs=[yt_queue_row_num],
-            outputs=[yt_queue_html, yt_queue_action_status],
+            outputs=[yt_queue_html, yt_queue_action_status, yt_queue_row_num],
         )
         yt_move_down_btn.click(
             fn=lambda row: on_yt_move_in_queue(row, 1),
             inputs=[yt_queue_row_num],
-            outputs=[yt_queue_html, yt_queue_action_status],
+            outputs=[yt_queue_html, yt_queue_action_status, yt_queue_row_num],
         )
         yt_sort_priority_btn.click(
             fn=on_yt_sort_queue,
