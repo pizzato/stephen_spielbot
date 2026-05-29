@@ -15,6 +15,7 @@ export default function YouTube({ go, initial }) {
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
+  const [myIdea, setMyIdea] = useState('')
 
   useEffect(() => {
     api.getComments().then((d) => setComments(d.comments || [])).catch((e) => setError(e.message))
@@ -24,6 +25,14 @@ export default function YouTube({ go, initial }) {
     setLoadingIdeas(true); setError('')
     try { const d = await api.getSuggestions(); setIdeas(d.suggestions || []) }
     catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
+  }
+
+  // Add a topic the user typed themselves to the idea list (same actions as AI ideas).
+  const addMyIdea = () => {
+    const t = myIdea.trim()
+    if (!t) return
+    setIdeas((prev) => [{ title: t, reason: 'Your suggestion', source: 'manual' }, ...prev])
+    setMyIdea('')
   }
 
   useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas() }, [view])
@@ -84,9 +93,17 @@ export default function YouTube({ go, initial }) {
             <div className="row center between row--wrap gap-16">
               <div className="row center gap-10">
                 <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
-                <div><div style={{ fontWeight: 600 }}>Fresh topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Generated from your channel's history and gaps.</div></div>
+                <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Suggest your own, or let the AI generate them from your channel's gaps.</div></div>
               </div>
               <Button variant="ghost" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={loadIdeas}>{loadingIdeas ? 'Thinking…' : 'Generate more'}</Button>
+            </div>
+            <div className="row gap-10 center mt-16">
+              <div className="grow">
+                <input className="input" placeholder="✍️ Suggest a topic — e.g. How sourdough actually works"
+                  value={myIdea} onChange={(e) => setMyIdea(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') addMyIdea() }} />
+              </div>
+              <Button variant="primary" icon="plus" disabled={!myIdea.trim()} onClick={addMyIdea}>Add idea</Button>
             </div>
           </Card>
           {ideas.map((idea, i) => {
@@ -96,7 +113,7 @@ export default function YouTube({ go, initial }) {
               <Card key={i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row center between">
                   <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                  <Stars value={idea.interestingness} />
+                  {idea.source === 'manual' ? <Chip tone="accent">Your idea</Chip> : <Stars value={idea.interestingness} />}
                 </div>
                 {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
                 {scenes ? <div className="row center between mt-16"><span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span><Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { topic: title })}>Create</Button></div>
