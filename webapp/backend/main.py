@@ -464,12 +464,15 @@ def youtube_comments() -> dict:
 
 @api.get("/api/youtube/suggestions")
 def youtube_suggestions() -> dict:
+    # generate_video_suggestions(previous_titles, cfg) wants the channel's prior
+    # titles so it can avoid repeats. Derive them from finished job folders
+    # (works without YouTube OAuth); fall back to an empty list.
     try:
-        # generate_video_suggestions may be argless or take a count — try both.
-        try:
-            ideas = generate_video_suggestions()
-        except TypeError:
-            ideas = generate_video_suggestions(6)
+        previous = [label for label, _ in gapp._list_recent_jobs(max_results=50)]
+    except Exception:
+        previous = []
+    try:
+        ideas = generate_video_suggestions(previous, gapp.load_config())
     except Exception as e:
         raise HTTPException(503, f"Could not generate suggestions: {str(e)[:160]}")
     return {"suggestions": ideas}
