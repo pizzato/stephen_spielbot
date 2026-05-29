@@ -32,6 +32,7 @@ if str(REPO_ROOT) not in sys.path:
 # behind `if __name__ == "__main__"`, so nothing UI-related starts here.
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
+import pipeline.llm as llm  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir  # noqa: E402
 
@@ -562,6 +563,223 @@ def mark_seen(body: SeenBody) -> dict:
         seen["films_total"] = _finished_film_count()
     _save_seen(seen)
     return {"ok": True}
+
+
+# ── YouTube publishing (the Post tab) ────────────────────────────────────────
+
+def _call_matching(fn, **available):
+    """Call fn passing only the kwargs whose names match its parameters.
+
+    Keeps the backend robust to the exact signature of the underlying pipeline
+    helpers (upload_video / generate_youtube_description) — we supply every
+    plausible argument name and only the matching ones are forwarded.
+    """
+    import inspect
+    params = inspect.signature(fn).parameters
+    accepts_kwargs = any(p.kind == p.VAR_KEYWORD for p in params.values())
+    if accepts_kwargs:
+        return fn(**available)
+    return fn(**{k: v for k, v in available.items() if k in params})
+
+
+def _client_secrets_path() -> str:
+    p = gapp.load_config().get("youtube_client_secrets", "")
+    return str(Path(p).expanduser()) if p else ""
+
+
+@api.get("/api/youtube/auth")
+def yt_auth_status() -> dict:
+    try:
+        return yt.check_auth_status(_client_secrets_path())
+    except Exception as e:
+        return {"connected": False, "channel_name": "", "error": str(e)[:200]}
+
+
+@api.post("/api/youtube/auth/start")
+def yt_auth_start() -> dict:
+    try:
+        return {"auth_url": yt.start_auth_flow(_client_secrets_path())}
+    except Exception as e:
+        raise HTTPException(503, str(e).splitlines()[0][:200])
+
+
+@api.post("/api/youtube/auth/poll")
+def yt_auth_poll() -> dict:
+    try:
+        return yt.poll_auth_flow()
+    except Exception as e:
+        return {"status": "error", "error": str(e)[:200]}
+
+
+@api.post("/api/youtube/disconnect")
+def yt_disconnect() -> dict:
+    try:
+        yt.disconnect_youtube()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+@api.get("/api/youtube/post/options")
+def yt_post_options() -> dict:
+    cfg = gapp.load_config()
+    return {
+        "categories": getattr(yt, "CATEGORY_OPTIONS", {"People & Blogs": "22"}),
+        "privacy": getattr(yt, "PRIVACY_OPTIONS", ["private", "unlisted", "public"]),
+        "default_privacy": cfg.get("youtube_post_privacy", "private"),
+        "default_category": cfg.get("youtube_post_category", "22"),
+        "finished": [{"label": l, "work_dir": d} for l, d in gapp._list_recent_jobs(max_results=50)],
+    }
+
+
+def _video_title_for(wd: Path) -> str:
+    title = wd.name
+    try:
+        store = DurableStore.default()
+        try:
+            job = store.get_job(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        if job:
+            d = _row_to_dict(job)
+            cfg = json.loads(d.get("config_json") or "{}")
+            title = cfg.get("video_title") or d.get("title") or title
+    except Exception:
+        pass
+    return title
+
+
+@api.get("/api/youtube/post/prefill")
+def yt_post_prefill(work_dir: str = Query("")) -> dict:
+    wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
+    if wd is None or not wd.exists():
+        raise HTTPException(404, "No finished film found.")
+    final = gapp._final_path_for_work_dir(wd)
+    cover = wd / "cover.png"
+    return {
+        "work_dir": str(wd),
+        "title": _video_title_for(wd),
+        "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
+        "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+    }
+
+
+class DescribeBody(BaseModel):
+    work_dir: str = ""
+    title: str = ""
+
+
+@api.post("/api/youtube/describe")
+def yt_describe(body: DescribeBody) -> dict:
+    cfg = gapp.load_config()
+    wd = Path(body.work_dir) if body.work_dir else None
+    title = body.title or (_video_title_for(wd) if wd else "")
+    scenes = []
+    if wd and wd.exists():
+        try:
+            scenes = gapp._load_scenes_for_work_dir(wd)
+        except Exception:
+            scenes = []
+    try:
+        desc = _call_matching(
+            llm.generate_youtube_description,
+            title=title, video_title=title, topic=title,
+            scenes=scenes, script=scenes, n_scenes=len(scenes),
+            cfg=cfg, config=cfg,
+        )
+    except Exception as e:
+        raise HTTPException(503, f"Description generation failed: {str(e).splitlines()[0][:200]}")
+    if isinstance(desc, (tuple, list)):
+        desc = desc[0]
+    suffix = cfg.get("description_suffix", "").strip()
+    if suffix and suffix not in str(desc):
+        desc = f"{desc}\n\n{suffix}"
+    return {"description": str(desc)}
+
+
+class CoverBody(BaseModel):
+    work_dir: str = ""
+    title: str = ""
+    style: str = ""
+
+
+@api.post("/api/youtube/cover")
+def yt_cover(body: CoverBody) -> dict:
+    wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
+    if wd is None or not wd.exists():
+        raise HTTPException(404, "No film found.")
+    job_id = job_id_from_work_dir(wd)
+    try:
+        for _ in gapp.on_generate_cover_image(body.title or _video_title_for(wd), body.style or "", job_id):
+            pass  # drive the generator to completion
+    except Exception as e:
+        raise HTTPException(503, f"Cover generation failed: {str(e).splitlines()[0][:200]}")
+    cover = wd / "cover.png"
+    if cover.exists() and cover.stat().st_size > 1000:
+        return {"cover_url": f"/api/file?path={cover}&t={int(time.time())}"}
+    raise HTTPException(503, "Cover image was not produced (no reachable workers?).")
+
+
+class PostBody(BaseModel):
+    work_dir: str
+    title: str
+    description: str = ""
+    category: str = "22"
+    privacy: str = "private"
+
+
+@api.post("/api/youtube/post")
+def yt_post(body: PostBody) -> dict:
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    final = gapp._final_path_for_work_dir(wd)
+    if not (final.exists() and final.stat().st_size > 10_000):
+        raise HTTPException(400, "No final video found for this film.")
+    cover = wd / "cover.png"
+    thumb = str(cover) if cover.exists() and cover.stat().st_size > 1000 else None
+
+    try:
+        result = _call_matching(
+            yt.upload_video,
+            client_secrets_path=_client_secrets_path(), client_secrets=_client_secrets_path(),
+            video_path=str(final), path=str(final), video=str(final), file=str(final),
+            filename=str(final), video_file=str(final),
+            title=body.title, description=body.description,
+            category=body.category, category_id=body.category, categoryId=body.category,
+            privacy=body.privacy, privacy_status=body.privacy, privacyStatus=body.privacy,
+            thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
+        )
+    except Exception as e:
+        raise HTTPException(502, f"Upload failed: {str(e).splitlines()[0][:240]}")
+
+    # Normalise the return into {video_id, url}.
+    video_id, url = "", ""
+    if isinstance(result, dict):
+        video_id = result.get("video_id") or result.get("id") or result.get("videoId") or ""
+        url = result.get("url") or result.get("video_url") or ""
+    elif isinstance(result, str):
+        video_id = result
+    if video_id and not url:
+        url = f"https://youtu.be/{video_id}"
+
+    # Side effects: stamp the job and mark its queue item posted.
+    try:
+        gapp._write_job_meta(wd, youtube_video_id=video_id, youtube_url=url, status="done")
+    except Exception:
+        pass
+    try:
+        cfg_path = wd / "job_config.json"
+        queue_item_id = ""
+        if cfg_path.exists():
+            queue_item_id = json.loads(cfg_path.read_text()).get("queue_item_id", "")
+        if queue_item_id and hasattr(yt, "update_queue_item"):
+            yt.update_queue_item(queue_item_id, status="posted", youtube_video_id=video_id, youtube_url=url)
+    except Exception:
+        pass
+
+    return {"ok": True, "video_id": video_id, "url": url,
+            "message": f"Uploaded — {url}" if url else "Uploaded to YouTube."}
 
 
 # ── file serving (videos, previews, covers) ──────────────────────────────────
