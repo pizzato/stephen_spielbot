@@ -40,6 +40,9 @@ export const api = {
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
 
+  getBadges: () => req('GET', '/badges'),
+  markSeen: (section) => req('POST', '/badges/seen', { section }),
+
   getQueue: () => req('GET', '/queue'),
   getComments: () => req('GET', '/youtube/comments'),
   getSuggestions: () => req('GET', '/youtube/suggestions'),

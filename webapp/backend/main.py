@@ -36,6 +36,9 @@ from pipeline.llm import generate_script, generate_video_suggestions, Scene  # n
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir  # noqa: E402
 
 api = FastAPI(title="Stephen Spielbot API")
+# `uvicorn webapp.backend.main:app` is the conventional entry point — expose the
+# instance under both names so either `:app` or `:api` works.
+app = api
 
 # Where the built frontend lives (after `npm run build`). Optional in dev — the
 # Vite dev server proxies /api to this process instead.
@@ -476,6 +479,89 @@ def youtube_suggestions() -> dict:
     except Exception as e:
         raise HTTPException(503, f"Could not generate suggestions: {str(e)[:160]}")
     return {"suggestions": ideas}
+
+
+# ── sidebar badges ("needs attention" counts) ────────────────────────────────
+
+SEEN_FILE = gapp.CONFIG_FILE.parent / "ui_seen.json"
+
+
+def _load_seen() -> dict:
+    try:
+        return json.loads(SEEN_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def _save_seen(d: dict) -> None:
+    SEEN_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SEEN_FILE.write_text(json.dumps(d, indent=2))
+
+
+def _finished_film_count() -> int:
+    try:
+        return len(gapp._list_recent_jobs(max_results=9999))
+    except Exception:
+        return 0
+
+
+@api.get("/api/badges")
+def badges() -> dict:
+    """Mailbox-style counts for the sidebar: what needs the user's attention."""
+    try:
+        render_active = bool(gapp._is_job_running())
+    except Exception:
+        render_active = False
+
+    render_pct = 0
+    if render_active:
+        try:
+            wd = gapp._preferred_work_dir("")
+            if wd is not None:
+                render_pct = int(round(gapp._status_for_work_dir(wd)[0]))
+        except Exception:
+            render_pct = 0
+
+    try:
+        queue = yt.load_queue()
+    except Exception:
+        queue = []
+    queue_pending = sum(1 for q in queue if q.get("status") == "pending")
+    publishable = sum(1 for q in queue if q.get("status") in ("done", "upload_pending"))
+
+    try:
+        attention = len(yt.get_pending_requests())
+    except Exception:
+        attention = 0
+
+    films_total = _finished_film_count()
+    seen = _load_seen()
+    films_new = max(0, films_total - int(seen.get("films_total", 0)))
+
+    return {
+        "render_active": render_active,
+        "render_pct": render_pct,
+        "queue": queue_pending,
+        "youtube": attention + publishable,
+        "youtube_attention": attention,
+        "youtube_publishable": publishable,
+        "films": films_new,
+        "films_total": films_total,
+    }
+
+
+class SeenBody(BaseModel):
+    section: str
+
+
+@api.post("/api/badges/seen")
+def mark_seen(body: SeenBody) -> dict:
+    """Clear the 'new' count for a section once the user has looked at it."""
+    seen = _load_seen()
+    if body.section == "films":
+        seen["films_total"] = _finished_film_count()
+    _save_seen(seen)
+    return {"ok": True}
 
 
 # ── file serving (videos, previews, covers) ──────────────────────────────────

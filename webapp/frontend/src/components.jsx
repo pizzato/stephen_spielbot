@@ -113,6 +113,22 @@ const NAV = [
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
 
+// Mailbox-style sidebar indicator for a nav item: a live "REC" pill while a
+// render is running, otherwise a count of items needing attention.
+function navIndicator(id, badges) {
+  if (id === 'progress' && badges.render_active) {
+    return (
+      <span className="nav__rec" title="Rendering now">
+        <span className="nav__rec-dot"></span>
+        {badges.render_pct ? `${badges.render_pct}%` : 'REC'}
+      </span>
+    )
+  }
+  const counts = { queue: badges.queue, youtube: badges.youtube, library: badges.films }
+  const n = counts[id]
+  return n ? <span className="nav__badge nav__badge--attn">{n}</span> : null
+}
+
 export function Sidebar({ route, go, badges = {} }) {
   return (
     <aside className="sidebar">
@@ -130,7 +146,7 @@ export function Sidebar({ route, go, badges = {} }) {
             : <button key={n.id} className={`nav__item ${route === n.id ? 'is-active' : ''}`} onClick={() => go(n.id)}>
                 <Icon name={n.icon} brand={n.brand} />
                 <span>{n.label}</span>
-                {badges[n.id] ? <span className="nav__badge">{badges[n.id]}</span> : null}
+                {navIndicator(n.id, badges)}
               </button>
         ))}
       </nav>

@@ -17,16 +17,28 @@ export default function App() {
   const [job, setJob] = useState(null)            // {job_id, work_dir, title, style, music_desc, scenes, voice, resolution}
   const [progressDir, setProgressDir] = useState('')
   const [meta, setMeta] = useState({ config: {}, voices: [], resolutions: [], default_resolution: '' })
+  const [badges, setBadges] = useState({})
 
   useEffect(() => {
     api.getConfig().then(setMeta).catch(() => {})
   }, [])
 
+  // Poll the "needs attention" counts for the sidebar (render activity, queue,
+  // YouTube, new films) on a light interval so the indicators stay live.
+  const refreshBadges = useCallback(() => api.getBadges().then(setBadges).catch(() => {}), [])
+  useEffect(() => {
+    refreshBadges()
+    const t = setInterval(refreshBadges, 5000)
+    return () => clearInterval(t)
+  }, [refreshBadges])
+
   const go = useCallback((id, payload) => {
     if (payload?.topic != null) setTopic(payload.topic)
     setRoute(id)
     window.scrollTo({ top: 0 })
-  }, [])
+    // Visiting Films marks the new ones as seen (mailbox-style clear).
+    if (id === 'library') api.markSeen('films').then(refreshBadges).catch(() => {})
+  }, [refreshBadges])
 
   // Create → Script: a fresh script was generated. If the user opted to
   // auto-approve, launch generation immediately and jump to the render screen.
@@ -75,7 +87,7 @@ export default function App() {
 
   return (
     <div className="shell">
-      <Sidebar route={route} go={go} />
+      <Sidebar route={route} go={go} badges={badges} />
       <main className="main" key={route}>{screen}</main>
     </div>
   )
