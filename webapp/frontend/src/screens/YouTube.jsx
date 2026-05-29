@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react'
 import { Card, Chip, Button, Field, Segmented, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
+import Publish from './Publish.jsx'
 
 function Stars({ value }) {
   if (value == null) return null
@@ -104,22 +105,7 @@ export default function YouTube({ go }) {
         </div>
       )}
 
-      {view === 'publish' && (
-        <div className="bento">
-          <Card span={12} className="reveal reveal-d1">
-            <Banner tone="info">Publishing runs through the YouTube OAuth flow in the classic Config/Post tabs. This panel is a preview of the publish form; wiring upload is a follow-up.</Banner>
-            <div className="stack gap-22">
-              <Field label="Title" hint="Max 100 characters."><input className="input" placeholder="The Rise and Fall of the Roman Empire" /></Field>
-              <Field label="Description"><textarea className="textarea" rows={5} placeholder={'A 4-minute history of Rome.\n\nMade with Stephen Spielbot · github.com/pizzato/stephen_spielbot'} /></Field>
-              <div className="row gap-22 row--wrap">
-                <div className="grow"><Field label="Category"><select className="select" defaultValue="Education"><option>People & Blogs</option><option>Education</option><option>Science & Technology</option><option>Film & Animation</option></select></Field></div>
-                <Field label="Privacy"><Segmented value="private" onChange={() => {}} options={['private', 'unlisted', 'public']} /></Field>
-              </div>
-              <Button variant="primary" size="lg" icon="youtube" disabled>Upload to YouTube (use classic Post tab)</Button>
-            </div>
-          </Card>
-        </div>
-      )}
+      {view === 'publish' && <Publish />}
     </div>
   )
 }

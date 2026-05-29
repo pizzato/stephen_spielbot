@@ -46,6 +46,16 @@ export const api = {
   getQueue: () => req('GET', '/queue'),
   getComments: () => req('GET', '/youtube/comments'),
   getSuggestions: () => req('GET', '/youtube/suggestions'),
+
+  ytAuthStatus: () => req('GET', '/youtube/auth'),
+  ytAuthStart: () => req('POST', '/youtube/auth/start'),
+  ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
+  ytDisconnect: () => req('POST', '/youtube/disconnect'),
+  ytPostOptions: () => req('GET', '/youtube/post/options'),
+  ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
+  ytDescribe: (body) => req('POST', '/youtube/describe', body),
+  ytCover: (body) => req('POST', '/youtube/cover', body),
+  ytPost: (body) => req('POST', '/youtube/post', body),
 }
 
 // Build a URL the <img>/<video> tags can load straight from the backend.
