@@ -28,6 +28,8 @@ export const api = {
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
   regenPreview: (jobId, sceneId, resolution, style) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
+  generateAllPreviews: (jobId, resolution, style) =>
+    req('POST', `/jobs/${jobId}/previews?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
 
   startGeneration: (body) => req('POST', '/jobs/generate', body),
   getProgress: (workDir) => req('GET', `/progress?work_dir=${encodeURIComponent(workDir || '')}`),

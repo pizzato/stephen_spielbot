@@ -65,11 +65,11 @@ export function ProgressBar({ pct }) {
 
 // A scene thumbnail: a real preview image if we have one, else a colored
 // gradient placeholder (or a shimmer skeleton while rendering).
-export function Thumb({ variant = 0, loading, label, src }) {
+export function Thumb({ variant = 0, loading, label, src, aspect }) {
   return (
-    <div className="scene__img">
+    <div className="scene__img" style={aspect ? { aspectRatio: aspect, background: 'var(--paper-2)' } : undefined}>
       {src
-        ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', position: 'absolute', inset: 0 }} />
+        ? <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: aspect ? 'contain' : 'cover', position: 'absolute', inset: 0 }} />
         : <div className={`gfill ${loading ? 'skel' : 'g' + (variant % 6)}`}></div>}
       {label ? <span className="scene__no">{label}</span> : null}
       {loading ? <div className="scene__state">rendering…</div> : null}

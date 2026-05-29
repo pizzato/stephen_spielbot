@@ -9,8 +9,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [resolution, setResolution] = useState(job?.resolution || meta.default_resolution || '')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
+  const [lightbox, setLightbox] = useState(null)
+  const [genAll, setGenAll] = useState(false)
 
   useEffect(() => { setScenes(job?.scenes || []); setCur(0); setStyle(job?.style || '') }, [job?.job_id])
+
+  // Generate any missing scene previews as soon as the script loads. Existing
+  // images are reused (cached on disk), so revisiting is cheap. Only the preview
+  // fields are merged back so in-progress text edits aren't clobbered.
+  useEffect(() => {
+    if (!job?.job_id) return
+    if (!(job.scenes || []).some((s) => !s.has_preview)) return
+    setGenAll(true)
+    api.generateAllPreviews(job.job_id, job.resolution || '', job.style || '')
+      .then((r) => {
+        if (r.scenes) setScenes((prev) => prev.map((s) => {
+          const u = r.scenes.find((x) => x.id === s.id)
+          return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview } : s
+        }))
+      })
+      .catch((e) => setError(e.message))
+      .finally(() => setGenAll(false))
+  }, [job?.job_id])
 
   if (!job) {
     return (
@@ -27,6 +47,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const total = scenes.length
   const d = scenes[cur] || {}
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
+  // Preview aspect ratio derived from the chosen resolution, e.g. "Portrait (480×832)".
+  const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
 
   const persist = async (idx = cur) => {
     const s = scenes[idx]
@@ -84,6 +106,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {genAll && <Banner tone="info">Generating scene previews… already-painted frames are reused.</Banner>}
 
       <div className="bento">
         <Card span={12} well className="reveal reveal-d1">
@@ -115,20 +138,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Field label="Scene title">
               <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
-            <div className="row gap-22 row--wrap">
-              <div className="grow">
-                <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
-                  <textarea className="textarea" rows={5} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
-              </div>
-              <div className="grow">
-                <Field label={<span className="row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Video prompt</span>} hint="LTX — motion & camera.">
-                  <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
-              </div>
-            </div>
             <Field label={<span className="row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narration</span>}>
-              <textarea className="textarea" rows={3} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+              <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+            </Field>
+            <Field label={<span className="row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Video prompt</span>} hint="LTX — motion & camera.">
+              <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
           </div>
         </Card>
@@ -136,13 +150,24 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <div className="col-4 stack gap-16">
           <Card className="reveal reveal-d2">
             <span className="label-sm">First frame</span>
-            <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
+            <div className="mt-16" onClick={() => d.has_preview && setLightbox(fileUrl(d.preview_path))}
+              style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: d.has_preview ? 'zoom-in' : 'default' }}>
               {d.has_preview
-                ? <img src={fileUrl(d.preview_path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-                : <div className={`gfill ${busy === 'preview' ? 'skel' : 'g' + (cur % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
+                ? <img src={fileUrl(d.preview_path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                : <div className={`gfill ${(busy === 'preview' || genAll) ? 'skel' : 'g' + (cur % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
+              {d.has_preview && (
+                <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
+                  <Icon name="up-right-and-down-left-from-center" /> Full size
+                </span>
+              )}
             </div>
             <Button variant="ghost" block icon="rotate-right" disabled={busy === 'preview'} onClick={regen}>
               {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
+            <div className="mt-16">
+              <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
+                <textarea className="textarea" rows={5} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
+              </Field>
+            </div>
           </Card>
           <Card well className="reveal reveal-d3">
             <div className="row center gap-10">
@@ -157,13 +182,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <div className="scene-grid mt-16">
             {scenes.map((s, i) => (
               <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => move(i)}>
-                <Thumb variant={i} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? fileUrl(s.preview_path) : null} />
+                <Thumb variant={i} aspect={aspect} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? fileUrl(s.preview_path) : null} />
                 <div className="scene__cap">{s.title || `Scene ${i + 1}`}</div>
               </div>
             ))}
           </div>
         </Card>
       </div>
+
+      {lightbox && (
+        <div onClick={() => setLightbox(null)}
+          style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
+          <img src={lightbox} alt="" style={{ maxWidth: '95%', maxHeight: '95%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)' }} />
+        </div>
+      )}
     </div>
   )
 }
