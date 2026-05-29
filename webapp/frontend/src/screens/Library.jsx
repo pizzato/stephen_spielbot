@@ -50,8 +50,12 @@ export default function Library({ go, onOpenRemix }) {
               <div style={{ position: 'absolute', top: 12, left: 12 }}><Chip tone="ok" dot>Done</Chip></div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
-            <div style={{ padding: '16px 18px 18px' }}>
+            <div style={{ padding: '14px 18px 16px' }}>
               <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.label}</div>
+              <div className="row gap-10 mt-16">
+                <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
+                <Button variant="primary" icon="youtube" onClick={(e) => { e.stopPropagation(); go('youtube', { publishWorkDir: f.work_dir }) }}>Publish</Button>
+              </div>
             </div>
           </Card>
         ))}

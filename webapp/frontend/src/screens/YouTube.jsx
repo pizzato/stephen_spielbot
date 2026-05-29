@@ -9,8 +9,8 @@ function Stars({ value }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
-export default function YouTube({ go }) {
-  const [view, setView] = useState('comments')
+export default function YouTube({ go, initial }) {
+  const [view, setView] = useState(initial?.view || 'comments')
   const [comments, setComments] = useState([])
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
@@ -27,6 +27,8 @@ export default function YouTube({ go }) {
   }
 
   useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas() }, [view])
+  // Honour a deep-link (e.g. "Publish" from a Films card) after mount.
+  useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
 
   return (
     <div>
@@ -105,7 +107,7 @@ export default function YouTube({ go }) {
         </div>
       )}
 
-      {view === 'publish' && <Publish />}
+      {view === 'publish' && <Publish initialWorkDir={initial?.workDir} />}
     </div>
   )
 }
