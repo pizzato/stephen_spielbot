@@ -49,7 +49,7 @@ export default function Remix({ workDir, go }) {
         </div>
         <div className="row gap-10 reveal reveal-d1">
           {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
-          <Button variant="primary" icon="youtube" onClick={() => go('youtube')}>Publish</Button>
+          <Button variant="primary" icon="youtube" onClick={() => go('youtube', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
         </div>
       </div>
 
