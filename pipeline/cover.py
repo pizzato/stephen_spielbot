@@ -4,17 +4,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+from pipeline import prompts as _prompts
+
 logger = logging.getLogger("video_gen")
 
 COVER_WIDTH  = 1280
 COVER_HEIGHT = 720
-
-
-_COVER_NEGATIVE = (
-    "blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, "
-    "random text, watermark, logo, messy layout, too much clutter, distorted faces, "
-    "deformed hands, boring flat lighting, plain background"
-)
 
 
 def shorten_title_for_cover(title: str, max_chars: int = 40) -> str:
@@ -97,50 +92,23 @@ def _extract_scene_aspects(scenes) -> str:
 
 
 def build_cover_prompt(title: str, style: str = "", scenes=None) -> str:
-    """Build a FLUX prompt for a YouTube thumbnail derived from the video's scenes.
+    """Build a FLUX prompt for a YouTube documentary cover image.
 
     scenes: optional iterable of Scene objects or dicts with `image_prompt`. When
-            provided, the thumbnail SUBJECT MATTER is taken directly from these
-            scenes — no topic-biasing words like "historical" appear in the prompt,
-            so a music video gets musicians, a tech video gets tech, etc.
+            provided, a short subject hint is appended so the cover reflects the
+            actual video content (not random topic-biased imagery).
     """
     style_note = style.strip().rstrip(".")
+    style_line = f"Video visual style: {style_note}. " if style_note else ""
     aspects = _extract_scene_aspects(scenes)
-
-    # When we have real scene content, lead with it (FLUX weights early tokens
-    # heavily). When we don't, fall back to a generic title-led brief.
-    if aspects:
-        subject_line = (
-            f"Subject matter (MUST be the dominant content of the image — combine these "
-            f"specific elements into one cohesive composition): {aspects}. "
-        )
-        topic_brief = ""
-    else:
-        subject_line = ""
-        topic_brief = (
-            f'Subject matter: imagery directly representing the topic "{title}". '
-        )
-
-    style_line = f"Visual style: {style_note}. " if style_note else ""
-
-    prompt = (
-        f"{subject_line}"
-        f"{topic_brief}"
-        f"Render this as a YouTube thumbnail in 16:9 landscape format. "
-        f"{style_line}"
-        f"Thumbnail look: dramatic cinematic lighting, ultra-detailed, bold contrast, "
-        f"rich colors, sharp focus, high resolution, professional YouTube thumbnail design. "
-        f"Composition: the subject matter above is the main image, filling most of the frame. "
-        f"Large readable title text overlays the lower or central area without obscuring "
-        f"the key subjects. Use dramatic lighting, atmosphere, and depth to make it eye-catching. "
-        f'Title text: spell exactly "{title}", large, bold, clean block lettering with strong '
-        f"shadow or outline. No extra words, no fake letters, no misspellings. "
-        f"Layout: keep the subjects from the video clearly visible, leave safe margins, "
-        f"no watermark, no logo, no UI elements. "
-        f"Avoid: {_COVER_NEGATIVE}, historical war imagery unless explicitly described above, "
-        f"random soldiers, random period costumes, generic stock imagery unrelated to the subject matter."
+    subject_hint = f"Key visual elements from the video: {aspects}. " if aspects else ""
+    return _prompts.user(
+        "cover_image",
+        title=title,
+        style_line=style_line,
+        subject_hint=subject_hint,
+        negative=_prompts.value("cover_negative"),
     )
-    return prompt
 
 
 def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:
