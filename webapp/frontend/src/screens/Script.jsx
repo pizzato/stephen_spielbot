@@ -141,6 +141,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Field label={<span className="row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narration</span>}>
               <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
+            <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
+              <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
+            </Field>
             <Field label={<span className="row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Video prompt</span>} hint="LTX — motion & camera.">
               <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
@@ -163,11 +166,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
             <Button variant="ghost" block icon="rotate-right" disabled={busy === 'preview'} onClick={regen}>
               {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
-            <div className="mt-16">
-              <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
-                <textarea className="textarea" rows={5} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
-              </Field>
-            </div>
           </Card>
           <Card well className="reveal reveal-d3">
             <div className="row center gap-10">
