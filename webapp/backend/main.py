@@ -211,6 +211,50 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
     return {"ok": True, "preview_path": str(out)}
 
 
+@api.post("/api/jobs/{job_id}/previews")
+def generate_all_previews(job_id: str, resolution: str = Query(""), style: str = Query("")) -> dict:
+    """Generate first-frame previews for every scene that doesn't already have one.
+    Existing images are reused (cached on disk via _generate_active_scene_preview's
+    force=False short-circuit), so revisiting the script is cheap."""
+    import concurrent.futures
+
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    if not rows:
+        return {"scenes": [], "generated": 0, "failed": []}
+
+    missing = [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
+    failed: list[int] = []
+    if missing:
+        worker_urls = gapp._preview_worker_urls()
+        if not worker_urls:
+            raise HTTPException(503, "No reachable workers for preview generation.")
+        pool = gapp.WorkerPool(worker_urls)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(worker_urls), len(missing))) as ex:
+            futs = {
+                ex.submit(gapp._generate_active_scene_preview, job_id, int(r["id"]),
+                          resolution, style, r.get("title") or "",
+                          r.get("image_prompt") or "", force=False, worker_pool=pool): int(r["id"])
+                for r in missing
+            }
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception:
+                    failed.append(futs[fut])
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+
+    return {"scenes": [_scene_to_json(r) for r in rows],
+            "generated": len(missing) - len(failed), "failed": failed}
+
+
 # ── approve & generate (launches the background pipeline) ─────────────────────
 
 class GenerateBody(BaseModel):
