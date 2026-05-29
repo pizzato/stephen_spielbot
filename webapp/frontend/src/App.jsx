@@ -18,6 +18,7 @@ export default function App() {
   const [progressDir, setProgressDir] = useState('')
   const [meta, setMeta] = useState({ config: {}, voices: [], resolutions: [], default_resolution: '' })
   const [badges, setBadges] = useState({})
+  const [ytInitial, setYtInitial] = useState(null)   // {view, workDir} to deep-link the YouTube tab
 
   useEffect(() => {
     api.getConfig().then(setMeta).catch(() => {})
@@ -34,6 +35,8 @@ export default function App() {
 
   const go = useCallback((id, payload) => {
     if (payload?.topic != null) setTopic(payload.topic)
+    // Deep-link into the YouTube tab's Publish view (e.g. from a Films card).
+    if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
     setRoute(id)
     window.scrollTo({ top: 0 })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
@@ -78,7 +81,7 @@ export default function App() {
       case 'progress': return <Progress workDir={progressDir} job={job} go={go} />
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
-      case 'youtube': return <YouTube go={go} />
+      case 'youtube': return <YouTube go={go} initial={ytInitial} />
       case 'library': return <Library go={go} onOpenRemix={(wd) => { setProgressDir(wd); go('remix') }} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />
       default: return <Home go={go} />

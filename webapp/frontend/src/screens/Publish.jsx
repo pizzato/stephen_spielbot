@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Card, Field, Segmented, Button, Icon, Banner } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
-export default function Publish() {
+export default function Publish({ initialWorkDir }) {
   const [opts, setOpts] = useState({ categories: {}, privacy: ['private', 'unlisted', 'public'], finished: [] })
   const [auth, setAuth] = useState({ connected: false })
   const [workDir, setWorkDir] = useState('')
@@ -25,11 +25,15 @@ export default function Publish() {
       setOpts(o)
       setCategory(o.default_category || '22')
       setPrivacy(o.default_privacy || 'private')
-      if (o.finished?.length) selectFilm(o.finished[0].work_dir)
+      // Honour a film passed in from the Films screen; otherwise pick the newest.
+      const target = (initialWorkDir && o.finished?.some((f) => f.work_dir === initialWorkDir))
+        ? initialWorkDir
+        : o.finished?.[0]?.work_dir
+      if (target) selectFilm(target)
     }).catch((e) => setError(e.message))
     refreshAuth()
     return () => clearInterval(pollRef.current)
-  }, [])
+  }, [initialWorkDir])
 
   const selectFilm = async (wd) => {
     setWorkDir(wd); setError(''); setStatus(''); setConfirming(false)
