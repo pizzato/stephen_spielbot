@@ -355,8 +355,11 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     fields = {"title": body.title, "narration": body.narration,
               "image_prompt": body.image_prompt, "video_prompt": body.video_prompt}
     fields[field] = text
-    gapp._save_active_scene(job_id, int(scene_id), fields["title"],
-                            fields["image_prompt"], fields["video_prompt"], fields["narration"])
+    try:
+        gapp._save_active_scene(job_id, int(scene_id), fields["title"],
+                                fields["image_prompt"], fields["video_prompt"], fields["narration"])
+    except Exception:
+        pass  # the client also persists on blur — never lose the regenerated text
     return {"field": field, "value": text}
 
 
