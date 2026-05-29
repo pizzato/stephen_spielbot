@@ -11,6 +11,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [error, setError] = useState('')
   const [lightbox, setLightbox] = useState(null)
   const [genAll, setGenAll] = useState(false)
+  const [fieldBusy, setFieldBusy] = useState('')
 
   useEffect(() => { setScenes(job?.scenes || []); setCur(0); setStyle(job?.style || '') }, [job?.job_id])
 
@@ -52,6 +53,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Preview images are rewritten to the same path on regenerate, so bust the
   // browser cache with a per-scene version stamp.
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
+
+  // Re-generate a single text field for the current scene via the LLM. The
+  // backend persists it; we mirror the new value into local state.
+  const regenField = async (field) => {
+    setFieldBusy(field); setError('')
+    try {
+      const r = await api.regenField(job.job_id, d.id, field, {
+        title: d.title || '', narration: d.narration || '',
+        image_prompt: d.image_prompt || '', video_prompt: d.video_prompt || '',
+      })
+      setField(field, r.value)
+    } catch (e) { setError(e.message) } finally { setFieldBusy('') }
+  }
+  const fieldLabel = (text, field, icon) => (
+    <span className="row center between">
+      <span className="row center gap-10">{icon ? <Icon name={icon} style={{ color: 'var(--ink-3)', width: 16 }} /> : null}{text}</span>
+      <button type="button" className="btn btn--quiet" style={{ padding: '3px 9px', fontSize: 11 }}
+        disabled={fieldBusy === field} onClick={(e) => { e.preventDefault(); e.stopPropagation(); regenField(field) }}>
+        <Icon name="rotate" /> {fieldBusy === field ? 'Writing…' : 'Re-generate'}
+      </button>
+    </span>
+  )
 
   const persist = async (idx = cur) => {
     const s = scenes[idx]
@@ -138,16 +161,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           </div>
 
           <div className="stack gap-22 mt-24">
-            <Field label="Scene title">
+            <Field label={fieldLabel('Scene title', 'title')}>
               <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
-            <Field label={<span className="row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narration</span>}>
+            <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
               <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
-            <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
+            <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
               <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
-            <Field label={<span className="row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Video prompt</span>} hint="LTX — motion & camera.">
+            <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="LTX — motion & camera.">
               <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
             </Field>
           </div>

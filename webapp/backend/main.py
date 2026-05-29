@@ -255,6 +255,111 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
             "generated": len(missing) - len(failed), "failed": failed}
 
 
+# ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
+
+_FIELD_INSTRUCTIONS = {
+    "title": "Write ONE short, vivid scene title (max ~8 words). Return only the title — no quotes, no label.",
+    "narration": "Rewrite the narration for this scene: 2–4 sentences in an engaging documentary voice, consistent with the video topic and the surrounding scenes. Return only the narration text.",
+    "image_prompt": "Write a single detailed text-to-image (FLUX) prompt for this scene's first frame: highly detailed, static, incorporating the visual style. Return only the prompt.",
+    "video_prompt": "Write a single concise video-motion (LTX) prompt for this scene describing camera movement and motion. Return only the prompt.",
+}
+
+
+def _llm_complete(system: str, user: str, cfg: dict) -> str:
+    """Lightweight direct LLM call honouring the configured backend.
+
+    NOTE: kept self-contained (stdlib urllib) rather than importing
+    pipeline.llm's internals. If pipeline.llm later changes models/prompting,
+    this can be unified with it.
+    """
+    import urllib.request
+    if cfg.get("llm_backend", "local") == "claude":
+        key = cfg.get("claude_api_key", "")
+        if not key:
+            raise RuntimeError("No Claude API key configured (Settings → LLM backend).")
+        payload = json.dumps({
+            "model": cfg.get("claude_model", "claude-sonnet-4-6"),
+            "max_tokens": 700, "system": system,
+            "messages": [{"role": "user", "content": user}],
+        }).encode()
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/messages", data=payload,
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
+                     "content-type": "application/json"})
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            data = json.loads(resp.read())
+        return "".join(b.get("text", "") for b in data.get("content", [])).strip()
+
+    url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
+    payload = json.dumps({
+        "model": cfg.get("local_llm_model", ""),
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "temperature": 0.9, "max_tokens": 700,
+    }).encode()
+    req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read())
+    return data["choices"][0]["message"]["content"].strip()
+
+
+class FieldRegenBody(BaseModel):
+    title: str = ""
+    narration: str = ""
+    image_prompt: str = ""
+    video_prompt: str = ""
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-field")
+def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
+                     body: FieldRegenBody | None = None) -> dict:
+    body = body or FieldRegenBody()
+    if field not in _FIELD_INSTRUCTIONS:
+        raise HTTPException(400, f"Unknown field: {field}")
+    cfg = gapp.load_config()
+
+    video_title, topic, style, outline = "", "", "", ""
+    try:
+        store = DurableStore.default()
+        try:
+            job = store.get_job(job_id)
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        if job:
+            d = _row_to_dict(job)
+            jc = json.loads(d.get("config_json") or "{}")
+            jm = json.loads(d.get("metadata_json") or "{}")
+            video_title = jc.get("video_title") or d.get("title") or ""
+            topic = jc.get("topic") or ""
+            style = jm.get("style") or ""
+        outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
+    except Exception:
+        pass
+
+    system = ("You are a documentary script writer for short, AI-generated videos. "
+              "Be concise and return ONLY what the task asks for — no preamble, no labels.")
+    user = (
+        f"Video title: {video_title or topic}\nTopic: {topic}\nVisual style: {style}\n"
+        f"Full scene outline: {outline}\n\n"
+        f"Scene {scene_id} — current draft:\n"
+        f"Title: {body.title}\nNarration: {body.narration}\n"
+        f"Image prompt: {body.image_prompt}\nVideo prompt: {body.video_prompt}\n\n"
+        f"Task: {_FIELD_INSTRUCTIONS[field]}"
+    )
+    try:
+        text = _llm_complete(system, user, cfg).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
+
+    # Persist the regenerated field together with the user's current values.
+    fields = {"title": body.title, "narration": body.narration,
+              "image_prompt": body.image_prompt, "video_prompt": body.video_prompt}
+    fields[field] = text
+    gapp._save_active_scene(job_id, int(scene_id), fields["title"],
+                            fields["image_prompt"], fields["video_prompt"], fields["narration"])
+    return {"field": field, "value": text}
+
+
 # ── approve & generate (launches the background pipeline) ─────────────────────
 
 class GenerateBody(BaseModel):
