@@ -1,0 +1,169 @@
+import React, { useState, useEffect } from 'react'
+import { Card, Field, Segmented, Button, Chip, Icon, Thumb, Banner } from '../components.jsx'
+import { api, fileUrl } from '../api.js'
+
+export default function Script({ job, setJob, meta, onGenerate, go }) {
+  const [scenes, setScenes] = useState(job?.scenes || [])
+  const [cur, setCur] = useState(0)
+  const [style, setStyle] = useState(job?.style || '')
+  const [resolution, setResolution] = useState(job?.resolution || meta.default_resolution || '')
+  const [busy, setBusy] = useState('')
+  const [error, setError] = useState('')
+
+  useEffect(() => { setScenes(job?.scenes || []); setCur(0); setStyle(job?.style || '') }, [job?.job_id])
+
+  if (!job) {
+    return (
+      <div>
+        <div className="page-head"><div className="page-head__intro">
+          <span className="label-sm">Script</span><h1 className="display-md">No script loaded</h1>
+        </div></div>
+        <Card span={12}><p className="body-1">Generate a script first.</p>
+          <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create')}>Go to Create</Button></Card>
+      </div>
+    )
+  }
+
+  const total = scenes.length
+  const d = scenes[cur] || {}
+  const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
+
+  const persist = async (idx = cur) => {
+    const s = scenes[idx]
+    if (!s) return
+    try {
+      await api.saveScene(job.job_id, s.id, {
+        title: s.title || '', image_prompt: s.image_prompt || '',
+        video_prompt: s.video_prompt || '', narration: s.narration || '',
+      })
+    } catch (e) { setError(e.message) }
+  }
+
+  const move = async (to) => {
+    if (to < 0 || to >= total) return
+    await persist(cur)
+    setCur(to)
+  }
+
+  const regen = async () => {
+    setBusy('preview'); setError('')
+    try {
+      await persist(cur)
+      const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style)
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true } : s))
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const approve = async () => {
+    setBusy('generate'); setError('')
+    try {
+      await persist(cur)
+      await api.startGeneration({
+        job_id: job.job_id, work_dir: job.work_dir,
+        video_title: job.video_title || '', title: job.title || '',
+        n_scenes: total, voice: job.voice || '', resolution,
+        music_desc: job.music_desc || '', style,
+      })
+      setJob({ ...job, scenes, style })
+      onGenerate(job.work_dir)
+    } catch (e) { setError(e.message); setBusy('') }
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="page-head__intro">
+          <span className="label-sm reveal">Script · {total} scenes</span>
+          <h1 className="display-md reveal reveal-d1">{job.title}</h1>
+        </div>
+        <div className="row gap-10 reveal reveal-d1">
+          <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
+          <Button variant="primary" iconRight="wand-magic-sparkles" disabled={busy === 'generate'}
+            onClick={approve}>{busy === 'generate' ? 'Launching…' : '2. Approve & generate →'}</Button>
+        </div>
+      </div>
+
+      <Banner tone="danger">{error}</Banner>
+
+      <div className="bento">
+        <Card span={12} well className="reveal reveal-d1">
+          <div className="row center between row--wrap gap-16">
+            <div className="grow">
+              <Field label="Visual style — applied to every scene">
+                <input className="input" value={style} onChange={(e) => setStyle(e.target.value)} />
+              </Field>
+            </div>
+            <Field label="Preview resolution">
+              <select className="select" value={resolution} onChange={(e) => setResolution(e.target.value)}>
+                {(meta.resolutions || []).map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </Field>
+          </div>
+        </Card>
+
+        <Card span={8} padLg className="reveal reveal-d2">
+          <div className="row center between">
+            <div className="row center gap-10">
+              <Button variant="quiet" icon="chevron-left" disabled={cur === 0} onClick={() => move(cur - 1)}>Prev</Button>
+              <span className="h-title">Scene {cur + 1}<span className="muted" style={{ fontWeight: 400 }}> / {total}</span></span>
+              <Button variant="quiet" iconRight="chevron-right" disabled={cur >= total - 1} onClick={() => move(cur + 1)}>Next</Button>
+            </div>
+            <Chip tone="accent" dot>~20s</Chip>
+          </div>
+
+          <div className="stack gap-22 mt-24">
+            <Field label="Scene title">
+              <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
+            </Field>
+            <div className="row gap-22 row--wrap">
+              <div className="grow">
+                <Field label={<span className="row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> Image prompt</span>} hint="FLUX — static, highly detailed.">
+                  <textarea className="textarea" rows={5} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                </Field>
+              </div>
+              <div className="grow">
+                <Field label={<span className="row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Video prompt</span>} hint="LTX — motion & camera.">
+                  <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                </Field>
+              </div>
+            </div>
+            <Field label={<span className="row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narration</span>}>
+              <textarea className="textarea" rows={3} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+            </Field>
+          </div>
+        </Card>
+
+        <div className="col-4 stack gap-16">
+          <Card className="reveal reveal-d2">
+            <span className="label-sm">First frame</span>
+            <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
+              {d.has_preview
+                ? <img src={fileUrl(d.preview_path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div className={`gfill ${busy === 'preview' ? 'skel' : 'g' + (cur % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
+            </div>
+            <Button variant="ghost" block icon="rotate-right" disabled={busy === 'preview'} onClick={regen}>
+              {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
+          </Card>
+          <Card well className="reveal reveal-d3">
+            <div className="row center gap-10">
+              <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
+              <span className="muted" style={{ fontSize: 12.5 }}>Edit any scene before rendering — changes here drive the final film.</span>
+            </div>
+          </Card>
+        </div>
+
+        <Card span={12} className="reveal reveal-d4">
+          <span className="label-sm">All scenes</span>
+          <div className="scene-grid mt-16">
+            {scenes.map((s, i) => (
+              <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => move(i)}>
+                <Thumb variant={i} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? fileUrl(s.preview_path) : null} />
+                <div className="scene__cap">{s.title || `Scene ${i + 1}`}</div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      </div>
+    </div>
+  )
+}
