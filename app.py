@@ -553,6 +553,27 @@ def _poll_job_outputs(active_job_dir: str):
     if work_dir is None:
         return (_progress_html(0, "Waiting to start…"), gr.update(), gr.update(),
                 gr.update(), gr.update(), gr.update(), "", False)
+
+    # Auto-follow the active job: if the currently-tracked work_dir is finished
+    # (status=done or failed) AND a newer work_dir is running, switch to the newer one
+    # so the Progress tab follows the chain instead of getting stuck on video 1.
+    try:
+        cur_meta = _read_json(_job_meta_path(work_dir))
+        cur_status = cur_meta.get("status", "")
+        if cur_status in ("done", "failed"):
+            latest = _latest_work_dir()
+            if latest and latest != work_dir:
+                latest_meta_path = _job_meta_path(latest)
+                if latest_meta_path.exists():
+                    latest_meta = _read_json(latest_meta_path)
+                    latest_status = latest_meta.get("status", "")
+                    if latest_status == "running" and _process_running(latest_meta.get("pid")):
+                        logger.info("Progress: auto-switching from %s (%s) to %s (running)",
+                                    work_dir.name, cur_status, latest.name)
+                        work_dir = latest
+                        active_job_dir = str(latest)
+    except Exception:
+        pass
     final, comb, mus, amb, tabs_upd = _collect_job_outputs(work_dir)
 
     # Detect a fresh completion transition (status just became "done" this tick)
@@ -2199,6 +2220,71 @@ def on_save_config(music_vol: float, voice_vol: float, ambient_vol: float,
     return status, gr.update(value=voice_val, choices=voice_choices), gr.update(value=cfg["default_n_scenes"])
 
 
+def on_system_reset(confirm_text: str):
+    """Kill stuck jobs, wipe queue/suggestions, reset upload backoff and in-memory state."""
+    import signal
+    if (confirm_text or "").strip().upper() != "RESET":
+        return (
+            "Type RESET in the confirmation box to proceed.",
+            gr.update(), gr.update(), gr.update(),
+        )
+
+    lines: list[str] = []
+
+    # 1. Kill running generation subprocesses and mark jobs failed
+    killed = 0
+    for job_json in OUTPUT_DIR.glob("*/job.json"):
+        try:
+            data = _read_json(job_json)
+            if data.get("status") == "running":
+                pid = data.get("pid")
+                if pid:
+                    try:
+                        os.kill(int(pid), signal.SIGTERM)
+                        killed += 1
+                    except (ProcessLookupError, ValueError):
+                        pass
+                data["status"] = "failed"
+                job_json.write_text(json.dumps(data, indent=2))
+        except Exception:
+            pass
+    lines.append(f"Killed {killed} subprocess(es), marked running jobs as failed.")
+
+    # 2. Wipe the entire queue
+    queue_path = CONFIG_FILE.parent / "youtube_queue.json"
+    try:
+        before = len(_read_json(queue_path)) if queue_path.exists() else 0
+        queue_path.write_text("[]")
+        lines.append(f"Queue cleared ({before} item(s) removed).")
+    except Exception as e:
+        lines.append(f"Queue clear failed: {e}")
+
+    # 3. Wipe video suggestions
+    try:
+        yt.save_suggestions([])
+        lines.append("Video suggestions cleared.")
+    except Exception as e:
+        lines.append(f"Suggestions clear failed: {e}")
+
+    # 4. Clear upload backoff
+    try:
+        yt.clear_upload_backoff()
+        lines.append("Upload backoff cleared.")
+    except Exception as e:
+        lines.append(f"Upload backoff clear failed: {e}")
+
+    # 5. Reset in-memory state
+    global _auto_post_triggered
+    with _auto_post_lock:
+        _auto_post_triggered.clear()
+    _auto_start_in_progress.clear()
+    lines.append("In-memory state (auto-post, auto-start) cleared.")
+
+    logger.warning("System reset performed: %s", " | ".join(lines))
+    status = "\n".join(f"✓ {l}" for l in lines)
+    return status, _queue_html([]), _suggestions_html([]), ""
+
+
 # ── YouTube tab handlers ─────────────────────────────────────────────────────
 
 def _yt_auth_html(status: dict) -> str:
@@ -3096,8 +3182,6 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
             )
             return
         logger.debug("_notify_comment_requester: matched by queue_item_id=%s", queue_item_id)
-        # Always mark the queue item as posted with the URL
-        yt.update_queue_item(match["id"], status="posted", youtube_url=yt_url)
         comment_id = match.get("comment_id", "")
         if not comment_id or match.get("notified"):
             return  # no comment to reply to, or already replied
@@ -3113,6 +3197,20 @@ def _notify_comment_requester(secrets: str, active_job_dir: str, video_title: st
             logger.warning("Failed to notify comment requester: %s", result.get("error"))
     except Exception as exc:
         logger.warning("_notify_comment_requester error: %s", exc)
+
+
+def _mark_queue_item_posted(work_dir: Path, video_title: str, yt_url: str) -> None:
+    """Mark the queue item linked to this job as posted, regardless of origin (comment/manual/suggestion)."""
+    try:
+        match = _find_queue_item_for_job(work_dir, video_title)
+        if match:
+            yt.update_queue_item(match["id"], status="posted", youtube_url=yt_url)
+            logger.info("Marked queue item %s (%r) as posted", match.get("id"), video_title)
+        else:
+            logger.warning("_mark_queue_item_posted: no queue item found for %r in %s",
+                           video_title, work_dir.name if work_dir else "?")
+    except Exception as exc:
+        logger.warning("_mark_queue_item_posted error: %s", exc)
 
 
 def _find_queue_item_for_job(work_dir: Path, video_title: str) -> dict | None:
@@ -3299,6 +3397,10 @@ def on_post_upload(
         )
 
     yt_url = result["url"]
+
+    # Mark queue item as posted (covers manual + suggestion + comment-driven videos)
+    if work_dir:
+        _mark_queue_item_posted(work_dir, title or "Untitled Video", yt_url)
 
     # Reply to the originating comment (if any) with the video link.
     # Pass the resolved work_dir so the queue lookup uses the uploaded video's job,
@@ -3637,6 +3739,7 @@ def _do_upload_for_job(work_dir: Path) -> bool:
             youtube_upload_status="uploaded",
             youtube_privacy=privacy,
         )
+        _mark_queue_item_posted(work_dir, video_title, result["url"])
         _notify_comment_requester(secrets, str(work_dir), video_title, result["url"])
         logger.info("Background auto-post: uploaded %r → %s", video_title, result["url"])
 
@@ -3922,14 +4025,12 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
 
 
 def _sync_queue_state_on_startup() -> None:
-    """Mark queue items upload_pending for any completed jobs that haven't been uploaded.
+    """Reconcile queue state with on-disk job state on startup.
 
-    Called once at process start (before Gradio event handlers fire) so that the
-    auto-start logic never re-generates a video that is already sitting completed
-    and waiting for the daily upload limit to reset.
+    1. Jobs that finished uploading (have youtube_video_id) → mark queue item posted.
+    2. Jobs that finished generating but haven't uploaded → mark queue item upload_pending.
     """
     try:
-        now = time.time()
         for job_dir in OUTPUT_DIR.iterdir():
             if not job_dir.is_dir():
                 continue
@@ -3942,19 +4043,26 @@ def _sync_queue_state_on_startup() -> None:
                 continue
             if meta.get("status") != "done":
                 continue
-            if meta.get("youtube_video_id"):
-                continue
-            # Completed job with no upload — find its queue item
             job_cfg_path = job_dir / "job_config.json"
             if not job_cfg_path.exists():
                 continue
-            job_cfg = _read_json(job_cfg_path)
+            try:
+                job_cfg = _read_json(job_cfg_path)
+            except Exception:
+                continue
             video_title = (job_cfg.get("video_title", "") or job_cfg.get("title", "") or "")
             if not video_title:
                 continue
             try:
                 q_item = _find_queue_item_for_job(job_dir, video_title)
-                if q_item and q_item.get("status") == "pending":
+                if not q_item:
+                    continue
+                yt_url = meta.get("youtube_url", "")
+                if meta.get("youtube_video_id"):
+                    if q_item.get("status") != "posted":
+                        yt.update_queue_item(q_item["id"], status="posted", youtube_url=yt_url)
+                        logger.info("Startup sync: marked %r posted (job has youtube_video_id)", video_title)
+                elif q_item.get("status") == "pending":
                     yt.update_queue_item(q_item["id"], status="upload_pending")
                     logger.info("Startup sync: marked %r upload_pending (completed job waiting)", video_title)
             except Exception as exc:
@@ -4727,6 +4835,23 @@ def build_ui() -> gr.Blocks:
                         "Remove", variant="stop", scale=1
                     )
 
+                # ── Danger Zone ───────────────────────────────────────────
+                gr.Markdown("### ⚠️ Danger Zone")
+                gr.Markdown(
+                    "**Reset System** — kills stuck generation processes, clears all pending "
+                    "queue items (posted/uploaded items are preserved), clears upload backoff, "
+                    "and resets in-memory state. Type **RESET** to confirm."
+                )
+                with gr.Row():
+                    reset_confirm_box = gr.Textbox(
+                        label="Type RESET to confirm",
+                        placeholder="RESET",
+                        scale=3,
+                        max_lines=1,
+                    )
+                    reset_btn = gr.Button("Reset System", variant="stop", scale=1)
+                reset_status = gr.Markdown("")
+
         # ── Event wiring ─────────────────────────────────────────────────────
 
         script_outputs = [
@@ -5091,6 +5216,12 @@ def build_ui() -> gr.Blocks:
             fn=on_remove_voice,
             inputs=[remove_voice_dd],
             outputs=[voices_table, voice_dropdown, remove_voice_dd, cfg_status],
+        )
+
+        reset_btn.click(
+            fn=on_system_reset,
+            inputs=[reset_confirm_box],
+            outputs=[reset_status, yt_queue_html, yt_suggestions_html, yt_queue_action_status],
         )
 
         # ── YouTube tab wiring ────────────────────────────────────────────────
