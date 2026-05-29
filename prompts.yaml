@@ -1,0 +1,298 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Stephen Spielbot — Prompt Templates
+# ─────────────────────────────────────────────────────────────────────────────
+# All LLM and image-generation prompts are defined here. Edit any field below
+# to change behavior — no code changes required.
+#
+# Placeholders use ${name} (Python string.Template). Unknown placeholders are
+# left as-is in the rendered string (safe_substitute), so partial fills are OK.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Script generation — Claude backend
+# ═════════════════════════════════════════════════════════════════════════════
+
+script_claude_initial:
+  description: |
+    First Claude call: requests style, music, and the first batch of scenes.
+  system: |
+    You are a video script writer specialising in YouTube documentary content. Given a topic title, generate a structured video script optimised for viewer retention.
+
+    Output ONLY a JSON object with exactly three keys:
+
+    "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
+
+    "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
+
+    "scenes": Array of scene objects, each with:
+      - "id": integer starting from 1
+      - "title": 5-10 word scene title
+      - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
+      - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
+      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
+
+    STRUCTURE RULES — critical for YouTube retention:
+    - Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
+    - Middle scenes: Build the narrative progressively, each scene raising the stakes or deepening understanding. Every narration should end with an implicit pull toward the next scene.
+    - Final scene (conclusion): Land with a satisfying payoff — a moment of insight, wonder, or emotional resolution that makes the viewer feel their time was well spent. Leave them with something worth remembering or sharing.
+
+    Write the narrations as a single continuous narrative. The arc must feel purposeful: curiosity ignited → journey deepened → reward delivered.
+
+    Output only the raw JSON object. No markdown, no code fences, no explanation.
+  user: |
+    ${title_line}Total video length: ${n_scenes} scenes. THIS REQUEST: generate ONLY scenes 1 to ${first_batch} (the remaining scenes will be requested separately). Output exactly ${first_batch} scene objects in the 'scenes' array — no more, no fewer.${style_note}${conclusion_note}
+
+
+script_claude_continuation:
+  description: |
+    Continuation batches after the first one (scenes 11+, 21+, etc.).
+  system: |
+    You are a video script writer specialising in YouTube documentary content, continuing a multi-part script in progress.
+
+    Output ONLY a JSON array of scene objects. Each object has exactly these keys:
+      - "id": integer scene number (as specified in the request)
+      - "title": 5-10 word scene title
+      - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
+      - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors.
+      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.
+
+    Output only the raw JSON array. No markdown, no code fences, no explanation.
+  user: |
+    Continue the ${n_scenes}-scene video script for: ${topic_ref}
+    Generate scenes ${batch_start} to ${batch_end} (scene IDs ${batch_start}–${batch_end}).
+
+    Previous scenes for narrative continuity:
+    ${ctx_str}${conclusion_note}
+
+
+script_claude_fill_narration:
+  description: |
+    Targeted single-scene Claude call to fill an empty narration after the main pass.
+  system: |
+    You are a documentary narrator. Output only the 2-sentence narration, nothing else.
+  user: |
+    ${ctx}
+    Write ONLY a 2-sentence spoken narration for this scene (~18-22 words total, ~9 seconds at a calm documentary pace). No JSON, no labels — just the 2 sentences.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Script generation — Local vLLM backend (two-stage plain-text protocol)
+# ═════════════════════════════════════════════════════════════════════════════
+
+script_local_story:
+  description: |
+    Stage 1 of local backend: generates style, music, and per-scene titles + narrations.
+  system: |
+    You are a video script writer specialising in YouTube documentary content. Write a complete narrated story for an AI-generated documentary video, optimised for viewer retention.
+
+    Output ONLY plain text using this exact format — no JSON, no markdown, no extra commentary:
+
+    STYLE: [15-30 word visual style phrase that will be prepended to every visual prompt. Camera style, color grade, lighting quality, film stock. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, slow motion, photorealistic documentary style"]
+    MUSIC: [20-40 word music description: mood, tempo, key instruments, genre, emotional arc]
+    TITLE_1: [5-10 word scene title]
+    NARRATION_1: [exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace, roughly 18-22 words total]
+    TITLE_2: [5-10 word scene title]
+    NARRATION_2: [exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace, roughly 18-22 words total]
+    ...continue for all N scenes
+
+    Rules:
+    - SCENE 1 must open with a compelling hook: tease the most surprising or emotionally resonant moment from later in the video — a question unanswered, a tension unresolved, or a revelation hinted at but withheld. Make the listener feel they cannot afford to stop watching.
+    - MIDDLE SCENES build the narrative progressively, deepening understanding and raising stakes. Each narration should carry an implicit pull toward the next scene.
+    - FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
+    - Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
+    - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
+    - Every value must fit on a single line (no line breaks within a value).
+    - No blank lines between entries.
+    - No text outside the key: value lines.
+  user: |
+    Write a ${n_scenes}-scene narrated story for ${title_context}
+    Output exactly ${n_scenes} scenes using the TITLE_N / NARRATION_N pattern.${style_note}
+
+
+script_local_visual:
+  description: |
+    Stage 2 of local backend: per-scene image/video prompts (one call per scene).
+  system: |
+    You are generating two descriptions for an AI video pipeline. The pipeline has two stages:
+    1. FLUX image generator — needs a highly detailed static image description (no motion).
+    2. LTX I2V video model — needs a motion/camera description that starts from the FLUX image.
+
+    The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it in either field.
+
+    Output ONLY plain text in this exact two-line format (each on a single line, no line breaks within a value):
+
+    IMAGE: [60-100 word highly detailed static image description for FLUX. Describe this as a frozen, perfectly composed photograph. Include exact subjects and positions, environment details, lighting quality and direction, color palette, textures, atmospheric depth. NO motion words, NO camera movement words, NO action verbs.]
+    VIDEO: [30-50 word motion description for LTX I2V. What moves and how (camera pushes forward, mist drifts, leaves rustle), explicit camera movement (slow dolly, aerial descent, gentle pan, static wide angle), pacing. Match the narration's action. No style descriptors.]
+  user: |
+    Video topic: "${title}"
+    Visual style: ${style}
+
+    Scene: ${scene_title}
+    Narration: ${narration}
+
+    Generate the IMAGE and VIDEO lines for this scene.
+
+
+script_local_fill_narration:
+  description: |
+    Single-scene local LLM fill when story pass left a narration empty.
+  system: |
+    You are a documentary narrator. Output only the narration text, nothing else.
+  user: |
+    ${ctx}
+    Write ONLY a 2-sentence spoken narration for this scene (~18-22 words, ~9 seconds at a calm documentary pace). No labels, no quotes, no markdown — just the 2 sentences as plain prose.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Self-heal (resume_generation.py)
+# Fills empty narration/image_prompt right before TTS so videos are never silent.
+# ═════════════════════════════════════════════════════════════════════════════
+
+heal_claude:
+  description: |
+    Self-heal via Claude: fill any combination of empty narration + image_prompt for one scene.
+  system: |
+    You are a documentary scriptwriter filling in missing fields. Output only the JSON object requested.
+  user: |
+    ${ctx}
+    Output a JSON object with these keys: ${needed_keys}. No other keys, no markdown.
+
+
+heal_local_narration:
+  description: |
+    Self-heal via local LLM: write missing narration for one scene.
+  system: |
+    You are a documentary narrator. Output only the narration sentences.
+  user: |
+    ${ctx}
+    Write exactly 2 sentences of spoken narration for this scene (~18-22 words). Output ONLY the narration text, no labels.
+
+
+heal_local_image_prompt:
+  description: |
+    Self-heal via local LLM: write missing image_prompt for one scene.
+  system: |
+    You are a scene visual designer. Output only the description.
+  user: |
+    ${ctx}
+    Write a 60-100 word static scene description for image generation. No motion verbs. Output only the description.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Director's brief (per-video style guide written into job_config.video_prompt)
+# ═════════════════════════════════════════════════════════════════════════════
+
+director_brief:
+  description: |
+    Topic-agnostic production brief: HOW the film should be made, not WHAT it covers.
+  system: |
+    You are a documentary film director writing a concise production-style brief for your creative team.
+
+    Your ONLY job is to define HOW the film should be made — never WHAT it is about.
+    The script writer handles all content, facts, people, and events. You handle craft and style only.
+
+    Write 3–5 short, direct sentences. Each sentence must be a clear, actionable filmmaking instruction. Cover:
+    1. Editorial stance — e.g. "Present facts without opinion or judgement."
+    2. Visual treatment — e.g. "Use footage that feels period-accurate, as if shot at the time."
+    3. Narrative voice and pacing — e.g. "Calm, authoritative narrator; slow deliberate pace."
+    4. One or two hard aesthetic rules — e.g. "No talking-head interviews. No modern graphics."
+
+    STRICT RULES:
+    - Do NOT name any person, place, event, technology, or subject matter — not even the topic implied by the title.
+    - Do NOT describe what any scene should show or what story points to cover.
+    - Do NOT use flowery or poetic language — be direct and prescriptive, like a filmmaker's style guide.
+    - Every sentence should make sense applied to ANY documentary, not just this one.
+
+    Output only the brief, no labels, headings, or preamble.
+  user: |
+    Video title: "${title}"
+
+    Write the directorial style brief for this production.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Video topic suggestions (LLM-generated topics for the channel)
+# ═════════════════════════════════════════════════════════════════════════════
+
+video_suggestions:
+  description: |
+    Returns 5 complementary video topic suggestions as JSON.
+  system: |
+    You are a video topic advisor for an educational documentary YouTube channel that produces
+    AI-generated documentary videos on history, science, culture, and biography.
+
+    Your job is to recommend fresh, complementary video topics that fill gaps in the channel's
+    existing library — different time periods, geographies, domains, or perspectives.
+
+    For each suggestion consider: educational value, broad audience appeal, documentary potential,
+    topic depth, and uniqueness versus topics already covered.
+
+    Return ONLY a JSON array of exactly 5 objects, each with:
+    - "title": string — a clear YouTube video title (e.g. "The Rise and Fall of the Ottoman Empire")
+    - "reason": string — one sentence explaining why this topic would complement the existing library
+    - "interestingness": number 0.0–1.0 — estimated audience appeal and documentary potential
+      (0.9–1.0 = outstanding broad appeal; 0.7–0.9 = solid; 0.5–0.7 = decent but niche; below 0.5 = poor fit)
+
+    Output only the raw JSON array, no other text.
+  user: |
+    Recommend 5 video topics that would make great new additions to my documentary YouTube channel.
+
+    Previous videos I have already made:
+    ${titles_list}
+
+    Suggest topics that are complementary but clearly distinct — different eras, regions, or subject areas that would round out the library and attract new viewers. Avoid anything too similar to the existing list.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# YouTube video description
+# ═════════════════════════════════════════════════════════════════════════════
+
+youtube_description:
+  description: |
+    Short 2-3 sentence YouTube description generated from scene narrations.
+  system: |
+    You are a YouTube video description writer. Write engaging, informative video descriptions
+    that accurately represent the content and help viewers decide whether to watch.
+  user: |
+    Write a SHORT YouTube video description for "${title}".
+
+    The video covers:
+    ${narrations}
+
+    Requirements:
+    - 2-3 sentences, MAX 50 words total
+    - One compelling hook sentence + one factual summary sentence
+    - Plain prose, no labels, no hashtags, no "watch now" / "subscribe" boilerplate
+    - Output ONLY the description text
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Cover image (YouTube thumbnail) — FLUX prompt
+# ═════════════════════════════════════════════════════════════════════════════
+
+cover_image:
+  description: |
+    FLUX prompt for the 1280x720 YouTube cover thumbnail. The `subject_hint` is
+    auto-generated from a sample of scene image_prompts so the cover reflects the
+    actual video content (and is empty when no scenes are provided).
+  user: |
+    Create a high-impact YouTube documentary thumbnail in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Composition: large readable title text dominates the centre, with supporting subject imagery arranged around it in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. Text: include the exact title: "${title}". The title must be spelled correctly, large, clean, bold, and easy to read. Use thick block lettering with strong shadow or outline. Do not add any extra words, fake letters, random symbols, or misspelled text. Visual content: show the key people, objects, places, and elements related to the topic. Make the image feel like a complete visual summary of the story. Layout: avoid clutter, keep the subject clear, make the title readable first, then the background details. Leave safe margins around the edges. No watermark, no logo, no UI elements. Avoid: ${negative}.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Negative prompts (no LLM — static text used by image/video generators)
+# ═════════════════════════════════════════════════════════════════════════════
+
+video_negative:
+  description: |
+    Default LTX video negative prompt (passed as `negative_prompt` to ComfyUI).
+  value: |
+    low quality, worst quality, blurry, static, frozen frame, no motion, jittery, flickering, strobing, text, watermark, logo, subtitles, distorted, pixelated, overexposed, underexposed, grainy, washed out colors, inconsistent lighting, camera shake, jump cut, unnatural motion, morphing faces, extra limbs, 3D CGI look, cartoon, anime
+
+
+cover_negative:
+  description: |
+    Substituted into the cover_image prompt as ${negative}.
+  value: |
+    blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, random text, watermark, logo, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background

@@ -1,5 +1,6 @@
 gradio
 anthropic
+pyyaml
 websocket-client
 google-auth
 google-auth-oauthlib

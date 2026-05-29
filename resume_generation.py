@@ -34,6 +34,7 @@ from PIL import Image as _PILImage
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT
+from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_scene_image, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio,
@@ -160,12 +161,15 @@ def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dic
             need.append('"image_prompt": 60-100 word static scene description for FLUX, no motion verbs')
         if not need:
             continue
-        ctx.append("Output a JSON object with these keys: " + ", ".join(need) + ". No other keys, no markdown.")
         try:
             with client.messages.stream(
                 model=model, max_tokens=400,
-                system="You are a documentary scriptwriter filling in missing fields. Output only the JSON object requested.",
-                messages=[{"role": "user", "content": "\n".join(ctx)}],
+                system=_prompts.system("heal_claude"),
+                messages=[{"role": "user", "content": _prompts.user(
+                    "heal_claude",
+                    ctx="\n".join(ctx),
+                    needed_keys=", ".join(need),
+                )}],
             ) as stream:
                 text = "".join(stream.text_stream).strip()
             if text.startswith("```"):
@@ -196,12 +200,11 @@ def _fill_via_local(scenes: list[Scene], title: str, video_title: str, cfg: dict
         if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
         if next_narr: ctx.append(f'Next scene: "{next_narr}"')
         if not (s.narration or "").strip():
-            ctx.append("Write exactly 2 sentences of spoken narration for this scene (~18-22 words). Output ONLY the narration text, no labels.")
             payload = json.dumps({
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "You are a documentary narrator. Output only the narration sentences."},
-                    {"role": "user", "content": "\n".join(ctx)},
+                    {"role": "system", "content": _prompts.system("heal_local_narration")},
+                    {"role": "user", "content": _prompts.user("heal_local_narration", ctx="\n".join(ctx))},
                 ],
                 "max_tokens": 120, "temperature": 0.7,
             }).encode()
@@ -216,12 +219,11 @@ def _fill_via_local(scenes: list[Scene], title: str, video_title: str, cfg: dict
             except Exception as exc:
                 logger.warning("Self-heal: local LLM narration fill failed for scene %d: %s", s.id, exc)
         if not (s.image_prompt or "").strip():
-            ctx2 = ctx[:2] + ["Write a 60-100 word static scene description for image generation. No motion verbs. Output only the description."]
             payload = json.dumps({
                 "model": model,
                 "messages": [
-                    {"role": "system", "content": "You are a scene visual designer. Output only the description."},
-                    {"role": "user", "content": "\n".join(ctx2)},
+                    {"role": "system", "content": _prompts.system("heal_local_image_prompt")},
+                    {"role": "user", "content": _prompts.user("heal_local_image_prompt", ctx="\n".join(ctx[:2]))},
                 ],
                 "max_tokens": 250, "temperature": 0.7,
             }).encode()
