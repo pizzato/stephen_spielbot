@@ -49,6 +49,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
   // Preview aspect ratio derived from the chosen resolution, e.g. "Portrait (480×832)".
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
+  // Preview images are rewritten to the same path on regenerate, so bust the
+  // browser cache with a per-scene version stamp.
+  const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
 
   const persist = async (idx = cur) => {
     const s = scenes[idx]
@@ -72,7 +75,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       await persist(cur)
       const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true } : s))
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, cb: Date.now() } : s))
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -153,10 +156,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <div className="col-4 stack gap-16">
           <Card className="reveal reveal-d2">
             <span className="label-sm">First frame</span>
-            <div className="mt-16" onClick={() => d.has_preview && setLightbox(fileUrl(d.preview_path))}
+            <div className="mt-16" onClick={() => d.has_preview && setLightbox(imgUrl(d))}
               style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: d.has_preview ? 'zoom-in' : 'default' }}>
               {d.has_preview
-                ? <img src={fileUrl(d.preview_path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                ? <img src={imgUrl(d)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
                 : <div className={`gfill ${(busy === 'preview' || genAll) ? 'skel' : 'g' + (cur % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
               {d.has_preview && (
                 <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
@@ -180,7 +183,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <div className="scene-grid mt-16">
             {scenes.map((s, i) => (
               <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => move(i)}>
-                <Thumb variant={i} aspect={aspect} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? fileUrl(s.preview_path) : null} />
+                <Thumb variant={i} aspect={aspect} label={String(i + 1).padStart(2, '0')} src={s.has_preview ? imgUrl(s) : null} />
                 <div className="scene__cap">{s.title || `Scene ${i + 1}`}</div>
               </div>
             ))}
