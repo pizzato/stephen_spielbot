@@ -14,42 +14,77 @@ export default function YouTube({ go, initial }) {
   const [comments, setComments] = useState([])
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
+  const [status, setStatus] = useState('')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [myIdea, setMyIdea] = useState('')
+  const [busy, setBusy] = useState('')          // action key currently running
+  const [titles, setTitles] = useState({})      // per-comment edited title
 
-  useEffect(() => {
-    api.getComments().then((d) => setComments(d.comments || [])).catch((e) => setError(e.message))
-  }, [])
+  const refreshComments = () => api.getComments().then((d) => setComments(d.comments || [])).catch((e) => setError(e.message))
+
+  useEffect(() => { refreshComments() }, [])
 
   const loadIdeas = async () => {
     setLoadingIdeas(true); setError('')
     try { const d = await api.getSuggestions(); setIdeas(d.suggestions || []) }
     catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
-
-  // Add a topic the user typed themselves to the idea list (same actions as AI ideas).
   const addMyIdea = () => {
     const t = myIdea.trim()
     if (!t) return
     setIdeas((prev) => [{ title: t, reason: 'Your suggestion', source: 'manual' }, ...prev])
     setMyIdea('')
   }
-
   useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas() }, [view])
-  // Honour a deep-link (e.g. "Publish" from a Films card) after mount.
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
+
+  const fetchEvaluate = async () => {
+    setBusy('fetch'); setError(''); setStatus('')
+    try {
+      const r = await api.fetchComments()
+      setComments(r.comments || [])
+      setStatus(`Fetched ${r.new} new · ${r.auto_approved} auto-approved · ${r.thanked} thanked`)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const approve = async (c) => {
+    setBusy('a' + c.comment_id); setError('')
+    try {
+      const r = await api.approveComment(c.comment_id, titles[c.comment_id] ?? c.suggested_title)
+      setStatus(`Approved → queued: ${r.final_title}`)
+      await refreshComments()
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const reject = async (c) => {
+    setBusy('r' + c.comment_id); setError('')
+    try { await api.rejectComment(c.comment_id); await refreshComments(); setStatus('Rejected.') }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const reply = async (c) => {
+    const text = window.prompt(`Reply to ${c.commenter}:`, '')
+    if (!text) return
+    setBusy('y' + c.comment_id); setError('')
+    try { await api.replyComment(c.comment_id, text); setStatus('Reply posted.') }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const pending = (c) => c.is_request && !['approved', 'rejected'].includes(c.status)
 
   return (
     <div>
       <div className="page-head">
         <div className="page-head__intro">
           <span className="label-sm reveal">YouTube</span>
-          <h1 className="display-md reveal reveal-d1">Comments, ideas & publishing</h1>
+          <h1 className="display-md reveal reveal-d1">Comments, ideas &amp; publishing</h1>
         </div>
-        <div className="row center gap-10 reveal reveal-d1"><Chip tone="ok" dot>@StephenSpielbot</Chip></div>
+        <div className="row center gap-10 reveal reveal-d1">
+          <Chip tone="ok" dot>@StephenSpielbot</Chip>
+          <Button variant="ghost" icon="rotate" disabled={busy === 'fetch'} onClick={fetchEvaluate}>
+            {busy === 'fetch' ? 'Fetching…' : 'Fetch & evaluate'}</Button>
+        </div>
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {status && <Banner tone="ok">{status}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={setView} options={[
@@ -59,31 +94,46 @@ export default function YouTube({ go, initial }) {
 
       {view === 'comments' && (
         <div className="bento">
-          {comments.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No comments cached. Fetch & evaluate comments from the Config tab in the classic app, then refresh here.</p></Card>}
-          {comments.map((c, i) => {
-            const isReq = c.is_request
-            return (
-              <Card key={i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
-                <div className="row center between">
-                  <span style={{ fontWeight: 700 }}>{c.author || c.who || 'viewer'}</span>
-                  {isReq ? <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> Request</Chip> : <Chip tone="neutral">Not a request</Chip>}
-                </div>
-                <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text || c.comment}</p>
-                {isReq && (
-                  <div className="mt-16">
-                    {c.suggested_title || c.final_title ? <div style={{ fontWeight: 600 }}>{c.final_title || c.suggested_title}</div> : null}
-                    <div className="row center gap-16 mt-8" style={{ flexWrap: 'wrap' }}>
-                      <Stars value={c.interestingness} />
-                      {c.confidence != null && <span className="muted" style={{ fontSize: 12.5 }}>conf {Math.round(c.confidence * 100)}%</span>}
-                      {c.n_scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{c.n_scenes} scenes · {tier(c.n_scenes)}</span> : null}
-                      {c.status && <Chip tone={c.status === 'approved' ? 'ok' : c.status === 'rejected' ? 'danger' : 'accent'}>{c.status}</Chip>}
-                    </div>
-                    {c.reason && <p className="muted" style={{ fontSize: 12.5, margin: '12px 0 0', fontStyle: 'italic' }}>{c.reason}</p>}
+          {comments.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No comments cached. Click <strong>Fetch &amp; evaluate</strong> to pull and rank the latest channel comments.</p></Card>}
+          {comments.map((c, i) => (
+            <Card key={c.comment_id || i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
+              <div className="row center between">
+                <span style={{ fontWeight: 700 }}>{c.commenter || 'viewer'}</span>
+                {c.is_request ? <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> Request</Chip> : <Chip tone="neutral">Not a request</Chip>}
+              </div>
+              <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text}</p>
+
+              {c.is_request && (
+                <div className="mt-16 stack gap-10">
+                  <div className="row center gap-16" style={{ flexWrap: 'wrap' }}>
+                    <Stars value={c.interestingness} />
+                    {c.confidence != null && <span className="muted" style={{ fontSize: 12.5 }}>conf {Math.round(c.confidence * 100)}%</span>}
+                    {c.suggested_scene_count ? <span className="muted" style={{ fontSize: 12.5 }}>{c.suggested_scene_count} scenes · {tier(c.suggested_scene_count)}</span> : null}
+                    {c.status && c.status !== 'evaluated' && <Chip tone={c.status === 'approved' ? 'ok' : c.status === 'rejected' ? 'danger' : 'accent'}>{c.status}</Chip>}
                   </div>
-                )}
-              </Card>
-            )
-          })}
+                  {c.reason && <p className="muted" style={{ fontSize: 12.5, margin: 0, fontStyle: 'italic' }}>{c.reason}</p>}
+                  {pending(c) && (
+                    <>
+                      <Field label="Title for the queue">
+                        <input className="input" value={titles[c.comment_id] ?? c.suggested_title ?? ''}
+                          onChange={(e) => setTitles((t) => ({ ...t, [c.comment_id]: e.target.value }))} />
+                      </Field>
+                      <div className="row gap-10 row--wrap">
+                        <Button variant="primary" icon="plus" disabled={busy === 'a' + c.comment_id} onClick={() => approve(c)}>Approve → queue</Button>
+                        <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
+                        <Button variant="danger" icon="xmark" disabled={busy === 'r' + c.comment_id} onClick={() => reject(c)}>Reject</Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+              {!c.is_request && (
+                <div className="row gap-10 mt-16">
+                  <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
+                </div>
+              )}
+            </Card>
+          ))}
         </div>
       )}
 
@@ -108,7 +158,7 @@ export default function YouTube({ go, initial }) {
           </Card>
           {ideas.map((idea, i) => {
             const title = idea.title || idea.final_title || idea
-            const scenes = idea.n_scenes || idea.scenes
+            const scenes = idea.n_scenes || idea.scenes || idea.suggested_scene_count
             return (
               <Card key={i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row center between">
@@ -116,8 +166,13 @@ export default function YouTube({ go, initial }) {
                   {idea.source === 'manual' ? <Chip tone="accent">Your idea</Chip> : <Stars value={idea.interestingness} />}
                 </div>
                 {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
-                {scenes ? <div className="row center between mt-16"><span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span><Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { topic: title })}>Create</Button></div>
-                  : <div className="row mt-16"><Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { topic: title })}>Create</Button></div>}
+                <div className="row center between mt-16 row--wrap gap-10">
+                  {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : <span />}
+                  <div className="row gap-10">
+                    <Button variant="ghost" icon="layer-group" onClick={() => api.queueAdd(title, scenes || 0, idea.reason || '').then(() => { setStatus('Added to queue.'); go('queue') }).catch((e) => setError(e.message))}>Queue</Button>
+                    <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { topic: title })}>Create</Button>
+                  </div>
+                </div>
               </Card>
             )
           })}

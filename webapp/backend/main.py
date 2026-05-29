@@ -934,6 +934,304 @@ def yt_post(body: PostBody) -> dict:
             "message": f"Uploaded — {url}" if url else "Uploaded to YouTube."}
 
 
+# ── YouTube comment actions (fetch / evaluate / approve / reject / reply) ─────
+# Mirrors app.py's _yt_fetch_new_comments + _yt_evaluate_unevaluated + on_yt_approve,
+# reusing the pipeline.youtube primitives so behaviour matches the classic app.
+
+_AUTO_APPROVE_THRESHOLD = 0.7
+
+
+def _fetch_and_evaluate(auto_approve: bool) -> dict:
+    cfg = gapp.load_config()
+    secrets = cfg.get("youtube_client_secrets", "")
+    new_count = 0
+    try:
+        fetched = yt.fetch_channel_comments(secrets)
+        cache = yt.load_comments_cache()
+        existing = {c.get("comment_id") for c in cache}
+        for fc in fetched:
+            if fc.get("comment_id") not in existing:
+                cache.insert(0, {**fc, "evaluated": False, "is_request": False,
+                                 "suggested_title": "", "confidence": 0.0,
+                                 "interestingness": 0.0, "reason": "", "status": "new"})
+                new_count += 1
+        yt.save_comments_cache(cache)
+    except Exception as e:
+        cache = yt.load_comments_cache()
+        raise HTTPException(503, f"Fetch failed: {str(e).splitlines()[0][:160]}")
+
+    approved = thanked = 0
+    for c in [x for x in cache if not x.get("evaluated")]:
+        r = yt.evaluate_comment(c.get("text", ""), c.get("commenter", ""), cfg)
+        c.update({"evaluated": True, "is_request": r["is_request"],
+                  "suggested_title": r["suggested_title"], "confidence": r["confidence"],
+                  "interestingness": r.get("interestingness", 0.0), "reason": r["reason"],
+                  "status": "evaluated" if c.get("status") == "new" else c.get("status")})
+        if r["is_request"] and not c.get("thanked"):
+            rep = yt.reply_to_comment(secrets, c.get("comment_id", ""),
+                                      "Thanks for the suggestion! We'll look into making a video about this. 🎬")
+            if rep.get("success"):
+                c["thanked"] = True
+                thanked += 1
+        if (auto_approve and r["is_request"] and r["confidence"] >= _AUTO_APPROVE_THRESHOLD
+                and c.get("status") not in ("approved", "rejected")):
+            c["status"] = "approved"
+            qi = yt.add_to_queue(c, r["suggested_title"], source="comment")
+            if qi:
+                try:
+                    vp = llm.generate_video_prompt(r["suggested_title"], c.get("text", ""))
+                    if vp:
+                        yt.update_queue_item(qi["id"], video_prompt=vp)
+                except Exception:
+                    pass
+            approved += 1
+    yt.save_comments_cache(cache)
+    return {"new": new_count, "thanked": thanked, "auto_approved": approved}
+
+
+class FetchBody(BaseModel):
+    auto_approve: bool | None = None
+
+
+@api.post("/api/youtube/comments/fetch")
+def youtube_fetch(body: FetchBody | None = None) -> dict:
+    body = body or FetchBody()
+    cfg = gapp.load_config()
+    aa = cfg.get("youtube_auto_approve_comments", False) if body.auto_approve is None else body.auto_approve
+    result = _fetch_and_evaluate(aa)
+    return {**result, "comments": yt.load_comments_cache()}
+
+
+class CommentActionBody(BaseModel):
+    comment_id: str
+    final_title: str = ""
+    text: str = ""
+
+
+@api.post("/api/youtube/comments/approve")
+def youtube_approve(body: CommentActionBody) -> dict:
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    c["status"] = "approved"
+    yt.save_comments_cache(cache)
+    title = (body.final_title or "").strip() or c.get("suggested_title", "")
+    qi = yt.add_to_queue(c, title, source="comment")
+    if qi:
+        try:
+            vp = llm.generate_video_prompt(title, c.get("text", ""))
+            if vp:
+                yt.update_queue_item(qi["id"], video_prompt=vp)
+        except Exception:
+            pass
+    return {"ok": True, "queued": bool(qi), "final_title": title}
+
+
+@api.post("/api/youtube/comments/reject")
+def youtube_reject(body: CommentActionBody) -> dict:
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    c["status"] = "rejected"
+    yt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/youtube/comments/reply")
+def youtube_reply(body: CommentActionBody) -> dict:
+    if not body.text.strip():
+        raise HTTPException(400, "Reply text required.")
+    res = yt.reply_to_comment(gapp.load_config().get("youtube_client_secrets", ""),
+                              body.comment_id, body.text.strip())
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    return {"ok": True}
+
+
+# ── Queue management ──────────────────────────────────────────────────────────
+
+class QueueMoveBody(BaseModel):
+    id: str
+    direction: int = -1
+
+
+@api.post("/api/queue/move")
+def queue_move(body: QueueMoveBody) -> dict:
+    ok = yt.move_queue_item(body.id, body.direction)
+    return {"ok": ok, "queue": yt.load_queue()}
+
+
+class QueueIdBody(BaseModel):
+    id: str
+
+
+@api.post("/api/queue/remove")
+def queue_remove(body: QueueIdBody) -> dict:
+    ok = yt.remove_queue_item(body.id)
+    return {"ok": ok, "queue": yt.load_queue()}
+
+
+class QueueAddBody(BaseModel):
+    title: str
+    n_scenes: int = 0
+    prompt: str = ""
+
+
+@api.post("/api/queue/add")
+def queue_add(body: QueueAddBody) -> dict:
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(400, "Title is required.")
+    n = max(6, min(50, body.n_scenes or gapp.load_config().get("default_n_scenes", 6)))
+    comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
+               "suggested_scene_count": n}
+    entry = yt.add_to_queue(comment, title, source="manual")
+    if entry and body.prompt.strip():
+        yt.update_queue_item(entry["id"], video_prompt=body.prompt.strip())
+    return {"ok": bool(entry), "queue": yt.load_queue()}
+
+
+def _start_queue_item(item: dict) -> dict:
+    """Generate the script and launch the render for a queue item (the auto-start
+    path). Reuses the existing script_generate + start_generation handlers."""
+    cfg = gapp.load_config()
+    title = item.get("final_title", "")
+    n = max(6, int(item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6)))
+    topic = item.get("video_prompt") or title
+    gen = script_generate(GenerateScriptBody(
+        video_title=title, topic=topic, n_scenes=n,
+        visual_style=cfg.get("default_visual_style") or None))
+    start_generation(GenerateBody(
+        job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
+        n_scenes=n, voice=cfg.get("default_voice", ""),
+        resolution=cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
+    yt.update_queue_item(item["id"], status="creating", video_job_id=gen["job_id"])
+    return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
+
+
+@api.post("/api/queue/start")
+def queue_start(body: QueueIdBody) -> dict:
+    if gapp._is_job_running():
+        raise HTTPException(409, "A render is already running — wait for it to finish.")
+    item = next((q for q in yt.load_queue() if q.get("id") == body.id), None)
+    if not item:
+        raise HTTPException(404, "Queue item not found.")
+    return {"ok": True, **_start_queue_item(item)}
+
+
+# ── Automation (Gap 2): on-demand step endpoints + opt-in background loop ──────
+
+def _auto_start_best() -> dict | None:
+    if gapp._is_job_running():
+        return None
+    item = gapp._best_pending_queue_item()
+    if not item:
+        return None
+    try:
+        return _start_queue_item(item)
+    except Exception:
+        return None
+
+
+def _auto_post_done() -> list[str]:
+    """Auto-post finished, queue-driven jobs that haven't been posted yet."""
+    cfg = gapp.load_config()
+    posted: list[str] = []
+    for _label, wd in gapp._list_recent_jobs(max_results=50):
+        p = Path(wd)
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            continue
+        if meta.get("status") != "done" or meta.get("youtube_video_id"):
+            continue
+        try:
+            jc = json.loads((p / "job_config.json").read_text())
+        except Exception:
+            jc = {}
+        if not jc.get("queue_item_id"):
+            continue  # only auto-post videos that came from the queue
+        try:
+            res = yt_post(PostBody(
+                work_dir=str(p), title=jc.get("video_title") or _video_title_for(p),
+                description="", category=cfg.get("youtube_post_category", "22"),
+                privacy=cfg.get("youtube_post_privacy", "private")))
+            if res.get("video_id"):
+                posted.append(res["video_id"])
+        except Exception:
+            continue
+    return posted
+
+
+def _automation_tick() -> dict:
+    cfg = gapp.load_config()
+    out: dict = {}
+    if cfg.get("youtube_auto_fetch_evaluate"):
+        try:
+            out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
+        except Exception as e:
+            out["fetch_error"] = str(e)[:120]
+    if cfg.get("youtube_auto_start_job"):
+        out["started"] = _auto_start_best()
+    if cfg.get("youtube_auto_post"):
+        out["posted"] = _auto_post_done()
+    return out
+
+
+@api.post("/api/automation/fetch")
+def automation_fetch() -> dict:
+    cfg = gapp.load_config()
+    return {**_fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False)),
+            "comments": yt.load_comments_cache()}
+
+
+@api.post("/api/automation/start")
+def automation_start() -> dict:
+    started = _auto_start_best()
+    return {"started": started, "running": gapp._is_job_running()}
+
+
+@api.post("/api/automation/post")
+def automation_post() -> dict:
+    return {"posted": _auto_post_done()}
+
+
+@api.post("/api/automation/tick")
+def automation_tick_endpoint() -> dict:
+    return _automation_tick()
+
+
+# Opt-in background loop: runs a tick periodically. Each step is gated by its own
+# config toggle, so with all toggles off (the default) this is a no-op heartbeat.
+import threading  # noqa: E402
+
+_AUTOMATION_INTERVAL = 180  # seconds
+_automation_started = False
+
+
+def _automation_loop():
+    while True:
+        time.sleep(_AUTOMATION_INTERVAL)
+        try:
+            cfg = gapp.load_config()
+            if cfg.get("youtube_fully_automated") or any(cfg.get(k) for k in (
+                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post")):
+                _automation_tick()
+        except Exception:
+            pass
+
+
+@api.on_event("startup")
+def _start_automation_loop():
+    global _automation_started
+    if not _automation_started:
+        _automation_started = True
+        threading.Thread(target=_automation_loop, daemon=True).start()
+
+
 # ── file serving (videos, previews, covers) ──────────────────────────────────
 
 @api.get("/api/file")
