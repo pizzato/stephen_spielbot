@@ -51,6 +51,24 @@ export const api = {
   getComments: () => req('GET', '/youtube/comments'),
   getSuggestions: () => req('GET', '/youtube/suggestions'),
 
+  // comment actions
+  fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),
+  approveComment: (commentId, finalTitle) => req('POST', '/youtube/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
+  rejectComment: (commentId) => req('POST', '/youtube/comments/reject', { comment_id: commentId }),
+  replyComment: (commentId, text) => req('POST', '/youtube/comments/reply', { comment_id: commentId, text }),
+
+  // queue management
+  queueMove: (id, direction) => req('POST', '/queue/move', { id, direction }),
+  queueRemove: (id) => req('POST', '/queue/remove', { id }),
+  queueAdd: (title, nScenes, prompt) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '' }),
+  queueStart: (id) => req('POST', '/queue/start', { id }),
+
+  // automation steps
+  autoFetch: () => req('POST', '/automation/fetch'),
+  autoStart: () => req('POST', '/automation/start'),
+  autoPost: () => req('POST', '/automation/post'),
+  autoTick: () => req('POST', '/automation/tick'),
+
   ytAuthStatus: () => req('GET', '/youtube/auth'),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
