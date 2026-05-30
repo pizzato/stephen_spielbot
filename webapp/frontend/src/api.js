@@ -50,7 +50,13 @@ export const api = {
 
   getQueue: () => req('GET', '/queue'),
   getComments: () => req('GET', '/youtube/comments'),
-  getSuggestions: (guidance) => req('GET', '/youtube/suggestions' + (guidance ? `?guidance=${encodeURIComponent(guidance)}` : '')),
+  getSuggestions: (guidance, refresh) => {
+    const p = new URLSearchParams()
+    if (guidance) p.set('guidance', guidance)
+    if (refresh) p.set('refresh', 'true')
+    const qs = p.toString()
+    return req('GET', '/youtube/suggestions' + (qs ? `?${qs}` : ''))
+  },
 
   // comment actions
   fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),
