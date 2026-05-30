@@ -618,19 +618,52 @@ def youtube_comments() -> dict:
     return {"comments": []}
 
 
+def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6) -> list[dict]:
+    """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
+    the 90s'). Uses the configured LLM backend via _llm_complete."""
+    import re
+    avoid = "; ".join(previous[:30])
+    system = ("You are a content strategist for an educational/documentary YouTube channel. "
+              "Return ONLY a JSON array, no prose.")
+    user = (
+        f'Generate {n} specific, compelling video ideas guided by this theme: "{guidance}".\n'
+        f"Each must be a concrete documentary topic that clearly fits the theme.\n"
+        + (f"Avoid duplicating these existing titles: {avoid}\n" if avoid else "")
+        + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
+        '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
+    )
+    text = _llm_complete(system, user, cfg)
+    m = re.search(r"\[.*\]", text, re.DOTALL)
+    arr = json.loads(m.group()) if m else []
+    out = []
+    for it in arr if isinstance(arr, list) else []:
+        title = str(it.get("title", "")).strip()
+        if not title:
+            continue
+        out.append({
+            "title": title,
+            "reason": str(it.get("reason", "")),
+            "suggested_scene_count": max(6, min(50, int(it.get("suggested_scene_count", 12) or 12))),
+            "interestingness": float(it.get("interestingness", 0.7) or 0.7),
+            "source": "guided",
+        })
+    return out
+
+
 @api.get("/api/youtube/suggestions")
-def youtube_suggestions() -> dict:
-    # generate_video_suggestions(previous_titles, cfg) wants the channel's prior
-    # titles so it can avoid repeats. Derive them from finished job folders
-    # (works without YouTube OAuth); fall back to an empty list.
+def youtube_suggestions(guidance: str = Query("")) -> dict:
+    cfg = gapp.load_config()
     try:
         previous = [label for label, _ in gapp._list_recent_jobs(max_results=50)]
     except Exception:
         previous = []
     try:
-        ideas = generate_video_suggestions(previous, gapp.load_config())
+        if guidance.strip():
+            ideas = _guided_suggestions(guidance.strip(), previous, cfg)
+        else:
+            ideas = generate_video_suggestions(previous, cfg)
     except Exception as e:
-        raise HTTPException(503, f"Could not generate suggestions: {str(e)[:160]}")
+        raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
     return {"suggestions": ideas}
 
 

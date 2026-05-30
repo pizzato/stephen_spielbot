@@ -16,7 +16,7 @@ export default function YouTube({ go, initial }) {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
-  const [myIdea, setMyIdea] = useState('')
+  const [guidance, setGuidance] = useState('')
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
 
@@ -24,18 +24,14 @@ export default function YouTube({ go, initial }) {
 
   useEffect(() => { refreshComments() }, [])
 
-  const loadIdeas = async () => {
+  // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
+  // 90s rock bands); blank = general ideas from the channel's gaps.
+  const loadIdeas = async (g = '') => {
     setLoadingIdeas(true); setError('')
-    try { const d = await api.getSuggestions(); setIdeas(d.suggestions || []) }
+    try { const d = await api.getSuggestions(g); setIdeas(d.suggestions || []) }
     catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
-  const addMyIdea = () => {
-    const t = myIdea.trim()
-    if (!t) return
-    setIdeas((prev) => [{ title: t, reason: 'Your suggestion', source: 'manual' }, ...prev])
-    setMyIdea('')
-  }
-  useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas() }, [view])
+  useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas('') }, [view])
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
 
   const fetchEvaluate = async () => {
@@ -140,20 +136,18 @@ export default function YouTube({ go, initial }) {
       {view === 'ideas' && (
         <div className="bento">
           <Card span={12} well className="reveal reveal-d1">
-            <div className="row center between row--wrap gap-16">
-              <div className="row center gap-10">
-                <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
-                <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Suggest your own, or let the AI generate them from your channel's gaps.</div></div>
-              </div>
-              <Button variant="ghost" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={loadIdeas}>{loadingIdeas ? 'Thinking…' : 'Generate more'}</Button>
+            <div className="row center gap-10">
+              <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
+              <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Type a theme to steer the AI, or leave it blank for ideas from your channel's gaps.</div></div>
             </div>
             <div className="row gap-10 center mt-16">
               <div className="grow">
-                <input className="input" placeholder="✍️ Suggest a topic — e.g. How sourdough actually works"
-                  value={myIdea} onChange={(e) => setMyIdea(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') addMyIdea() }} />
+                <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
+                  value={guidance} onChange={(e) => setGuidance(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance) }} />
               </div>
-              <Button variant="primary" icon="plus" disabled={!myIdea.trim()} onClick={addMyIdea}>Add idea</Button>
+              <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance)}>
+                {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
             </div>
           </Card>
           {ideas.map((idea, i) => {
