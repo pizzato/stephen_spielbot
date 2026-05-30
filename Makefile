@@ -6,7 +6,8 @@ SCRIPTS := scripts
 W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
-        start stop restart restart-server status worker-agent help
+        start stop restart restart-server status worker-agent help \
+        web-install web-build web web-dev
 
 ## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
 install:
@@ -67,6 +68,29 @@ worker-agent:
 	ENDPOINT="$${ENDPOINT:-http://localhost:8188}"; \
 	.venv/bin/python worker_agent.py --kind "$$KIND" --endpoint "$$ENDPOINT"
 
+# ── Modern web UI (React + FastAPI) — alternative front-end, runs alongside Gradio ──
+FRONTEND := webapp/frontend
+WEB_PORT := 8001
+
+## Install web UI deps: FastAPI backend (into .venv) + the React frontend (npm).
+web-install:
+	.venv/bin/pip install -r webapp/backend/requirements.txt
+	cd $(FRONTEND) && npm install
+
+## Build the React frontend to webapp/frontend/dist.
+web-build:
+	cd $(FRONTEND) && npm run build
+
+## Build the SPA and serve the modern web UI + API from one process (localhost:8001).
+web: web-build
+	.venv/bin/python -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port $(WEB_PORT)
+
+## Dev mode: FastAPI (autoreload) + Vite dev server with /api proxy (localhost:5174). Ctrl-C stops both.
+web-dev:
+	@.venv/bin/python -m uvicorn webapp.backend.main:app --port $(WEB_PORT) --reload & \
+	  cd $(FRONTEND) && npm run dev; \
+	  kill %1 2>/dev/null || true
+
 help:
 	@echo "Usage: make <target> [W=<worker>] [CONF=<file>]"
 	@echo ""
@@ -88,5 +112,11 @@ help:
 	@echo "    make status  W=s2       # check just s2"
 	@echo ""
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local ENDPOINT=...)"
+	@echo ""
+	@echo "Modern web UI (React + FastAPI, alongside the Gradio app):"
+	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"
+	@echo "  web             Build the SPA and serve UI + API (localhost:8001)"
+	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"
+	@echo "  web-build       Build the React frontend to webapp/frontend/dist"
 	@echo ""
 	@echo "  CONF=$(CONF)  (override with  make install CONF=other.conf)"
