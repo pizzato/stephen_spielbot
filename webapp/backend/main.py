@@ -772,6 +772,23 @@ def _finished_film_count() -> int:
         return 0
 
 
+def _publishable_dirs() -> list[str]:
+    """Finished films that haven't been posted to YouTube yet (by work_dir).
+    Deleting a film drops it from this list automatically."""
+    dirs = []
+    try:
+        for _label, wd in gapp._list_recent_jobs(max_results=9999):
+            try:
+                meta = json.loads((Path(wd) / "job.json").read_text())
+            except Exception:
+                meta = {}
+            if not meta.get("youtube_video_id"):
+                dirs.append(wd)
+    except Exception:
+        pass
+    return dirs
+
+
 @api.get("/api/badges")
 def badges() -> dict:
     """Mailbox-style counts for the sidebar: what needs the user's attention."""
@@ -794,15 +811,19 @@ def badges() -> dict:
     except Exception:
         queue = []
     queue_pending = sum(1 for q in queue if q.get("status") == "pending")
-    publishable = sum(1 for q in queue if q.get("status") in ("done", "upload_pending"))
 
     try:
         attention = len(yt.get_pending_requests())
     except Exception:
         attention = 0
 
-    films_total = _finished_film_count()
     seen = _load_seen()
+    # Publishable = finished films not yet posted, minus the ones already seen on
+    # the Publish tab (mailbox-style). A deleted film leaves the list automatically.
+    seen_pub = set(seen.get("publish_seen", []))
+    publishable = sum(1 for wd in _publishable_dirs() if wd not in seen_pub)
+
+    films_total = _finished_film_count()
     films_new = max(0, films_total - int(seen.get("films_total", 0)))
 
     return {
@@ -827,6 +848,8 @@ def mark_seen(body: SeenBody) -> dict:
     seen = _load_seen()
     if body.section == "films":
         seen["films_total"] = _finished_film_count()
+    elif body.section == "publish":
+        seen["publish_seen"] = _publishable_dirs()
     _save_seen(seen)
     return {"ok": True}
 
