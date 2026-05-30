@@ -50,18 +50,18 @@ export default function App() {
     setJob(nextJob)
     if (choices.autoApprove) {
       try {
-        await api.startGeneration({
+        const r = await api.queueFromJob({
           job_id: nextJob.job_id, work_dir: nextJob.work_dir,
-          video_title: nextJob.video_title || '', title: nextJob.title || '',
-          n_scenes: nextJob.scenes?.length || 0, voice: choices.voice || '',
-          resolution: choices.resolution || '', music_desc: nextJob.music_desc || '',
-          style: nextJob.style || '',
+          video_title: nextJob.video_title || nextJob.title || '',
+          n_scenes: nextJob.scenes?.length || 0,
+          style: nextJob.style || '', resolution: choices.resolution || '',
+          voice: choices.voice || '', music_desc: nextJob.music_desc || '',
         })
-        setProgressDir(nextJob.work_dir)
-        go('progress')
+        if (r.started) { setProgressDir(nextJob.work_dir); go('progress') }
+        else go('queue')
         return
       } catch {
-        // fall through to manual review if the launch failed
+        // fall through to manual review if enqueue failed
       }
     }
     go('script')

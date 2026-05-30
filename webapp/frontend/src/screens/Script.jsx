@@ -106,14 +106,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setBusy('generate'); setError('')
     try {
       await persist(cur)
-      await api.startGeneration({
+      const r = await api.queueFromJob({
         job_id: job.job_id, work_dir: job.work_dir,
-        video_title: job.video_title || '', title: job.title || '',
-        n_scenes: total, voice: job.voice || '', resolution,
-        music_desc: job.music_desc || '', style,
+        video_title: job.video_title || job.title || '', n_scenes: total,
+        style, resolution, voice: job.voice || '', music_desc: job.music_desc || '',
       })
       setJob({ ...job, scenes, style })
-      onGenerate(job.work_dir)
+      if (r.started) onGenerate(job.work_dir)   // auto-start next is on → go watch it render
+      else go('queue')                          // queued; starts on a manual/auto "Start next"
     } catch (e) { setError(e.message); setBusy('') }
   }
 
@@ -126,8 +126,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         </div>
         <div className="row gap-10 reveal reveal-d1">
           <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
-          <Button variant="primary" iconRight="wand-magic-sparkles" disabled={busy === 'generate'}
-            onClick={approve}>{busy === 'generate' ? 'Launching…' : '2. Approve & generate →'}</Button>
+          <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
+            onClick={approve}>{busy === 'generate' ? 'Approving…' : '2. Approve → queue'}</Button>
         </div>
       </div>
 

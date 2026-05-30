@@ -24,13 +24,6 @@ export default function Queue({ go }) {
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const addManual = () => {
-    const title = window.prompt('Video title to add to the queue:', '')
-    if (!title) return
-    const n = parseInt(window.prompt('How many scenes? (6–50)', '6') || '6', 10)
-    run('add', () => api.queueAdd(title, n, ''), () => setStatus(`Added: ${title}`))
-  }
-
   const pendingCount = items.filter((i) => i.status === 'pending').length
   const counts = {
     pending: pendingCount,
@@ -45,7 +38,7 @@ export default function Queue({ go }) {
           <span className="label-sm reveal">Queue</span>
           <h1 className="display-md reveal reveal-d1">Video request queue</h1>
         </div>
-        <Button variant="ghost" icon="pen" onClick={addManual}>Add manually</Button>
+        <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Add manually</Button>
       </div>
 
       <Banner tone="danger">{error}</Banner>
@@ -57,13 +50,11 @@ export default function Queue({ go }) {
           <div className="row center between row--wrap gap-16">
             <div className="row center gap-10">
               <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="robot" /></span>
-              <div><div style={{ fontWeight: 600 }}>Automation</div><div className="muted" style={{ fontSize: 12.5 }}>Run a step now, or enable hands-free mode in Settings.</div></div>
+              <div><div style={{ fontWeight: 600 }}>Manual controls</div><div className="muted" style={{ fontSize: 12.5 }}>Do it now. Hands-free automation is configured in Settings → YouTube automation.</div></div>
             </div>
             <div className="row gap-10 row--wrap">
-              <Button variant="ghost" icon="rotate" disabled={!!busy} onClick={() => run('fetch', api.autoFetch, (r) => setStatus(`Fetched ${r.new} new · ${r.auto_approved} auto-approved`))}>{busy === 'fetch' ? 'Fetching…' : 'Fetch & evaluate'}</Button>
-              <Button variant="ghost" icon="play" disabled={!!busy} onClick={() => run('start', api.autoStart, (r) => setStatus(r.started ? `Started: ${r.started.title}` : 'Nothing to start (busy or empty).'))}>{busy === 'start' ? 'Starting…' : 'Auto-start best'}</Button>
-              <Button variant="ghost" icon="youtube" disabled={!!busy} onClick={() => run('post', api.autoPost, (r) => setStatus(`Posted ${r.posted.length} video(s).`))}>{busy === 'post' ? 'Posting…' : 'Auto-post finished'}</Button>
-              <Button variant="primary" icon="bolt" disabled={!!busy} onClick={() => run('tick', api.autoTick, () => setStatus('Ran one automation tick.'))}>{busy === 'tick' ? 'Running…' : 'Run full tick'}</Button>
+              <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('start', api.autoStart, (r) => setStatus(r.started ? `Started: ${r.started.title}` : 'Nothing to start — a render may be running, or the queue is empty.'))}>{busy === 'start' ? 'Starting…' : 'Start next render'}</Button>
+              <Button variant="ghost" icon="youtube" disabled={!!busy} onClick={() => run('post', api.autoPost, (r) => setStatus(`Posted ${r.posted.length} video(s).`))}>{busy === 'post' ? 'Posting…' : 'Post finished'}</Button>
             </div>
           </div>
         </Card>

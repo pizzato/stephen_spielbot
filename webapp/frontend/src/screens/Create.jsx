@@ -88,7 +88,7 @@ export default function Create({ initialTopic, meta, onGenerated }) {
             </Field>
 
             <div className="row center between mt-8 row--wrap gap-16">
-              <Check checked={autoApprove} onChange={setAutoApprove} label="Auto-approve the script and start rendering" />
+              <Check checked={autoApprove} onChange={setAutoApprove} label="Auto-approve the script → send straight to the queue" />
               <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                 disabled={!videoTitle.trim() || busy}
                 onClick={generate}>{busy ? 'Drafting the script…' : '1. Generate script →'}</Button>

@@ -8,6 +8,8 @@ export default function Remix({ workDir, go }) {
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     api.loadRemix(workDir)
@@ -26,6 +28,12 @@ export default function Remix({ workDir, go }) {
       setStatus(r.message)
       if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url + `&t=${Date.now()}` }))
     } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  const del = async () => {
+    setDeleting(true); setError('')
+    try { await api.deleteFilm(data.work_dir || workDir); go('library') }
+    catch (e) { setError(e.message); setConfirmDel(false) } finally { setDeleting(false) }
   }
 
   if (error && !data) {
@@ -47,9 +55,17 @@ export default function Remix({ workDir, go }) {
           <span className="label-sm reveal">Finished</span>
           <h1 className="display-md reveal reveal-d1">{data.work_dir.split('/').pop()}</h1>
         </div>
-        <div className="row gap-10 reveal reveal-d1">
+        <div className="row gap-10 reveal reveal-d1 row--wrap">
           {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
           <Button variant="primary" icon="youtube" onClick={() => go('youtube', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
+          {confirmDel ? (
+            <>
+              <Button variant="danger" icon="trash-can" disabled={deleting} onClick={del}>{deleting ? 'Deleting…' : 'Confirm delete'}</Button>
+              <Button variant="ghost" disabled={deleting} onClick={() => setConfirmDel(false)}>Cancel</Button>
+            </>
+          ) : (
+            <Button variant="danger" icon="trash-can" onClick={() => setConfirmDel(true)}>Delete</Button>
+          )}
         </div>
       </div>
 

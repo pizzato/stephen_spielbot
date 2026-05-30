@@ -594,10 +594,51 @@ def remix_apply(body: RemixBody) -> dict:
 
 # ── queue ────────────────────────────────────────────────────────────────────
 
+def _reconcile_queue() -> list[dict]:
+    """Update queue items stuck at 'creating' whose underlying render actually
+    finished (or was posted), so the queue reflects reality."""
+    try:
+        queue = yt.load_queue()
+    except Exception:
+        return []
+    changed = False
+    for it in queue:
+        if it.get("status") != "creating":
+            continue
+        wd = it.get("work_dir") or ""
+        jid = it.get("video_job_id") or ""
+        if not wd and jid:
+            try:
+                store = DurableStore.default()
+                try:
+                    row = store.get_job(jid)
+                finally:
+                    store.close()
+                wd = dict(row)["work_dir"] if row else ""
+            except Exception:
+                wd = ""
+        if not wd:
+            continue
+        p = Path(wd)
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            meta = {}
+        final = gapp._final_path_for_work_dir(p)
+        done = final.exists() and final.stat().st_size > 10_000 and (p / "combined.mp4").exists()
+        if meta.get("youtube_video_id"):
+            it["status"] = "posted"; it["youtube_video_id"] = meta["youtube_video_id"]; changed = True
+        elif done or meta.get("status") == "done":
+            it["status"] = "done"; changed = True
+    if changed:
+        yt.save_queue(queue)
+    return queue
+
+
 @api.get("/api/queue")
 def get_queue() -> dict:
     try:
-        return {"queue": yt.load_queue()}
+        return {"queue": _reconcile_queue()}
     except Exception:
         return {"queue": []}
 
@@ -1126,12 +1167,41 @@ def queue_add(body: QueueAddBody) -> dict:
     return {"ok": bool(entry), "queue": yt.load_queue()}
 
 
+def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
+    try:
+        store = DurableStore.default()
+        try:
+            row = store.get_job(job_id)
+        finally:
+            store.close()
+        if row:
+            return json.loads(dict(row).get("metadata_json") or "{}").get(key, default)
+    except Exception:
+        pass
+    return default
+
+
 def _start_queue_item(item: dict) -> dict:
-    """Generate the script and launch the render for a queue item (the auto-start
-    path). Reuses the existing script_generate + start_generation handlers."""
+    """Launch the render for a queue item. If the item already has an approved
+    script (script_ready + work_dir + video_job_id) we render it directly;
+    otherwise we generate the script first. Reuses script_generate +
+    start_generation."""
     cfg = gapp.load_config()
     title = item.get("final_title", "")
     n = max(6, int(item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6)))
+
+    if item.get("script_ready") and item.get("work_dir") and item.get("video_job_id"):
+        job_id = item["video_job_id"]
+        wd = item["work_dir"]
+        start_generation(GenerateBody(
+            job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
+            voice=item.get("gen_voice") or cfg.get("default_voice", ""),
+            resolution=item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+            music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
+            style=item.get("gen_style") or _job_meta_field(job_id, "style")))
+        yt.update_queue_item(item["id"], status="creating")
+        return {"job_id": job_id, "work_dir": wd, "title": title}
+
     topic = item.get("video_prompt") or title
     gen = script_generate(GenerateScriptBody(
         video_title=title, topic=topic, n_scenes=n,
@@ -1141,7 +1211,8 @@ def _start_queue_item(item: dict) -> dict:
         n_scenes=n, voice=cfg.get("default_voice", ""),
         resolution=cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
-    yt.update_queue_item(item["id"], status="creating", video_job_id=gen["job_id"])
+    yt.update_queue_item(item["id"], status="creating",
+                         video_job_id=gen["job_id"], work_dir=gen["work_dir"])
     return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
 
 
@@ -1153,6 +1224,75 @@ def queue_start(body: QueueIdBody) -> dict:
     if not item:
         raise HTTPException(404, "Queue item not found.")
     return {"ok": True, **_start_queue_item(item)}
+
+
+class FromJobBody(BaseModel):
+    job_id: str
+    work_dir: str
+    video_title: str = ""
+    n_scenes: int = 0
+    style: str = ""
+    resolution: str = ""
+    voice: str = ""
+    music_desc: str = ""
+
+
+@api.post("/api/queue/from-job")
+def queue_from_job(body: FromJobBody) -> dict:
+    """Add an approved (already-generated) script to the queue. Does NOT render
+    unless 'auto-start next' (youtube_auto_start_job) is on and nothing is
+    currently rendering."""
+    cfg = gapp.load_config()
+    title = (body.video_title or "").strip() or Path(body.work_dir).name
+    n = body.n_scenes
+    if not n:
+        try:
+            store = DurableStore.default()
+            try:
+                n = store.scene_count(body.job_id)
+            finally:
+                store.close()
+        except Exception:
+            n = cfg.get("default_n_scenes", 6)
+    n = max(6, int(n or 6))
+
+    entry = yt.add_to_queue({"comment_id": "", "text": "", "commenter": "you",
+                             "suggested_scene_count": n}, title, source="script")
+    if not entry:
+        raise HTTPException(500, "Could not enqueue the script.")
+    yt.update_queue_item(entry["id"], video_job_id=body.job_id, work_dir=body.work_dir,
+                         script_ready=True, gen_style=body.style, gen_resolution=body.resolution,
+                         gen_voice=body.voice, gen_music=body.music_desc)
+
+    started = None
+    if cfg.get("youtube_auto_start_job") and not gapp._is_job_running():
+        item = next((q for q in yt.load_queue() if q.get("id") == entry["id"]), None)
+        if item:
+            try:
+                started = _start_queue_item(item)
+            except Exception:
+                started = None
+    return {"ok": True, "queue_item_id": entry["id"], "started": started}
+
+
+@api.post("/api/films/delete")
+def delete_film(body: JobActionBody) -> dict:
+    wd = Path(body.work_dir)
+    out = gapp.OUTPUT_DIR.resolve()
+    try:
+        wd_res = wd.resolve()
+    except OSError:
+        raise HTTPException(400, "Invalid path.")
+    # Only allow deleting a direct child of the videos directory.
+    if not body.work_dir or wd_res == out or wd_res.parent != out:
+        raise HTTPException(400, "Refusing to delete outside the videos directory.")
+    import shutil
+    if wd.exists():
+        shutil.rmtree(wd, ignore_errors=True)
+    canonical = gapp.OUTPUT_DIR / f"{wd.name}.mp4"
+    if canonical.exists():
+        canonical.unlink(missing_ok=True)
+    return {"ok": True, "deleted": wd.name}
 
 
 # ── Automation (Gap 2): on-demand step endpoints + opt-in background loop ──────

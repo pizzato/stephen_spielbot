@@ -41,6 +41,7 @@ export const api = {
   cancelJob: (workDir) => req('POST', '/jobs/cancel', { work_dir: workDir }),
 
   listJobs: () => req('GET', '/jobs'),
+  deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
 
@@ -62,6 +63,7 @@ export const api = {
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
   queueAdd: (title, nScenes, prompt) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '' }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
+  queueFromJob: (body) => req('POST', '/queue/from-job', body),
 
   // automation steps
   autoFetch: () => req('POST', '/automation/fetch'),
