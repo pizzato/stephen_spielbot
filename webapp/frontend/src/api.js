@@ -49,7 +49,7 @@ export const api = {
 
   getQueue: () => req('GET', '/queue'),
   getComments: () => req('GET', '/youtube/comments'),
-  getSuggestions: () => req('GET', '/youtube/suggestions'),
+  getSuggestions: (guidance) => req('GET', '/youtube/suggestions' + (guidance ? `?guidance=${encodeURIComponent(guidance)}` : '')),
 
   // comment actions
   fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),
