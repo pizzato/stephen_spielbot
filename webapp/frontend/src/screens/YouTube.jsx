@@ -9,6 +9,8 @@ function Stars({ value }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
+const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
+
 export default function YouTube({ go, initial }) {
   const [view, setView] = useState(initial?.view || 'comments')
   const [comments, setComments] = useState([])
@@ -19,19 +21,22 @@ export default function YouTube({ go, initial }) {
   const [guidance, setGuidance] = useState('')
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
+  const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
 
-  const refreshComments = () => api.getComments().then((d) => setComments(d.comments || [])).catch((e) => setError(e.message))
+  const refreshBadges = () => api.getBadges().then(setBadges).catch(() => {})
+  const refreshComments = () => api.getComments().then((d) => { setComments(d.comments || []); refreshBadges() }).catch((e) => setError(e.message))
 
-  useEffect(() => { refreshComments() }, [])
+  useEffect(() => { refreshComments(); refreshBadges() }, [])
 
   // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
   // 90s rock bands); blank = general ideas from the channel's gaps.
-  const loadIdeas = async (g = '') => {
+  const loadIdeas = async (g = '', refresh = false) => {
     setLoadingIdeas(true); setError('')
-    try { const d = await api.getSuggestions(g); setIdeas(d.suggestions || []) }
+    try { const d = await api.getSuggestions(g, refresh); setIdeas(d.suggestions || []) }
     catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
-  useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas('') }, [view])
+  // First visit loads the cached set (no LLM call); only regenerates if empty.
+  useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas('', false) }, [view])
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
 
   const fetchEvaluate = async () => {
@@ -39,6 +44,7 @@ export default function YouTube({ go, initial }) {
     try {
       const r = await api.fetchComments()
       setComments(r.comments || [])
+      refreshBadges()
       setStatus(`Fetched ${r.new} new · ${r.auto_approved} auto-approved · ${r.thanked} thanked`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -84,7 +90,9 @@ export default function YouTube({ go, initial }) {
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={setView} options={[
-          { value: 'comments', label: 'Comments' }, { value: 'ideas', label: 'AI ideas' }, { value: 'publish', label: 'Publish' },
+          { value: 'comments', label: badges.youtube_attention ? <span>Comments <span style={SEG_BADGE}>{badges.youtube_attention}</span></span> : 'Comments' },
+          { value: 'ideas', label: 'AI ideas' },
+          { value: 'publish', label: badges.youtube_publishable ? <span>Publish <span style={SEG_BADGE}>{badges.youtube_publishable}</span></span> : 'Publish' },
         ]} />
       </div>
 
@@ -144,27 +152,27 @@ export default function YouTube({ go, initial }) {
               <div className="grow">
                 <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
                   value={guidance} onChange={(e) => setGuidance(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance) }} />
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance, true) }} />
               </div>
-              <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance)}>
+              <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
                 {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
             </div>
           </Card>
           {ideas.map((idea, i) => {
             const title = idea.title || idea.final_title || idea
-            const scenes = idea.n_scenes || idea.scenes || idea.suggested_scene_count
+            const scenes = idea.suggested_scene_count || idea.n_scenes || idea.scenes || 12
             return (
               <Card key={i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row center between">
                   <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                  {idea.source === 'manual' ? <Chip tone="accent">Your idea</Chip> : <Stars value={idea.interestingness} />}
+                  <Stars value={idea.interestingness} />
                 </div>
                 {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
                 <div className="row center between mt-16 row--wrap gap-10">
-                  {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : <span />}
+                  <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span>
                   <div className="row gap-10">
-                    <Button variant="ghost" icon="layer-group" onClick={() => api.queueAdd(title, scenes || 0, idea.reason || '').then(() => { setStatus('Added to queue.'); go('queue') }).catch((e) => setError(e.message))}>Queue</Button>
-                    <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { topic: title })}>Create</Button>
+                    <Button variant="ghost" icon="layer-group" onClick={() => api.queueAdd(title, scenes, idea.reason || '').then(() => { setStatus('Added to queue.'); go('queue') }).catch((e) => setError(e.message))}>Queue</Button>
+                    <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { title, description: idea.reason || '', scenes })}>Create</Button>
                   </div>
                 </div>
               </Card>

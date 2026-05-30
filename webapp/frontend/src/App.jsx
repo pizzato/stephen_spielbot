@@ -14,6 +14,7 @@ import Settings from './screens/Settings.jsx'
 export default function App() {
   const [route, setRoute] = useState('home')
   const [topic, setTopic] = useState('')          // hero quick-start text
+  const [createSeed, setCreateSeed] = useState(null)  // {title, description, scenes} prefill for Create
   const [job, setJob] = useState(null)            // {job_id, work_dir, title, style, music_desc, scenes, voice, resolution}
   const [progressDir, setProgressDir] = useState('')
   const [meta, setMeta] = useState({ config: {}, voices: [], resolutions: [], default_resolution: '' })
@@ -35,6 +36,12 @@ export default function App() {
 
   const go = useCallback((id, payload) => {
     if (payload?.topic != null) setTopic(payload.topic)
+    // Carry an idea's title/description/scene-count into the Create form.
+    if (id === 'create') setCreateSeed({
+      title: payload?.title ?? payload?.topic ?? '',
+      description: payload?.description ?? '',
+      scenes: payload?.scenes ?? null,
+    })
     // Deep-link into the YouTube tab's Publish view (e.g. from a Films card).
     if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
     setRoute(id)
@@ -76,7 +83,7 @@ export default function App() {
   const screen = (() => {
     switch (route) {
       case 'home': return <Home go={go} initialTopic={topic} setTopic={setTopic} />
-      case 'create': return <Create initialTopic={topic} meta={meta} onGenerated={onScriptGenerated} />
+      case 'create': return <Create seed={createSeed} meta={meta} onGenerated={onScriptGenerated} />
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
       case 'progress': return <Progress workDir={progressDir} job={job} go={go} />
       case 'remix': return <Remix workDir={progressDir} go={go} />

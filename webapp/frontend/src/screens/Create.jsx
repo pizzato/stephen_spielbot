@@ -10,10 +10,10 @@ const PIPELINE = [
   ['film', 'Cut', 'FFmpeg muxes the final film'],
 ]
 
-export default function Create({ initialTopic, meta, onGenerated }) {
-  const [videoTitle, setVideoTitle] = useState(initialTopic || '')
-  const [direction, setDirection] = useState('')
-  const [scenes, setScenes] = useState(meta.config?.default_n_scenes || 12)
+export default function Create({ seed, meta, onGenerated }) {
+  const [videoTitle, setVideoTitle] = useState(seed?.title || '')
+  const [direction, setDirection] = useState(seed?.description || '')
+  const [scenes, setScenes] = useState(seed?.scenes || meta.config?.default_n_scenes || 12)
   const [voice, setVoice] = useState(meta.voices?.[0] || 'Default (F5-TTS)')
   const [resolution, setResolution] = useState(meta.config?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(meta.config?.default_visual_style || '')

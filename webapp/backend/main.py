@@ -691,21 +691,61 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     return out
 
 
+def _normalize_suggestions(raw: list) -> list[dict]:
+    """Coerce any suggestion shape into a consistent one that always has a scene
+    count, so the UI can always show it."""
+    out = []
+    for it in raw or []:
+        if not isinstance(it, dict):
+            it = {"title": str(it)}
+        sc = (it.get("suggested_scene_count") or it.get("n_scenes")
+              or it.get("scene_count") or it.get("scenes") or 12)
+        title = str(it.get("title") or it.get("final_title") or "").strip()
+        if not title:
+            continue
+        out.append({
+            "title": title,
+            "reason": str(it.get("reason") or it.get("description") or ""),
+            "suggested_scene_count": max(6, min(50, int(sc or 12))),
+            "interestingness": float(it.get("interestingness", it.get("interest", 0.7)) or 0.7),
+            "source": it.get("source", "ai"),
+        })
+    return out
+
+
 @api.get("/api/youtube/suggestions")
-def youtube_suggestions(guidance: str = Query("")) -> dict:
+def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False)) -> dict:
+    """Return AI video ideas. Without guidance or refresh, returns the last
+    cached set (no LLM call) so reopening the tab is instant; only generates when
+    the cache is empty, the user asks (refresh), or a guidance theme is given."""
     cfg = gapp.load_config()
+    g = guidance.strip()
+
+    if not g and not refresh:
+        try:
+            cached = yt.load_suggestions()
+        except Exception:
+            cached = []
+        if cached:
+            return {"suggestions": _normalize_suggestions(cached), "cached": True}
+
     try:
         previous = [label for label, _ in gapp._list_recent_jobs(max_results=50)]
     except Exception:
         previous = []
     try:
-        if guidance.strip():
-            ideas = _guided_suggestions(guidance.strip(), previous, cfg)
+        if g:
+            ideas = _guided_suggestions(g, previous, cfg)
         else:
-            ideas = generate_video_suggestions(previous, cfg)
+            ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg))
     except Exception as e:
         raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
-    return {"suggestions": ideas}
+
+    try:
+        yt.save_suggestions(ideas)  # cache the last generated set
+    except Exception:
+        pass
+    return {"suggestions": ideas, "cached": False}
 
 
 # ── sidebar badges ("needs attention" counts) ────────────────────────────────
