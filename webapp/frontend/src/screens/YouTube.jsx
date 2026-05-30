@@ -38,6 +38,9 @@ export default function YouTube({ go, initial }) {
   // First visit loads the cached set (no LLM call); only regenerates if empty.
   useEffect(() => { if (view === 'ideas' && ideas.length === 0 && !loadingIdeas) loadIdeas('', false) }, [view])
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
+  // Opening Publish marks the ready-to-publish videos as seen (mailbox-style),
+  // so the "unread" count clears even if you don't actually publish.
+  useEffect(() => { if (view === 'publish') api.markSeen('publish').then(refreshBadges).catch(() => {}) }, [view])
 
   const fetchEvaluate = async () => {
     setBusy('fetch'); setError(''); setStatus('')
