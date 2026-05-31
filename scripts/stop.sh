@@ -23,9 +23,9 @@ comfyui_pids() {
     || true
 }
 
-# ── 1. Gradio app ─────────────────────────────────────────────────────────────
+# ── 1. Web app ────────────────────────────────────────────────────────────────
 
-echo "=== Stopping Gradio app ==="
+echo "=== Stopping web app ==="
 
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE")"
@@ -37,7 +37,7 @@ if [[ -f "$PID_FILE" ]]; then
     fi
     rm -f "$PID_FILE"
 else
-    PIDS=$(pgrep -f "python.*app\.py" 2>/dev/null || true)
+    PIDS=$(pgrep -f "uvicorn webapp.backend.main" 2>/dev/null || true)
     if [[ -n "$PIDS" ]]; then
         kill $PIDS
         echo "  [app] stopped (PID $PIDS)"
