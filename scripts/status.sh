@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Show health of the Gradio app and every ComfyUI worker.
+# Show health of the web app and every ComfyUI worker.
 # Usage: bash scripts/status.sh [cluster.conf]
 
 CONF="${1:-cluster.conf}"

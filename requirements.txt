@@ -1,4 +1,3 @@
-gradio
 anthropic
 pyyaml
 websocket-client
