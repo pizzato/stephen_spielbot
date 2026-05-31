@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Durable worker agent for ComfyUI, TTS, and local assembly tasks.
 
-The current Gradio app can still launch the resumable generator directly.  This
-agent is the durable execution path for running workers as independent daemons:
+The web app can launch the resumable generator directly.  This agent is the
+durable execution path for running workers as independent daemons:
 each agent leases one ready task from the SQLite controller, heartbeats while it
 runs, and records artifacts before taking another task.
 """

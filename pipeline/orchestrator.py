@@ -3,8 +3,8 @@
 This module is intentionally dependency-free.  It provides a small SQLite
 controller database that can survive process restarts, track task attempts,
 expire stale leases, and keep artifacts attached to the task that produced
-them.  The existing Gradio app can keep using its current UI while generation
-state moves out of process memory and into a durable source of truth.
+them.  Generation state lives out of process memory in a durable source of
+truth that survives restarts.
 """
 
 from __future__ import annotations
