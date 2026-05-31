@@ -3789,6 +3789,8 @@ def _background_auto_post_loop() -> None:
                         continue
                     if meta.get("youtube_video_id"):
                         continue
+                    if meta.get("_auto_post_triggered"):
+                        continue  # already claimed/uploading (this or the web backend process)
                     with _auto_post_lock:
                         if str(job_dir) in _auto_post_triggered:
                             continue
