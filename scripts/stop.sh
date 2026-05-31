@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop the Gradio app and ComfyUI on all workers.
+# Stop the web app and ComfyUI on all workers.
 # Usage: bash scripts/stop.sh [cluster.conf]
 set -euo pipefail
 

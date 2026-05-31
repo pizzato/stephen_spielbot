@@ -26,15 +26,15 @@ check_comfyui() {
     fi
 }
 
-# ── Gradio app ─────────────────────────────────────────────────────────────────
+# ── Web app ────────────────────────────────────────────────────────────────────
 
 echo "=== Stephen Spielbot status ==="
 echo ""
-echo "Gradio app:"
+echo "Web app:"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    echo "  ✓ Running  (PID $(cat "$PID_FILE"))  http://localhost:7860"
-elif pgrep -f "python.*app\.py" &>/dev/null; then
-    echo "  ✓ Running  (PID $(pgrep -f 'python.*app\.py'))  http://localhost:7860"
+    echo "  ✓ Running  (PID $(cat "$PID_FILE"))  http://localhost:8001"
+elif pgrep -f "uvicorn webapp.backend.main" &>/dev/null; then
+    echo "  ✓ Running  (PID $(pgrep -f 'uvicorn webapp.backend.main'))  http://localhost:8001"
 else
     echo "  ✗ Not running"
     ALL_OK=false
