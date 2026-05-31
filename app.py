@@ -198,7 +198,7 @@ def _best_pending_queue_item() -> dict | None:
     try:
         queue = yt.load_queue()
         first = next((q for q in queue if q.get("status") == "pending"), None)
-        return {**first} if first else None  # fresh copy so Gradio detects the change
+        return {**first} if first else None  # fresh copy
     except Exception:
         return None
 
