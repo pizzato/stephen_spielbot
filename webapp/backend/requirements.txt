@@ -1,5 +1,5 @@
-# Backend API for the modern web frontend. Reuses the existing pipeline/app.py.
-# Install on top of the project's existing environment (which already has gradio,
+# Backend API for the web frontend. Reuses the existing pipeline/app.py.
+# Install on top of the project's existing environment (which already has
 # the pipeline deps, etc.):  pip install -r webapp/backend/requirements.txt
 fastapi>=0.110
 uvicorn[standard]>=0.29
