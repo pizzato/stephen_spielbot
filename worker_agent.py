@@ -26,6 +26,13 @@ from pipeline.assembler import (  # noqa: E402
     mux_video_audio,
 )
 from pipeline.comfyui import generate_music, generate_scene_image  # noqa: E402
+from pipeline.cover import (  # noqa: E402
+    COVER_HEIGHT,
+    COVER_WIDTH,
+    build_cover_prompt,
+    overlay_title_on_image,
+    shorten_title_for_cover,
+)
 from pipeline.llm import Scene  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
     DurableStore,
@@ -227,6 +234,46 @@ def _execute_final(store: DurableStore, task: TaskRecord) -> None:
     store.complete_task(task.id, result={"path": str(final_path)}, message="final video ready")
 
 
+def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> None:
+    p = task.payload
+    work_dir = Path(p["work_dir"]).expanduser()
+    title = (p.get("title") or "").strip()
+
+    # Load scenes for richer prompt context.
+    try:
+        rows = store.scene_rows(task.job_id) or []
+    except Exception:
+        rows = []
+    if not rows:
+        # Fallback: read script.json from disk.
+        script_path = work_dir / "script.json"
+        if script_path.exists():
+            import json as _json
+            try:
+                data = _json.loads(script_path.read_text())
+                rows = data if isinstance(data, list) else (data.get("scenes") or [])
+            except Exception:
+                rows = []
+
+    prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows)
+
+    base_path = work_dir / "cover_base.png"
+    cover_path = work_dir / "cover.png"
+    generate_scene_image(
+        prompt, base_path,
+        width=COVER_WIDTH, height=COVER_HEIGHT,
+        steps=int(p.get("flux_steps", 4)),
+        flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
+        clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+        clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
+        flux_vae=p.get("flux_vae", "ae.safetensors"),
+        comfy_url=endpoint,
+    )
+    overlay_title_on_image(base_path, cover_path, title)
+    store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
+    store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")
+
+
 def execute_task(store: DurableStore, task: TaskRecord, endpoint: str, lease_seconds: int) -> None:
     with TaskRun(
         store,
@@ -248,6 +295,8 @@ def execute_task(store: DurableStore, task: TaskRecord, endpoint: str, lease_sec
             _execute_scene_mux(store, task)
         elif task.kind == "video.finalize":
             _execute_final(store, task)
+        elif task.kind == "ui.cover.generate":
+            _execute_ui_cover(store, task, endpoint)
         else:
             raise RuntimeError(f"unsupported task kind: {task.kind}")
 
@@ -292,7 +341,7 @@ def run_agent(args: argparse.Namespace) -> int:
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a durable Stephen Spielbot worker agent.")
     parser.add_argument("--db", type=Path, default=default_db_path(), help="SQLite orchestration DB path")
-    parser.add_argument("--kind", choices=["comfy", "tts", "local"], required=True, help="Task kind this worker leases")
+    parser.add_argument("--kind", choices=["comfy", "tts", "local", "ui"], required=True, help="Task kind this worker leases")
     parser.add_argument("--endpoint", required=True, help="ComfyUI URL, TTS host, or local label")
     parser.add_argument("--worker-id", default="", help="Stable worker id override")
     parser.add_argument("--lease-seconds", type=int, default=900)

@@ -24,6 +24,7 @@ export const api = {
   saveConfig: (config) => req('POST', '/config', { config }),
 
   generateScript: (body) => req('POST', '/script/generate', body),
+  loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
   regenPreview: (jobId, sceneId, resolution, style) =>
@@ -57,6 +58,7 @@ export const api = {
     const qs = p.toString()
     return req('GET', '/youtube/suggestions' + (qs ? `?${qs}` : ''))
   },
+  dismissSuggestion: (body) => req('POST', '/youtube/suggestions/dismiss', body),
 
   // comment actions
   fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),
@@ -85,6 +87,7 @@ export const api = {
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
+  ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
   ytPost: (body) => req('POST', '/youtube/post', body),
 }
 
