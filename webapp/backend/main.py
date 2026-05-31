@@ -1719,6 +1719,14 @@ def _auto_start_best() -> dict | None:
         return None
     item = gapp._best_pending_queue_item()
     if not item:
+        # Nothing queued manually — fall back to AI ideas. _auto_pick_suggestion
+        # picks the best unused idea, marks it used (so it's closed and never
+        # re-picked), and generates a fresh batch when none remain.
+        try:
+            item = gapp._auto_pick_suggestion(gapp.load_config())
+        except Exception:
+            item = None
+    if not item:
         return None
     try:
         return _start_queue_item(item)

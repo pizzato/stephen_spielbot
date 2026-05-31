@@ -3989,10 +3989,18 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
         unused = suggestions
 
     suggestion = unused[0]
-    # Mark as used in the persisted list
+    suggestion["used"] = True
+    # Persist the 'used' flag so this idea is closed and never re-picked. Match
+    # by id, fall back to title, and never re-mark an already-used row — a
+    # missing/duplicate id must not close the wrong idea and leave this one open
+    # (which made automation pick the same idea over and over).
+    sid = str(suggestion.get("id") or "")
+    stitle = (suggestion.get("title") or "").strip().lower()
     all_suggestions = yt.load_suggestions()
     for s in all_suggestions:
-        if s.get("id") == suggestion.get("id"):
+        if s.get("used"):
+            continue
+        if (sid and str(s.get("id") or "") == sid) or ((s.get("title") or "").strip().lower() == stitle):
             s["used"] = True
             break
     yt.save_suggestions(all_suggestions)
