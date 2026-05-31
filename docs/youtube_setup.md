@@ -104,7 +104,7 @@ The OAuth token is saved at `~/.config/video-generator/youtube_token.json` and w
 
 ### Auto-Post
 
-Enable **Auto-post when generation completes** in Config. When a video finishes generating, the app will automatically navigate to the Post tab and begin uploading with the default settings.
+Enable **Auto-post when generation completes** in Settings. When a video finishes generating, the app automatically uploads it from the YouTube → Publish screen with the default settings.
 
 ---
 
@@ -114,7 +114,7 @@ Enable **Auto-post when generation completes** in Config. When a video finishes 
 
 **"client_secrets.json not configured"** — Check the path in the Settings screen → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
 
-**"Not authenticated"** — Click Connect YouTube in the YouTube tab.
+**"Not authenticated"** — Click Connect YouTube in the YouTube → Publish screen.
 
 **"Google hasn't verified this app" warning** — This is expected. Click **Advanced** → **Go to Stephen Spielbot (unsafe)** to proceed.
 
