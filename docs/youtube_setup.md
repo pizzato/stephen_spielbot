@@ -112,7 +112,7 @@ Enable **Auto-post when generation completes** in Config. When a video finishes 
 
 **"Access blocked: Stephen Spielbot has not completed the Google verification process"** — You need to add your Google account as a test user. Go back to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **OAuth consent screen** → **Test users** → **+ Add Users** → enter your email → Save. Then try connecting again.
 
-**"client_secrets.json not configured"** — Check the path in Config tab → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
+**"client_secrets.json not configured"** — Check the path in the Settings screen → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
 
 **"Not authenticated"** — Click Connect YouTube in the YouTube tab.
 
