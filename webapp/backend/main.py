@@ -1735,23 +1735,40 @@ def _auto_start_best() -> dict | None:
 
 
 def _auto_post_done() -> list[str]:
-    """Auto-post finished, queue-driven jobs that haven't been posted yet."""
+    """Auto-post finished, queue-driven jobs that haven't been posted yet.
+
+    Each job is claimed on disk (_auto_post_triggered in job.json) before its
+    upload starts, so neither two overlapping web ticks nor the classic Gradio
+    app's auto-poster — a separate process that scans the same job dirs — can
+    upload the same video twice. The marker that closes the job permanently
+    (youtube_video_id) is only written after the slow upload finishes, which is
+    why a pre-upload claim is needed rather than relying on that marker alone.
+    """
     cfg = gapp.load_config()
     posted: list[str] = []
     for _label, wd in gapp._list_recent_jobs(max_results=50):
         p = Path(wd)
-        try:
-            meta = json.loads((p / "job.json").read_text())
-        except Exception:
-            continue
-        if meta.get("status") != "done" or meta.get("youtube_video_id"):
-            continue
-        try:
-            jc = json.loads((p / "job_config.json").read_text())
-        except Exception:
-            jc = {}
-        if not jc.get("queue_item_id"):
-            continue  # only auto-post videos that came from the queue
+        jc: dict = {}
+        # Atomically claim the job: re-check state and stamp the claim under the
+        # lock so two ticks can't both pass the check before either writes.
+        with gapp._auto_post_lock:
+            if str(p) in gapp._auto_post_triggered:
+                continue
+            try:
+                meta = json.loads((p / "job.json").read_text())
+            except Exception:
+                continue
+            if (meta.get("status") != "done" or meta.get("youtube_video_id")
+                    or meta.get("_auto_post_triggered")):
+                continue
+            try:
+                jc = json.loads((p / "job_config.json").read_text())
+            except Exception:
+                jc = {}
+            if not jc.get("queue_item_id"):
+                continue  # only auto-post videos that came from the queue
+            gapp._auto_post_triggered.add(str(p))
+            gapp._write_job_meta(p, _auto_post_triggered=True)
         try:
             title = jc.get("video_title") or _video_title_for(p)
             description = _generate_youtube_description(str(p), title)
@@ -1762,7 +1779,13 @@ def _auto_post_done() -> list[str]:
             if res.get("video_id"):
                 posted.append(res["video_id"])
         except Exception:
-            continue
+            # Upload failed — release the claim so a later tick can retry.
+            with gapp._auto_post_lock:
+                gapp._auto_post_triggered.discard(str(p))
+            try:
+                gapp._write_job_meta(p, _auto_post_triggered=False)
+            except Exception:
+                pass
     return posted
 
 
