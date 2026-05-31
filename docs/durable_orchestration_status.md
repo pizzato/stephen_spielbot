@@ -12,7 +12,7 @@ continue without rediscovering the implementation state.
 - Web app Render screen with durable job, task, and worker status.
 - Script tab uses one active scene editor backed by durable scene records.
 - Script review stores full scene data in SQLite and `script.json`, not in
-  page-sized Gradio state.
+  page-sized in-memory UI state.
 - Background generation launch reads scenes from durable storage and writes a
   task graph before starting `resume_generation.py`.
 

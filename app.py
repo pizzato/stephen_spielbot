@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Gradio web interface for the AI video generator."""
+"""Core helpers for the AI video generator.
+
+Formerly the Gradio app; the Gradio UI has been removed and the React +
+FastAPI web app (``webapp/``) is the only interface. This module is now a
+helper library that ``webapp/backend/main.py`` imports for config I/O,
+work-dir bookkeeping, job launching, progress polling, and automation.
+"""
 
 import concurrent.futures
 import threading
