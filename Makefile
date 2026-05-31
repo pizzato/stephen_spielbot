@@ -25,7 +25,7 @@ download-flux:
 download-flux-cluster:
 	@bash $(SCRIPTS)/download_flux_cluster.sh $(CONF)
 
-## Start ComfyUI on all workers + the Gradio app.  Add W=<host> to start one worker only.
+## Start ComfyUI on all workers + the web app.  Add W=<host> to start one worker only.
 start:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh start "$(W)"; \
@@ -33,7 +33,7 @@ start:
 	    bash $(SCRIPTS)/start.sh $(CONF); \
 	fi
 
-## Stop the Gradio app and ComfyUI on all workers.  Add W=<host> to stop one worker only.
+## Stop the web app and ComfyUI on all workers.  Add W=<host> to stop one worker only.
 stop:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh stop "$(W)"; \
@@ -49,7 +49,7 @@ restart:
 	    $(MAKE) --no-print-directory stop && $(MAKE) --no-print-directory start; \
 	fi
 
-## Restart only the Gradio app (workers keep running — use after UI/code changes).
+## Restart only the web app (workers keep running — use after UI/code changes).
 restart-server:
 	@bash $(SCRIPTS)/stop_server.sh
 	@bash $(SCRIPTS)/start_server.sh
@@ -68,7 +68,7 @@ worker-agent:
 	ENDPOINT="$${ENDPOINT:-http://localhost:8188}"; \
 	.venv/bin/python worker_agent.py --kind "$$KIND" --endpoint "$$ENDPOINT"
 
-# ── Modern web UI (React + FastAPI) — alternative front-end, runs alongside Gradio ──
+# ── Web UI (React + FastAPI) — the app's only front-end ──
 FRONTEND := webapp/frontend
 WEB_PORT := 8001
 
@@ -99,10 +99,10 @@ help:
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo ""
-	@echo "  start           Start ComfyUI on all workers + launch the Gradio app"
-	@echo "  stop            Stop the Gradio app and ComfyUI on all workers"
+	@echo "  start           Start ComfyUI on all workers + launch the web app"
+	@echo "  stop            Stop the web app and ComfyUI on all workers"
 	@echo "  restart         Stop everything, then start everything"
-	@echo "  restart-server  Restart only the Gradio app (workers keep running)"
+	@echo "  restart-server  Restart only the web app (workers keep running)"
 	@echo "  status          Check health of the app and every ComfyUI worker"
 	@echo ""
 	@echo "  start/stop/restart/status all accept  W=<host>  to target one worker:"
@@ -113,7 +113,7 @@ help:
 	@echo ""
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local ENDPOINT=...)"
 	@echo ""
-	@echo "Modern web UI (React + FastAPI, alongside the Gradio app):"
+	@echo "Web UI (React + FastAPI):"
 	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"
 	@echo "  web             Build the SPA and serve UI + API (localhost:8001)"
 	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"

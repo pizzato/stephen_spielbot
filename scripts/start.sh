@@ -55,21 +55,26 @@ REMOTE
     wait_for_comfyui "$host" "http://${host}:8188"
 done
 
-# ── 2. Gradio app ─────────────────────────────────────────────────────────────
+# ── 2. Web app ────────────────────────────────────────────────────────────────
 
-echo "=== Starting Gradio app ==="
+echo "=== Starting web app ==="
 
+WEB_PORT="${WEB_PORT:-8001}"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "  [app] already running (PID $(cat "$PID_FILE"))"
 else
     mkdir -p "$(dirname "$APP_LOG")"
     cd "$REPO_ROOT"
-    nohup "$PYTHON" app.py >/tmp/stephen_spielbot.out 2>&1 &
+    if [[ ! -f "$REPO_ROOT/webapp/frontend/dist/index.html" ]]; then
+        echo "  [app] WARNING: webapp/frontend/dist not found — run 'make web-build' to build the UI"
+    fi
+    nohup "$PYTHON" -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port "$WEB_PORT" \
+        >/tmp/stephen_spielbot.out 2>&1 &
     echo $! > "$PID_FILE"
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
 echo ""
-echo "Stephen Spielbot is running at http://localhost:7860"
+echo "Stephen Spielbot is running at http://localhost:${WEB_PORT}"
 echo "App log: $APP_LOG"
 echo "Stop with: make stop"

@@ -691,13 +691,10 @@ def remix_apply(body: RemixBody) -> dict:
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
-    result = gapp.on_remix(str(combined), str(music),
-                           str(ambient) if ambient.exists() else "",
-                           body.voice_vol, body.music_vol, body.ambient_vol, None)
-    # on_remix returns a gr tuple; element 0 is an update with the final path.
-    final_update = result[0]
-    final_path = getattr(final_update, "get", lambda *_: None)("value") if hasattr(final_update, "get") else None
-    return {"message": result[4], "final_url": f"/api/file?path={final_path}" if final_path else ""}
+    final_path, message = gapp.on_remix(str(combined), str(music),
+                                        str(ambient) if ambient.exists() else "",
+                                        body.voice_vol, body.music_vol, body.ambient_vol)
+    return {"message": message, "final_url": f"/api/file?path={final_path}" if final_path else ""}
 
 
 # ── queue ────────────────────────────────────────────────────────────────────
@@ -1604,6 +1601,21 @@ def _start_queue_item(item: dict) -> dict:
     otherwise we generate the script first. Reuses script_generate +
     start_generation."""
     cfg = gapp.load_config()
+    # Claim the item BEFORE the slow script generation. _best_pending_queue_item
+    # — used by this backend's automation AND the classic Gradio app (a separate
+    # process sharing the same queue file) — only returns status=="pending"
+    # items, so flipping the status away from pending now is the claim that stops
+    # a concurrent tick or the other app from starting the same item and creating
+    # a duplicate work folder. Without it, the item stays "pending" for the whole
+    # ~45s script_generate, which is exactly the window that produced two folders.
+    item_id = item.get("id")
+    if item_id:
+        cur = next((q for q in yt.load_queue() if q.get("id") == item_id), None)
+        # Block only items that are already being worked on or finished; a
+        # failed/errored item may still be retried.
+        if cur is not None and cur.get("status") in ("creating", "upload_pending", "posted", "done"):
+            raise HTTPException(409, f"Queue item is already {cur.get('status')}.")
+        yt.update_queue_item(item_id, status="creating")
     title = item.get("final_title", "")
     n = max(6, int(item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6)))
 
