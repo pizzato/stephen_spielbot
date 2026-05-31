@@ -13,8 +13,10 @@ Run it from the repo root:
 """
 
 import json
+import re
 import sys
 import time
+import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -34,7 +36,7 @@ import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
-from pipeline.orchestrator import DurableStore, job_id_from_work_dir  # noqa: E402
+from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
 
 api = FastAPI(title="Stephen Spielbot API")
 # `uvicorn webapp.backend.main:app` is the conventional entry point — expose the
@@ -117,6 +119,9 @@ class GenerateScriptBody(BaseModel):
     topic: str = ""
     n_scenes: int = 12
     visual_style: str | None = None
+    auto_approve: bool = False
+    voice: str = ""
+    resolution: str = ""
 
 
 @api.post("/api/script/generate")
@@ -162,7 +167,7 @@ def script_generate(body: GenerateScriptBody) -> dict:
     finally:
         store.close()
 
-    return {
+    result = {
         "job_id": job_id,
         "work_dir": str(work_dir),
         "title": display_title,
@@ -170,6 +175,81 @@ def script_generate(body: GenerateScriptBody) -> dict:
         "style": style,
         "music_desc": music_desc,
         "scenes": [_scene_to_json(s) for s in scenes_list],
+    }
+    if body.auto_approve:
+        queued = queue_from_job(FromJobBody(
+            job_id=job_id,
+            work_dir=str(work_dir),
+            video_title=(body.video_title or display_title).strip(),
+            n_scenes=len(scenes_list),
+            style=style,
+            resolution=body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+            voice=body.voice or cfg.get("default_voice", ""),
+            music_desc=music_desc,
+        ))
+        result.update({
+            "auto_approved": True,
+            "queue_item_id": queued.get("queue_item_id", ""),
+            "started": queued.get("started"),
+        })
+    return result
+
+
+@api.get("/api/scripts/load")
+def load_script(work_dir: str = Query("")) -> dict:
+    if not work_dir:
+        raise HTTPException(400, "Choose a saved script.")
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Script path is outside the output folder.")
+    script_path = wd / "script.json"
+    if not script_path.exists():
+        raise HTTPException(404, "No script found in the selected folder.")
+
+    try:
+        scenes_list = json.loads(script_path.read_text())
+    except Exception as e:
+        raise HTTPException(500, f"Could not read script: {str(e).splitlines()[0][:200]}")
+    if not isinstance(scenes_list, list):
+        raise HTTPException(400, "Saved script has an unexpected format.")
+
+    job_id = job_id_from_work_dir(wd)
+    fallback_title = wd.name.replace("-", " ").title()
+    video_title = fallback_title
+    style = ""
+    music_desc = ""
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        if job:
+            d = _row_to_dict(job)
+            cfg = json.loads(d.get("config_json") or "{}")
+            meta = json.loads(d.get("metadata_json") or "{}")
+            video_title = cfg.get("video_title") or d.get("title") or fallback_title
+            style = meta.get("style", "")
+            music_desc = meta.get("music_desc", "")
+        store.create_or_update_job(
+            job_id, wd, video_title,
+            config={"video_title": video_title, "phase": "script_review"},
+            metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
+        )
+        store.upsert_scenes(job_id, scenes_list)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    cfg = gapp.load_config()
+    return {
+        "job_id": job_id,
+        "work_dir": str(wd),
+        "title": video_title,
+        "video_title": video_title,
+        "style": style,
+        "music_desc": music_desc,
+        "voice": cfg.get("default_voice", ""),
+        "resolution": cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        "scenes": [_scene_to_json(r) for r in rows],
     }
 
 
@@ -540,9 +620,37 @@ def cancel_job(body: JobActionBody) -> dict:
 
 @api.get("/api/jobs")
 def list_jobs() -> dict:
-    finished = [{"label": l, "work_dir": d} for l, d in gapp._list_recent_jobs(max_results=50)]
+    finished_rows = gapp._list_recent_jobs(max_results=50)
+    finished = [{"label": l, "work_dir": d} for l, d in finished_rows]
     scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
-    resumable = [{"label": l, "work_dir": d} for l, d in gapp._list_resumable_jobs()]
+    resumable = []
+    active_wd = gapp._preferred_work_dir("")
+    active_key = _work_dir_title_key(active_wd) if active_wd else ""
+    finished_keys = set()
+    for label, work_dir in finished_rows:
+        finished_keys.add(_title_key(label))
+        finished_keys.add(_work_dir_title_key(Path(work_dir)))
+    for label, work_dir in gapp._list_resumable_jobs():
+        wd = Path(work_dir)
+        title_key = _work_dir_title_key(wd) or _title_key(label)
+        is_active = bool(active_wd and wd == active_wd)
+        if title_key in finished_keys and not is_active:
+            continue
+        meta = {}
+        try:
+            meta = json.loads((wd / "job.json").read_text())
+        except Exception:
+            pass
+        pid = meta.get("pid")
+        running = (meta.get("status") == "running" and gapp._process_running(pid)) or (
+            is_active and title_key == active_key and meta.get("status") == "running"
+        )
+        resumable.append({
+            "label": label,
+            "work_dir": work_dir,
+            "status": "running" if running else (meta.get("status") or "incomplete"),
+            "running": running,
+        })
     return {"finished": finished, "scripts": scripts, "resumable": resumable}
 
 
@@ -594,17 +702,127 @@ def remix_apply(body: RemixBody) -> dict:
 
 # ── queue ────────────────────────────────────────────────────────────────────
 
+def _title_key(title: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", str(title or "").lower()).strip()
+
+
+def _queue_title_key(item: dict) -> str:
+    return _title_key(item.get("final_title") or item.get("title") or "")
+
+
+def _work_dir_title_key(work_dir: Path | None) -> str:
+    if not work_dir:
+        return ""
+    try:
+        cfg = json.loads((work_dir / "job_config.json").read_text())
+        title = cfg.get("video_title") or cfg.get("title")
+        if title:
+            return _title_key(title)
+    except Exception:
+        pass
+    return _title_key(_video_title_for(work_dir))
+
+
+def _queue_done(work_dir: str) -> tuple[bool, dict]:
+    if not work_dir:
+        return False, {}
+    p = Path(work_dir)
+    try:
+        meta = json.loads((p / "job.json").read_text())
+    except Exception:
+        meta = {}
+    final = gapp._final_path_for_work_dir(p)
+    done = final.exists() and final.stat().st_size > 10_000 and (p / "combined.mp4").exists()
+    return bool(done or meta.get("status") == "done"), meta
+
+
+def _posted_title_map() -> dict[str, dict]:
+    posted: dict[str, dict] = {}
+    try:
+        for item in yt.load_queue():
+            if item.get("status") == "posted":
+                key = _queue_title_key(item)
+                if key:
+                    posted[key] = item
+    except Exception:
+        pass
+    try:
+        for label, work_dir in gapp._list_recent_jobs(max_results=100):
+            wd = Path(work_dir)
+            try:
+                meta = json.loads((wd / "job.json").read_text())
+            except Exception:
+                meta = {}
+            if meta.get("youtube_video_id") or meta.get("youtube_url"):
+                key = _work_dir_title_key(wd) or _title_key(label)
+                if key:
+                    posted[key] = {
+                        "youtube_video_id": meta.get("youtube_video_id"),
+                        "youtube_url": meta.get("youtube_url"),
+                    }
+    except Exception:
+        pass
+    return posted
+
+
+def _link_queue_item_to_work_dir(item: dict, work_dir: Path) -> None:
+    item["work_dir"] = str(work_dir)
+    try:
+        cfg_path = work_dir / "job_config.json"
+        cfg = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        if item.get("id") and cfg.get("queue_item_id") != item.get("id"):
+            cfg["queue_item_id"] = item["id"]
+            cfg_path.write_text(json.dumps(cfg, indent=2))
+    except Exception:
+        pass
+
+
+def _queue_lifecycle_sort_key(item: dict) -> tuple:
+    status_rank = {
+        "creating": 0, "running": 0,
+        "pending": 1,
+        "done": 2, "upload_pending": 2,
+        "posted": 3,
+        "cancelled": 4, "failed": 4, "superseded": 4,
+    }
+    if item.get("status") == "pending":
+        source = item.get("source", "suggestion")
+        group = 0 if source == "comment" else 1
+        return (1, group, item.get("created_at", 0))
+    return (status_rank.get(item.get("status"), 5), 0, -(item.get("updated_at") or item.get("created_at") or 0))
+
+
 def _reconcile_queue() -> list[dict]:
-    """Update queue items stuck at 'creating' whose underlying render actually
-    finished (or was posted), so the queue reflects reality."""
+    """Make queue rows reflect real render/upload state before the UI sees them."""
     try:
         queue = yt.load_queue()
     except Exception:
         return []
+    active_wd = gapp._preferred_work_dir("")
+    active_done = False
+    active_running = False
+    active_key = ""
+    if active_wd:
+        try:
+            active_meta = json.loads((active_wd / "job.json").read_text())
+        except Exception:
+            active_meta = {}
+        active_done, _ = _queue_done(str(active_wd))
+        active_running = active_meta.get("status") == "running" and not active_done
+        active_key = _work_dir_title_key(active_wd)
+    posted_by_title = _posted_title_map()
     changed = False
     for it in queue:
-        if it.get("status") != "creating":
-            continue
+        status = it.get("status") or "pending"
+        title_key = _queue_title_key(it)
+        if active_running and active_key and title_key == active_key and status in ("done", "upload_pending", "creating", "running"):
+            if it.get("work_dir") != str(active_wd):
+                _link_queue_item_to_work_dir(it, active_wd)
+                changed = True
+            if status in ("done", "upload_pending"):
+                it["status"] = "creating"
+                changed = True
+
         wd = it.get("work_dir") or ""
         jid = it.get("video_job_id") or ""
         if not wd and jid:
@@ -619,17 +837,32 @@ def _reconcile_queue() -> list[dict]:
                 wd = ""
         if not wd:
             continue
+
         p = Path(wd)
-        try:
-            meta = json.loads((p / "job.json").read_text())
-        except Exception:
-            meta = {}
-        final = gapp._final_path_for_work_dir(p)
-        done = final.exists() and final.stat().st_size > 10_000 and (p / "combined.mp4").exists()
+        done, meta = _queue_done(wd)
+        is_active = bool(active_wd and p == active_wd)
         if meta.get("youtube_video_id"):
-            it["status"] = "posted"; it["youtube_video_id"] = meta["youtube_video_id"]; changed = True
-        elif done or meta.get("status") == "done":
-            it["status"] = "done"; changed = True
+            it["status"] = "posted"
+            it["youtube_video_id"] = meta["youtube_video_id"]
+            if meta.get("youtube_url"):
+                it["youtube_url"] = meta["youtube_url"]
+            changed = True
+        elif done:
+            if it.get("status") != "done":
+                it["status"] = "done"
+                changed = True
+        elif it.get("status") in ("creating", "running") and not is_active:
+            posted = posted_by_title.get(title_key)
+            if posted:
+                it["status"] = "posted"
+                it["youtube_video_id"] = posted.get("youtube_video_id")
+                it["youtube_url"] = posted.get("youtube_url")
+                changed = True
+            elif meta.get("status") == "running" and not gapp._process_running(meta.get("pid")):
+                it["status"] = "failed"
+                it["error"] = "Render process is no longer running."
+                changed = True
+    queue = sorted(queue, key=_queue_lifecycle_sort_key)
     if changed:
         yt.save_queue(queue)
     return queue
@@ -691,6 +924,37 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     return out
 
 
+def _suggestion_key(title: str) -> str:
+    return " ".join((title or "").strip().lower().split())
+
+
+def _load_dismissed_suggestions() -> dict:
+    try:
+        data = json.loads(DISMISSED_SUGGESTIONS_FILE.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_dismissed_suggestions(data: dict) -> None:
+    DISMISSED_SUGGESTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    DISMISSED_SUGGESTIONS_FILE.write_text(json.dumps(data, indent=2))
+
+
+def _is_suggestion_dismissed(suggestion: dict, dismissed: dict) -> bool:
+    sid = str(suggestion.get("id") or "").strip()
+    title = _suggestion_key(str(suggestion.get("title") or suggestion.get("final_title") or ""))
+    return bool((sid and sid in dismissed) or (title and title in dismissed))
+
+
+def _visible_suggestions(suggestions: list[dict]) -> list[dict]:
+    dismissed = _load_dismissed_suggestions()
+    return [
+        s for s in _normalize_suggestions(suggestions)
+        if not s.get("used") and not _is_suggestion_dismissed(s, dismissed)
+    ]
+
+
 def _normalize_suggestions(raw: list) -> list[dict]:
     """Coerce any suggestion shape into a consistent one that always has a scene
     count, so the UI can always show it."""
@@ -703,12 +967,16 @@ def _normalize_suggestions(raw: list) -> list[dict]:
         title = str(it.get("title") or it.get("final_title") or "").strip()
         if not title:
             continue
+        used = bool(it.get("used") or it.get("dismissed"))
         out.append({
+            "id": str(it.get("id") or title),
             "title": title,
             "reason": str(it.get("reason") or it.get("description") or ""),
             "suggested_scene_count": max(6, min(50, int(sc or 12))),
             "interestingness": float(it.get("interestingness", it.get("interest", 0.7)) or 0.7),
             "source": it.get("source", "ai"),
+            "used": used,
+            "dismissed": bool(it.get("dismissed")),
         })
     return out
 
@@ -727,7 +995,7 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
         except Exception:
             cached = []
         if cached:
-            return {"suggestions": _normalize_suggestions(cached), "cached": True}
+            return {"suggestions": _visible_suggestions(cached), "cached": True}
 
     try:
         previous = [label for label, _ in gapp._list_recent_jobs(max_results=50)]
@@ -742,15 +1010,62 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
         raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
     try:
+        ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
+                  "created_at": time.time(), "used": False, "dismissed": False}
+                 for idea in ideas]
         yt.save_suggestions(ideas)  # cache the last generated set
     except Exception:
         pass
-    return {"suggestions": ideas, "cached": False}
+    return {"suggestions": _visible_suggestions(ideas), "cached": False}
+
+
+class SuggestionDismissBody(BaseModel):
+    id: str = ""
+    title: str = ""
+    reason: str = ""
+
+
+@api.post("/api/youtube/suggestions/dismiss")
+def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
+    suggestions = yt.load_suggestions()
+    key = (body.id or "").strip()
+    title = _suggestion_key(body.title)
+    dismissed = _load_dismissed_suggestions()
+    dismiss_record = {
+        "id": key,
+        "title": body.title,
+        "reason": body.reason or "dismissed",
+        "dismissed_at": time.time(),
+    }
+    dismiss_keys = [k for k in (key, title) if k]
+    if dismiss_keys:
+        for dismiss_key in dismiss_keys:
+            dismissed[dismiss_key] = {
+                **dismiss_record,
+                "key": dismiss_key,
+            }
+        _save_dismissed_suggestions(dismissed)
+
+    changed = False
+    for suggestion in suggestions:
+        suggestion_id = str(suggestion.get("id") or suggestion.get("title") or "")
+        suggestion_title = _suggestion_key(str(suggestion.get("title") or suggestion.get("final_title") or ""))
+        if (key and suggestion_id == key) or (title and suggestion_title == title):
+            suggestion["used"] = True
+            suggestion["dismissed"] = True
+            suggestion["dismissed_reason"] = body.reason or "dismissed"
+            suggestion["dismissed_at"] = time.time()
+            changed = True
+            break
+    if changed:
+        yt.save_suggestions(suggestions)
+    return {"ok": bool(dismiss_keys), "suggestions": _visible_suggestions(suggestions)}
 
 
 # ── sidebar badges ("needs attention" counts) ────────────────────────────────
 
 SEEN_FILE = gapp.CONFIG_FILE.parent / "ui_seen.json"
+DISMISSED_SUGGESTIONS_FILE = gapp.CONFIG_FILE.parent / "youtube_dismissed_suggestions.json"
 
 
 def _load_seen() -> dict:
@@ -960,9 +1275,13 @@ class DescribeBody(BaseModel):
 
 @api.post("/api/youtube/describe")
 def yt_describe(body: DescribeBody) -> dict:
+    return {"description": _generate_youtube_description(body.work_dir, body.title)}
+
+
+def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
     cfg = gapp.load_config()
-    wd = Path(body.work_dir) if body.work_dir else None
-    title = body.title or (_video_title_for(wd) if wd else "")
+    wd = Path(work_dir) if work_dir else None
+    title = title or (_video_title_for(wd) if wd else "")
     scenes = []
     if wd and wd.exists():
         try:
@@ -983,7 +1302,7 @@ def yt_describe(body: DescribeBody) -> dict:
     suffix = cfg.get("description_suffix", "").strip()
     if suffix and suffix not in str(desc):
         desc = f"{desc}\n\n{suffix}"
-    return {"description": str(desc)}
+    return str(desc)
 
 
 class CoverBody(BaseModel):
@@ -998,15 +1317,50 @@ def yt_cover(body: CoverBody) -> dict:
     if wd is None or not wd.exists():
         raise HTTPException(404, "No film found.")
     job_id = job_id_from_work_dir(wd)
+    title = body.title or _video_title_for(wd)
+    cfg = gapp.load_config()
+    store = DurableStore.default()
     try:
-        for _ in gapp.on_generate_cover_image(body.title or _video_title_for(wd), body.style or "", job_id):
-            pass  # drive the generator to completion
-    except Exception as e:
-        raise HTTPException(503, f"Cover generation failed: {str(e).splitlines()[0][:200]}")
-    cover = wd / "cover.png"
-    if cover.exists() and cover.stat().st_size > 1000:
-        return {"cover_url": f"/api/file?path={cover}&t={int(time.time())}"}
-    raise HTTPException(503, "Cover image was not produced (no reachable workers?).")
+        store.create_or_update_job(job_id, wd, title, status="done")
+        tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
+        store.create_task(
+            tid, job_id, "ui.cover.generate", f"Cover: {title}",
+            worker_kind="ui",
+            payload={
+                "work_dir": str(wd),
+                "title": title,
+                "style": body.style or "",
+                "flux_steps": cfg.get("flux_steps", 4),
+                "flux_model": cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                "flux_clip_t5": cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                "flux_clip_l": cfg.get("flux_clip_l", "clip_l.safetensors"),
+                "flux_vae": cfg.get("flux_vae", "ae.safetensors"),
+            },
+            priority=10,
+            max_attempts=3,
+        )
+    finally:
+        store.close()
+    return {"task_id": tid}
+
+
+@api.get("/api/youtube/cover/status")
+def yt_cover_status(task_id: str = Query(...)) -> dict:
+    store = DurableStore.default()
+    try:
+        t = store.get_task(task_id)
+    finally:
+        store.close()
+    if t is None:
+        raise HTTPException(404, "Task not found.")
+    result: dict = {"status": t.status}
+    if t.status == "succeeded":
+        cover = Path(t.result.get("path", "")) if t.result else None
+        if cover and cover.exists() and cover.stat().st_size > 1000:
+            result["cover_url"] = f"/api/file?path={cover}&t={int(time.time())}"
+    if t.error:
+        result["error"] = t.error[:200]
+    return result
 
 
 class PostBody(BaseModel):
@@ -1391,9 +1745,11 @@ def _auto_post_done() -> list[str]:
         if not jc.get("queue_item_id"):
             continue  # only auto-post videos that came from the queue
         try:
+            title = jc.get("video_title") or _video_title_for(p)
+            description = _generate_youtube_description(str(p), title)
             res = yt_post(PostBody(
-                work_dir=str(p), title=jc.get("video_title") or _video_title_for(p),
-                description="", category=cfg.get("youtube_post_category", "22"),
+                work_dir=str(p), title=title,
+                description=description, category=cfg.get("youtube_post_category", "22"),
                 privacy=cfg.get("youtube_post_privacy", "private")))
             if res.get("video_id"):
                 posted.append(res["video_id"])
