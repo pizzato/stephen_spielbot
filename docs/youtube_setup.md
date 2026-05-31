@@ -58,7 +58,7 @@ Stephen Spielbot uses the YouTube Data API v3 to fetch channel comments and uplo
 
 ## Step 5 — Configure in Stephen Spielbot
 
-1. Open Stephen Spielbot and go to the **⚙️ Config** tab
+1. Open Stephen Spielbot and go to the **⚙️ Settings** screen
 2. In the **YouTube Integration** section, verify the path shows:
    `~/.config/video-generator/client_secrets.json`
 3. Configure your preferences:
