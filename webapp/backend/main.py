@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""FastAPI backend for the modern Stephen Spielbot web UI.
+"""FastAPI backend for the Stephen Spielbot web UI — the only interface.
 
 This is a thin REST/JSON layer over the EXISTING pipeline. It imports the
-original ``app`` module (the Gradio app) purely to reuse its Gradio-free helper
-functions (config, work-dir bookkeeping, job launching, progress polling) plus
-the ``pipeline`` package directly. No Gradio UI is built here — the Gradio app
-in ``app.py`` keeps working untouched and can run side by side.
+``app`` module to reuse its helper functions (config, work-dir bookkeeping,
+job launching, progress polling) plus the ``pipeline`` package directly.
+``app.py`` is a helper library (the former Gradio UI has been removed).
 
 Run it from the repo root:
 
