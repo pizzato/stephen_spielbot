@@ -469,10 +469,10 @@ def _active_job_row(active_job_dir: str = ""):
 def on_resume_active_job(active_job_dir: str):
     job = _active_job_row(active_job_dir)
     if not job:
-        return "No durable job available to resume.", gr.update(), active_job_dir
+        return "No durable job available to resume.", None, active_job_dir
     work_dir = Path(job["work_dir"])
     if not work_dir.exists():
-        return f"Work directory missing: {work_dir}", gr.update(), active_job_dir
+        return f"Work directory missing: {work_dir}", None, active_job_dir
     store = DurableStore.default()
     try:
         store.recover_incomplete_tasks(job["id"])
@@ -480,7 +480,7 @@ def on_resume_active_job(active_job_dir: str):
     finally:
         store.close()
     _launch_generation_job(work_dir)
-    return f"Resume launched for {work_dir.name}", gr.update(selected="progress"), str(work_dir)
+    return f"Resume launched for {work_dir.name}", None, str(work_dir)
 
 
 def on_retry_failed_tasks(active_job_dir: str):
