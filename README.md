@@ -20,8 +20,8 @@ Generation state is mirrored into a SQLite controller database at
 `~/.local/share/video-generator/orchestrator.sqlite3`.  Each story, image,
 narration, music, scene-video, mux, and final-assembly unit is tracked as a
 task with dependencies, attempts, leases, worker ownership, and produced
-artifacts.  The Gradio **Progress** tab shows this durable task graph alongside
-the existing progress bar.
+artifacts.  The web app's **Render** screen shows this durable task graph
+alongside the progress bar.
 
 The standard app path still launches `resume_generation.py`, but that process
 now writes durable task/artifact state as it runs.  For a fully agent-driven
@@ -52,11 +52,18 @@ Current implementation and test status are tracked in
 ```bash
 git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot
-make install   # install deps locally + on every worker in cluster.conf
-make start     # start ComfyUI on all workers, then launch the app
+make install       # install deps locally + on every worker in cluster.conf
+make web-install   # install web UI deps (FastAPI backend + React frontend)
+make web-build     # build the React frontend to webapp/frontend/dist
+make start         # start ComfyUI on all workers, then launch the app
 ```
 
-Open [http://localhost:7860](http://localhost:7860).
+Open [http://localhost:8001](http://localhost:8001).
+
+> The interface is a React + FastAPI web app (`webapp/`) served from a single
+> uvicorn process on port 8001. `make start` serves the pre-built frontend from
+> `webapp/frontend/dist`, so run `make web-build` after any frontend change. For
+> frontend development with hot reload, use `make web-dev` instead.
 
 ```bash
 make stop      # stop everything
@@ -80,7 +87,7 @@ Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
 ## Configuration
 
-All settings live in `~/.config/video-generator/config.json` and can be edited live in the **Config** tab:
+All settings live in `~/.config/video-generator/config.json` and can be edited live in the **Settings** screen:
 
 | Setting | Description |
 |---|---|
