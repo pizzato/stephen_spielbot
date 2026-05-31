@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start ComfyUI on all workers and the Gradio app locally.
+# Start ComfyUI on all workers and the web app locally.
 # Usage: bash scripts/start.sh [cluster.conf]
 set -euo pipefail
 

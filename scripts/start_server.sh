@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Start only the Gradio app (assumes ComfyUI workers are already running).
+# Start only the web app (assumes ComfyUI workers are already running).
 # Usage: bash scripts/start_server.sh
 set -euo pipefail
 

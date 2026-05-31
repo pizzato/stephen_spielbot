@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stop only the Gradio app (leaves ComfyUI workers running).
+# Stop only the web app (leaves ComfyUI workers running).
 # Usage: bash scripts/stop_server.sh
 set -euo pipefail
 
