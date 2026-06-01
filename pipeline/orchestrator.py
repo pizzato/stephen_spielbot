@@ -442,6 +442,7 @@ class DurableStore:
 
         narration_task_ids: list[str] = []
         mux_task_ids: list[str] = []
+        last_scene_id = int(_scene_value(scene_items[-1], "id")) if scene_items else None
         for scene in scene_items:
             sid = int(_scene_value(scene, "id"))
             scene_payload = {
@@ -509,7 +510,7 @@ class DurableStore:
                 "scene.video.mux",
                 f"Scene {sid} mux",
                 worker_kind="local",
-                payload={**scene_payload, "resource_class": resource_classes.get("mux", "local")},
+                payload={**scene_payload, "resource_class": resource_classes.get("mux", "local"), "is_last_scene": sid == last_scene_id},
                 dependencies=[video_task, narration_task],
                 priority=70 + sid,
                 max_attempts=2,

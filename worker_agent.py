@@ -200,7 +200,8 @@ def _execute_scene_mux(store: DurableStore, task: TaskRecord) -> None:
     if not raw.exists():
         raw = work_dir / f"scene_{sid:02d}_clip_01.mp4"
     narration = Path(p["narration_path"]).expanduser() if p.get("narration_path") else work_dir / f"scene_{sid:02d}_narration.wav"
-    mux_video_audio(raw, narration, output)
+    extra_tail = 2.0 if p.get("is_last_scene") else 0.0
+    mux_video_audio(raw, narration, output, extra_tail_secs=extra_tail)
     store.record_artifact(task.job_id, task.id, "scene_final", output, duration_seconds=_get_duration(output))
     store.complete_task(task.id, result={"path": str(output)}, message="scene muxed")
 

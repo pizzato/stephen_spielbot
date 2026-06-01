@@ -126,7 +126,8 @@ def main() -> None:
             concat_clips(clips, raw_video)
 
         scene_final = work_dir / f"scene_{scene.id:02d}_final.mp4"
-        mux_video_audio(raw_video, narration_paths[scene.id], scene_final)
+        extra_tail = 2.0 if scene is scenes[-1] else 0.0
+        mux_video_audio(raw_video, narration_paths[scene.id], scene_final, extra_tail_secs=extra_tail)
         scene_finals.append(scene_final)
         print(f"  → {scene_final.name}")
 

@@ -754,6 +754,7 @@ def main(work_dir: Path) -> None:
         raw = scene_raws_map[s.id]
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
         mux_task = task_id(durable_job_id, "scene", s.id, "mux")
+        is_last = s.id == scenes[-1].id
         if scene_final.exists() and scene_final.stat().st_size > 10_000:
             logger.info("Scene %d muxed final exists, skipping", s.id)
             store.complete_task(mux_task, result={"path": str(scene_final), "skipped": True})
@@ -766,7 +767,7 @@ def main(work_dir: Path) -> None:
                 lease_seconds=600,
                 start_message="muxing scene",
             ) as run:
-                mux_video_audio(raw, narration_paths[s.id], scene_final)
+                mux_video_audio(raw, narration_paths[s.id], scene_final, extra_tail_secs=2.0 if is_last else 0.0)
                 store.record_artifact(
                     durable_job_id,
                     mux_task,
