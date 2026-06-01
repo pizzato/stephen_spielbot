@@ -4,6 +4,7 @@
 set -euo pipefail
 
 PID_FILE="/tmp/stephen_spielbot.pid"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "=== Stopping web app ==="
 
@@ -25,3 +26,6 @@ else
         echo "  [app] not running"
     fi
 fi
+
+echo "=== Stopping UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" stop

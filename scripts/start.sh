@@ -74,6 +74,11 @@ else
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
+# ── 3. UI workers (cover-image regeneration) ──────────────────────────────────
+
+echo "=== Starting UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" start
+
 echo ""
 echo "Stephen Spielbot is running at http://localhost:${WEB_PORT}"
 echo "App log: $APP_LOG"

@@ -5,6 +5,7 @@ set -euo pipefail
 
 CONF="${1:-cluster.conf}"
 PID_FILE="/tmp/stephen_spielbot.pid"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,12 @@ else
     fi
 fi
 
-# ── 2. Local ComfyUI ──────────────────────────────────────────────────────────
+# ── 2. UI workers ─────────────────────────────────────────────────────────────
+
+echo "=== Stopping UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" stop
+
+# ── 3. Local ComfyUI ──────────────────────────────────────────────────────────
 
 echo "=== Stopping ComfyUI (local) ==="
 
