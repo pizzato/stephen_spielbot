@@ -26,6 +26,9 @@ else
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
+echo "=== Starting UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" start
+
 echo ""
 echo "Stephen Spielbot is running at http://localhost:8001"
 echo "App log: $APP_LOG"

@@ -6,7 +6,7 @@ SCRIPTS := scripts
 W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
-        start stop restart restart-server status worker-agent help \
+        start stop restart restart-server status worker-agent ui-worker help \
         web-install web-build web web-dev
 
 ## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
@@ -68,6 +68,12 @@ worker-agent:
 	ENDPOINT="$${ENDPOINT:-http://localhost:8188}"; \
 	.venv/bin/python worker_agent.py --kind "$$KIND" --endpoint "$$ENDPOINT"
 
+## Start/stop the UI worker(s) for cover-image regeneration (reads ui_workers.conf).
+## Started automatically by 'make start'; use this to (re)start them on their own.
+## Usage: make ui-worker [ACT=start|stop|status]
+ui-worker:
+	@bash $(SCRIPTS)/ui_worker.sh "$${ACT:-start}"
+
 # ── Web UI (React + FastAPI) — the app's only front-end ──
 FRONTEND := webapp/frontend
 WEB_PORT := 8001
@@ -99,11 +105,11 @@ help:
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo ""
-	@echo "  start           Start ComfyUI on all workers + launch the web app"
-	@echo "  stop            Stop the web app and ComfyUI on all workers"
+	@echo "  start           Start ComfyUI on all workers + the web app + UI worker(s)"
+	@echo "  stop            Stop the web app, UI worker(s), and ComfyUI on all workers"
 	@echo "  restart         Stop everything, then start everything"
 	@echo "  restart-server  Restart only the web app (workers keep running)"
-	@echo "  status          Check health of the app and every ComfyUI worker"
+	@echo "  status          Check health of the app, UI worker(s), and every ComfyUI worker"
 	@echo ""
 	@echo "  start/stop/restart/status all accept  W=<host>  to target one worker:"
 	@echo "    make stop    W=s2       # kill ComfyUI on s2"
@@ -111,7 +117,9 @@ help:
 	@echo "    make restart W=s2       # stop + start ComfyUI on s2"
 	@echo "    make status  W=s2       # check just s2"
 	@echo ""
-	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local ENDPOINT=...)"
+	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local|ui ENDPOINT=...)"
+	@echo "  ui-worker       Start/stop UI worker(s) for cover regen (ACT=start|stop|status,"
+	@echo "                  endpoints from ui_workers.conf — started by 'make start' too)"
 	@echo ""
 	@echo "Web UI (React + FastAPI):"
 	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"
