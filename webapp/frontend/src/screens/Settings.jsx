@@ -5,21 +5,30 @@ import { api } from '../api.js'
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
 
-function WorkerGroup({ title, items, note }) {
+// Extract a short display name from a worker URL or hostname
+function shortHost(url) {
+  try { return new URL(url).hostname } catch { return url }
+}
+
+// Compact inline status row shown under each worker textarea
+function WorkerStatus({ items, probed = true, extra }) {
+  if (!items) return <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Checking…</div>
+  if (!items.length) return null
+  if (!probed) {
+    return (
+      <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
+        {items.map((w) => <Chip key={w.host} tone="neutral">{w.host}</Chip>)}
+        <span className="muted" style={{ fontSize: 11 }}>not probed</span>
+      </div>
+    )
+  }
+  const down = items.filter((w) => !w.up)
   return (
-    <div>
-      <div className="row center between" style={{ marginBottom: 6 }}>
-        <span className="label-sm">{title}</span>{note}
-      </div>
-      <div className="stack gap-10">
-        {(items || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>none configured</span>}
-        {(items || []).map((w) => (
-          <div key={w.endpoint} className="row center gap-10">
-            <Chip tone={w.up ? 'ok' : 'danger'} dot>{w.up ? 'up' : 'down'}</Chip>
-            <span style={{ fontSize: 12.5, fontFamily: 'monospace' }}>{w.endpoint}</span>
-          </div>
-        ))}
-      </div>
+    <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
+      {down.length === 0
+        ? <Chip tone="ok" dot>all up</Chip>
+        : down.map((w) => <Chip key={w.endpoint} tone="danger" dot>{shortHost(w.endpoint)} down</Chip>)}
+      {extra}
     </div>
   )
 }
@@ -74,51 +83,33 @@ export default function Settings({ meta, setMeta }) {
 
       <div className="bento">
 
-        {/* ── Infrastructure + live cluster status ── */}
-        <Card span={12} className="reveal reveal-d1">
+        {/* ── Infrastructure ── */}
+        <Card span={6} className="reveal reveal-d1">
           <div className="row center between">
             <span className="label-sm">Infrastructure</span>
-            <span className="muted" style={{ fontSize: 11.5 }}>live · start/stop via <code>make start</code></span>
+            <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
           </div>
-          <div className="row gap-32 mt-16" style={{ alignItems: 'flex-start' }}>
-            <div className="stack gap-22" style={{ flex: 1 }}>
-              <Field label="ComfyUI workers" hint="One URL per line.">
-                <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
-              </Field>
-              <Field label="TTS workers" hint="One host per line.">
-                <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
-              </Field>
-              <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
-                <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
-              </Field>
-            </div>
-            <div style={{ width: 1, background: 'var(--line)', alignSelf: 'stretch' }} />
-            <div className="stack gap-16" style={{ flex: 1 }}>
-              <span className="label-sm muted">Cluster status</span>
-              {!workers && <span className="muted" style={{ fontSize: 13 }}>Checking…</span>}
-              {workers && (
-                <>
-                  <WorkerGroup title="ComfyUI" items={workers.comfy} />
-                  <WorkerGroup title="UI (covers)" items={workers.ui}
-                    note={workers.ui_worker_running
-                      ? <Chip tone="ok" dot>worker running</Chip>
-                      : <Chip tone="warn" dot>worker not running</Chip>} />
-                  <div>
-                    <div className="label-sm" style={{ marginBottom: 6 }}>TTS</div>
-                    <div className="row gap-10 row--wrap">
-                      {(workers.tts || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>none configured</span>}
-                      {(workers.tts || []).map((t) => <Chip key={t.host} tone="neutral">{t.host}</Chip>)}
-                    </div>
-                    <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>(reachability not probed)</div>
-                  </div>
-                </>
-              )}
-            </div>
+          <div className="stack gap-22 mt-16">
+            <Field label="ComfyUI workers" hint="One URL per line.">
+              <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
+              <WorkerStatus items={workers?.comfy} />
+            </Field>
+            <Field label="TTS workers" hint="One host per line.">
+              <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
+              <WorkerStatus items={workers?.tts} probed={false} />
+            </Field>
+            <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
+              <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
+              <WorkerStatus items={workers?.ui}
+                extra={workers && (workers.ui_worker_running
+                  ? <Chip tone="ok" dot>worker running</Chip>
+                  : <Chip tone="warn" dot>worker not running</Chip>)} />
+            </Field>
           </div>
         </Card>
 
         {/* ── Generation settings ── */}
-        <Card span={6} className="reveal reveal-d2">
+        <Card span={6} className="reveal reveal-d1">
           <span className="label-sm">Render quality</span>
           <div className="stack gap-22 mt-16">
             <Field label="Resolution" hint="Higher = better quality, slower.">
@@ -160,7 +151,7 @@ export default function Settings({ meta, setMeta }) {
         </Card>
 
         {/* ── Content settings ── */}
-        <Card span={6} className="reveal reveal-d3">
+        <Card span={6} className="reveal reveal-d2">
           <span className="label-sm">Script & content defaults</span>
           <div className="stack gap-22 mt-16">
             <div className="row gap-22 row--wrap">
@@ -189,22 +180,18 @@ export default function Settings({ meta, setMeta }) {
         </Card>
 
         {/* ── Publishing ── */}
-        <Card span={12} className="reveal reveal-d4">
+        <Card span={6} className="reveal reveal-d3">
           <span className="label-sm">YouTube automation</span>
-          <div className="row gap-32 mt-16" style={{ alignItems: 'flex-start' }}>
-            <div className="stack gap-16" style={{ flex: 1 }}>
-              <Check checked={!!cfg.youtube_fully_automated} onChange={(v) => set('youtube_fully_automated', v)} label="⚡ Fully automated mode" />
-              <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
-              <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
-            </div>
-            <div className="stack gap-16" style={{ flex: 1 }}>
-              <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start rendering the highest-interest request" />
-              <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve script (skip review)" />
-              <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
-              <Field label="Default privacy">
-                <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
-              </Field>
-            </div>
+          <div className="stack gap-16 mt-16">
+            <Check checked={!!cfg.youtube_fully_automated} onChange={(v) => set('youtube_fully_automated', v)} label="⚡ Fully automated mode" />
+            <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
+            <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
+            <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start rendering the highest-interest request" />
+            <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve script (skip review)" />
+            <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
+            <Field label="Default privacy">
+              <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
+            </Field>
           </div>
         </Card>
 
