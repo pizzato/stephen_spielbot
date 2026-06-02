@@ -108,8 +108,26 @@ export default function Settings({ meta, setMeta }) {
           </div>
         </Card>
 
-        {/* ── Generation settings ── */}
+        {/* ── Content settings ── */}
         <Card span={6} className="reveal reveal-d1">
+          <span className="label-sm">Script & content defaults</span>
+          <div className="stack gap-22 mt-16">
+            <div className="row gap-22 row--wrap">
+              <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={cfg.default_n_scenes ?? ''} onChange={(e) => set('default_n_scenes', +e.target.value)} /></Field></div>
+              <div className="grow"><Field label="Default voice"><select className="select" value={cfg.default_voice || ''} onChange={(e) => set('default_voice', e.target.value)}>
+                <option value="">(F5-TTS default)</option>
+                {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+              </select></Field></div>
+            </div>
+            <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
+            <Field label="Extra script instructions" hint="Appended to every topic.">
+              <textarea className="textarea" rows={2} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
+            </Field>
+          </div>
+        </Card>
+
+        {/* ── Generation settings ── */}
+        <Card span={6} className="reveal reveal-d2">
           <span className="label-sm">Render quality</span>
           <div className="stack gap-22 mt-16">
             <Field label="Resolution" hint="Higher = better quality, slower.">
@@ -147,24 +165,6 @@ export default function Settings({ meta, setMeta }) {
                 <Field label="Local LLM model"><input className="input" value={cfg.local_llm_model || ''} onChange={(e) => set('local_llm_model', e.target.value)} /></Field>
               </>
             )}
-          </div>
-        </Card>
-
-        {/* ── Content settings ── */}
-        <Card span={6} className="reveal reveal-d2">
-          <span className="label-sm">Script & content defaults</span>
-          <div className="stack gap-22 mt-16">
-            <div className="row gap-22 row--wrap">
-              <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={cfg.default_n_scenes ?? ''} onChange={(e) => set('default_n_scenes', +e.target.value)} /></Field></div>
-              <div className="grow"><Field label="Default voice"><select className="select" value={cfg.default_voice || ''} onChange={(e) => set('default_voice', e.target.value)}>
-                <option value="">(F5-TTS default)</option>
-                {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
-              </select></Field></div>
-            </div>
-            <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
-            <Field label="Extra script instructions" hint="Appended to every topic.">
-              <textarea className="textarea" rows={2} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
-            </Field>
           </div>
         </Card>
 
