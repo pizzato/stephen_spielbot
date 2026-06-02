@@ -620,11 +620,23 @@ def progress(work_dir: str = Query("")) -> dict:
     finally:
         store.close()
 
+    title = (job or {}).get("title", wd.name)
+
+    # Pre-generate the YouTube description in the background the first time a job
+    # completes, so the Publish tab has a description ready without the user having
+    # to click Generate.
+    if done and not _description_path(wd).exists():
+        threading.Thread(
+            target=_generate_and_cache_description,
+            args=(str(wd), title),
+            daemon=True,
+        ).start()
+
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
         "final_url": f"/api/file?path={final_path}" if done else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
-        "title": (job or {}).get("title", wd.name),
+        "title": title,
         "status": (job or {}).get("status", ""),
         "tasks": tasks, "workers": workers, "counts": counts,
     }
@@ -1306,6 +1318,7 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "title": _video_title_for(wd),
         "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+        "description": _cached_description(wd),
     }
 
 
@@ -1316,7 +1329,31 @@ class DescribeBody(BaseModel):
 
 @api.post("/api/youtube/describe")
 def yt_describe(body: DescribeBody) -> dict:
-    return {"description": _generate_youtube_description(body.work_dir, body.title)}
+    desc = _generate_and_cache_description(body.work_dir, body.title)
+    return {"description": desc}
+
+
+def _description_path(wd: Path) -> Path:
+    return wd / "description.txt"
+
+
+def _cached_description(wd: Path) -> str:
+    """Return the saved description for a work dir, or empty string."""
+    p = _description_path(wd)
+    try:
+        return p.read_text().strip() if p.exists() else ""
+    except Exception:
+        return ""
+
+
+def _generate_and_cache_description(work_dir: str, title: str = "") -> str:
+    """Generate a YouTube description, save it to description.txt, and return it."""
+    desc = _generate_youtube_description(work_dir, title)
+    try:
+        _description_path(Path(work_dir)).write_text(desc)
+    except Exception:
+        pass
+    return desc
 
 
 def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:

@@ -40,6 +40,7 @@ export default function Publish({ initialWorkDir }) {
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
+      setDescription(p.description || '')
       setCoverUrl(p.cover_url || '')
       setFinalUrl(p.final_url || '')
     } catch (e) { setError(e.message) }
