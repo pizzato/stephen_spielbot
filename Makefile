@@ -8,8 +8,9 @@ W ?=
         start stop restart restart-server status worker-agent ui-worker help \
         web-install web-build web web-dev
 
-## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
-## First run seeds config.yaml; set workers non-interactively: make install WORKERS="s1 s2 s3"
+## Install everything: local deps, models, workers, config.yaml, AND the web UI
+## (backend deps + React build). First run seeds config.yaml; set workers
+## non-interactively: make install WORKERS="s1 s2 s3"
 install:
 	@WORKERS="$(WORKERS)" bash $(SCRIPTS)/install.sh
 
@@ -100,7 +101,7 @@ web-dev:
 help:
 	@echo "Usage: make <target> [W=<worker>]"
 	@echo ""
-	@echo "  install         Install deps locally; download all models; install workers from config.yaml"
+	@echo "  install         Install everything: deps, models, workers, web UI (backend+React build)"
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
