@@ -949,7 +949,7 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
     the 90s'). Uses the configured LLM backend via _llm_complete."""
     import re
-    avoid = "; ".join(previous[:30])
+    avoid = "; ".join(previous)
     system = ("You are a content strategist for an educational/documentary YouTube channel. "
               "Return ONLY a JSON array, no prose.")
     user = (
@@ -1051,7 +1051,14 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
             return {"suggestions": _visible_suggestions(cached), "cached": True}
 
     try:
-        previous = [label for label, _ in gapp._list_recent_jobs(max_results=50)]
+        # Channel titles (YouTube API + posted queue) come first; supplement with
+        # any local completed jobs not yet published to the channel.
+        previous = gapp._channel_video_titles(cfg)
+        seen = {t.lower() for t in previous}
+        for label, _ in gapp._list_recent_jobs(max_results=500):
+            if label.lower() not in seen:
+                previous.append(label)
+                seen.add(label.lower())
     except Exception:
         previous = []
     try:

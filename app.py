@@ -979,7 +979,7 @@ def _channel_video_titles(cfg: dict) -> list[str]:
     secrets = cfg.get("youtube_client_secrets", "")
     titles: list[str] = []
     try:
-        titles = yt.fetch_channel_video_titles(secrets, max_results=50)
+        titles = yt.fetch_channel_video_titles(secrets, max_results=500)
     except Exception as exc:
         logger.warning("fetch_channel_video_titles error: %s", exc)
     # Supplement with posted queue items in case the API call failed or is partial
