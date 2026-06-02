@@ -4,18 +4,27 @@ import { api } from '../api.js'
 
 const STATUS_CHIP = {
   pending: ['accent', 'Queued'], creating: ['info', 'Rendering'], running: ['info', 'Rendering'],
-  done: ['ok', 'Done'], posted: ['ok', 'Posted'], failed: ['danger', 'Failed'], cancelled: ['neutral', 'Cancelled'],
+  done: ['warn', 'Ready to publish'], upload_pending: ['warn', 'Ready to publish'],
+  posted: ['ok', 'Posted'], failed: ['danger', 'Failed'], cancelled: ['neutral', 'Cancelled'],
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
 export default function Queue({ go }) {
   const [items, setItems] = useState([])
+  const [progress, setProgress] = useState(null)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
 
-  const refresh = () => api.getQueue().then((d) => { setItems(d.queue || []); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
+  const refresh = () => Promise.all([
+    api.getQueue(),
+    api.getProgress(''),
+  ]).then(([q, p]) => {
+    setItems(q.queue || [])
+    setProgress(p || null)
+    setLoaded(true)
+  }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { refresh() }, [])
 
   const run = async (key, fn, after) => {
@@ -24,12 +33,61 @@ export default function Queue({ go }) {
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const pendingCount = items.filter((i) => i.status === 'pending').length
+  const pendingItems = items.filter((i) => i.status === 'pending')
+  const renderingItems = items.filter((i) => ['creating', 'running'].includes(i.status))
+  const readyItems = items.filter((i) => ['done', 'upload_pending'].includes(i.status))
+  const historyItems = items.filter((i) => ['posted', 'cancelled', 'failed'].includes(i.status))
+  const renderActive = progress && !progress.done && progress.work_dir && progress.status === 'running'
+  const hasRenderQueueItem = renderActive && renderingItems.some((i) => i.work_dir === progress.work_dir)
+
   const counts = {
-    pending: pendingCount,
-    creating: items.filter((i) => ['creating', 'running'].includes(i.status)).length,
+    pending: pendingItems.length,
+    creating: renderingItems.length + (renderActive && !hasRenderQueueItem ? 1 : 0),
+    ready: readyItems.length,
     posted: items.filter((i) => i.status === 'posted').length,
   }
+
+  const queueRow = (it, idx, sectionItems, { dim = false } = {}) => {
+    const [tone, label] = STATUS_CHIP[it.status] || ['neutral', it.status]
+    const titleText = it.final_title || it.title || '(untitled)'
+    const scenes = it.suggested_scene_count
+    const isPending = it.status === 'pending'
+    return (
+      <div key={it.id || idx} className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
+        <div className="stack" style={{ gap: 2 }}>
+          <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
+          <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
+        </div>
+        <div className="grow">
+          <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
+          <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
+            {it.source && <Chip tone="info">{it.source}</Chip>}
+            {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
+            {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
+            {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
+          </div>
+        </div>
+        <Chip tone={tone} dot>{label}</Chip>
+        <div className="row gap-6">
+          {isPending && <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
+          {['done', 'upload_pending'].includes(it.status) && <Button variant="ghost" icon="youtube" onClick={() => go('youtube')}>Publish</Button>}
+          {(isPending || ['done', 'upload_pending', 'posted', 'cancelled'].includes(it.status)) &&
+            <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
+        </div>
+      </div>
+    )
+  }
+
+  const section = (title, hint, sectionItems, empty, opts = {}) => (
+    <Card span={12} className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
+      <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+        <span className="label-sm">{title}</span>
+        {hint ? <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>{hint}</span> : null}
+      </div>
+      {loaded && sectionItems.length === 0 && <div className="muted" style={{ fontSize: 13, padding: '18px 22px' }}>{empty}</div>}
+      {sectionItems.map((it, idx) => queueRow(it, idx, sectionItems, opts))}
+    </Card>
+  )
 
   return (
     <div>
@@ -59,47 +117,34 @@ export default function Queue({ go }) {
           </div>
         </Card>
 
-        <Card span={4} className="reveal reveal-d1"><span className="label-sm">Queued</span><div className="metric mt-8">{counts.pending}</div><div className="muted" style={{ fontSize: 13 }}>waiting to render</div></Card>
-        <Card span={4} className="reveal reveal-d2"><span className="label-sm">Rendering</span><div className="metric mt-8">{counts.creating}</div><div className="muted" style={{ fontSize: 13 }}>in progress now</div></Card>
-        <Card span={4} className="reveal reveal-d3"><span className="label-sm">Posted</span><div className="metric mt-8">{counts.posted}</div><div className="muted" style={{ fontSize: 13 }}>live on YouTube</div></Card>
+        <Card span={3} className="reveal reveal-d1"><span className="label-sm">Queued</span><div className="metric mt-8">{counts.pending}</div><div className="muted" style={{ fontSize: 13 }}>waiting to render</div></Card>
+        <Card span={3} className="reveal reveal-d2"><span className="label-sm">Rendering</span><div className="metric mt-8">{counts.creating}</div><div className="muted" style={{ fontSize: 13 }}>in progress now</div></Card>
+        <Card span={3} className="reveal reveal-d3"><span className="label-sm">Ready</span><div className="metric mt-8">{counts.ready}</div><div className="muted" style={{ fontSize: 13 }}>waiting to publish</div></Card>
+        <Card span={3} className="reveal reveal-d3"><span className="label-sm">Posted</span><div className="metric mt-8">{counts.posted}</div><div className="muted" style={{ fontSize: 13 }}>live on YouTube</div></Card>
 
-        <Card span={12} className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
-          <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
-            <span className="label-sm">Up next</span>
-            <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>Comment requests rank above ideas. Reorder with the arrows.</span>
-          </div>
-          {loaded && items.length === 0 && <div className="muted" style={{ fontSize: 13, padding: '18px 22px' }}>The queue is empty. Approve a comment request (YouTube tab) or add one manually.</div>}
-          {items.map((it, idx) => {
-            const [tone, label] = STATUS_CHIP[it.status] || ['neutral', it.status]
-            const titleText = it.final_title || it.title || '(untitled)'
-            const scenes = it.suggested_scene_count
-            const isPending = it.status === 'pending'
-            return (
-              <div key={it.id || idx} className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: idx < items.length - 1 ? '1px solid var(--line)' : 'none', opacity: ['posted', 'done', 'cancelled'].includes(it.status) ? 0.62 : 1 }}>
-                <div className="stack" style={{ gap: 2 }}>
-                  <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
-                  <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
-                </div>
+        {(renderActive || renderingItems.length > 0) && (
+          <Card span={12} className="reveal reveal-d2" style={{ padding: 0, overflow: 'hidden' }}>
+            <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+              <span className="label-sm">Rendering now</span>
+              <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>Active work, not the waiting queue.</span>
+            </div>
+            {renderActive && !hasRenderQueueItem && (
+              <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: renderingItems.length ? '1px solid var(--line)' : 'none' }}>
                 <div className="grow">
-                  <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
-                  <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
-                    {it.source && <Chip tone="info">{it.source}</Chip>}
-                    {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
-                    {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
-                    {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
-                  </div>
+                  <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{progress.title || 'Rendering'}</div>
+                  <div className="muted mt-8" style={{ fontSize: 12.5 }}>{Math.round(progress.pct || 0)}% · {progress.msg || 'Running'}</div>
                 </div>
-                <Chip tone={tone} dot>{label}</Chip>
-                <div className="row gap-6">
-                  {isPending && <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
-                  {it.status === 'done' && <Button variant="ghost" icon="youtube" onClick={() => go('youtube')}>Publish</Button>}
-                  {(isPending || ['done', 'posted', 'cancelled'].includes(it.status)) &&
-                    <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
-                </div>
+                <Chip tone="info" dot>Rendering</Chip>
+                <Button variant="ghost" icon="gauge-high" onClick={() => go('progress')}>View render</Button>
               </div>
-            )
-          })}
-        </Card>
+            )}
+            {renderingItems.map((it, idx) => queueRow(it, idx, renderingItems))}
+          </Card>
+        )}
+
+        {section('Up next', 'Only waiting items. Comment requests rank above ideas. Reorder with the arrows.', pendingItems, 'The queue is empty. Approve a comment request (YouTube tab) or add one manually.')}
+        {readyItems.length > 0 && section('Ready to publish', 'Finished videos waiting for YouTube upload.', readyItems, '', {})}
+        {historyItems.length > 0 && section('History', 'Already posted or no longer active.', historyItems, '', { dim: true })}
       </div>
     </div>
   )
