@@ -1397,20 +1397,20 @@ def _best_cover_comfy_url() -> str:
     When the cluster is idle we use the first live render worker instead —
     those have CUDA and are significantly faster.
     """
-    from pipeline.worker_pool import check_alive
+    from pipeline.worker_pool import idle_workers
     cfg = gapp.load_config()
     ui_url = (cfg.get("ui_workers") or ["http://localhost:8188"])[0]
 
     if gapp._is_job_running():
         return ui_url  # render in progress — keep cover work off the render cluster
 
-    # Cluster idle — try render workers in order, fall back to UI worker
-    for url in cfg.get("comfy_workers") or []:
-        try:
-            if check_alive(url, timeout=2):
-                return url
-        except Exception:
-            continue
+    # Cluster idle — pick a least-busy render worker, fall back to UI worker
+    try:
+        candidates = idle_workers(cfg.get("comfy_workers") or [], timeout=2)
+        if candidates:
+            return candidates[0]
+    except Exception:
+        pass
     return ui_url
 
 

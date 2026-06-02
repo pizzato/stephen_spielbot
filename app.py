@@ -62,7 +62,7 @@ from pipeline.assembler import (
 )
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
-from pipeline.worker_pool import WorkerPool, alive_workers
+from pipeline.worker_pool import WorkerPool, alive_workers, idle_workers
 from pipeline.cover import (
     overlay_title_on_image as _overlay_title_on_image,
     build_cover_prompt as _cover_prompt,
@@ -640,7 +640,9 @@ def _preview_worker_urls() -> list[str]:
     cfg = load_config()
     all_workers = cfg.get("comfy_workers", [])
     try:
-        return alive_workers(all_workers)
+        # Prefer idle workers so previews don't queue behind a video render on a
+        # busy worker; falls back to all reachable workers if every one is busy.
+        return idle_workers(all_workers)
     except Exception as exc:
         logger.warning("Scene image generation worker probe failed: %s", exc)
         return []
