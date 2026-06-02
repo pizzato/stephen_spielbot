@@ -258,6 +258,9 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows)
 
     cover_path = work_dir / "cover.png"
+    # Use the endpoint selected at task-creation time (render-aware routing);
+    # fall back to the worker's own endpoint if not set.
+    comfy_url = p.get("comfy_url") or endpoint
     generate_scene_image(
         prompt, cover_path,
         width=COVER_WIDTH, height=COVER_HEIGHT,
@@ -266,7 +269,7 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
         clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
         clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
         flux_vae=p.get("flux_vae", "ae.safetensors"),
-        comfy_url=endpoint,
+        comfy_url=comfy_url,
     )
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")

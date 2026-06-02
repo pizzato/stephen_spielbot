@@ -1389,6 +1389,31 @@ class CoverBody(BaseModel):
     style: str = ""
 
 
+def _best_cover_comfy_url() -> str:
+    """Pick the fastest available ComfyUI endpoint for cover generation.
+
+    When a render job is active the render workers are busy, so we use the
+    dedicated UI worker (MPS/local) to avoid competing with them.
+    When the cluster is idle we use the first live render worker instead —
+    those have CUDA and are significantly faster.
+    """
+    from pipeline.worker_pool import check_alive
+    cfg = gapp.load_config()
+    ui_url = (cfg.get("ui_workers") or ["http://localhost:8188"])[0]
+
+    if gapp._is_job_running():
+        return ui_url  # render in progress — keep cover work off the render cluster
+
+    # Cluster idle — try render workers in order, fall back to UI worker
+    for url in cfg.get("comfy_workers") or []:
+        try:
+            if check_alive(url, timeout=2):
+                return url
+        except Exception:
+            continue
+    return ui_url
+
+
 @api.post("/api/youtube/cover")
 def yt_cover(body: CoverBody) -> dict:
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
@@ -1408,6 +1433,7 @@ def yt_cover(body: CoverBody) -> dict:
                 "work_dir": str(wd),
                 "title": title,
                 "style": body.style or "",
+                "comfy_url": _best_cover_comfy_url(),
                 "flux_steps": cfg.get("flux_steps", 4),
                 "flux_model": cfg.get("ui_flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
                 "flux_clip_t5": cfg.get("ui_flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
