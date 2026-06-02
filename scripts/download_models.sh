@@ -157,6 +157,13 @@ else
         "flux1-schnell-fp8.safetensors" \
         "models/unet"
 
+    # BF16 (non-quantised) version — required for MPS (Apple Silicon) UI workers.
+    # fp8 models cannot run on MPS; this model is selected via ui_flux_model in config.
+    download \
+        "black-forest-labs/FLUX.1-schnell" \
+        "flux1-schnell.safetensors" \
+        "models/unet"
+
     # Shared FLUX text encoders (also used by FLUX dev)
     download \
         "comfyanonymous/flux_text_encoders" \

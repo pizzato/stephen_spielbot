@@ -87,20 +87,14 @@ def _ws_url(comfy_url: str, client_id: str) -> str:
                      .replace("http://", "ws://")) + f"/ws?clientId={client_id}"
 
 
-def _flux_weight_dtype(comfy_url: str) -> str:
-    """Return the best weight_dtype for FLUX given the ComfyUI backend's hardware.
-
-    fp8_e4m3fn is fastest on CUDA but unsupported on MPS/CPU — fall back to bf16.
-    """
+def _comfy_has_cuda(comfy_url: str) -> bool:
+    """True if the ComfyUI backend reports a CUDA device."""
     try:
         with urllib.request.urlopen(f"{comfy_url}/system_stats", timeout=5) as r:
             stats = json.loads(r.read())
-        devices = stats.get("devices") or []
-        if any(d.get("type") == "cuda" for d in devices):
-            return "fp8_e4m3fn"
+        return any(d.get("type") == "cuda" for d in (stats.get("devices") or []))
     except Exception:
-        pass
-    return "bf16"
+        return False
 
 
 def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) -> str:
@@ -699,12 +693,15 @@ def generate_scene_image(
         seed = random.randint(0, 2**32 - 1)
 
     workflow = _load_workflow("flux_t2i.json")
+    # fp8 weights require CUDA; on MPS/CPU use "default" (needs a non-fp8 model).
+    weight_dtype = "fp8_e4m3fn" if _comfy_has_cuda(comfy_url) else "default"
+
     workflow = _fill_template(workflow, {
         "FLUX_MODEL":      flux_model,
         "CLIP_T5":         clip_t5,
         "CLIP_L":          clip_l,
         "FLUX_VAE":        flux_vae,
-        "WEIGHT_DTYPE":    _flux_weight_dtype(comfy_url),
+        "WEIGHT_DTYPE":    weight_dtype,
         "POSITIVE_PROMPT": positive_prompt,
         "WIDTH":           width,
         "HEIGHT":          height,
