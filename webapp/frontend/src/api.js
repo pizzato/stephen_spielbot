@@ -22,6 +22,7 @@ async function req(method, path, body) {
 export const api = {
   getConfig: () => req('GET', '/config'),
   saveConfig: (config) => req('POST', '/config', { config }),
+  workerStatus: () => req('GET', '/workers/status'),
 
   generateScript: (body) => req('POST', '/script/generate', body),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),

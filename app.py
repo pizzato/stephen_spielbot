@@ -24,6 +24,8 @@ import uuid
 from datetime import datetime
 from pathlib import Path
 
+import yaml
+
 
 LOG_DIR = Path.home() / ".local" / "share" / "video-generator" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -73,7 +75,7 @@ MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
-CONFIG_FILE  = Path.home() / ".config" / "video-generator" / "config.json"
+CONFIG_FILE  = Path.home() / ".config" / "video-generator" / "config.yaml"
 VOICES_DIR   = CONFIG_FILE.parent / "voices"
 SESSION_FILE = CONFIG_FILE.parent / "last_session.json"
 REPO_ROOT    = Path(__file__).parent
@@ -124,10 +126,13 @@ DEFAULT_CFG = {
     "flux_vae":      "ae.safetensors",
     "flux_steps":    4,
     "voices": [],
-    # ComfyUI worker URLs — one per line in the config UI.
-    # Each worker handles one video generation job at a time.
+    # Worker lists — edited from the Settings screen, stored in config.yaml.
+    # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
+    # tts_workers:   hostnames for F5-TTS narration.
+    # ui_workers:    ComfyUI URLs the lightweight "ui" worker renders covers on.
     "comfy_workers": [],
     "tts_workers":   [],
+    "ui_workers":    [],
     # Generation defaults
     "default_voice": "",
     "default_n_scenes": 20,
@@ -147,9 +152,6 @@ DEFAULT_CFG = {
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
-
-CLUSTER_CONF = Path(__file__).parent / "cluster.conf"
-COMFYUI_PORT = 8188
 
 # Thread pool for long blocking operations — keeps SSE alive via heartbeat yields
 _executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -205,41 +207,21 @@ def _best_pending_queue_item() -> dict | None:
 
 # ── Config helpers ───────────────────────────────────────────────────────────
 
-def _hosts_from_cluster_conf() -> list[str]:
-    """Return non-comment, non-empty hostnames from cluster.conf."""
-    if not CLUSTER_CONF.exists():
-        return []
-    hosts = []
-    for line in CLUSTER_CONF.read_text().splitlines():
-        line = line.split("#")[0].strip()
-        if line:
-            hosts.append(line)
-    return hosts
-
-
-def _default_workers() -> tuple[list[str], list[str]]:
-    """Derive comfy_workers and tts_workers from cluster.conf."""
-    hosts = _hosts_from_cluster_conf()
-    if not hosts:
-        return [], []
-    comfy = [f"http://{h}:{COMFYUI_PORT}" for h in hosts]
-    return comfy, hosts
-
-
 def load_config() -> dict:
+    """Load the single YAML config. Saved values are authoritative — worker
+    lists (comfy_workers/tts_workers/ui_workers) live here and are edited from
+    the Settings screen."""
     cfg = DEFAULT_CFG.copy()
-    # Seed worker defaults from cluster.conf before applying saved overrides
-    comfy, tts = _default_workers()
-    cfg["comfy_workers"] = comfy
-    cfg["tts_workers"]   = tts
     if CONFIG_FILE.exists():
-        cfg.update(json.loads(CONFIG_FILE.read_text()))
+        data = yaml.safe_load(CONFIG_FILE.read_text()) or {}
+        if isinstance(data, dict):
+            cfg.update(data)
     return cfg
 
 
 def save_config(cfg: dict) -> None:
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(json.dumps(cfg, indent=2))
+    CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
 
 
 

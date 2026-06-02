@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # Show health of the web app and every ComfyUI worker.
-# Usage: bash scripts/status.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/status.sh
 
-CONF="${1:-cluster.conf}"
 PID_FILE="/tmp/stephen_spielbot.pid"
 ALL_OK=true
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
 check_comfyui() {
     local label="$1" url="$2"

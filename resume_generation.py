@@ -14,6 +14,8 @@ import sys
 import time
 from pathlib import Path
 
+import yaml
+
 LOG_DIR = Path.home() / ".local" / "share" / "video-generator" / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = LOG_DIR / "app.log"  # Append to same log as main app
@@ -57,7 +59,7 @@ from pipeline.cover import (
     COVER_HEIGHT as _COVER_H,
 )
 
-CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.json"
+CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
 OUTPUT_DIR  = Path.home() / "videos"
 
 
@@ -77,7 +79,7 @@ _PROGRESS_JOB_ID: str | None = None
 
 def load_config() -> dict:
     if CONFIG_FILE.exists():
-        return json.loads(CONFIG_FILE.read_text())
+        return yaml.safe_load(CONFIG_FILE.read_text()) or {}
     raise RuntimeError(f"Config not found: {CONFIG_FILE}")
 
 

@@ -1,4 +1,3 @@
-CONF    ?= cluster.conf
 SCRIPTS := scripts
 
 # Optional: scope start / stop / restart to a single worker.
@@ -11,7 +10,7 @@ W ?=
 
 ## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
 install:
-	@bash $(SCRIPTS)/install.sh $(CONF)
+	@bash $(SCRIPTS)/install.sh
 
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
@@ -23,14 +22,14 @@ download-flux:
 
 ## Download FLUX.1-schnell models to the first cluster node, then rsync to all workers.
 download-flux-cluster:
-	@bash $(SCRIPTS)/download_flux_cluster.sh $(CONF)
+	@bash $(SCRIPTS)/download_flux_cluster.sh
 
 ## Start ComfyUI on all workers + the web app.  Add W=<host> to start one worker only.
 start:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh start "$(W)"; \
 	else \
-	    bash $(SCRIPTS)/start.sh $(CONF); \
+	    bash $(SCRIPTS)/start.sh; \
 	fi
 
 ## Stop the web app and ComfyUI on all workers.  Add W=<host> to stop one worker only.
@@ -38,7 +37,7 @@ stop:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh stop "$(W)"; \
 	else \
-	    bash $(SCRIPTS)/stop.sh $(CONF); \
+	    bash $(SCRIPTS)/stop.sh; \
 	fi
 
 ## Stop then start.  Add W=<host> to restart one worker only (app keeps running).
@@ -59,7 +58,7 @@ status:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh status "$(W)"; \
 	else \
-	    bash $(SCRIPTS)/status.sh $(CONF); \
+	    bash $(SCRIPTS)/status.sh; \
 	fi
 
 ## Run one durable worker agent. Override KIND and ENDPOINT, e.g. make worker-agent KIND=comfy ENDPOINT=http://s1:8188
@@ -68,7 +67,7 @@ worker-agent:
 	ENDPOINT="$${ENDPOINT:-http://localhost:8188}"; \
 	.venv/bin/python worker_agent.py --kind "$$KIND" --endpoint "$$ENDPOINT"
 
-## Start/stop the UI worker(s) for cover-image regeneration (reads ui_workers.conf).
+## Start/stop the UI worker(s) for cover-image regeneration (reads config.yaml ui_workers).
 ## Started automatically by 'make start'; use this to (re)start them on their own.
 ## Usage: make ui-worker [ACT=start|stop|status]
 ui-worker:
@@ -98,9 +97,9 @@ web-dev:
 	  kill %1 2>/dev/null || true
 
 help:
-	@echo "Usage: make <target> [W=<worker>] [CONF=<file>]"
+	@echo "Usage: make <target> [W=<worker>]"
 	@echo ""
-	@echo "  install         Install deps locally; download all models; install workers in CONF"
+	@echo "  install         Install deps locally; download all models; install workers from config.yaml"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
@@ -119,7 +118,7 @@ help:
 	@echo ""
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local|ui ENDPOINT=...)"
 	@echo "  ui-worker       Start/stop UI worker(s) for cover regen (ACT=start|stop|status,"
-	@echo "                  endpoints from ui_workers.conf — started by 'make start' too)"
+	@echo "                  endpoints from config.yaml ui_workers — started by 'make start' too)"
 	@echo ""
 	@echo "Web UI (React + FastAPI):"
 	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"
@@ -127,4 +126,5 @@ help:
 	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"
 	@echo "  web-build       Build the React frontend to webapp/frontend/dist"
 	@echo ""
-	@echo "  CONF=$(CONF)  (override with  make install CONF=other.conf)"
+	@echo "  Worker lists (comfy/tts/ui) live in ~/.config/video-generator/config.yaml"
+	@echo "  — edit them in the Settings screen, or directly in that file."

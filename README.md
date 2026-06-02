@@ -52,7 +52,7 @@ Current implementation and test status are tracked in
 ```bash
 git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot
-make install       # install deps locally + on every worker in cluster.conf
+make install       # install deps locally + on every worker in config.yaml
 make web-install   # install web UI deps (FastAPI backend + React frontend)
 make web-build     # build the React frontend to webapp/frontend/dist
 make start         # start ComfyUI on all workers, then launch the app
@@ -72,22 +72,30 @@ make status    # check health of the app and all workers
 
 ## Cluster setup
 
-Edit `cluster.conf` to list your remote worker hostnames (one per line):
+Workers are configured in the single config file (see below) — there is no
+separate `cluster.conf`. List your render workers under `comfy_workers` (and the
+matching `tts_workers` hosts); `make install` will SSH into each host and install
+ComfyUI + F5-TTS automatically. The local machine is always included.
 
+```yaml
+# ~/.config/video-generator/config.yaml
+comfy_workers:
+  - http://s1:8188
+  - http://s2:8188
+tts_workers:
+  - s1
+  - s2
+ui_workers:            # ComfyUI endpoints for cover-image regeneration
+  - http://localhost:8188
 ```
-# cluster.conf
-s1
-s2
-```
-
-`make install` will SSH into each host and install ComfyUI + F5-TTS automatically.
-The local machine is always included and does not need to appear in the file.
 
 Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
 ## Configuration
 
-All settings live in `~/.config/video-generator/config.json` and can be edited live in the **Settings** screen:
+All settings live in the single YAML file `~/.config/video-generator/config.yaml`
+and can be edited live in the **Settings** screen (which also shows a read-only
+cluster status panel). Worker lists are part of this file:
 
 | Setting | Description |
 |---|---|

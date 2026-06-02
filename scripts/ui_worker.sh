@@ -1,31 +1,30 @@
 #!/usr/bin/env bash
-# Start/stop local "ui" worker agents — one per endpoint in ui_workers.conf.
+# Start/stop local "ui" worker agents — one per endpoint in config.yaml (ui_workers).
 #
 # A ui worker leases lightweight interface tasks (cover-image regeneration) from
 # the durable orchestrator and renders them against a ComfyUI endpoint, so those
 # tasks don't wait behind the heavy render workers.
 #
 # The worker PROCESS runs on this machine (it reads the local orchestrator DB);
-# the ComfyUI ENDPOINT in ui_workers.conf may be local or remote.
+# the ComfyUI endpoints (config.yaml ui_workers) may be local or remote.
 #
 # Usage:
-#   bash scripts/ui_worker.sh start [ui_workers.conf]
+#   bash scripts/ui_worker.sh start
 #   bash scripts/ui_worker.sh stop
 #   bash scripts/ui_worker.sh status
 set -euo pipefail
 
 ACTION="${1:-start}"
-CONF="${2:-ui_workers.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 VENV="$REPO_ROOT/.venv"
 PYTHON="${VENV}/bin/python"
 PID_DIR="/tmp/stephen_spielbot_ui"
 LOG_DIR="$HOME/.local/share/video-generator/logs"
 
-endpoints() {
-    [ -f "$REPO_ROOT/$CONF" ] || return 0
-    grep -v '^\s*#' "$REPO_ROOT/$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
+
+endpoints() { ui_endpoints; }
 
 case "$ACTION" in
   start)
@@ -50,7 +49,7 @@ case "$ACTION" in
         echo "  [ui-worker $n] started (PID $!)  $endpoint  (log: $log_file)"
     done < <(endpoints)
     if [[ "$n" -eq 0 ]]; then
-        echo "  [ui-worker] no endpoints in $CONF — cover regeneration will not run"
+        echo "  [ui-worker] no ui_workers in config.yaml — cover regeneration will not run"
     fi
     ;;
 
@@ -88,7 +87,7 @@ case "$ACTION" in
     ;;
 
   *)
-    echo "Usage: bash scripts/ui_worker.sh start|stop|status [ui_workers.conf]"
+    echo "Usage: bash scripts/ui_worker.sh start|stop|status"
     exit 1
     ;;
 esac

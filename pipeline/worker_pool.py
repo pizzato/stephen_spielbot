@@ -24,7 +24,7 @@ def alive_workers(urls: list[str], timeout: int = 5) -> list[str]:
     if not ok:
         raise RuntimeError(
             f"No ComfyUI workers reachable. Tried: {urls}\n"
-            "Check your cluster.conf and that workers are running."
+            "Check comfy_workers in config.yaml (Settings screen) and that workers are running."
         )
     return ok
 

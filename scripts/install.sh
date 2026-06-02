@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # Install Stephen Spielbot dependencies locally and on all cluster workers.
-# Usage: bash scripts/install.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers). On a fresh machine with no
+# config yet, this installs single-machine; add comfy_workers and re-run for a cluster.
+# Usage: bash scripts/install.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
 banner() { echo ""; echo "=== $* ==="; }
 
@@ -136,7 +133,7 @@ if [[ -d "$COMFY_DIR" ]]; then
 elif [[ -n "$(remote_hosts)" ]]; then
     # No local ComfyUI — download once on the first cluster node; others rsync from it
     if [[ -z "$MODEL_SOURCE" ]]; then
-        echo "[models] No hosts in $CONF — skipping download."
+        echo "[models] No comfy_workers in config.yaml — skipping download."
     elif _models_present_on "$MODEL_SOURCE"; then
         echo "[models] All models already present on $MODEL_SOURCE — skipping download"
     else
@@ -152,7 +149,7 @@ elif [[ -n "$(remote_hosts)" ]]; then
 
 else
     echo "[models] No local ComfyUI and no remote workers — skipping."
-    echo "  Add workers to $CONF or install ComfyUI, then run: bash scripts/download_models.sh"
+    echo "  Add comfy_workers to config.yaml or install ComfyUI, then run: bash scripts/download_models.sh"
 fi
 
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
@@ -160,7 +157,7 @@ fi
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
     echo ""
-    echo "No remote workers defined in $CONF — single-machine setup complete."
+    echo "No remote workers defined in config.yaml — single-machine setup complete."
     exit 0
 fi
 
