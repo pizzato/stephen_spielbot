@@ -42,3 +42,9 @@ remote_hosts() {
 ui_endpoints() {
     _cfg_list ui_workers
 }
+
+# UI ComfyUI hosts — bare hostnames derived from ui_workers URLs.
+# Used for SSH-based install/start/stop, same interface as remote_hosts().
+ui_hosts() {
+    _cfg_list ui_workers | sed -E 's#^https?://##; s#[:/].*$##' | awk 'NF' | sort -u
+}

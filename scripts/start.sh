@@ -51,6 +51,17 @@ REMOTE
     wait_for_comfyui "$host" "http://${host}:8188"
 done
 
+# ── 1b. UI ComfyUI worker hosts ───────────────────────────────────────────────
+# Hosts in ui_workers that are NOT already render workers get started here via
+# the same SSH-based worker.sh (works for localhost too).
+
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for host in $(ui_hosts); do
+    [[ "$_COMFY_HOSTS" == *" $host "* ]] && continue
+    echo "=== Starting ComfyUI (ui: $host) ==="
+    bash "$REPO_ROOT/scripts/worker.sh" start "$host"
+done
+
 # ── 2. Web app ────────────────────────────────────────────────────────────────
 
 echo "=== Starting web app ==="
