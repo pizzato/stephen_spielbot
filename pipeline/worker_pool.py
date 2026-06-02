@@ -24,9 +24,41 @@ def alive_workers(urls: list[str], timeout: int = 5) -> list[str]:
     if not ok:
         raise RuntimeError(
             f"No ComfyUI workers reachable. Tried: {urls}\n"
-            "Check your cluster.conf and that workers are running."
+            "Check comfy_workers in config.yaml (Settings screen) and that workers are running."
         )
     return ok
+
+
+def queue_depth(url: str, timeout: int = 5) -> int:
+    """Return running+pending job count for a ComfyUI worker, or -1 if unreachable."""
+    try:
+        with urllib.request.urlopen(f"{url}/queue", timeout=timeout) as resp:
+            import json
+            data = json.loads(resp.read())
+        return len(data.get("queue_running", [])) + len(data.get("queue_pending", []))
+    except Exception:
+        return -1
+
+
+def idle_workers(urls: list[str], timeout: int = 5) -> list[str]:
+    """Return reachable workers ordered least-busy-first, preferring idle ones.
+
+    A worker busy with a long video render reports a non-empty queue; this lets
+    light tasks (scene previews, covers) avoid queueing behind it when other
+    workers are free. Falls back to all reachable workers if every one is busy.
+    """
+    reachable = [(u, queue_depth(u, timeout=timeout)) for u in urls]
+    reachable = [(u, d) for u, d in reachable if d >= 0]
+    if not reachable:
+        raise RuntimeError(
+            f"No ComfyUI workers reachable. Tried: {urls}\n"
+            "Check comfy_workers in config.yaml (Settings screen) and that workers are running."
+        )
+    idle = [u for u, d in reachable if d == 0]
+    if idle:
+        return idle
+    # All busy — return ordered by ascending load so the least-loaded is picked first.
+    return [u for u, _ in sorted(reachable, key=lambda x: x[1])]
 
 
 class WorkerPool:

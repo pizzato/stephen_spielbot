@@ -1,9 +1,9 @@
-# Stephen Spielbot — modern web UI
+# Stephen Spielbot — web UI
 
-A React (Vite) + FastAPI rebuild of the Gradio interface, styled with the
-shipped design system (sidebar + bento layout). The original Gradio app
-(`app.py`) is **unchanged** and still runs on `localhost:7860`; this is an
-additive, parallel front end.
+A React (Vite) + FastAPI app, styled with the shipped design system (sidebar +
+bento layout). This is the **only** interface — the former Gradio UI has been
+removed. `app.py` is retained as a helper module the backend imports. The app
+runs on `localhost:8001`.
 
 ```
 webapp/
@@ -13,11 +13,10 @@ webapp/
 
 ## How it fits together
 
-The backend imports the existing `app` module purely to reuse its
-Gradio-free helpers (config I/O, work-dir bookkeeping, job launching, progress
-polling) plus the `pipeline` package directly. No Gradio UI is started. The
-frontend talks to it over `/api/*` (JSON), and renders/uploads media through
-`/api/file`.
+The backend imports the `app` module to reuse its helpers (config I/O, work-dir
+bookkeeping, job launching, progress polling) plus the `pipeline` package
+directly. The frontend talks to it over `/api/*` (JSON), and renders/uploads
+media through `/api/file`.
 
 The wired end-to-end flow:
 
@@ -26,7 +25,7 @@ The wired end-to-end flow:
 **Render** (live progress + durable task/worker tables) → **Remix** (re-mux
 audio on the finished film). **Home**, **Queue**, **YouTube** (comments + AI
 ideas), **Films** and **Settings** read/write the real backend too. YouTube
-*publishing* still goes through the classic Post/Config tabs (OAuth flow).
+*publishing* (OAuth flow) runs from the **YouTube → Publish** screen.
 
 ## Run it (development)
 

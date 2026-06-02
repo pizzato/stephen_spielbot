@@ -40,6 +40,7 @@ export default function Publish({ initialWorkDir }) {
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
+      setDescription(p.description || '')
       setCoverUrl(p.cover_url || '')
       setFinalUrl(p.final_url || '')
     } catch (e) { setError(e.message) }
@@ -74,10 +75,24 @@ export default function Publish({ initialWorkDir }) {
 
   const regenCover = async () => {
     setBusy('cover'); setError('')
+    let pollTimer = null
     try {
-      const r = await api.ytCover({ work_dir: workDir, title })
-      setCoverUrl(r.cover_url || '')
-    } catch (e) { setError(e.message) } finally { setBusy('') }
+      const { task_id: tid } = await api.ytCover({ work_dir: workDir, title })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const s = await api.ytCoverStatus(tid)
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); resolve() }
+            else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
+            else pollTimer = setTimeout(check, 2000)
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setError(e.message) } finally {
+      clearTimeout(pollTimer)
+      setBusy('')
+    }
   }
 
   const upload = async () => {
@@ -158,7 +173,7 @@ export default function Publish({ initialWorkDir }) {
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
           <Button variant="ghost" block icon="rotate-right" disabled={busy === 'cover' || !workDir} onClick={regenCover}>
-            {busy === 'cover' ? 'Painting…' : 'Regenerate cover'}</Button>
+            {busy === 'cover' ? 'Queued — waiting for UI worker…' : 'Regenerate cover'}</Button>
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>

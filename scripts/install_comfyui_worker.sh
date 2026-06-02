@@ -34,7 +34,11 @@ if [[ -f "$HOME/miniconda3/bin/python3" ]]; then
 fi
 echo "[miniconda] installing Miniconda..."
 ARCH=$(uname -m)
-URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${ARCH}.sh"
+case "$(uname -s)" in
+    Darwin) OS_STR="MacOSX" ;;
+    *)      OS_STR="Linux" ;;
+esac
+URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-${OS_STR}-${ARCH}.sh"
 curl -fsSL "$URL" -o /tmp/miniconda.sh
 bash /tmp/miniconda.sh -b -p "$HOME/miniconda3"
 rm /tmp/miniconda.sh
@@ -71,7 +75,7 @@ echo "[pip] installing ComfyUI dependencies..."
 cd "$HOME/github/ComfyUI"
 pip install --quiet -r requirements.txt
 
-if ! python -c "import torch; assert torch.cuda.is_available()" 2>/dev/null; then
+if ! python -c "import torch; assert torch.cuda.is_available() or torch.backends.mps.is_available()" 2>/dev/null; then
     echo "[pip] installing PyTorch..."
     pip install --quiet torch torchvision torchaudio
 fi
@@ -144,9 +148,10 @@ echo "ComfyUI started (PID $!), log: $HOME/github/ComfyUI/comfyui.log"
 SCRIPT
 chmod +x $HOME/github/ComfyUI/start_worker.sh
 
-# Write a systemd user service for auto-start
-mkdir -p $HOME/.config/systemd/user
-cat > $HOME/.config/systemd/user/comfyui-worker.service <<UNIT
+# Register a systemd service on Linux; skip on macOS (use start_worker.sh directly)
+if [[ "$(uname -s)" == "Linux" ]] && command -v systemctl &>/dev/null; then
+    mkdir -p $HOME/.config/systemd/user
+    cat > $HOME/.config/systemd/user/comfyui-worker.service <<UNIT
 [Unit]
 Description=ComfyUI Worker
 After=network.target
@@ -161,9 +166,12 @@ RestartSec=10
 [Install]
 WantedBy=default.target
 UNIT
-systemctl --user daemon-reload
-systemctl --user enable comfyui-worker.service 2>/dev/null || true
-echo "[service] comfyui-worker.service registered"
+    systemctl --user daemon-reload
+    systemctl --user enable comfyui-worker.service 2>/dev/null || true
+    echo "[service] comfyui-worker.service registered"
+else
+    echo "[service] macOS — start_worker.sh will be used directly (no systemd)"
+fi
 REMOTE
 
 # ── 6. Start ComfyUI ─────────────────────────────────────────────────────────

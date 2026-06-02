@@ -1,17 +1,46 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Check, Button, Banner } from '../components.jsx'
+import { Card, Field, Segmented, Check, Button, Banner, Chip, Icon } from '../components.jsx'
 import { api } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
+
+function WorkerGroup({ title, items, note }) {
+  return (
+    <div>
+      <div className="row center between" style={{ marginBottom: 6 }}>
+        <span className="label-sm">{title}</span>{note}
+      </div>
+      <div className="stack gap-10">
+        {(items || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>none configured</span>}
+        {(items || []).map((w) => (
+          <div key={w.endpoint} className="row center gap-10">
+            <Chip tone={w.up ? 'ok' : 'danger'} dot>{w.up ? 'up' : 'down'}</Chip>
+            <span style={{ fontSize: 12.5, fontFamily: 'monospace' }}>{w.endpoint}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export default function Settings({ meta, setMeta }) {
   const [cfg, setCfg] = useState(meta.config || {})
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [workers, setWorkers] = useState(null)
 
   useEffect(() => { setCfg(meta.config || {}) }, [meta.config])
+
+  // Poll live cluster status (read-only). Start/stop is via `make start`/`stop`.
+  useEffect(() => {
+    let alive = true
+    const tick = () => api.workerStatus().then((w) => { if (alive) setWorkers(w) }).catch(() => {})
+    tick()
+    const id = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(id) }
+  }, [])
 
   const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
 
@@ -21,6 +50,7 @@ export default function Settings({ meta, setMeta }) {
       const out = { ...cfg }
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
+      out.ui_workers = fromLines(toLines(cfg.ui_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
       setMeta((m) => ({ ...m, config: r.config }))
@@ -72,6 +102,36 @@ export default function Settings({ meta, setMeta }) {
             <Field label="TTS workers" hint="One host per line.">
               <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
             </Field>
+            <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
+              <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
+            </Field>
+          </div>
+        </Card>
+
+        <Card span={6} className="reveal reveal-d2">
+          <div className="row center between">
+            <span className="label-sm">Cluster status</span>
+            <span className="muted" style={{ fontSize: 11.5 }}>live · start/stop via <code>make start</code></span>
+          </div>
+          <div className="stack gap-16 mt-16">
+            {!workers && <span className="muted" style={{ fontSize: 13 }}>Checking…</span>}
+            {workers && (
+              <>
+                <WorkerGroup title="ComfyUI" items={workers.comfy} />
+                <WorkerGroup title="UI (covers)" items={workers.ui}
+                  note={workers.ui_worker_running
+                    ? <Chip tone="ok" dot>worker running</Chip>
+                    : <Chip tone="warn" dot>worker not running</Chip>} />
+                <div>
+                  <div className="label-sm" style={{ marginBottom: 6 }}>TTS</div>
+                  <div className="row gap-10 row--wrap">
+                    {(workers.tts || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>none configured</span>}
+                    {(workers.tts || []).map((t) => <Chip key={t.host} tone="neutral">{t.host}</Chip>)}
+                  </div>
+                  <div className="muted" style={{ fontSize: 11.5, marginTop: 4 }}>(reachability not probed)</div>
+                </div>
+              </>
+            )}
           </div>
         </Card>
 

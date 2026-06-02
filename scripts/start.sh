@@ -1,26 +1,22 @@
 #!/usr/bin/env bash
-# Start ComfyUI on all workers and the Gradio app locally.
-# Usage: bash scripts/start.sh [cluster.conf]
+# Start ComfyUI on all workers and the web app locally.
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/start.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="/tmp/stephen_spielbot.pid"
 APP_LOG="$HOME/.local/share/video-generator/logs/app.log"
 VENV="$REPO_ROOT/.venv"
 PYTHON="${VENV}/bin/python"
 
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
+
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: virtual environment not found at $VENV — run 'make install' first"
     exit 1
 fi
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
 
 wait_for_comfyui() {
     local host="$1" url="$2"
@@ -55,21 +51,42 @@ REMOTE
     wait_for_comfyui "$host" "http://${host}:8188"
 done
 
-# ── 2. Gradio app ─────────────────────────────────────────────────────────────
+# ── 1b. UI ComfyUI worker hosts ───────────────────────────────────────────────
+# Hosts in ui_workers that are NOT already render workers get started here via
+# the same SSH-based worker.sh (works for localhost too).
 
-echo "=== Starting Gradio app ==="
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for host in $(ui_hosts); do
+    [[ "$_COMFY_HOSTS" == *" $host "* ]] && continue
+    echo "=== Starting ComfyUI (ui: $host) ==="
+    bash "$REPO_ROOT/scripts/worker.sh" start "$host"
+done
 
+# ── 2. Web app ────────────────────────────────────────────────────────────────
+
+echo "=== Starting web app ==="
+
+WEB_PORT="${WEB_PORT:-8001}"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "  [app] already running (PID $(cat "$PID_FILE"))"
 else
     mkdir -p "$(dirname "$APP_LOG")"
     cd "$REPO_ROOT"
-    nohup "$PYTHON" app.py >/tmp/stephen_spielbot.out 2>&1 &
+    if [[ ! -f "$REPO_ROOT/webapp/frontend/dist/index.html" ]]; then
+        echo "  [app] WARNING: webapp/frontend/dist not found — run 'make web-build' to build the UI"
+    fi
+    nohup "$PYTHON" -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port "$WEB_PORT" \
+        >/tmp/stephen_spielbot.out 2>&1 &
     echo $! > "$PID_FILE"
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
+# ── 3. UI workers (cover-image regeneration) ──────────────────────────────────
+
+echo "=== Starting UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" start
+
 echo ""
-echo "Stephen Spielbot is running at http://localhost:7860"
+echo "Stephen Spielbot is running at http://localhost:${WEB_PORT}"
 echo "App log: $APP_LOG"
 echo "Stop with: make stop"

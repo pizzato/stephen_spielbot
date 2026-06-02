@@ -56,6 +56,15 @@ export default function App() {
     const nextJob = { ...data, voice: choices.voice, resolution: choices.resolution }
     setJob(nextJob)
     if (choices.autoApprove) {
+      if (data.auto_approved) {
+        if (data.started) {
+          setProgressDir(data.started.work_dir || nextJob.work_dir)
+          go('progress')
+        } else {
+          go('queue')
+        }
+        return
+      }
       try {
         const r = await api.queueFromJob({
           job_id: nextJob.job_id, work_dir: nextJob.work_dir,
@@ -89,7 +98,7 @@ export default function App() {
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} />
-      case 'library': return <Library go={go} onOpenRemix={(wd) => { setProgressDir(wd); go('remix') }} />
+      case 'library': return <Library go={go} onOpenProgress={(wd) => { setProgressDir(wd); go('progress') }} onOpenRemix={(wd) => { setProgressDir(wd); go('remix') }} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />
       default: return <Home go={go} />
     }

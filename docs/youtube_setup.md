@@ -58,7 +58,7 @@ Stephen Spielbot uses the YouTube Data API v3 to fetch channel comments and uplo
 
 ## Step 5 — Configure in Stephen Spielbot
 
-1. Open Stephen Spielbot and go to the **⚙️ Config** tab
+1. Open Stephen Spielbot and go to the **⚙️ Settings** screen
 2. In the **YouTube Integration** section, verify the path shows:
    `~/.config/video-generator/client_secrets.json`
 3. Configure your preferences:
@@ -104,7 +104,7 @@ The OAuth token is saved at `~/.config/video-generator/youtube_token.json` and w
 
 ### Auto-Post
 
-Enable **Auto-post when generation completes** in Config. When a video finishes generating, the app will automatically navigate to the Post tab and begin uploading with the default settings.
+Enable **Auto-post when generation completes** in Settings. When a video finishes generating, the app automatically uploads it from the YouTube → Publish screen with the default settings.
 
 ---
 
@@ -112,9 +112,9 @@ Enable **Auto-post when generation completes** in Config. When a video finishes 
 
 **"Access blocked: Stephen Spielbot has not completed the Google verification process"** — You need to add your Google account as a test user. Go back to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **OAuth consent screen** → **Test users** → **+ Add Users** → enter your email → Save. Then try connecting again.
 
-**"client_secrets.json not configured"** — Check the path in Config tab → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
+**"client_secrets.json not configured"** — Check the path in the Settings screen → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
 
-**"Not authenticated"** — Click Connect YouTube in the YouTube tab.
+**"Not authenticated"** — Click Connect YouTube in the YouTube → Publish screen.
 
 **"Google hasn't verified this app" warning** — This is expected. Click **Advanced** → **Go to Stephen Spielbot (unsafe)** to proceed.
 

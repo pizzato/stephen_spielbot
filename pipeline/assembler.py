@@ -168,7 +168,12 @@ def concat_audio(audio_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
-def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Path:
+def mux_video_audio(
+    video_path: Path,
+    audio_path: Path,
+    output_path: Path,
+    extra_tail_secs: float = 0.0,
+) -> Path:
     """Mux video with narration audio, discarding any audio track on the video.
 
     Both branches re-encode the video so the output duration exactly matches the
@@ -176,14 +181,18 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
     boundaries, leaving the video track a full frame (~40 ms at 25 fps) longer
     than the audio track.  Across many scenes this drift accumulates: narration
     starts noticeably early relative to the video.
+
+    extra_tail_secs: freeze the last video frame for this many additional seconds
+    after narration ends (useful for the final scene to avoid an abrupt cut).
     """
     audio_dur = _get_duration(audio_path)
     video_dur = _get_duration(video_path)
+    target_dur = audio_dur + extra_tail_secs
 
-    if video_dur >= audio_dur:
+    if video_dur >= target_dur:
         logger.debug(
-            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs — trimming to audio",
-            video_dur, audio_dur,
+            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs target=%.3fs — trimming to target",
+            video_dur, audio_dur, target_dur,
         )
         _run([
             "ffmpeg", "-y",
@@ -191,19 +200,20 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
             "-i", str(audio_path),
             "-map", "0:v:0",
             "-map", "1:a:0",
-            "-t", str(audio_dur),
+            "-t", str(target_dur),
             "-c:v", "libx264", "-crf", "18", "-preset", "fast",
             "-c:a", "aac", "-b:a", "192k",
             str(output_path),
         ])
     else:
-        # Video is slightly shorter than narration (ComfyUI frame-count rounding).
-        # Freeze the last frame to fill the gap instead of looping from the start —
-        # looping caused the beginning of the scene to flash before the next scene.
-        gap = audio_dur - video_dur
+        # Video is shorter than the target duration (ComfyUI frame-count rounding,
+        # or intentional extra tail). Freeze the last frame to fill the gap instead
+        # of looping from the start — looping caused the beginning of the scene to
+        # flash before the next scene.
+        gap = target_dur - video_dur
         logger.info(
-            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs — freezing last frame %.3fs",
-            video_dur, audio_dur, gap,
+            "[ffmpeg] mux_video_audio: video=%.3fs audio=%.3fs target=%.3fs — freezing last frame %.3fs",
+            video_dur, audio_dur, target_dur, gap,
         )
         _run([
             "ffmpeg", "-y",
@@ -212,7 +222,7 @@ def mux_video_audio(video_path: Path, audio_path: Path, output_path: Path) -> Pa
             "-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={gap:.3f}[vout]",
             "-map", "[vout]",
             "-map", "1:a:0",
-            "-t", str(audio_dur),
+            "-t", str(target_dur),
             "-c:v", "libx264", "-crf", "18", "-preset", "fast",
             "-c:a", "aac", "-b:a", "192k",
             str(output_path),

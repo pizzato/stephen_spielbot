@@ -7,13 +7,30 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [cur, setCur] = useState(0)
   const [style, setStyle] = useState(job?.style || '')
   const [resolution, setResolution] = useState(job?.resolution || meta.default_resolution || '')
+  const [savedScripts, setSavedScripts] = useState([])
+  const [selectedScript, setSelectedScript] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [lightbox, setLightbox] = useState(null)
   const [genAll, setGenAll] = useState(false)
   const [fieldBusy, setFieldBusy] = useState('')
 
-  useEffect(() => { setScenes(job?.scenes || []); setCur(0); setStyle(job?.style || '') }, [job?.job_id])
+  useEffect(() => {
+    setScenes(job?.scenes || [])
+    setCur(0)
+    setStyle(job?.style || '')
+    setResolution(job?.resolution || meta.config?.resolution || meta.default_resolution || '')
+  }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
+
+  useEffect(() => {
+    api.listJobs()
+      .then((d) => {
+        const scripts = d.scripts || []
+        setSavedScripts(scripts)
+        setSelectedScript((cur) => cur || scripts[0]?.work_dir || '')
+      })
+      .catch(() => {})
+  }, [])
 
   // Generate any missing scene previews as soon as the script loads. Existing
   // images are reused (cached on disk), so revisiting is cheap. Only the preview
@@ -34,13 +51,50 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }, [job?.job_id])
 
   if (!job) {
+    const loadSavedScript = async () => {
+      if (!selectedScript) return
+      setBusy('load'); setError('')
+      try {
+        const loaded = await api.loadScript(selectedScript)
+        setJob({
+          ...loaded,
+          voice: loaded.voice || meta.config?.default_voice || '',
+          resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
+        })
+      } catch (e) {
+        setError(e.message)
+      } finally {
+        setBusy('')
+      }
+    }
+
     return (
       <div>
         <div className="page-head"><div className="page-head__intro">
           <span className="label-sm">Script</span><h1 className="display-md">No script loaded</h1>
         </div></div>
-        <Card span={12}><p className="body-1">Generate a script first.</p>
-          <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create')}>Go to Create</Button></Card>
+        <Banner tone="danger">{error}</Banner>
+        <div className="bento">
+          <Card span={7} padLg>
+            <div className="stack gap-16">
+              <Field label="Saved scripts">
+                <select className="select" value={selectedScript} onChange={(e) => setSelectedScript(e.target.value)}>
+                  {savedScripts.length === 0 && <option value="">No saved scripts found</option>}
+                  {savedScripts.map((s) => <option key={s.work_dir} value={s.work_dir}>{s.label}</option>)}
+                </select>
+              </Field>
+              <div className="row gap-10 row--wrap">
+                <Button variant="primary" icon="folder-open" disabled={!selectedScript || busy === 'load'} onClick={loadSavedScript}>
+                  {busy === 'load' ? 'Loading…' : 'Load script'}
+                </Button>
+                <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
+              </div>
+            </div>
+          </Card>
+          <Card span={5} well>
+            <p className="body-1" style={{ margin: 0 }}>Generate a new script, or reopen a saved one to edit scenes and approve it for rendering.</p>
+          </Card>
+        </div>
       </div>
     )
   }
