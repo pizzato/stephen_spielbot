@@ -34,7 +34,11 @@ if [[ -f "$HOME/miniconda3/bin/python3" ]]; then
 fi
 echo "[miniconda] installing Miniconda..."
 ARCH=$(uname -m)
-URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-${ARCH}.sh"
+case "$(uname -s)" in
+    Darwin) OS_STR="MacOSX" ;;
+    *)      OS_STR="Linux" ;;
+esac
+URL="https://repo.anaconda.com/miniconda/Miniconda3-latest-${OS_STR}-${ARCH}.sh"
 curl -fsSL "$URL" -o /tmp/miniconda.sh
 bash /tmp/miniconda.sh -b -p "$HOME/miniconda3"
 rm /tmp/miniconda.sh
