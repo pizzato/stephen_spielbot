@@ -121,7 +121,7 @@ export default function Settings({ meta, setMeta }) {
             </div>
             <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
             <Field label="Extra script instructions" hint="Appended to every topic.">
-              <textarea className="textarea" rows={2} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
+              <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
             </Field>
           </div>
         </Card>
