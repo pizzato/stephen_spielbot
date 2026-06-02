@@ -74,7 +74,7 @@ case "$ACTION" in
         echo "  [ui-worker] stopped stragglers (PID $PIDS)"
         stopped=$((stopped + 1))
     fi
-    [[ "$stopped" -eq 0 ]] && echo "  [ui-worker] not running"
+    if [[ "$stopped" -eq 0 ]]; then echo "  [ui-worker] not running"; fi
     ;;
 
   status)
