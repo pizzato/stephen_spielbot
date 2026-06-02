@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
-# Show health of the Gradio app and every ComfyUI worker.
-# Usage: bash scripts/status.sh [cluster.conf]
+# Show health of the web app and every ComfyUI worker.
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/status.sh
 
-CONF="${1:-cluster.conf}"
 PID_FILE="/tmp/stephen_spielbot.pid"
 ALL_OK=true
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
 check_comfyui() {
     local label="$1" url="$2"
@@ -26,18 +23,26 @@ check_comfyui() {
     fi
 }
 
-# ── Gradio app ─────────────────────────────────────────────────────────────────
+# ── Web app ────────────────────────────────────────────────────────────────────
 
 echo "=== Stephen Spielbot status ==="
 echo ""
-echo "Gradio app:"
+echo "Web app:"
 if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    echo "  ✓ Running  (PID $(cat "$PID_FILE"))  http://localhost:7860"
-elif pgrep -f "python.*app\.py" &>/dev/null; then
-    echo "  ✓ Running  (PID $(pgrep -f 'python.*app\.py'))  http://localhost:7860"
+    echo "  ✓ Running  (PID $(cat "$PID_FILE"))  http://localhost:8001"
+elif pgrep -f "uvicorn webapp.backend.main" &>/dev/null; then
+    echo "  ✓ Running  (PID $(pgrep -f 'uvicorn webapp.backend.main'))  http://localhost:8001"
 else
     echo "  ✗ Not running"
     ALL_OK=false
+fi
+
+echo ""
+echo "UI worker(s):"
+if pgrep -f "worker_agent.py --kind ui" &>/dev/null; then
+    echo "  ✓ Running  (PID $(pgrep -f 'worker_agent.py --kind ui' | tr '\n' ' '))"
+else
+    echo "  ✗ Not running (cover regeneration will queue without a ui worker)"
 fi
 
 # ── Durable orchestration ─────────────────────────────────────────────────────
@@ -80,6 +85,18 @@ echo ""
 echo "ComfyUI workers:"
 for host in $(remote_hosts); do
     check_comfyui "$host" "http://${host}:8188"
+done
+
+echo ""
+echo "UI ComfyUI worker(s):"
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for url in $(ui_endpoints); do
+    host=$(echo "$url" | sed -E 's#^https?://##; s#[:/].*$##')
+    if [[ "$_COMFY_HOSTS" == *" $host "* ]]; then
+        echo "  (shared with render worker $host)"
+    else
+        check_comfyui "ui:$host" "$url"
+    fi
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────

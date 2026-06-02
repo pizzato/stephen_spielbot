@@ -1,31 +1,18 @@
 #!/usr/bin/env bash
-# Stop the Gradio app and ComfyUI on all workers.
-# Usage: bash scripts/stop.sh [cluster.conf]
+# Stop the web app and ComfyUI on all workers.
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/stop.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 PID_FILE="/tmp/stephen_spielbot.pid"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# ── 1. Web app ────────────────────────────────────────────────────────────────
 
-# Find PIDs of whatever process is listening on port 8188.
-# Works regardless of how ComfyUI was invoked (with or without --port 8188).
-comfyui_pids() {
-    # lsof: BSD/macOS and most Linux
-    lsof -ti TCP:8188 -s TCP:LISTEN 2>/dev/null \
-    || ss -tlnp 'sport = :8188' 2>/dev/null \
-       | grep -oP 'pid=\K[0-9]+' \
-    || true
-}
-
-# ── 1. Gradio app ─────────────────────────────────────────────────────────────
-
-echo "=== Stopping Gradio app ==="
+echo "=== Stopping web app ==="
 
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE")"
@@ -37,7 +24,7 @@ if [[ -f "$PID_FILE" ]]; then
     fi
     rm -f "$PID_FILE"
 else
-    PIDS=$(pgrep -f "python.*app\.py" 2>/dev/null || true)
+    PIDS=$(pgrep -f "uvicorn webapp.backend.main" 2>/dev/null || true)
     if [[ -n "$PIDS" ]]; then
         kill $PIDS
         echo "  [app] stopped (PID $PIDS)"
@@ -46,24 +33,23 @@ else
     fi
 fi
 
-# ── 2. Local ComfyUI ──────────────────────────────────────────────────────────
+# ── 2. UI workers ─────────────────────────────────────────────────────────────
 
-echo "=== Stopping ComfyUI (local) ==="
+echo "=== Stopping UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" stop
 
-if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-    systemctl --user stop comfyui-worker.service
-    echo "  [comfyui] stopped (systemd)"
-else
-    PIDS=$(comfyui_pids)
-    if [[ -n "$PIDS" ]]; then
-        kill $PIDS
-        echo "  [comfyui] stopped (PID $PIDS)"
-    else
-        echo "  [comfyui] not running"
-    fi
-fi
+# ── 3. UI ComfyUI worker hosts ────────────────────────────────────────────────
+# Hosts in ui_workers that are NOT already render workers — stopped via SSH
+# (same interface as render workers, works for localhost too).
 
-# ── 3. Remote ComfyUI workers ─────────────────────────────────────────────────
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for host in $(ui_hosts); do
+    [[ "$_COMFY_HOSTS" == *" $host "* ]] && continue
+    echo "=== Stopping ComfyUI (ui: $host) ==="
+    bash "$REPO_ROOT/scripts/worker.sh" stop "$host"
+done
+
+# ── 4. Remote ComfyUI workers ─────────────────────────────────────────────────
 
 for host in $(remote_hosts); do
     echo "=== Stopping ComfyUI ($host) ==="

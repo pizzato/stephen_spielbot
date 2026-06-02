@@ -1,19 +1,17 @@
 #!/usr/bin/env bash
 # Download FLUX.1-schnell models to the first cluster node, then rsync to all others.
-# Usage: bash scripts/download_flux_cluster.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/download_flux_cluster.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
 HOSTS="$(remote_hosts)"
 if [[ -z "$HOSTS" ]]; then
-    echo "ERROR: No remote hosts found in $CONF"
+    echo "ERROR: No comfy_workers found in config.yaml"
     exit 1
 fi
 

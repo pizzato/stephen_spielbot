@@ -9,10 +9,10 @@ continue without rediscovering the implementation state.
 - Durable jobs, tasks, dependencies, workers, artifacts, events, and scenes.
 - Task leases, retries, lease expiry, worker heartbeat, and worker quarantine.
 - Worker agent entry point for `comfy`, `tts`, and `local` task kinds.
-- Gradio Progress tab with durable job, task, and worker status.
+- Web app Render screen with durable job, task, and worker status.
 - Script tab uses one active scene editor backed by durable scene records.
 - Script review stores full scene data in SQLite and `script.json`, not in
-  page-sized Gradio state.
+  page-sized in-memory UI state.
 - Background generation launch reads scenes from durable storage and writes a
   task graph before starting `resume_generation.py`.
 

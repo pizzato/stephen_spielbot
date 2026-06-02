@@ -20,8 +20,8 @@ Generation state is mirrored into a SQLite controller database at
 `~/.local/share/video-generator/orchestrator.sqlite3`.  Each story, image,
 narration, music, scene-video, mux, and final-assembly unit is tracked as a
 task with dependencies, attempts, leases, worker ownership, and produced
-artifacts.  The Gradio **Progress** tab shows this durable task graph alongside
-the existing progress bar.
+artifacts.  The web app's **Render** screen shows this durable task graph
+alongside the progress bar.
 
 The standard app path still launches `resume_generation.py`, but that process
 now writes durable task/artifact state as it runs.  For a fully agent-driven
@@ -52,11 +52,18 @@ Current implementation and test status are tracked in
 ```bash
 git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot
-make install   # install deps locally + on every worker in cluster.conf
-make start     # start ComfyUI on all workers, then launch the app
+make install WORKERS="s1 s2 s3"   # deps, models, workers, config.yaml, web UI
+make start                        # start ComfyUI on all workers, then launch the app
 ```
 
-Open [http://localhost:7860](http://localhost:7860).
+`make install` sets up everything — Python deps, models, the web UI (backend +
+React build), and seeds `config.yaml` with your workers. Omit `WORKERS=...` for a
+single-machine (localhost) setup, or run `make install` with no args to be
+prompted. Then open [http://localhost:8001](http://localhost:8001).
+
+> The interface is a React + FastAPI web app (`webapp/`) served from a single
+> uvicorn process on port 8001. `make install` builds the frontend; after later
+> frontend changes run `make web-build`, or use `make web-dev` for hot reload.
 
 ```bash
 make stop      # stop everything
@@ -65,22 +72,30 @@ make status    # check health of the app and all workers
 
 ## Cluster setup
 
-Edit `cluster.conf` to list your remote worker hostnames (one per line):
+Workers are configured in the single config file (see below) — there is no
+separate `cluster.conf`. List your render workers under `comfy_workers` (and the
+matching `tts_workers` hosts); `make install` will SSH into each host and install
+ComfyUI + F5-TTS automatically. The local machine is always included.
 
+```yaml
+# ~/.config/video-generator/config.yaml
+comfy_workers:
+  - http://s1:8188
+  - http://s2:8188
+tts_workers:
+  - s1
+  - s2
+ui_workers:            # ComfyUI endpoints for cover-image regeneration
+  - http://localhost:8188
 ```
-# cluster.conf
-s1
-s2
-```
-
-`make install` will SSH into each host and install ComfyUI + F5-TTS automatically.
-The local machine is always included and does not need to appear in the file.
 
 Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
 ## Configuration
 
-All settings live in `~/.config/video-generator/config.json` and can be edited live in the **Config** tab:
+All settings live in the single YAML file `~/.config/video-generator/config.yaml`
+and can be edited live in the **Settings** screen (which also shows a read-only
+cluster status panel). Worker lists are part of this file:
 
 | Setting | Description |
 |---|---|

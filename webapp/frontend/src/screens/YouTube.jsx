@@ -10,6 +10,32 @@ function Stars({ value }) {
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
+const DISMISSED_IDEAS_KEY = 'spielbot.dismissedIdeas'
+
+const normalizeIdeaTitle = (title) => String(title || '').trim().toLowerCase().replace(/\s+/g, ' ')
+const readDismissedIdeas = () => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(DISMISSED_IDEAS_KEY) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const writeDismissedIdea = (idea, reason = 'dismissed') => {
+  const title = idea?.title || idea?.final_title || idea
+  const data = readDismissedIdeas()
+  const record = { id: idea?.id || '', title, reason, dismissed_at: Date.now() }
+  if (idea?.id) data[idea.id] = record
+  const titleKey = normalizeIdeaTitle(title)
+  if (titleKey) data[titleKey] = record
+  window.localStorage.setItem(DISMISSED_IDEAS_KEY, JSON.stringify(data))
+}
+const isDismissedIdea = (idea) => {
+  const title = idea?.title || idea?.final_title || idea
+  const data = readDismissedIdeas()
+  return Boolean((idea?.id && data[idea.id]) || data[normalizeIdeaTitle(title)])
+}
+const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(idea))
 
 export default function YouTube({ go, initial }) {
   const [view, setView] = useState(initial?.view || 'comments')
@@ -32,7 +58,7 @@ export default function YouTube({ go, initial }) {
   // 90s rock bands); blank = general ideas from the channel's gaps.
   const loadIdeas = async (g = '', refresh = false) => {
     setLoadingIdeas(true); setError('')
-    try { const d = await api.getSuggestions(g, refresh); setIdeas(d.suggestions || []) }
+    try { const d = await api.getSuggestions(g, refresh); setIdeas(visibleIdeas(d.suggestions || [])) }
     catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
   // First visit loads the cached set (no LLM call); only regenerates if empty.
@@ -73,6 +99,43 @@ export default function YouTube({ go, initial }) {
   }
 
   const pending = (c) => c.is_request && !['approved', 'rejected'].includes(c.status)
+  const ideaKey = (idea) => idea?.id || idea?.title || idea?.final_title || ''
+  const removeIdeaLocal = (idea) => {
+    const key = ideaKey(idea)
+    const title = idea?.title || idea?.final_title || idea
+    setIdeas((arr) => arr.filter((it) => ideaKey(it) !== key && (it.title || it.final_title || it) !== title))
+  }
+  const closeIdea = async (idea, reason = 'dismissed') => {
+    const title = idea.title || idea.final_title || idea
+    const key = ideaKey(idea)
+    setBusy('idea-' + key); setError('')
+    writeDismissedIdea(idea, reason)
+    removeIdeaLocal(idea)
+    try {
+      const r = await api.dismissSuggestion({ id: idea.id || '', title, reason })
+      if (Array.isArray(r.suggestions)) setIdeas(visibleIdeas(r.suggestions))
+      setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
+    } catch (e) {
+      setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
+    } finally {
+      setBusy('')
+    }
+  }
+  const queueIdea = async (idea, title, scenes) => {
+    setError('')
+    try {
+      await api.queueAdd(title, scenes, idea.reason || '')
+      await closeIdea(idea, 'used')
+      setStatus('Added to queue.')
+      go('queue')
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+  const createIdea = async (idea, title, scenes) => {
+    await closeIdea(idea, 'used')
+    go('create', { title, description: idea.reason || '', scenes })
+  }
 
   return (
     <div>
@@ -164,8 +227,9 @@ export default function YouTube({ go, initial }) {
           {ideas.map((idea, i) => {
             const title = idea.title || idea.final_title || idea
             const scenes = idea.suggested_scene_count || idea.n_scenes || idea.scenes || 12
+            const key = ideaKey(idea) || `${title}-${i}`
             return (
-              <Card key={i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
+              <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row center between">
                   <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
                   <Stars value={idea.interestingness} />
@@ -174,8 +238,9 @@ export default function YouTube({ go, initial }) {
                 <div className="row center between mt-16 row--wrap gap-10">
                   <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span>
                   <div className="row gap-10">
-                    <Button variant="ghost" icon="layer-group" onClick={() => api.queueAdd(title, scenes, idea.reason || '').then(() => { setStatus('Added to queue.'); go('queue') }).catch((e) => setError(e.message))}>Queue</Button>
-                    <Button variant="primary" icon="wand-magic-sparkles" onClick={() => go('create', { title, description: idea.reason || '', scenes })}>Create</Button>
+                    <Button variant="ghost" icon="xmark" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea)}>Close</Button>
+                    <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title, scenes)}>Queue</Button>
+                    <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'idea-' + key} onClick={() => createIdea(idea, title, scenes)}>Create</Button>
                   </div>
                 </div>
               </Card>

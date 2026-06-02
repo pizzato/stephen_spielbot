@@ -3,7 +3,7 @@
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "{{FLUX_MODEL}}",
-      "weight_dtype": "fp8_e4m3fn"
+      "weight_dtype": "{{WEIGHT_DTYPE}}"
     }
   },
   "2": {

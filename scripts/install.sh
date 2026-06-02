@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 # Install Stephen Spielbot dependencies locally and on all cluster workers.
-# Usage: bash scripts/install.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers). On a fresh machine with no
+# config yet, this installs single-machine; add comfy_workers and re-run for a cluster.
+# Usage: bash scripts/install.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
 banner() { echo ""; echo "=== $* ==="; }
 
@@ -54,6 +51,25 @@ fi
 "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/requirements.txt"
 echo "[venv] requirements installed at $VENV"
 
+# ── 1b. Seed config.yaml (worker lists) on first install ──────────────────────
+# Workers can be passed non-interactively:  make install WORKERS="s1 s2 s3"
+# (env var WORKERS). Otherwise, if no config exists yet and we're on a TTY,
+# prompt once. Existing config is never overwritten.
+
+banner "Configuration"
+if [[ -f "$CONFIG_YAML" ]]; then
+    echo "[config] $CONFIG_YAML exists — leaving it untouched"
+else
+    WORKERS="${WORKERS:-}"
+    if [[ -z "$WORKERS" ]] && [[ -t 0 ]]; then
+        echo "No config yet. List your render worker hostnames (ComfyUI + F5-TTS),"
+        echo "space-separated. Leave blank for a single-machine (localhost) setup."
+        read -rp "Workers: " WORKERS
+    fi
+    "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
+fi
+
+# Re-evaluate hosts now that a config may have just been written.
 # ── 2. Local F5-TTS environment ───────────────────────────────────────────────
 
 banner "Checking local F5-TTS environment"
@@ -127,16 +143,35 @@ _ask_hf_token() {
 }
 
 if [[ -d "$COMFY_DIR" ]]; then
-    # Local ComfyUI — download here
-    if ! _models_present_on localhost; then
-        _ask_hf_token
+    # Local ComfyUI present. If it's a UI-only worker (in ui_workers but not a
+    # render worker), only download FLUX models — LTX/ACE are not needed there.
+    _RENDER_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+    _UI_ONLY_LOCAL=false
+    for _h in $(ui_hosts 2>/dev/null || true); do
+        if [[ "$_h" == "localhost" || "$_h" == "127.0.0.1" ]]; then
+            if [[ "$_RENDER_HOSTS" != *" $_h "* ]]; then
+                _UI_ONLY_LOCAL=true
+            fi
+        fi
+    done
+
+    if $_UI_ONLY_LOCAL; then
+        echo "[models] localhost is a UI-only ComfyUI worker — downloading FLUX models only"
+        if [[ ! -f "$COMFY_DIR/models/unet/flux1-schnell-fp8.safetensors" ]]; then
+            _ask_hf_token
+        fi
+        SKIP_LTX=1 SKIP_ACE=1 HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+    else
+        if ! _models_present_on localhost; then
+            _ask_hf_token
+        fi
+        HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
     fi
-    HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 
 elif [[ -n "$(remote_hosts)" ]]; then
     # No local ComfyUI — download once on the first cluster node; others rsync from it
     if [[ -z "$MODEL_SOURCE" ]]; then
-        echo "[models] No hosts in $CONF — skipping download."
+        echo "[models] No comfy_workers in config.yaml — skipping download."
     elif _models_present_on "$MODEL_SOURCE"; then
         echo "[models] All models already present on $MODEL_SOURCE — skipping download"
     else
@@ -152,7 +187,20 @@ elif [[ -n "$(remote_hosts)" ]]; then
 
 else
     echo "[models] No local ComfyUI and no remote workers — skipping."
-    echo "  Add workers to $CONF or install ComfyUI, then run: bash scripts/download_models.sh"
+    echo "  Add comfy_workers to config.yaml or install ComfyUI, then run: bash scripts/download_models.sh"
+fi
+
+# ── 3b. Web UI (FastAPI backend deps + React frontend build) ──────────────────
+
+banner "Setting up web UI"
+"$VENV/bin/pip" install --quiet -r "$REPO_ROOT/webapp/backend/requirements.txt"
+echo "[web] backend deps installed"
+if command -v npm &>/dev/null; then
+    ( cd "$REPO_ROOT/webapp/frontend" && npm install --silent && npm run build )
+    echo "[web] frontend built → webapp/frontend/dist"
+else
+    echo "[web] WARNING: npm not found — skipping frontend build."
+    echo "  Install Node.js, then run: make web-build"
 fi
 
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
@@ -160,7 +208,8 @@ fi
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
     echo ""
-    echo "No remote workers defined in $CONF — single-machine setup complete."
+    echo "No remote workers defined in config.yaml — single-machine setup complete."
+    echo "Run 'make start' to launch."
     exit 0
 fi
 
@@ -168,6 +217,21 @@ for host in $HOSTS; do
     banner "Installing worker: $host"
     bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
     bash "$REPO_ROOT/scripts/install_f5tts_worker.sh"   "$host"
+done
+
+# ── 5. UI ComfyUI worker hosts ────────────────────────────────────────────────
+# Any host in ui_workers that is NOT already a render worker gets its own
+# ComfyUI install (SSH-based, same script). Covers localhost and dedicated
+# UI machines alike.
+
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for host in $(ui_hosts); do
+    if [[ "$_COMFY_HOSTS" == *" $host "* ]]; then
+        echo "[ui-comfy] $host already installed as a render worker — skipping"
+        continue
+    fi
+    banner "Installing UI ComfyUI worker: $host"
+    bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
 done
 
 echo ""

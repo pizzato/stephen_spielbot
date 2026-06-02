@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Stop only the Gradio app (leaves ComfyUI workers running).
+# Stop only the web app (leaves ComfyUI workers running).
 # Usage: bash scripts/stop_server.sh
 set -euo pipefail
 
 PID_FILE="/tmp/stephen_spielbot.pid"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "=== Stopping Gradio app ==="
+echo "=== Stopping web app ==="
 
 if [[ -f "$PID_FILE" ]]; then
     PID="$(cat "$PID_FILE")"
@@ -17,7 +18,7 @@ if [[ -f "$PID_FILE" ]]; then
     fi
     rm -f "$PID_FILE"
 else
-    PIDS=$(pgrep -f "python.*app\.py" 2>/dev/null || true)
+    PIDS=$(pgrep -f "uvicorn webapp.backend.main" 2>/dev/null || true)
     if [[ -n "$PIDS" ]]; then
         kill $PIDS
         echo "  [app] stopped (PID $PIDS)"
@@ -25,3 +26,6 @@ else
         echo "  [app] not running"
     fi
 fi
+
+echo "=== Stopping UI worker(s) ==="
+bash "$REPO_ROOT/scripts/ui_worker.sh" stop

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function Library({ go, onOpenRemix }) {
+export default function Library({ go, onOpenProgress, onOpenRemix }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -25,14 +25,18 @@ export default function Library({ go, onOpenRemix }) {
 
       {jobs.resumable.length > 0 && (
         <>
-          <div className="label-sm" style={{ marginBottom: 12 }}>In progress / resumable</div>
+          <div className="label-sm" style={{ marginBottom: 12 }}>Active and unfinished</div>
           <div className="bento" style={{ marginBottom: 28 }}>
             {jobs.resumable.map((j, i) => (
               <Card key={i} span={4} className="reveal">
                 <div style={{ fontWeight: 700 }}>{j.label}</div>
                 <div className="row center between mt-16">
-                  <Chip tone="info" dot>In progress</Chip>
-                  <Button variant="ghost" icon="play" onClick={() => api.resumeJob(j.work_dir).then(() => go('progress'))}>Resume</Button>
+                  <Chip tone={j.running ? 'info' : 'warn'} dot>{j.running ? 'Rendering' : 'Needs attention'}</Chip>
+                  {j.running ? (
+                    <Button variant="ghost" icon="gauge-high" onClick={() => onOpenProgress(j.work_dir)}>View render</Button>
+                  ) : (
+                    <Button variant="ghost" icon="play" onClick={() => api.resumeJob(j.work_dir).then((r) => onOpenProgress(r.work_dir || j.work_dir))}>Continue</Button>
+                  )}
                 </div>
               </Card>
             ))}
@@ -46,7 +50,10 @@ export default function Library({ go, onOpenRemix }) {
         {jobs.finished.map((f, i) => (
           <Card key={i} span={4} link onClick={() => onOpenRemix(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ position: 'relative', aspectRatio: '16/9' }}>
-              <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
+              {f.cover_url
+                ? <img src={f.cover_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
+              }
               <div style={{ position: 'absolute', top: 12, left: 12 }}><Chip tone="ok" dot>Done</Chip></div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>

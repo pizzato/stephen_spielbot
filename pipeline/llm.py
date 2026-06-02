@@ -20,6 +20,8 @@ import urllib.error
 from dataclasses import dataclass
 from pathlib import Path
 
+import yaml
+
 logger = logging.getLogger("video_gen")
 
 # ── Local vLLM defaults (overridden by config: local_llm_url / local_llm_model) ─
@@ -32,11 +34,11 @@ NEGATIVE_PROMPT = _prompts.value("video_negative")
 
 
 # ── Config loader (avoids circular import with app.py) ────────────────────────
-_CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.json"
+_CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
 
 def _load_cfg() -> dict:
     try:
-        return json.loads(_CONFIG_FILE.read_text())
+        return yaml.safe_load(_CONFIG_FILE.read_text()) or {}
     except Exception:
         return {}
 
