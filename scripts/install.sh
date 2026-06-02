@@ -51,6 +51,25 @@ fi
 "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/requirements.txt"
 echo "[venv] requirements installed at $VENV"
 
+# ── 1b. Seed config.yaml (worker lists) on first install ──────────────────────
+# Workers can be passed non-interactively:  make install WORKERS="s1 s2 s3"
+# (env var WORKERS). Otherwise, if no config exists yet and we're on a TTY,
+# prompt once. Existing config is never overwritten.
+
+banner "Configuration"
+if [[ -f "$CONFIG_YAML" ]]; then
+    echo "[config] $CONFIG_YAML exists — leaving it untouched"
+else
+    WORKERS="${WORKERS:-}"
+    if [[ -z "$WORKERS" ]] && [[ -t 0 ]]; then
+        echo "No config yet. List your render worker hostnames (ComfyUI + F5-TTS),"
+        echo "space-separated. Leave blank for a single-machine (localhost) setup."
+        read -rp "Workers: " WORKERS
+    fi
+    "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
+fi
+
+# Re-evaluate hosts now that a config may have just been written.
 # ── 2. Local F5-TTS environment ───────────────────────────────────────────────
 
 banner "Checking local F5-TTS environment"

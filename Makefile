@@ -9,8 +9,9 @@ W ?=
         web-install web-build web web-dev
 
 ## Install deps locally + download all models (LTX, ACE-Step, FLUX) + install workers.
+## First run seeds config.yaml; set workers non-interactively: make install WORKERS="s1 s2 s3"
 install:
-	@bash $(SCRIPTS)/install.sh
+	@WORKERS="$(WORKERS)" bash $(SCRIPTS)/install.sh
 
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
@@ -100,6 +101,7 @@ help:
 	@echo "Usage: make <target> [W=<worker>]"
 	@echo ""
 	@echo "  install         Install deps locally; download all models; install workers from config.yaml"
+	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
 	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
