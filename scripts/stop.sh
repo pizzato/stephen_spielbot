@@ -1,18 +1,16 @@
 #!/usr/bin/env bash
 # Stop the web app and ComfyUI on all workers.
-# Usage: bash scripts/stop.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/stop.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 PID_FILE="/tmp/stephen_spielbot.pid"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
+# ── Helpers ────────────────────────────────────────────────────────────────────
 
 # Find PIDs of whatever process is listening on port 8188.
 # Works regardless of how ComfyUI was invoked (with or without --port 8188).

@@ -1,26 +1,22 @@
 #!/usr/bin/env bash
 # Start ComfyUI on all workers and the web app locally.
-# Usage: bash scripts/start.sh [cluster.conf]
+# Worker hosts come from config.yaml (comfy_workers).
+# Usage: bash scripts/start.sh
 set -euo pipefail
 
-CONF="${1:-cluster.conf}"
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="/tmp/stephen_spielbot.pid"
 APP_LOG="$HOME/.local/share/video-generator/logs/app.log"
 VENV="$REPO_ROOT/.venv"
 PYTHON="${VENV}/bin/python"
 
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
+
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: virtual environment not found at $VENV — run 'make install' first"
     exit 1
 fi
-
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-remote_hosts() {
-    [ -f "$CONF" ] || return 0
-    grep -v '^\s*#' "$CONF" | grep -v '^\s*$'
-}
 
 wait_for_comfyui() {
     local host="$1" url="$2"

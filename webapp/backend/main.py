@@ -111,6 +111,46 @@ def post_config(body: ConfigUpdate) -> dict:
     return {"ok": True, "config": gapp.load_config()}
 
 
+@api.get("/api/workers/status")
+def workers_status() -> dict:
+    """Live, read-only health of the configured workers.
+
+    comfy/ui endpoints are HTTP-probed (ComfyUI /system_stats); tts is listed
+    (reachability needs SSH, not probed here). ui_worker_running reports whether
+    a local `worker_agent --kind ui` daemon is up. Never raises — an
+    unreachable host is reported as up:false.
+    """
+    from pipeline.worker_pool import check_alive
+    cfg = gapp.load_config()
+
+    def probe(urls: list[str]) -> list[dict]:
+        out = []
+        for u in urls or []:
+            try:
+                up = check_alive(u, timeout=3)
+            except Exception:
+                up = False
+            out.append({"endpoint": u, "up": up})
+        return out
+
+    ui_running = False
+    try:
+        import subprocess
+        ui_running = subprocess.run(
+            ["pgrep", "-f", "worker_agent.py --kind ui"],
+            capture_output=True,
+        ).returncode == 0
+    except Exception:
+        ui_running = False
+
+    return {
+        "comfy": probe(cfg.get("comfy_workers", [])),
+        "tts": [{"host": h} for h in cfg.get("tts_workers", [])],
+        "ui": probe(cfg.get("ui_workers", [])),
+        "ui_worker_running": ui_running,
+    }
+
+
 # ── script generation ────────────────────────────────────────────────────────
 
 class GenerateScriptBody(BaseModel):
