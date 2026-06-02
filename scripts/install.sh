@@ -143,11 +143,30 @@ _ask_hf_token() {
 }
 
 if [[ -d "$COMFY_DIR" ]]; then
-    # Local ComfyUI — download here
-    if ! _models_present_on localhost; then
-        _ask_hf_token
+    # Local ComfyUI present. If it's a UI-only worker (in ui_workers but not a
+    # render worker), only download FLUX models — LTX/ACE are not needed there.
+    _RENDER_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+    _UI_ONLY_LOCAL=false
+    for _h in $(ui_hosts 2>/dev/null || true); do
+        if [[ "$_h" == "localhost" || "$_h" == "127.0.0.1" ]]; then
+            if [[ "$_RENDER_HOSTS" != *" $_h "* ]]; then
+                _UI_ONLY_LOCAL=true
+            fi
+        fi
+    done
+
+    if $_UI_ONLY_LOCAL; then
+        echo "[models] localhost is a UI-only ComfyUI worker — downloading FLUX models only"
+        if [[ ! -f "$COMFY_DIR/models/unet/flux1-schnell-fp8.safetensors" ]]; then
+            _ask_hf_token
+        fi
+        SKIP_LTX=1 SKIP_ACE=1 HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
+    else
+        if ! _models_present_on localhost; then
+            _ask_hf_token
+        fi
+        HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
     fi
-    HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 
 elif [[ -n "$(remote_hosts)" ]]; then
     # No local ComfyUI — download once on the first cluster node; others rsync from it

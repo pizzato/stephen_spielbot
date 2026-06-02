@@ -97,6 +97,10 @@ download() {
 }
 
 # ── LTX 2.3 ───────────────────────────────────────────────────────────────────
+# Skip with:  SKIP_LTX=1 bash scripts/download_models.sh
+if [[ "${SKIP_LTX:-0}" == "1" ]]; then
+    echo "--- LTX 2.3 models skipped (SKIP_LTX=1) ---"
+else
 echo "--- LTX 2.3 video generation models ---"
 
 download \
@@ -119,7 +123,13 @@ download \
     "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" \
     "models/text_encoders"
 
+fi  # SKIP_LTX
+
 # ── ACE-Step 1.5 (music generation) ──────────────────────────────────────────
+# Skip with:  SKIP_ACE=1 bash scripts/download_models.sh
+if [[ "${SKIP_ACE:-0}" == "1" ]]; then
+    echo "--- ACE-Step models skipped (SKIP_ACE=1) ---"
+else
 echo ""
 echo "--- ACE-Step 1.5 music generation models ---"
 
@@ -143,6 +153,8 @@ download \
     "split_files/text_encoders/qwen_4b_ace15.safetensors" \
     "models/text_encoders"
 
+fi  # SKIP_ACE
+
 # ── FLUX.1-schnell (scene preview image generation) — optional ────────────────
 # ~13 GB total. Skip with:  SKIP_FLUX=1 bash scripts/download_models.sh
 if [[ "${SKIP_FLUX:-0}" == "1" ]]; then
@@ -159,10 +171,11 @@ else
 
     # BF16 (non-quantised) version — required for MPS (Apple Silicon) UI workers.
     # fp8 models cannot run on MPS; this model is selected via ui_flux_model in config.
+    # Requires accepting the BFL license at huggingface.co/black-forest-labs/FLUX.1-schnell
     download \
         "black-forest-labs/FLUX.1-schnell" \
         "flux1-schnell.safetensors" \
-        "models/unet"
+        "models/unet" || echo "  [warn] flux1-schnell.safetensors skipped — accept the license at huggingface.co/black-forest-labs/FLUX.1-schnell then re-run with HF_TOKEN=<token> make install"
 
     # Shared FLUX text encoders (also used by FLUX dev)
     download \
