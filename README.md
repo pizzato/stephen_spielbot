@@ -52,18 +52,18 @@ Current implementation and test status are tracked in
 ```bash
 git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot
-make install       # install deps locally + on every worker in config.yaml
-make web-install   # install web UI deps (FastAPI backend + React frontend)
-make web-build     # build the React frontend to webapp/frontend/dist
-make start         # start ComfyUI on all workers, then launch the app
+make install WORKERS="s1 s2 s3"   # deps, models, workers, config.yaml, web UI
+make start                        # start ComfyUI on all workers, then launch the app
 ```
 
-Open [http://localhost:8001](http://localhost:8001).
+`make install` sets up everything — Python deps, models, the web UI (backend +
+React build), and seeds `config.yaml` with your workers. Omit `WORKERS=...` for a
+single-machine (localhost) setup, or run `make install` with no args to be
+prompted. Then open [http://localhost:8001](http://localhost:8001).
 
 > The interface is a React + FastAPI web app (`webapp/`) served from a single
-> uvicorn process on port 8001. `make start` serves the pre-built frontend from
-> `webapp/frontend/dist`, so run `make web-build` after any frontend change. For
-> frontend development with hot reload, use `make web-dev` instead.
+> uvicorn process on port 8001. `make install` builds the frontend; after later
+> frontend changes run `make web-build`, or use `make web-dev` for hot reload.
 
 ```bash
 make stop      # stop everything

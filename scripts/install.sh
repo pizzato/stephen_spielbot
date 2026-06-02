@@ -171,12 +171,26 @@ else
     echo "  Add comfy_workers to config.yaml or install ComfyUI, then run: bash scripts/download_models.sh"
 fi
 
+# ── 3b. Web UI (FastAPI backend deps + React frontend build) ──────────────────
+
+banner "Setting up web UI"
+"$VENV/bin/pip" install --quiet -r "$REPO_ROOT/webapp/backend/requirements.txt"
+echo "[web] backend deps installed"
+if command -v npm &>/dev/null; then
+    ( cd "$REPO_ROOT/webapp/frontend" && npm install --silent && npm run build )
+    echo "[web] frontend built → webapp/frontend/dist"
+else
+    echo "[web] WARNING: npm not found — skipping frontend build."
+    echo "  Install Node.js, then run: make web-build"
+fi
+
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
 
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
     echo ""
     echo "No remote workers defined in config.yaml — single-machine setup complete."
+    echo "Run 'make start' to launch."
     exit 0
 fi
 
