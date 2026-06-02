@@ -660,7 +660,12 @@ def cancel_job(body: JobActionBody) -> dict:
 @api.get("/api/jobs")
 def list_jobs() -> dict:
     finished_rows = gapp._list_recent_jobs(max_results=50)
-    finished = [{"label": l, "work_dir": d} for l, d in finished_rows]
+    def _cover_url(work_dir: str) -> str:
+        cover = Path(work_dir) / "cover.png"
+        if cover.exists() and cover.stat().st_size > 1000:
+            return f"/api/file?path={cover}"
+        return ""
+    finished = [{"label": l, "work_dir": d, "cover_url": _cover_url(d)} for l, d in finished_rows]
     scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
@@ -1407,6 +1412,75 @@ class PostBody(BaseModel):
     privacy: str = "private"
 
 
+def _completion_reply_text(title: str, url: str) -> str:
+    title = (title or "the video").strip()
+    return f"Thanks again for the suggestion - {title} is ready: {url}"
+
+
+def _queue_item_by_id(queue_item_id: str) -> dict | None:
+    if not queue_item_id:
+        return None
+    try:
+        return next((q for q in yt.load_queue() if q.get("id") == queue_item_id), None)
+    except Exception:
+        return None
+
+
+def _mark_completion_reply_on_comment(comment_id: str, **updates) -> None:
+    if not comment_id:
+        return
+    try:
+        cache = yt.load_comments_cache()
+        changed = False
+        for comment in cache:
+            if comment.get("comment_id") == comment_id:
+                comment.update(updates)
+                changed = True
+                break
+        if changed:
+            yt.save_comments_cache(cache)
+    except Exception:
+        pass
+
+
+def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
+    """Reply to the original request comment once the uploaded video has a link."""
+    if not queue_item_id or not url:
+        return {"attempted": False, "reason": "missing queue item or url"}
+    item = _queue_item_by_id(queue_item_id)
+    if not item:
+        return {"attempted": False, "reason": "queue item not found"}
+    comment_id = item.get("comment_id", "")
+    if not comment_id:
+        return {"attempted": False, "reason": "queue item has no source comment"}
+    if item.get("completion_replied"):
+        return {"attempted": False, "already_replied": True}
+
+    text = _completion_reply_text(title, url)
+    result = yt.reply_to_comment(_client_secrets_path(), comment_id, text)
+    now = time.time()
+    if result.get("success"):
+        updates = {
+            "completion_replied": True,
+            "completion_reply_at": now,
+            "completion_reply_url": url,
+            "completion_reply_error": "",
+        }
+        yt.update_queue_item(queue_item_id, **updates)
+        _mark_completion_reply_on_comment(comment_id, **updates)
+        return {"attempted": True, "success": True}
+
+    error = result.get("error", "unknown")[:300]
+    updates = {
+        "completion_reply_attempted_at": now,
+        "completion_reply_url": url,
+        "completion_reply_error": error,
+    }
+    yt.update_queue_item(queue_item_id, **updates)
+    _mark_completion_reply_on_comment(comment_id, **updates)
+    return {"attempted": True, "success": False, "error": error}
+
+
 @api.post("/api/youtube/post")
 def yt_post(body: PostBody) -> dict:
     wd = Path(body.work_dir)
@@ -1442,14 +1516,15 @@ def yt_post(body: PostBody) -> dict:
     if video_id and not url:
         url = f"https://youtu.be/{video_id}"
 
-    # Side effects: stamp the job and mark its queue item posted.
+    # Side effects: stamp the job, mark its queue item posted, and notify the
+    # original requester when this upload came from a YouTube comment.
+    queue_item_id = ""
     try:
         gapp._write_job_meta(wd, youtube_video_id=video_id, youtube_url=url, status="done")
     except Exception:
         pass
     try:
         cfg_path = wd / "job_config.json"
-        queue_item_id = ""
         if cfg_path.exists():
             queue_item_id = json.loads(cfg_path.read_text()).get("queue_item_id", "")
         if queue_item_id and hasattr(yt, "update_queue_item"):
@@ -1457,8 +1532,20 @@ def yt_post(body: PostBody) -> dict:
     except Exception:
         pass
 
+    completion_reply = _post_completion_reply(queue_item_id, body.title, url)
+    try:
+        gapp._write_job_meta(
+            wd,
+            completion_reply_attempted=bool(completion_reply.get("attempted")),
+            completion_replied=bool(completion_reply.get("success") or completion_reply.get("already_replied")),
+            completion_reply_error=completion_reply.get("error", ""),
+        )
+    except Exception:
+        pass
+
     return {"ok": True, "video_id": video_id, "url": url,
-            "message": f"Uploaded — {url}" if url else "Uploaded to YouTube."}
+            "message": f"Uploaded — {url}" if url else "Uploaded to YouTube.",
+            "completion_reply": completion_reply}
 
 
 # ── YouTube comment actions (fetch / evaluate / approve / reject / reply) ─────
