@@ -30,7 +30,6 @@ from pipeline.cover import (  # noqa: E402
     COVER_HEIGHT,
     COVER_WIDTH,
     build_cover_prompt,
-    overlay_title_on_image,
     shorten_title_for_cover,
 )
 from pipeline.llm import Scene  # noqa: E402
@@ -258,10 +257,9 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
 
     prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows)
 
-    base_path = work_dir / "cover_base.png"
     cover_path = work_dir / "cover.png"
     generate_scene_image(
-        prompt, base_path,
+        prompt, cover_path,
         width=COVER_WIDTH, height=COVER_HEIGHT,
         steps=int(p.get("flux_steps", 4)),
         flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
@@ -270,7 +268,6 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
         flux_vae=p.get("flux_vae", "ae.safetensors"),
         comfy_url=endpoint,
     )
-    overlay_title_on_image(base_path, cover_path, title)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")
 
