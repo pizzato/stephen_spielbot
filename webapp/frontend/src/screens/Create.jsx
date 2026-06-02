@@ -1,5 +1,5 @@
-import React, { useState } from 'react'
-import { Card, Field, Segmented, Check, Button, Icon, Banner } from '../components.jsx'
+import React, { useEffect, useMemo, useState } from 'react'
+import { Card, Field, Check, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
 const PIPELINE = [
@@ -11,15 +11,48 @@ const PIPELINE = [
 ]
 
 export default function Create({ seed, meta, onGenerated }) {
+  const voiceChoices = useMemo(() => (
+    meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
+  ), [meta.voices])
+  const configuredVoice = meta.config?.default_voice || voiceChoices[0] || 'Default (F5-TTS)'
+
   const [videoTitle, setVideoTitle] = useState(seed?.title || '')
   const [direction, setDirection] = useState(seed?.description || '')
   const [scenes, setScenes] = useState(seed?.scenes || meta.config?.default_n_scenes || 12)
-  const [voice, setVoice] = useState(meta.voices?.[0] || 'Default (F5-TTS)')
+  const [voice, setVoice] = useState(configuredVoice)
+  const [voiceTouched, setVoiceTouched] = useState(false)
   const [resolution, setResolution] = useState(meta.config?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(meta.config?.default_visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!voiceTouched) setVoice(configuredVoice)
+  }, [configuredVoice, voiceTouched])
+
+  useEffect(() => {
+    if (!voiceChoices.includes(voice)) setVoice(configuredVoice)
+  }, [configuredVoice, voice, voiceChoices])
+
+  useEffect(() => {
+    if (!seed) return
+    setVideoTitle(seed.title || '')
+    setDirection(seed.description || '')
+    if (seed.scenes) setScenes(seed.scenes)
+  }, [seed])
+
+  useEffect(() => {
+    if (!seed?.scenes && meta.config?.default_n_scenes) setScenes(meta.config.default_n_scenes)
+  }, [meta.config?.default_n_scenes, seed?.scenes])
+
+  useEffect(() => {
+    setResolution(meta.config?.resolution || meta.default_resolution || '')
+  }, [meta.config?.resolution, meta.default_resolution])
+
+  useEffect(() => {
+    setStyle(meta.config?.default_visual_style || '')
+  }, [meta.config?.default_visual_style])
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -29,6 +62,9 @@ export default function Create({ seed, meta, onGenerated }) {
         topic: direction.trim() || videoTitle.trim(),
         n_scenes: Number(scenes),
         visual_style: style.trim() || null,
+        auto_approve: autoApprove,
+        voice,
+        resolution,
       })
       onGenerated(data, { voice, resolution, autoApprove })
     } catch (e) {
@@ -82,8 +118,8 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Narrator voice">
-              <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
-                {(meta.voices || ['Default (F5-TTS)']).map((v) => <option key={v} value={v}>{v}</option>)}
+              <select className="select" value={voice} onChange={(e) => { setVoiceTouched(true); setVoice(e.target.value) }}>
+                {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
             </Field>
 
