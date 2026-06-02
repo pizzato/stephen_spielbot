@@ -839,9 +839,7 @@ def _queue_lifecycle_sort_key(item: dict) -> tuple:
         "cancelled": 4, "failed": 4, "superseded": 4,
     }
     if item.get("status") == "pending":
-        source = item.get("source", "suggestion")
-        group = 0 if source == "comment" else 1
-        return (1, group, item.get("created_at", 0))
+        return (1, 0, 0)  # preserve file order (sort is stable)
     return (status_rank.get(item.get("status"), 5), 0, -(item.get("updated_at") or item.get("created_at") or 0))
 
 
