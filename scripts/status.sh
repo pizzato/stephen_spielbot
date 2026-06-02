@@ -87,6 +87,18 @@ for host in $(remote_hosts); do
     check_comfyui "$host" "http://${host}:8188"
 done
 
+echo ""
+echo "UI ComfyUI worker(s):"
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for url in $(ui_endpoints); do
+    host=$(echo "$url" | sed -E 's#^https?://##; s#[:/].*$##')
+    if [[ "$_COMFY_HOSTS" == *" $host "* ]]; then
+        echo "  (shared with render worker $host)"
+    else
+        check_comfyui "ui:$host" "$url"
+    fi
+done
+
 # ── Summary ────────────────────────────────────────────────────────────────────
 
 echo ""

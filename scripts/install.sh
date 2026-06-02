@@ -200,5 +200,20 @@ for host in $HOSTS; do
     bash "$REPO_ROOT/scripts/install_f5tts_worker.sh"   "$host"
 done
 
+# ── 5. UI ComfyUI worker hosts ────────────────────────────────────────────────
+# Any host in ui_workers that is NOT already a render worker gets its own
+# ComfyUI install (SSH-based, same script). Covers localhost and dedicated
+# UI machines alike.
+
+_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
+for host in $(ui_hosts); do
+    if [[ "$_COMFY_HOSTS" == *" $host "* ]]; then
+        echo "[ui-comfy] $host already installed as a render worker — skipping"
+        continue
+    fi
+    banner "Installing UI ComfyUI worker: $host"
+    bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
+done
+
 echo ""
 echo "Installation complete. Run 'make start' to launch the cluster."
