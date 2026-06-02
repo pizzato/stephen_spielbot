@@ -87,6 +87,22 @@ def _ws_url(comfy_url: str, client_id: str) -> str:
                      .replace("http://", "ws://")) + f"/ws?clientId={client_id}"
 
 
+def _flux_weight_dtype(comfy_url: str) -> str:
+    """Return the best weight_dtype for FLUX given the ComfyUI backend's hardware.
+
+    fp8_e4m3fn is fastest on CUDA but unsupported on MPS/CPU — fall back to bf16.
+    """
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/system_stats", timeout=5) as r:
+            stats = json.loads(r.read())
+        devices = stats.get("devices") or []
+        if any(d.get("type") == "cuda" for d in devices):
+            return "fp8_e4m3fn"
+    except Exception:
+        pass
+    return "bf16"
+
+
 def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) -> str:
     payload = json.dumps({"prompt": workflow, "client_id": client_id}).encode()
     req = urllib.request.Request(
@@ -688,6 +704,7 @@ def generate_scene_image(
         "CLIP_T5":         clip_t5,
         "CLIP_L":          clip_l,
         "FLUX_VAE":        flux_vae,
+        "WEIGHT_DTYPE":    _flux_weight_dtype(comfy_url),
         "POSITIVE_PROMPT": positive_prompt,
         "WIDTH":           width,
         "HEIGHT":          height,
