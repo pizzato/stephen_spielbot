@@ -20,6 +20,8 @@ function fmtDate(iso) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
+let _analyticsCache = null
+
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
 const DISMISSED_IDEAS_KEY = 'spielbot.dismissedIdeas'
 
@@ -152,10 +154,14 @@ export default function YouTube({ go, initial }) {
 
   const fetchAnalytics = async () => {
     setLoadingAnalytics(true); setError('')
-    try { const d = await api.ytAnalytics(); setAnalytics(d) }
+    try { const d = await api.ytAnalytics(); _analyticsCache = d; setAnalytics(d) }
     catch (e) { setAnalytics({ channel: {}, videos: [], error: e.message }) } finally { setLoadingAnalytics(false) }
   }
-  useEffect(() => { if (view === 'analytics' && !analytics && !loadingAnalytics) fetchAnalytics() }, [view])
+  useEffect(() => {
+    if (view !== 'analytics') return
+    if (_analyticsCache && !analytics) { setAnalytics(_analyticsCache); return }
+    if (!analytics && !loadingAnalytics) fetchAnalytics()
+  }, [view])
 
   return (
     <div>
