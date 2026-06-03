@@ -1282,6 +1282,14 @@ def yt_disconnect() -> dict:
     return {"ok": True}
 
 
+@api.get("/api/youtube/analytics")
+def yt_analytics() -> dict:
+    try:
+        return yt.fetch_channel_analytics(_client_secrets_path())
+    except Exception as e:
+        return {"channel": {}, "videos": [], "error": str(e)[:200]}
+
+
 @api.get("/api/youtube/post/options")
 def yt_post_options() -> dict:
     cfg = gapp.load_config()

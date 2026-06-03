@@ -7,6 +7,17 @@ function Stars({ value }) {
   if (value == null) return null
   return <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(value).toFixed(1)}</span>
 }
+function fmtNum(n) {
+  if (n == null) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return String(n)
+}
+function fmtDate(iso) {
+  if (!iso) return ''
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
+  catch { return iso.slice(0, 10) }
+}
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
@@ -48,6 +59,8 @@ export default function YouTube({ go, initial }) {
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
   const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
+  const [analytics, setAnalytics] = useState(null)
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false)
 
   const refreshBadges = () => api.getBadges().then(setBadges).catch(() => {})
   const refreshComments = () => api.getComments().then((d) => { setComments(d.comments || []); refreshBadges() }).catch((e) => setError(e.message))
@@ -137,6 +150,13 @@ export default function YouTube({ go, initial }) {
     go('create', { title, description: idea.reason || '', scenes })
   }
 
+  const fetchAnalytics = async () => {
+    setLoadingAnalytics(true); setError('')
+    try { const d = await api.ytAnalytics(); setAnalytics(d) }
+    catch (e) { setError(e.message) } finally { setLoadingAnalytics(false) }
+  }
+  useEffect(() => { if (view === 'analytics' && !analytics && !loadingAnalytics) fetchAnalytics() }, [view])
+
   return (
     <div>
       <div className="page-head">
@@ -159,6 +179,7 @@ export default function YouTube({ go, initial }) {
           { value: 'comments', label: badges.youtube_attention ? <span>Comments <span style={SEG_BADGE}>{badges.youtube_attention}</span></span> : 'Comments' },
           { value: 'ideas', label: 'AI ideas' },
           { value: 'publish', label: badges.youtube_publishable ? <span>Publish <span style={SEG_BADGE}>{badges.youtube_publishable}</span></span> : 'Publish' },
+          { value: 'analytics', label: 'Analytics' },
         ]} />
       </div>
 
@@ -250,6 +271,80 @@ export default function YouTube({ go, initial }) {
       )}
 
       {view === 'publish' && <Publish initialWorkDir={initial?.workDir} />}
+
+      {view === 'analytics' && (
+        <div className="bento">
+          {loadingAnalytics && (
+            <Card span={12}><p className="muted" style={{ fontSize: 13 }}>Loading analytics…</p></Card>
+          )}
+          {!loadingAnalytics && !analytics && (
+            <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect YouTube to see your channel analytics.</p></Card>
+          )}
+          {analytics?.error && (
+            <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
+          )}
+          {!loadingAnalytics && analytics && !analytics.error && (
+            <>
+              {/* Channel stat cards */}
+              <Card span={4} className="reveal reveal-d1">
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Subscribers</div>
+                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.subscriber_count)}</div>
+              </Card>
+              <Card span={4} className="reveal reveal-d2">
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Total views</div>
+                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.view_count)}</div>
+              </Card>
+              <Card span={4} className="reveal reveal-d3">
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Videos</div>
+                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.video_count)}</div>
+                <Button variant="ghost" icon="rotate" style={{ marginTop: 12 }} disabled={loadingAnalytics} onClick={fetchAnalytics}>Refresh</Button>
+              </Card>
+
+              {/* Per-video table */}
+              {(analytics.videos || []).length > 0 && (
+                <Card span={12} className="reveal reveal-d4">
+                  <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent videos</div>
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                          <th style={{ textAlign: 'left', padding: '6px 10px 6px 0', fontWeight: 600, color: 'var(--muted)', width: 52 }}></th>
+                          <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)' }}>Title</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Views</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Likes</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Comments</th>
+                          <th style={{ textAlign: 'right', padding: '6px 0 6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Published</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {analytics.videos.map((v, i) => (
+                          <tr key={v.video_id} style={{ borderBottom: '1px solid var(--border-subtle, var(--border))', opacity: 0.95 }}>
+                            <td style={{ padding: '8px 10px 8px 0' }}>
+                              {v.thumbnail_url
+                                ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} />
+                                : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}
+                            </td>
+                            <td style={{ padding: '8px 10px' }}>
+                              <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer"
+                                style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>
+                                {v.title}
+                              </a>
+                            </td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.like_count)}</td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.comment_count)}</td>
+                            <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+            </>
+          )}
+        </div>
+      )}
     </div>
   )
 }
