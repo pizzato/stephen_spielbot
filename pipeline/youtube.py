@@ -665,6 +665,96 @@ def save_suggestions(suggestions: list[dict]) -> None:
     SUGGESTIONS_PATH.write_text(json.dumps(suggestions, indent=2))
 
 
+# ── Channel analytics ─────────────────────────────────────────────────────────
+
+def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> dict:
+    """Return channel-level stats and per-video stats for the most recent uploads.
+
+    Returns:
+        {
+          channel: {name, subscriber_count, view_count, video_count},
+          videos: [{video_id, title, published_at, thumbnail_url, view_count,
+                    like_count, comment_count}]  # newest first
+        }
+    """
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return {"channel": {}, "videos": []}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+
+        # Channel stats + uploads playlist ID in one call
+        ch_resp = youtube.channels().list(
+            part="snippet,statistics,contentDetails", mine=True
+        ).execute()
+        ch_items = ch_resp.get("items", [])
+        if not ch_items:
+            return {"channel": {}, "videos": []}
+        ch = ch_items[0]
+        stats = ch.get("statistics", {})
+        channel = {
+            "name": ch["snippet"]["title"],
+            "subscriber_count": int(stats.get("subscriberCount") or 0),
+            "view_count": int(stats.get("viewCount") or 0),
+            "video_count": int(stats.get("videoCount") or 0),
+        }
+        uploads_id = ch["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        # Collect video IDs from the uploads playlist
+        video_ids: list[str] = []
+        next_page: str | None = None
+        while len(video_ids) < max_videos:
+            resp = youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_id,
+                maxResults=min(50, max_videos - len(video_ids)),
+                pageToken=next_page,
+            ).execute()
+            for item in resp.get("items", []):
+                vid = item["contentDetails"].get("videoId", "")
+                if vid:
+                    video_ids.append(vid)
+            next_page = resp.get("nextPageToken")
+            if not next_page:
+                break
+
+        # Batch-fetch snippet + statistics for all collected video IDs
+        videos: list[dict] = []
+        for i in range(0, len(video_ids), 50):
+            batch = video_ids[i:i + 50]
+            vresp = youtube.videos().list(
+                part="snippet,statistics",
+                id=",".join(batch),
+            ).execute()
+            for v in vresp.get("items", []):
+                snip = v.get("snippet", {})
+                vstats = v.get("statistics", {})
+                thumb = (
+                    snip.get("thumbnails", {}).get("medium", {}).get("url")
+                    or snip.get("thumbnails", {}).get("default", {}).get("url")
+                    or ""
+                )
+                videos.append({
+                    "video_id": v["id"],
+                    "title": snip.get("title", ""),
+                    "published_at": snip.get("publishedAt", ""),
+                    "thumbnail_url": thumb,
+                    "view_count": int(vstats.get("viewCount") or 0),
+                    "like_count": int(vstats.get("likeCount") or 0),
+                    "comment_count": int(vstats.get("commentCount") or 0),
+                })
+        # Re-sort newest first (playlist order, but batch call may shuffle)
+        id_order = {vid: idx for idx, vid in enumerate(video_ids)}
+        videos.sort(key=lambda v: id_order.get(v["video_id"], 999))
+
+        logger.info("Fetched analytics for %d videos", len(videos))
+        return {"channel": channel, "videos": videos}
+    except Exception as exc:
+        logger.warning("fetch_channel_analytics failed: %s", exc)
+        return {"channel": {}, "videos": [], "error": str(exc)[:300]}
+
+
 # ── Channel video title fetching ──────────────────────────────────────────────
 
 def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50) -> list[str]:
