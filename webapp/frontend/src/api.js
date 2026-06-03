@@ -80,6 +80,7 @@ export const api = {
   autoPost: () => req('POST', '/automation/post'),
   autoTick: () => req('POST', '/automation/tick'),
 
+  ytAnalytics: () => req('GET', '/youtube/analytics'),
   ytAuthStatus: () => req('GET', '/youtube/auth'),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),

@@ -38,6 +38,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 CATEGORY_OPTIONS = {
@@ -206,6 +207,8 @@ def poll_auth_flow() -> dict:
 
 def disconnect_youtube():
     _auth_flow.disconnect()
+    _auth_cache["result"] = None
+    _auth_cache["ts"] = 0.0
 
 
 # ── Comment fetching ──────────────────────────────────────────────────────────
@@ -663,6 +666,274 @@ def load_suggestions() -> list[dict]:
 def save_suggestions(suggestions: list[dict]) -> None:
     SUGGESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SUGGESTIONS_PATH.write_text(json.dumps(suggestions, indent=2))
+
+
+# ── Channel analytics ─────────────────────────────────────────────────────────
+
+def _parse_duration(iso: str) -> str:
+    """Convert ISO 8601 video duration (PT5M30S) to m:ss / h:mm:ss."""
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return ""
+    h, mins, s = int(m.group(1) or 0), int(m.group(2) or 0), int(m.group(3) or 0)
+    if h:
+        return f"{h}:{mins:02d}:{s:02d}"
+    return f"{mins}:{s:02d}"
+
+
+def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> dict:
+    """Return channel-level stats and per-video stats for the most recent uploads.
+
+    Returns:
+        {
+          channel: {name, subscriber_count, view_count, video_count,
+                    watch_time_minutes, avg_view_duration_secs},
+          videos: [{video_id, title, published_at, thumbnail_url, view_count,
+                    like_count, comment_count, duration, privacy,
+                    watch_time_minutes, avg_view_duration_secs}]
+        }
+    """
+    import datetime
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return {"channel": {}, "videos": []}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+
+        # Channel stats + uploads playlist ID in one call
+        ch_resp = youtube.channels().list(
+            part="snippet,statistics,contentDetails", mine=True
+        ).execute()
+        ch_items = ch_resp.get("items", [])
+        if not ch_items:
+            return {"channel": {}, "videos": []}
+        ch = ch_items[0]
+        stats = ch.get("statistics", {})
+        channel = {
+            "name": ch["snippet"]["title"],
+            "subscriber_count": int(stats.get("subscriberCount") or 0),
+            "view_count": int(stats.get("viewCount") or 0),
+            "video_count": int(stats.get("videoCount") or 0),
+            "watch_time_minutes": None,
+            "avg_view_duration_secs": None,
+            "subscribers_gained": None,
+            "subscribers_lost": None,
+            "impressions": None,
+            "ctr": None,
+            "daily_views": [],
+            "traffic_sources": [],
+            "top_countries": [],
+        }
+        uploads_id = ch["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        # Collect video IDs from the uploads playlist
+        video_ids: list[str] = []
+        next_page: str | None = None
+        while len(video_ids) < max_videos:
+            resp = youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_id,
+                maxResults=min(50, max_videos - len(video_ids)),
+                pageToken=next_page,
+            ).execute()
+            for item in resp.get("items", []):
+                vid = item["contentDetails"].get("videoId", "")
+                if vid:
+                    video_ids.append(vid)
+            next_page = resp.get("nextPageToken")
+            if not next_page:
+                break
+
+        # Batch-fetch snippet + statistics + contentDetails + status
+        videos: list[dict] = []
+        for i in range(0, len(video_ids), 50):
+            batch = video_ids[i:i + 50]
+            vresp = youtube.videos().list(
+                part="snippet,statistics,contentDetails,status",
+                id=",".join(batch),
+            ).execute()
+            for v in vresp.get("items", []):
+                snip = v.get("snippet", {})
+                vstats = v.get("statistics", {})
+                thumb = (
+                    snip.get("thumbnails", {}).get("medium", {}).get("url")
+                    or snip.get("thumbnails", {}).get("default", {}).get("url")
+                    or ""
+                )
+                videos.append({
+                    "video_id": v["id"],
+                    "title": snip.get("title", ""),
+                    "published_at": snip.get("publishedAt", ""),
+                    "thumbnail_url": thumb,
+                    "view_count": int(vstats.get("viewCount") or 0),
+                    "like_count": int(vstats.get("likeCount") or 0),
+                    "comment_count": int(vstats.get("commentCount") or 0),
+                    "duration": _parse_duration(v.get("contentDetails", {}).get("duration", "")),
+                    "privacy": v.get("status", {}).get("privacyStatus", ""),
+                    "watch_time_minutes": None,
+                    "avg_view_duration_secs": None,
+                    "impressions": None,
+                    "ctr": None,
+                    "avg_view_pct": None,
+                })
+
+        # Re-sort newest first (playlist order, but batch call may shuffle)
+        id_order = {vid: idx for idx, vid in enumerate(video_ids)}
+        videos.sort(key=lambda v: id_order.get(v["video_id"], 999))
+
+        # ── YouTube Analytics API (yt-analytics.readonly scope) ───────────────
+        # Each query is wrapped individually so a single failure doesn't wipe
+        # out the rest of the data.
+        today = datetime.date.today().isoformat()
+        start_28 = (datetime.date.today() - datetime.timedelta(days=28)).isoformat()
+
+        _TRAFFIC_LABELS = {
+            "YT_SEARCH": "YouTube Search",
+            "SUGGESTED_VIDEO": "Suggested Videos",
+            "EXT_URL": "External",
+            "DIRECT_OR_UNKNOWN": "Direct / Unknown",
+            "YT_CHANNEL": "Channel Page",
+            "YT_OTHER_PAGE": "Other YouTube",
+            "NO_LINK_EMBEDDED": "Embedded",
+            "NOTIFICATION": "Notifications",
+            "END_SCREEN": "End Screen",
+            "YT_PLAYLIST_PAGE": "Playlists",
+            "HASHTAGS": "Hashtags",
+            "SHORTS": "YouTube Shorts",
+        }
+
+        def _rows(rep: dict, *metric_names) -> dict[str, list]:
+            """Extract named columns from an Analytics API response."""
+            headers = [h["name"] for h in rep.get("columnHeaders", [])]
+            idxs = {m: headers.index(m) for m in metric_names if m in headers}
+            result: dict[str, list] = {m: [] for m in metric_names}
+            for row in rep.get("rows", []):
+                for m, i in idxs.items():
+                    result[m].append(row[i])
+            return result
+
+        try:
+            yt_analytics = build("youtubeAnalytics", "v2", credentials=creds)
+
+            # 1. Channel totals: watch time, avg duration, subs gained/lost
+            try:
+                ch_rep = yt_analytics.reports().query(
+                    ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                    metrics="estimatedMinutesWatched,averageViewDuration,subscribersGained,subscribersLost",
+                ).execute()
+                ch_rows = ch_rep.get("rows", [])
+                if ch_rows:
+                    channel["watch_time_minutes"] = int(ch_rows[0][0] or 0)
+                    channel["avg_view_duration_secs"] = int(ch_rows[0][1] or 0)
+                    channel["subscribers_gained"] = int(ch_rows[0][2] or 0)
+                    channel["subscribers_lost"] = int(ch_rows[0][3] or 0)
+            except Exception as exc:
+                logger.info("Analytics totals query failed: %s", exc)
+
+            # 2. Impressions + CTR (available from 2018 onwards)
+            try:
+                imp_rep = yt_analytics.reports().query(
+                    ids="channel==MINE", startDate="2018-01-01", endDate=today,
+                    metrics="impressions,impressionClickThroughRate",
+                ).execute()
+                imp_rows = imp_rep.get("rows", [])
+                if imp_rows:
+                    channel["impressions"] = int(imp_rows[0][0] or 0)
+                    channel["ctr"] = round(float(imp_rows[0][1] or 0), 4)
+            except Exception as exc:
+                logger.info("Analytics impressions query failed: %s", exc)
+
+            # 3. Daily views — last 28 days
+            try:
+                daily_rep = yt_analytics.reports().query(
+                    ids="channel==MINE", startDate=start_28, endDate=today,
+                    dimensions="day", metrics="views",
+                ).execute()
+                channel["daily_views"] = [
+                    {"date": row[0], "views": int(row[1] or 0)}
+                    for row in daily_rep.get("rows", [])
+                ]
+            except Exception as exc:
+                logger.info("Analytics daily views query failed: %s", exc)
+
+            # 4. Traffic sources
+            try:
+                traffic_rep = yt_analytics.reports().query(
+                    ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                    dimensions="insightTrafficSourceType",
+                    metrics="views", sort="-views", maxResults=10,
+                ).execute()
+                total_traffic = sum(int(r[1] or 0) for r in traffic_rep.get("rows", []))
+                channel["traffic_sources"] = [
+                    {
+                        "source": r[0],
+                        "label": _TRAFFIC_LABELS.get(r[0], r[0].replace("_", " ").title()),
+                        "views": int(r[1] or 0),
+                        "pct": round(int(r[1] or 0) / total_traffic * 100) if total_traffic else 0,
+                    }
+                    for r in traffic_rep.get("rows", [])
+                ]
+            except Exception as exc:
+                logger.info("Analytics traffic sources query failed: %s", exc)
+
+            # 5. Top countries
+            try:
+                country_rep = yt_analytics.reports().query(
+                    ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                    dimensions="country", metrics="views",
+                    sort="-views", maxResults=5,
+                ).execute()
+                total_country = sum(int(r[1] or 0) for r in country_rep.get("rows", []))
+                channel["top_countries"] = [
+                    {
+                        "country": r[0],
+                        "views": int(r[1] or 0),
+                        "pct": round(int(r[1] or 0) / total_country * 100) if total_country else 0,
+                    }
+                    for r in country_rep.get("rows", [])
+                ]
+            except Exception as exc:
+                logger.info("Analytics countries query failed: %s", exc)
+
+            # 6. Per-video: watch time, avg duration, impressions, CTR, avg view %
+            if video_ids:
+                try:
+                    vid_rep = yt_analytics.reports().query(
+                        ids="channel==MINE", startDate="2000-01-01", endDate=today,
+                        dimensions="video",
+                        metrics="estimatedMinutesWatched,averageViewDuration,impressions,impressionClickThroughRate,averageViewPercentage",
+                        filters="video==" + ",".join(video_ids),
+                        maxResults=len(video_ids),
+                    ).execute()
+                    headers = [h["name"] for h in vid_rep.get("columnHeaders", [])]
+                    def _col(name): return headers.index(name) if name in headers else None
+                    vid_idx = _col("video")
+                    vid_map: dict[str, dict] = {}
+                    for row in vid_rep.get("rows", []):
+                        if vid_idx is not None:
+                            def _v(c): return row[c] if c is not None else None
+                            vid_map[row[vid_idx]] = {
+                                "watch_time_minutes": int(_v(_col("estimatedMinutesWatched")) or 0),
+                                "avg_view_duration_secs": int(_v(_col("averageViewDuration")) or 0),
+                                "impressions": int(_v(_col("impressions")) or 0),
+                                "ctr": round(float(_v(_col("impressionClickThroughRate")) or 0), 4),
+                                "avg_view_pct": round(float(_v(_col("averageViewPercentage")) or 0), 1),
+                            }
+                    for v in videos:
+                        if v["video_id"] in vid_map:
+                            v.update(vid_map[v["video_id"]])
+                except Exception as exc:
+                    logger.info("Analytics per-video query failed: %s", exc)
+
+        except Exception as exc:
+            logger.info("YouTube Analytics API unavailable (may need re-auth): %s", exc)
+
+        logger.info("Fetched analytics for %d videos", len(videos))
+        return {"channel": channel, "videos": videos}
+    except Exception as exc:
+        logger.warning("fetch_channel_analytics failed: %s", exc)
+        return {"channel": {}, "videos": [], "error": str(exc)[:300]}
 
 
 # ── Channel video title fetching ──────────────────────────────────────────────
