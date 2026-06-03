@@ -207,6 +207,8 @@ def poll_auth_flow() -> dict:
 
 def disconnect_youtube():
     _auth_flow.disconnect()
+    _auth_cache["result"] = None
+    _auth_cache["ts"] = 0.0
 
 
 # ── Comment fetching ──────────────────────────────────────────────────────────
