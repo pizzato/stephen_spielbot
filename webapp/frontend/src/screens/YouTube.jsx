@@ -18,6 +18,20 @@ function fmtDate(iso) {
   try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
   catch { return iso.slice(0, 10) }
 }
+function fmtDuration(secs) {
+  if (secs == null) return '—'
+  const s = Math.round(secs)
+  const m = Math.floor(s / 60), rem = s % 60
+  const h = Math.floor(m / 60), mins = m % 60
+  if (h) return `${h}:${String(mins).padStart(2, '0')}:${String(rem).padStart(2, '0')}`
+  return `${m}:${String(rem).padStart(2, '0')}`
+}
+function fmtWatchTime(mins) {
+  if (mins == null) return '—'
+  if (mins >= 1_000_000) return (mins / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M min'
+  if (mins >= 1_000) return (mins / 1_000).toFixed(1).replace(/\.0$/, '') + 'K min'
+  return mins + ' min'
+}
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
 let _analyticsCache = null
@@ -298,15 +312,20 @@ export default function YouTube({ go, initial }) {
           {!loadingAnalytics && analytics && !analytics.error && (
             <>
               {/* Channel stat cards */}
-              <Card span={4} className="reveal reveal-d1">
+              <Card span={3} className="reveal reveal-d1">
                 <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Subscribers</div>
                 <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.subscriber_count)}</div>
               </Card>
-              <Card span={4} className="reveal reveal-d2">
+              <Card span={3} className="reveal reveal-d2">
                 <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Total views</div>
                 <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.view_count)}</div>
               </Card>
-              <Card span={4} className="reveal reveal-d3">
+              <Card span={3} className="reveal reveal-d3">
+                <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Watch time</div>
+                <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtWatchTime(analytics.channel?.watch_time_minutes)}</div>
+                {analytics.channel?.watch_time_minutes == null && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>re-auth needed</div>}
+              </Card>
+              <Card span={3} className="reveal reveal-d4">
                 <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>Videos</div>
                 <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{fmtNum(analytics.channel?.video_count)}</div>
                 <Button variant="ghost" icon="rotate" style={{ marginTop: 12 }} disabled={loadingAnalytics} onClick={fetchAnalytics}>Refresh</Button>
@@ -322,9 +341,11 @@ export default function YouTube({ go, initial }) {
                         <tr style={{ borderBottom: '1px solid var(--border)' }}>
                           <th style={{ textAlign: 'left', padding: '6px 10px 6px 0', fontWeight: 600, color: 'var(--muted)', width: 52 }}></th>
                           <th style={{ textAlign: 'left', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)' }}>Title</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Duration</th>
                           <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Views</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Watch time</th>
+                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Avg duration</th>
                           <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Likes</th>
-                          <th style={{ textAlign: 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Comments</th>
                           <th style={{ textAlign: 'right', padding: '6px 0 6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>Published</th>
                         </tr>
                       </thead>
@@ -337,14 +358,21 @@ export default function YouTube({ go, initial }) {
                                 : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}
                             </td>
                             <td style={{ padding: '8px 10px' }}>
-                              <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer"
-                                style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>
-                                {v.title}
-                              </a>
+                              <div className="row center gap-10" style={{ flexWrap: 'nowrap' }}>
+                                <a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer"
+                                  style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>
+                                  {v.title}
+                                </a>
+                                {v.privacy && v.privacy !== 'public' && (
+                                  <span style={{ flexShrink: 0, fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em', background: 'var(--surface-2)', borderRadius: 4, padding: '2px 6px', color: 'var(--muted)' }}>{v.privacy}</span>
+                                )}
+                              </div>
                             </td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
                             <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>
+                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDuration(v.avg_view_duration_secs)}</td>
                             <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.like_count)}</td>
-                            <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.comment_count)}</td>
                             <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                           </tr>
                         ))}
