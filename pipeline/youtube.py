@@ -38,6 +38,7 @@ SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
+    "https://www.googleapis.com/auth/yt-analytics.readonly",
 ]
 
 CATEGORY_OPTIONS = {
@@ -667,16 +668,30 @@ def save_suggestions(suggestions: list[dict]) -> None:
 
 # ── Channel analytics ─────────────────────────────────────────────────────────
 
+def _parse_duration(iso: str) -> str:
+    """Convert ISO 8601 video duration (PT5M30S) to m:ss / h:mm:ss."""
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return ""
+    h, mins, s = int(m.group(1) or 0), int(m.group(2) or 0), int(m.group(3) or 0)
+    if h:
+        return f"{h}:{mins:02d}:{s:02d}"
+    return f"{mins}:{s:02d}"
+
+
 def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> dict:
     """Return channel-level stats and per-video stats for the most recent uploads.
 
     Returns:
         {
-          channel: {name, subscriber_count, view_count, video_count},
+          channel: {name, subscriber_count, view_count, video_count,
+                    watch_time_minutes, avg_view_duration_secs},
           videos: [{video_id, title, published_at, thumbnail_url, view_count,
-                    like_count, comment_count}]  # newest first
+                    like_count, comment_count, duration, privacy,
+                    watch_time_minutes, avg_view_duration_secs}]
         }
     """
+    import datetime
     creds = _load_credentials(client_secrets_path)
     if not creds:
         return {"channel": {}, "videos": []}
@@ -698,6 +713,8 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
             "subscriber_count": int(stats.get("subscriberCount") or 0),
             "view_count": int(stats.get("viewCount") or 0),
             "video_count": int(stats.get("videoCount") or 0),
+            "watch_time_minutes": None,
+            "avg_view_duration_secs": None,
         }
         uploads_id = ch["contentDetails"]["relatedPlaylists"]["uploads"]
 
@@ -719,12 +736,12 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
             if not next_page:
                 break
 
-        # Batch-fetch snippet + statistics for all collected video IDs
+        # Batch-fetch snippet + statistics + contentDetails + status
         videos: list[dict] = []
         for i in range(0, len(video_ids), 50):
             batch = video_ids[i:i + 50]
             vresp = youtube.videos().list(
-                part="snippet,statistics",
+                part="snippet,statistics,contentDetails,status",
                 id=",".join(batch),
             ).execute()
             for v in vresp.get("items", []):
@@ -743,10 +760,63 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
                     "view_count": int(vstats.get("viewCount") or 0),
                     "like_count": int(vstats.get("likeCount") or 0),
                     "comment_count": int(vstats.get("commentCount") or 0),
+                    "duration": _parse_duration(v.get("contentDetails", {}).get("duration", "")),
+                    "privacy": v.get("status", {}).get("privacyStatus", ""),
+                    "watch_time_minutes": None,
+                    "avg_view_duration_secs": None,
                 })
+
         # Re-sort newest first (playlist order, but batch call may shuffle)
         id_order = {vid: idx for idx, vid in enumerate(video_ids)}
         videos.sort(key=lambda v: id_order.get(v["video_id"], 999))
+
+        # ── YouTube Analytics API (yt-analytics.readonly scope) ───────────────
+        # Graceful fallback: if the token pre-dates this scope or the API fails,
+        # we still return all Data API fields above.
+        today = datetime.date.today().isoformat()
+        try:
+            yt_analytics = build("youtubeAnalytics", "v2", credentials=creds)
+
+            # Channel-level totals
+            ch_rep = yt_analytics.reports().query(
+                ids="channel==MINE",
+                startDate="2000-01-01",
+                endDate=today,
+                metrics="estimatedMinutesWatched,averageViewDuration",
+            ).execute()
+            ch_rows = ch_rep.get("rows", [])
+            if ch_rows:
+                channel["watch_time_minutes"] = int(ch_rows[0][0] or 0)
+                channel["avg_view_duration_secs"] = int(ch_rows[0][1] or 0)
+
+            # Per-video watch time + avg duration
+            if video_ids:
+                vid_rep = yt_analytics.reports().query(
+                    ids="channel==MINE",
+                    startDate="2000-01-01",
+                    endDate=today,
+                    dimensions="video",
+                    metrics="estimatedMinutesWatched,averageViewDuration",
+                    filters="video==" + ",".join(video_ids),
+                    maxResults=len(video_ids),
+                ).execute()
+                headers = [h["name"] for h in vid_rep.get("columnHeaders", [])]
+                vid_idx = headers.index("video") if "video" in headers else None
+                wt_idx = headers.index("estimatedMinutesWatched") if "estimatedMinutesWatched" in headers else None
+                avd_idx = headers.index("averageViewDuration") if "averageViewDuration" in headers else None
+                vid_map: dict[str, dict] = {}
+                for row in vid_rep.get("rows", []):
+                    if vid_idx is not None:
+                        vid_id = row[vid_idx]
+                        vid_map[vid_id] = {
+                            "watch_time_minutes": int(row[wt_idx] or 0) if wt_idx is not None else None,
+                            "avg_view_duration_secs": int(row[avd_idx] or 0) if avd_idx is not None else None,
+                        }
+                for v in videos:
+                    if v["video_id"] in vid_map:
+                        v.update(vid_map[v["video_id"]])
+        except Exception as exc:
+            logger.info("YouTube Analytics API unavailable (may need re-auth): %s", exc)
 
         logger.info("Fetched analytics for %d videos", len(videos))
         return {"channel": channel, "videos": videos}
