@@ -49,7 +49,7 @@ const isDismissedIdea = (idea) => {
 const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(idea))
 
 export default function YouTube({ go, initial }) {
-  const [view, setView] = useState(initial?.view || 'comments')
+  const [view, setView] = useState(initial?.view || 'analytics')
   const [comments, setComments] = useState([])
   const [ideas, setIdeas] = useState([])
   const [error, setError] = useState('')
@@ -153,7 +153,7 @@ export default function YouTube({ go, initial }) {
   const fetchAnalytics = async () => {
     setLoadingAnalytics(true); setError('')
     try { const d = await api.ytAnalytics(); setAnalytics(d) }
-    catch (e) { setError(e.message) } finally { setLoadingAnalytics(false) }
+    catch (e) { setAnalytics({ channel: {}, videos: [], error: e.message }) } finally { setLoadingAnalytics(false) }
   }
   useEffect(() => { if (view === 'analytics' && !analytics && !loadingAnalytics) fetchAnalytics() }, [view])
 
@@ -166,8 +166,6 @@ export default function YouTube({ go, initial }) {
         </div>
         <div className="row center gap-10 reveal reveal-d1">
           <Chip tone="ok" dot>@StephenSpielbot</Chip>
-          <Button variant="ghost" icon="rotate" disabled={busy === 'fetch'} onClick={fetchEvaluate}>
-            {busy === 'fetch' ? 'Fetching…' : 'Fetch & evaluate'}</Button>
         </div>
       </div>
 
@@ -176,15 +174,23 @@ export default function YouTube({ go, initial }) {
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={setView} options={[
+          { value: 'analytics', label: 'Analytics' },
           { value: 'comments', label: badges.youtube_attention ? <span>Comments <span style={SEG_BADGE}>{badges.youtube_attention}</span></span> : 'Comments' },
           { value: 'ideas', label: 'AI ideas' },
           { value: 'publish', label: badges.youtube_publishable ? <span>Publish <span style={SEG_BADGE}>{badges.youtube_publishable}</span></span> : 'Publish' },
-          { value: 'analytics', label: 'Analytics' },
         ]} />
       </div>
 
       {view === 'comments' && (
         <div className="bento">
+          <Card span={12} well className="reveal reveal-d1">
+            <div className="row center between">
+              <span className="muted" style={{ fontSize: 13 }}>Pull the latest channel comments and rank video requests.</span>
+              <Button variant="ghost" icon="rotate" disabled={busy === 'fetch'} onClick={fetchEvaluate}>
+                {busy === 'fetch' ? 'Fetching…' : 'Fetch & evaluate'}
+              </Button>
+            </div>
+          </Card>
           {comments.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No comments cached. Click <strong>Fetch &amp; evaluate</strong> to pull and rank the latest channel comments.</p></Card>}
           {comments.map((c, i) => (
             <Card key={c.comment_id || i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
