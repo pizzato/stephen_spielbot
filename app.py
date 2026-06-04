@@ -196,7 +196,7 @@ def _is_job_running() -> bool:
                     if job_file.exists():
                         try:
                             job_data = json.loads(job_file.read_text())
-                            if job_data.get("status") in ("error", "cancelled"):
+                            if job_data.get("status") in ("error", "cancelled", "paused"):
                                 continue
                         except Exception:
                             pass
