@@ -635,16 +635,6 @@ def progress(work_dir: str = Query("")) -> dict:
 
     title = (job or {}).get("title", wd.name)
 
-    # Pre-generate the YouTube description in the background the first time a job
-    # completes, so the Publish tab has a description ready without the user having
-    # to click Generate.
-    if done and not _description_path(wd).exists():
-        threading.Thread(
-            target=_generate_and_cache_description,
-            args=(str(wd), title),
-            daemon=True,
-        ).start()
-
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
         "final_url": f"/api/file?path={final_path}" if done else "",
@@ -2133,6 +2123,32 @@ def _auto_post_done() -> list[str]:
     return posted
 
 
+def _ensure_descriptions() -> int:
+    """Cache YouTube descriptions for completed jobs that don't have one yet.
+    Called from the automation loop so it runs server-side, not on browser polls."""
+    cfg = gapp.load_config()
+    backend = cfg.get("llm_backend", "local")
+    if backend == "claude" and not cfg.get("claude_api_key", ""):
+        return 0
+    count = 0
+    try:
+        for _label, wd_str in gapp._list_recent_jobs(max_results=50):
+            wd = Path(wd_str)
+            if _description_path(wd).exists():
+                continue
+            title = _video_title_for(wd)
+            try:
+                _generate_and_cache_description(wd_str, title)
+                count += 1
+                if count >= 3:  # cap per tick to avoid long blocking
+                    break
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return count
+
+
 def _automation_tick() -> dict:
     cfg = gapp.load_config()
     out: dict = {}
@@ -2182,6 +2198,14 @@ _automation_started = False
 def _automation_loop():
     while True:
         time.sleep(_AUTOMATION_INTERVAL)
+        # Always cache descriptions for completed jobs — independent of automation flags
+        # and browser connections.
+        try:
+            if not any(t.name == "ensure_descriptions" for t in threading.enumerate()):
+                threading.Thread(target=_ensure_descriptions, daemon=True,
+                                 name="ensure_descriptions").start()
+        except Exception:
+            pass
         try:
             cfg = gapp.load_config()
             if cfg.get("youtube_fully_automated") or any(cfg.get(k) for k in (
