@@ -170,6 +170,17 @@ _auto_start_in_progress = threading.Event()
 
 def _is_job_running() -> bool:
     """Return True if any video generation job is currently in progress."""
+    # Check the queue first: a "creating" item means script_generate() is running
+    # but job_config.json may not exist yet — the filesystem check below would miss it.
+    try:
+        cutoff = time.time() - 86400
+        for q in yt.load_queue():
+            if q.get("status") == "creating":
+                ts = q.get("updated_at") or q.get("created_at") or time.time()
+                if ts > cutoff:
+                    return True
+    except Exception:
+        pass
     try:
         cutoff = time.time() - 86400  # ignore stale jobs older than 24 h
         for d in OUTPUT_DIR.iterdir():
