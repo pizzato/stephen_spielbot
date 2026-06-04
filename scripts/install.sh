@@ -196,8 +196,12 @@ banner "Setting up web UI"
 "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/webapp/backend/requirements.txt"
 echo "[web] backend deps installed"
 if command -v npm &>/dev/null; then
-    ( cd "$REPO_ROOT/webapp/frontend" && npm install --silent && npm run build )
-    echo "[web] frontend built → webapp/frontend/dist"
+    if ( cd "$REPO_ROOT/webapp/frontend" && npm install && npm run build ); then
+        echo "[web] frontend built → webapp/frontend/dist"
+    else
+        echo "[web] WARNING: frontend build failed — run 'make web-build' to retry."
+        echo "  (Any existing dist/ is still served; build when ready.)"
+    fi
 else
     echo "[web] WARNING: npm not found — skipping frontend build."
     echo "  Install Node.js, then run: make web-build"
