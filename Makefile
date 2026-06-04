@@ -6,7 +6,8 @@ W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
         start stop restart restart-server status worker-agent ui-worker help \
-        web-install web-build web web-dev
+        web-install web-build web web-dev \
+        launchd-install launchd-uninstall
 
 ## Install everything: local deps, models, workers, config.yaml, AND the web UI
 ## (backend deps + React build). First run seeds config.yaml; set workers
@@ -49,6 +50,16 @@ restart:
 	else \
 	    $(MAKE) --no-print-directory stop && $(MAKE) --no-print-directory start; \
 	fi
+
+## Install the web server as a macOS LaunchAgent — auto-starts on login and
+## auto-restarts on crash. Also run by 'make install'. After this, make
+## start/stop/restart/restart-server use launchd automatically.
+launchd-install:
+	@bash $(SCRIPTS)/launchd.sh install
+
+## Remove the LaunchAgent service (reverts to the manual nohup approach).
+launchd-uninstall:
+	@bash $(SCRIPTS)/launchd.sh uninstall
 
 ## Restart only the web app (workers keep running — use after UI/code changes).
 restart-server:
@@ -112,6 +123,8 @@ help:
 	@echo "  restart         Stop everything, then start everything"
 	@echo "  restart-server  Restart only the web app (workers keep running)"
 	@echo "  status          Check health of the app, UI worker(s), and every ComfyUI worker"
+	@echo "  launchd-install   Install web server as a macOS LaunchAgent (auto-start/restart)"
+	@echo "  launchd-uninstall Remove the LaunchAgent (reverts to manual nohup)"
 	@echo ""
 	@echo "  start/stop/restart/status all accept  W=<host>  to target one worker:"
 	@echo "    make stop    W=s2       # kill ComfyUI on s2"

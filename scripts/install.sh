@@ -203,6 +203,15 @@ else
     echo "  Install Node.js, then run: make web-build"
 fi
 
+# ── 3c. macOS LaunchAgent (auto-start + auto-restart on login) ───────────────
+
+banner "Installing system service (launchd)"
+if [[ "$(uname)" == "Darwin" ]]; then
+    bash "$REPO_ROOT/scripts/launchd.sh" install
+else
+    echo "[launchd] skipped (not macOS)"
+fi
+
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
 
 HOSTS=$(remote_hosts)

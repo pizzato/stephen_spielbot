@@ -25,10 +25,24 @@ check_comfyui() {
 
 # ── Web app ────────────────────────────────────────────────────────────────────
 
+LABEL="com.stephen-spielbot.server"
+PLIST_DST="$HOME/Library/LaunchAgents/${LABEL}.plist"
+DOMAIN="gui/$(id -u)"
+SERVICE="${DOMAIN}/${LABEL}"
+
 echo "=== Stephen Spielbot status ==="
 echo ""
 echo "Web app:"
-if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+if [[ -f "$PLIST_DST" ]]; then
+    if launchctl print "$SERVICE" &>/dev/null 2>&1; then
+        PID=$(launchctl print "$SERVICE" 2>/dev/null | awk '/pid = /{print $NF}')
+        [[ -z "$PID" ]] && PID=$(pgrep -f "uvicorn webapp.backend.main" 2>/dev/null | head -1 || echo "starting")
+        echo "  ✓ Running  (launchd, pid=${PID})  http://localhost:8001"
+    else
+        echo "  ✗ Not running  (launchd service installed but stopped — run: make start)"
+        ALL_OK=false
+    fi
+elif [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     echo "  ✓ Running  (PID $(cat "$PID_FILE"))  http://localhost:8001"
 elif pgrep -f "uvicorn webapp.backend.main" &>/dev/null; then
     echo "  ✓ Running  (PID $(pgrep -f 'uvicorn webapp.backend.main'))  http://localhost:8001"
