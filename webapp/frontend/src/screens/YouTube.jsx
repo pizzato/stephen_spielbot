@@ -47,6 +47,12 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
+const LENGTH_PRESETS = {
+  short:  { scenes: 6,  resolution: 'Portrait FHD (1080×1920)' },
+  medium: { scenes: 12, resolution: 'Landscape FHD (1920×1080)' },
+  long:   { scenes: 20, resolution: 'Landscape FHD (1920×1080)' },
+}
+
 let _analyticsCache = null
 
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
@@ -85,6 +91,7 @@ export default function YouTube({ go, initial }) {
   const [status, setStatus] = useState('')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [guidance, setGuidance] = useState('')
+  const [videoLength, setVideoLength] = useState('medium')
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
   const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
@@ -163,10 +170,11 @@ export default function YouTube({ go, initial }) {
       setBusy('')
     }
   }
-  const queueIdea = async (idea, title, scenes) => {
+  const queueIdea = async (idea, title) => {
+    const { scenes, resolution } = LENGTH_PRESETS[videoLength]
     setError('')
     try {
-      await api.queueAdd(title, scenes, idea.reason || '')
+      await api.queueAdd(title, scenes, idea.reason || '', resolution)
       await closeIdea(idea, 'used')
       setStatus('Added to queue.')
       go('queue')
@@ -174,9 +182,10 @@ export default function YouTube({ go, initial }) {
       setError(e.message)
     }
   }
-  const createIdea = async (idea, title, scenes) => {
+  const createIdea = async (idea, title) => {
+    const { scenes, resolution } = LENGTH_PRESETS[videoLength]
     await closeIdea(idea, 'used')
-    go('create', { title, description: idea.reason || '', scenes })
+    go('create', { title, description: idea.reason || '', scenes, resolution })
   }
 
   const fetchAnalytics = async () => {
@@ -274,7 +283,7 @@ export default function YouTube({ go, initial }) {
               <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
               <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Type a theme to steer the AI, or leave it blank for ideas from your channel's gaps.</div></div>
             </div>
-            <div className="row gap-10 center mt-16">
+            <div className="row gap-10 center mt-16" style={{ flexWrap: 'wrap' }}>
               <div className="grow">
                 <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
                   value={guidance} onChange={(e) => setGuidance(e.target.value)}
@@ -283,10 +292,18 @@ export default function YouTube({ go, initial }) {
               <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
                 {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
             </div>
+            <div className="row center gap-10 mt-16" style={{ flexWrap: 'wrap' }}>
+              <span className="muted" style={{ fontSize: 12.5 }}>Video length</span>
+              <Segmented value={videoLength} onChange={setVideoLength} options={[
+                { value: 'short',  label: `Short · ${LENGTH_PRESETS.short.scenes} scenes · portrait` },
+                { value: 'medium', label: `Medium · ${LENGTH_PRESETS.medium.scenes} scenes · landscape` },
+                { value: 'long',   label: `Long · ${LENGTH_PRESETS.long.scenes} scenes · landscape` },
+              ]} />
+            </div>
           </Card>
           {ideas.map((idea, i) => {
             const title = idea.title || idea.final_title || idea
-            const scenes = idea.suggested_scene_count || idea.n_scenes || idea.scenes || 12
+            const { scenes: presetScenes } = LENGTH_PRESETS[videoLength]
             const key = ideaKey(idea) || `${title}-${i}`
             return (
               <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
@@ -296,11 +313,11 @@ export default function YouTube({ go, initial }) {
                 </div>
                 {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
                 <div className="row center between mt-16 row--wrap gap-10">
-                  <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span>
+                  <span className="muted" style={{ fontSize: 12.5 }}>{presetScenes} scenes · {tier(presetScenes)}</span>
                   <div className="row gap-10">
                     <Button variant="ghost" icon="xmark" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea)}>Close</Button>
-                    <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title, scenes)}>Queue</Button>
-                    <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'idea-' + key} onClick={() => createIdea(idea, title, scenes)}>Create</Button>
+                    <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title)}>Queue</Button>
+                    <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'idea-' + key} onClick={() => createIdea(idea, title)}>Create</Button>
                   </div>
                 </div>
               </Card>

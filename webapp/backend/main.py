@@ -1885,6 +1885,7 @@ class QueueAddBody(BaseModel):
     title: str
     n_scenes: int = 0
     prompt: str = ""
+    resolution: str = ""
 
 
 @api.post("/api/queue/add")
@@ -1896,8 +1897,14 @@ def queue_add(body: QueueAddBody) -> dict:
     comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
                "suggested_scene_count": n}
     entry = yt.add_to_queue(comment, title, source="manual")
-    if entry and body.prompt.strip():
-        yt.update_queue_item(entry["id"], video_prompt=body.prompt.strip())
+    if entry:
+        updates = {}
+        if body.prompt.strip():
+            updates["video_prompt"] = body.prompt.strip()
+        if body.resolution.strip():
+            updates["gen_resolution"] = body.resolution.strip()
+        if updates:
+            yt.update_queue_item(entry["id"], **updates)
     return {"ok": bool(entry), "queue": yt.load_queue()}
 
 
