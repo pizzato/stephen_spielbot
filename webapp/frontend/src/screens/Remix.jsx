@@ -10,6 +10,13 @@ export default function Remix({ workDir, go }) {
   const [status, setStatus] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // Aspect ratio is read from the actual video so portrait films aren't letterboxed.
+  const [aspect, setAspect] = useState('16 / 9')
+  const [portrait, setPortrait] = useState(false)
+  const onVideoMeta = (e) => {
+    const w = e.target.videoWidth, h = e.target.videoHeight
+    if (w && h) { setAspect(`${w} / ${h}`); setPortrait(h > w) }
+  }
 
   useEffect(() => {
     api.loadRemix(workDir)
@@ -74,7 +81,9 @@ export default function Remix({ workDir, go }) {
 
       <div className="bento">
         <Card span={8} className="reveal reveal-d1" style={{ padding: 0, overflow: 'hidden' }}>
-          <video src={data.final_url} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: '16/9' }} />
+          <video src={data.final_url} controls onLoadedMetadata={onVideoMeta}
+            style={{ display: 'block', background: '#15171a', aspectRatio: aspect, margin: '0 auto',
+              width: portrait ? 'auto' : '100%', height: portrait ? '78vh' : 'auto', maxHeight: '78vh' }} />
           <div className="row center between" style={{ padding: '16px 20px' }}>
             <Chip tone="ok" dot>Final cut</Chip>
             <span className="muted mono">{data.work_dir}</span>
