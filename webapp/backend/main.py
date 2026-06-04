@@ -1807,6 +1807,31 @@ def queue_abandon(body: QueueIdBody) -> dict:
     return {"ok": True, "queue": yt.load_queue()}
 
 
+@api.post("/api/queue/retry-reply")
+def queue_retry_reply(body: QueueIdBody) -> dict:
+    """Re-attempt the completion reply for a posted queue item (e.g. if it failed on first publish)."""
+    item = _queue_item_by_id(body.id)
+    if not item:
+        raise HTTPException(404, "Queue item not found.")
+    if item.get("status") != "posted":
+        raise HTTPException(400, "Queue item is not in 'posted' state.")
+    url = item.get("youtube_url", "")
+    if not url:
+        raise HTTPException(400, "Queue item has no YouTube URL yet.")
+    title = item.get("final_title") or item.get("title") or ""
+    # Clear any previous failed attempt so _post_completion_reply will retry.
+    if not item.get("completion_replied"):
+        yt.update_queue_item(body.id, completion_reply_attempted_at=None, completion_reply_error="")
+    result = _post_completion_reply(body.id, title, url)
+    if result.get("already_replied"):
+        return {"ok": True, "message": "Already replied."}
+    if result.get("success"):
+        return {"ok": True, "message": "Reply sent."}
+    if not result.get("attempted"):
+        raise HTTPException(400, result.get("reason", "Could not send reply."))
+    raise HTTPException(502, f"Reply failed: {result.get('error', 'unknown error')}")
+
+
 class QueueAddBody(BaseModel):
     title: str
     n_scenes: int = 0
