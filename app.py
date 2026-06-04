@@ -813,19 +813,20 @@ def on_remix(
     combined_path_str: str,
     music_path_str: str,
     ambient_path_str: str,
-    music_vol: float,
     voice_vol: float,
+    music_vol: float,
     ambient_vol: float,
-    *_,
 ):
-    """Re-mux the final video with new music/voice/ambient volumes.
+    """Re-mux the final video with new voice/music/ambient volumes.
 
-    Returns a 4-tuple whose first element is the final video path on success
-    (empty string on failure), matching the web backend's remix adapter.
+    Volumes are percentages (100 = unchanged), matching the UI sliders and
+    job_config; they're divided by 100 into the fractional gains that
+    mix_background_music expects. Returns ``(final_video_path, message)`` — the
+    path is ``""`` on failure and ``message`` explains the outcome.
     """
     combined_path = Path(combined_path_str)
     if not combined_path.exists():
-        return "", None, None, None
+        return "", "combined.mp4 not found — nothing to remix."
     work_dir = combined_path.parent
     final_video = work_dir / f"{work_dir.name}.mp4"
     music_path = Path(music_path_str) if music_path_str else None
@@ -833,20 +834,26 @@ def on_remix(
     try:
         from pipeline.assembler import mix_background_music
         mix_background_music(
-            combined_video=work_dir / "combined.mp4",
+            video_path=combined_path,
             music_path=music_path,
             output_path=final_video,
-            volume=music_vol,
-            voice_volume=voice_vol,
+            volume=music_vol / 100.0,
+            voice_volume=voice_vol / 100.0,
             ambient_path=ambient_path,
-            ambient_volume=ambient_vol,
+            ambient_volume=ambient_vol / 100.0,
         )
-        # Reset volumes to the new values in job_config so a re-render keeps them.
-        _update_job_config_volumes(work_dir, music_vol, voice_vol, ambient_vol)
-        return str(final_video), None, None, None
-    except Exception:
+        # Persist the new volumes to job_config so a later re-render keeps them.
+        try:
+            cfg_path = work_dir / "job_config.json"
+            jc = json.loads(cfg_path.read_text())
+            jc.update(voice_vol=voice_vol, music_vol=music_vol, ambient_vol=ambient_vol)
+            cfg_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            logger.warning("Could not persist remix volumes to job_config", exc_info=True)
+        return str(final_video), "Re-mixed the audio and re-muxed the film."
+    except Exception as e:
         logger.exception("Remix failed")
-        return "", None, None, None
+        return "", f"Remix failed: {str(e).splitlines()[0][:200]}"
 
 
 # ── LTX Upscale ──────────────────────────────────────────────────────────────
