@@ -788,10 +788,14 @@ def remix_apply(body: RemixBody) -> dict:
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
-    final_path, message = gapp.on_remix(str(combined), str(music),
-                                        str(ambient) if ambient.exists() else "",
-                                        body.voice_vol, body.music_vol, body.ambient_vol)
-    return {"message": message, "final_url": f"/api/file?path={final_path}" if final_path else ""}
+    final_path, message = gapp.on_remix(
+        str(combined), str(music),
+        str(ambient) if ambient.exists() else "",
+        voice_vol=body.voice_vol, music_vol=body.music_vol, ambient_vol=body.ambient_vol,
+    )
+    if not final_path:
+        raise HTTPException(500, message or "Remix failed.")
+    return {"message": message, "final_url": f"/api/file?path={final_path}"}
 
 
 # ── queue ────────────────────────────────────────────────────────────────────
