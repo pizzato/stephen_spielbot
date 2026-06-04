@@ -75,8 +75,11 @@ else
     if [[ ! -f "$REPO_ROOT/webapp/frontend/dist/index.html" ]]; then
         echo "  [app] WARNING: webapp/frontend/dist not found — run 'make web-build' to build the UI"
     fi
+    # --timeout-keep-alive 30: keep idle HTTP/1.1 connections open longer than the
+    # UI's poll cadence (progress 2.5s, badges 5s) so the server doesn't close a
+    # socket just as the next poll reuses it (surfaces as a browser "NetworkError").
     nohup "$PYTHON" -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port "$WEB_PORT" \
-        >/tmp/stephen_spielbot.out 2>&1 &
+        --timeout-keep-alive 30 >/tmp/stephen_spielbot.out 2>&1 &
     echo $! > "$PID_FILE"
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi

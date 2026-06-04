@@ -18,7 +18,7 @@ export default function Progress({ workDir, job, go }) {
     const tick = async () => {
       try {
         const data = await api.getProgress(workDir)
-        if (alive) setP(data)
+        if (alive) { setP(data); setError('') }
       } catch (e) { if (alive) setError(e.message) }
     }
     tick()

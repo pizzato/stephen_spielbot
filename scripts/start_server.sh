@@ -21,7 +21,10 @@ if [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
 else
     mkdir -p "$(dirname "$APP_LOG")"
     cd "$REPO_ROOT"
-    nohup "$PYTHON" -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port 8001 >/tmp/stephen_spielbot.out 2>&1 &
+    # --timeout-keep-alive 30: keep idle HTTP/1.1 connections open longer than the
+    # UI's poll cadence (progress 2.5s, badges 5s) so the server doesn't close a
+    # socket just as the next poll reuses it (surfaces as a browser "NetworkError").
+    nohup "$PYTHON" -m uvicorn webapp.backend.main:app --host 127.0.0.1 --port 8001 --timeout-keep-alive 30 >/tmp/stephen_spielbot.out 2>&1 &
     echo $! > "$PID_FILE"
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
