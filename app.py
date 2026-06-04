@@ -86,15 +86,18 @@ _RESOLUTIONS = {
     "Landscape Fast (512×288)":    (512, 288),
     "Landscape (832×480)":         (832, 480),
     "Landscape HD (1024×576)":     (1024, 576),
+    "Landscape 720p (1280×720)":   (1280, 720),
     "Landscape FHD (1920×1080)":   (1920, 1080),
     # Portrait 9:16
     "Portrait Fast (288×512)":     (288, 512),
     "Portrait (480×832)":          (480, 832),
     "Portrait HD (576×1024)":      (576, 1024),
+    "Portrait 720p (720×1280)":    (720, 1280),
     "Portrait FHD (1080×1920)":    (1080, 1920),
     # Square 1:1
     "Square (512×512)":            (512, 512),
     "Square HD (576×576)":         (576, 576),
+    "Square 720p (720×720)":       (720, 720),
     "Square FHD (1080×1080)":      (1080, 1080),
 }
 _DEFAULT_RESOLUTION = "Landscape FHD (1920×1080)"
