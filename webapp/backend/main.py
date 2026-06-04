@@ -1959,13 +1959,14 @@ def _start_queue_item(item: dict) -> dict:
         return {"job_id": job_id, "work_dir": wd, "title": title}
 
     topic = item.get("video_prompt") or title
+    resolution = item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
     gen = script_generate(GenerateScriptBody(
-        video_title=title, topic=topic, n_scenes=n,
+        video_title=title, topic=topic, n_scenes=n, resolution=resolution,
         visual_style=cfg.get("default_visual_style") or None))
     start_generation(GenerateBody(
         job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
         n_scenes=n, voice=cfg.get("default_voice", ""),
-        resolution=cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        resolution=resolution,
         music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
     yt.update_queue_item(item["id"], status="creating",
                          video_job_id=gen["job_id"], work_dir=gen["work_dir"])

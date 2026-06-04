@@ -41,6 +41,7 @@ export default function App() {
       title: payload?.title ?? payload?.topic ?? '',
       description: payload?.description ?? '',
       scenes: payload?.scenes ?? null,
+      resolution: payload?.resolution ?? '',
     })
     // Deep-link into the YouTube tab's Publish view (e.g. from a Films card).
     if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
