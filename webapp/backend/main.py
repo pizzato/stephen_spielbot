@@ -1355,12 +1355,21 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         raise HTTPException(404, "No finished film found.")
     final = gapp._final_path_for_work_dir(wd)
     cover = wd / "cover.png"
+    meta = {}
+    try:
+        job_json = wd / "job.json"
+        if job_json.exists():
+            meta = json.loads(job_json.read_text())
+    except Exception:
+        pass
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
         "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
         "description": _cached_description(wd),
+        "youtube_url": meta.get("youtube_url", ""),
+        "youtube_video_id": meta.get("youtube_video_id", ""),
     }
 
 

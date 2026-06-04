@@ -16,6 +16,7 @@ export default function Publish({ initialWorkDir }) {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [confirming, setConfirming] = useState(false)
+  const [youtubeUrl, setYoutubeUrl] = useState('')
   const pollRef = useRef(null)
 
   const refreshAuth = () => api.ytAuthStatus().then(setAuth).catch(() => {})
@@ -36,13 +37,14 @@ export default function Publish({ initialWorkDir }) {
   }, [initialWorkDir])
 
   const selectFilm = async (wd) => {
-    setWorkDir(wd); setError(''); setStatus(''); setConfirming(false)
+    setWorkDir(wd); setError(''); setStatus(''); setConfirming(false); setYoutubeUrl('')
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
       setDescription(p.description || '')
       setCoverUrl(p.cover_url || '')
       setFinalUrl(p.final_url || '')
+      setYoutubeUrl(p.youtube_url || '')
     } catch (e) { setError(e.message) }
   }
 
@@ -106,6 +108,7 @@ export default function Publish({ initialWorkDir }) {
             const s = await api.ytPostStatus(task_id)
             if (s.status === 'done') {
               setStatus(s.message || 'Uploaded.')
+              setYoutubeUrl(s.url || '')
               setConfirming(false)
               refreshAuth()
               resolve()
@@ -172,9 +175,14 @@ export default function Publish({ initialWorkDir }) {
             <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Uploads are flagged as <strong>synthetic media</strong> per the channel's automated settings.</span>
           </div>
 
-          {confirming ? (
+          {youtubeUrl ? (
+            <div className="row center gap-10">
+              <Button variant="ghost" icon="check" disabled style={{ cursor: 'default' }}>Uploaded to YouTube</Button>
+              <a className="btn btn--ghost" href={youtubeUrl} target="_blank" rel="noreferrer"><Icon name="youtube" /> View on YouTube</a>
+            </div>
+          ) : confirming ? (
             <div className="row gap-10 center">
-              <span className="muted" style={{ fontSize: 13 }}>Upload “{title}” as <strong>{privacy}</strong>?</span>
+              <span className="muted" style={{ fontSize: 13 }}>Upload "{title}" as <strong>{privacy}</strong>?</span>
               <Button variant="primary" icon="youtube" disabled={busy === 'upload'} onClick={upload}>{busy === 'upload' ? 'Uploading…' : 'Confirm upload'}</Button>
               <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
             </div>
