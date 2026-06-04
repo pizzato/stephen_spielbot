@@ -70,9 +70,10 @@ export default function Queue({ go }) {
         <Chip tone={tone} dot>{label}</Chip>
         <div className="row gap-6">
           {isPending && <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
+          {it.status === 'creating' && <Button variant="ghost" icon="stop" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueAbandon(it.id))}>Cancel</Button>}
           {['done', 'upload_pending'].includes(it.status) && <Button variant="ghost" icon="youtube" onClick={() => go('youtube')}>Publish</Button>}
-          {(isPending || ['done', 'upload_pending', 'posted', 'cancelled'].includes(it.status)) &&
-            <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
+          {(isPending || it.status === 'creating' || ['done', 'upload_pending', 'posted', 'cancelled'].includes(it.status)) &&
+            <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => it.status === 'creating' ? api.queueAbandon(it.id) : api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
         </div>
       </div>
     )
