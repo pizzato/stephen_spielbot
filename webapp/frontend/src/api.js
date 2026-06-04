@@ -8,7 +8,20 @@ async function req(method, path, body) {
     opts.headers['Content-Type'] = 'application/json'
     opts.body = JSON.stringify(body)
   }
-  const res = await fetch(`/api${path}`, opts)
+  // A bare fetch() rejection (TypeError) means the connection failed before any
+  // response — e.g. the server closed an idle keep-alive socket just as a poll
+  // reused it. These are transient, so retry idempotent GETs a couple of times
+  // before surfacing the error. POSTs aren't retried (avoid double-submits).
+  let res
+  for (let attempt = 0; ; attempt++) {
+    try {
+      res = await fetch(`/api${path}`, opts)
+      break
+    } catch (e) {
+      if (method !== 'GET' || attempt >= 2) throw e
+      await new Promise((r) => setTimeout(r, 150 * (attempt + 1)))
+    }
+  }
   const text = await res.text()
   let data
   try { data = text ? JSON.parse(text) : {} } catch { data = { detail: text } }
