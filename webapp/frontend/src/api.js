@@ -73,7 +73,7 @@ export const api = {
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
   queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueRetryReply: (id) => req('POST', '/queue/retry-reply', { id }),
-  queueAdd: (title, nScenes, prompt) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '' }),
+  queueAdd: (title, nScenes, prompt, resolution) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '', resolution: resolution || '' }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
   queueFromJob: (body) => req('POST', '/queue/from-job', body),
 

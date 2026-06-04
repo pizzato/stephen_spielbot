@@ -40,6 +40,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setVideoTitle(seed.title || '')
     setDirection(seed.description || '')
     if (seed.scenes) setScenes(seed.scenes)
+    if (seed.resolution) setResolution(seed.resolution)
   }, [seed])
 
   useEffect(() => {
@@ -47,6 +48,7 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [meta.config?.default_n_scenes, seed?.scenes])
 
   useEffect(() => {
+    if (seed?.resolution) return
     setResolution(meta.config?.resolution || meta.default_resolution || '')
   }, [meta.config?.resolution, meta.default_resolution])
 
