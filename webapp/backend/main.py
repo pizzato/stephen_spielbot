@@ -276,6 +276,18 @@ def load_script(work_dir: str = Query("")) -> dict:
         )
         store.upsert_scenes(job_id, scenes_list)
         rows = store.scene_rows(job_id)
+        # Back-fill preview_path for scenes whose image already exists on disk
+        # (e.g. first_frame generated during a previous video render).
+        for r in rows:
+            if r.get("preview_path") and Path(r["preview_path"]).exists():
+                continue
+            sid = int(r["id"])
+            for suffix in ("_preview.png", "_first_frame.png"):
+                candidate = wd / f"scene_{sid:02d}{suffix}"
+                if candidate.exists():
+                    store.update_scene_preview(job_id, sid, candidate)
+                    r["preview_path"] = str(candidate)
+                    break
     finally:
         store.close()
 
