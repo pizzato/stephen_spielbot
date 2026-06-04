@@ -94,6 +94,7 @@ export const api = {
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
   ytPost: (body) => req('POST', '/youtube/post', body),
+  ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),
 }
 
 // Build a URL the <img>/<video> tags can load straight from the backend.
