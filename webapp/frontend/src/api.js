@@ -41,6 +41,7 @@ export const api = {
   resumeJob: (workDir) => req('POST', '/jobs/resume', { work_dir: workDir }),
   retryJob: (workDir) => req('POST', '/jobs/retry', { work_dir: workDir }),
   cancelJob: (workDir) => req('POST', '/jobs/cancel', { work_dir: workDir }),
+  deleteJob: (workDir) => req('POST', '/jobs/delete', { work_dir: workDir }),
 
   listJobs: () => req('GET', '/jobs'),
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
@@ -70,6 +71,7 @@ export const api = {
   // queue management
   queueMove: (id, direction) => req('POST', '/queue/move', { id, direction }),
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
+  queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueAdd: (title, nScenes, prompt) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '' }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
   queueFromJob: (body) => req('POST', '/queue/from-job', body),

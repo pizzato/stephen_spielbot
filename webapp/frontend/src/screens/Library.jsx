@@ -35,7 +35,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix }) {
                   {j.running ? (
                     <Button variant="ghost" icon="gauge-high" onClick={() => onOpenProgress(j.work_dir)}>View render</Button>
                   ) : (
-                    <Button variant="ghost" icon="play" onClick={() => api.resumeJob(j.work_dir).then((r) => onOpenProgress(r.work_dir || j.work_dir))}>Continue</Button>
+                    <Button variant="ghost" icon="play" onClick={() => onOpenProgress(j.work_dir)}>Continue</Button>
                   )}
                 </div>
               </Card>

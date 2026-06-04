@@ -115,6 +115,13 @@ export default function Progress({ workDir, job, go }) {
               <Button variant="ghost" icon="play" disabled={action === 'busy'} onClick={() => doAction(api.resumeJob)}>Resume</Button>
               <Button variant="danger" icon="stop" disabled={action === 'busy'} onClick={() => doAction(api.cancelJob)}>Cancel</Button>
             </div>
+            <div className="mt-10">
+              <Button variant="danger" icon="trash-can" disabled={action === 'busy'} onClick={async () => {
+                setAction('busy'); setError('')
+                try { await api.deleteJob(p?.work_dir || workDir); go('library') }
+                catch (e) { setError(e.message); setAction('') }
+              }}>Delete job &amp; files</Button>
+            </div>
           </Card>
         </div>
       </div>

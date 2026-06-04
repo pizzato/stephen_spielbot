@@ -667,6 +667,34 @@ def cancel_job(body: JobActionBody) -> dict:
     return {"message": gapp.on_cancel_active_job(body.work_dir)}
 
 
+@api.post("/api/jobs/delete")
+def delete_job(body: JobActionBody) -> dict:
+    """Cancel an active render, remove any queue entry pointing to it, then delete its files."""
+    work_dir = body.work_dir
+    try:
+        gapp.on_cancel_active_job(work_dir)
+    except Exception:
+        pass
+    for item in yt.load_queue():
+        if item.get("work_dir") == work_dir:
+            yt.remove_queue_item(item["id"])
+    wd = Path(work_dir)
+    out = gapp.OUTPUT_DIR.resolve()
+    try:
+        wd_res = wd.resolve()
+    except OSError:
+        raise HTTPException(400, "Invalid path.")
+    if not work_dir or wd_res == out or wd_res.parent != out:
+        raise HTTPException(400, "Refusing to delete outside the videos directory.")
+    import shutil
+    if wd.exists():
+        shutil.rmtree(wd, ignore_errors=True)
+    canonical = gapp.OUTPUT_DIR / f"{wd.name}.mp4"
+    if canonical.exists():
+        canonical.unlink(missing_ok=True)
+    return {"ok": True, "deleted": wd.name}
+
+
 # ── library / recent jobs ────────────────────────────────────────────────────
 
 @api.get("/api/jobs")
@@ -1761,6 +1789,22 @@ class QueueIdBody(BaseModel):
 def queue_remove(body: QueueIdBody) -> dict:
     ok = yt.remove_queue_item(body.id)
     return {"ok": ok, "queue": yt.load_queue()}
+
+
+@api.post("/api/queue/abandon")
+def queue_abandon(body: QueueIdBody) -> dict:
+    """Cancel a stuck 'creating' queue item: stop any associated render and remove from queue."""
+    item = next((q for q in yt.load_queue() if q.get("id") == body.id), None)
+    if not item:
+        raise HTTPException(404, "Queue item not found.")
+    work_dir = item.get("work_dir", "")
+    if work_dir:
+        try:
+            gapp.on_cancel_active_job(work_dir)
+        except Exception:
+            pass
+    yt.remove_queue_item(body.id)
+    return {"ok": True, "queue": yt.load_queue()}
 
 
 class QueueAddBody(BaseModel):
