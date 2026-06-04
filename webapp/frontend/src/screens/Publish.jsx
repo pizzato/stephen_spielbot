@@ -96,13 +96,33 @@ export default function Publish({ initialWorkDir }) {
   }
 
   const upload = async () => {
-    setBusy('upload'); setError(''); setStatus('')
+    setBusy('upload'); setError(''); setStatus('Starting upload…')
+    let pollTimer = null
     try {
-      const r = await api.ytPost({ work_dir: workDir, title, description, category, privacy })
-      setStatus(r.message || 'Uploaded.')
-      setConfirming(false)
-      refreshAuth()
-    } catch (e) { setError(e.message) } finally { setBusy('') }
+      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const s = await api.ytPostStatus(task_id)
+            if (s.status === 'done') {
+              setStatus(s.message || 'Uploaded.')
+              setConfirming(false)
+              refreshAuth()
+              resolve()
+            } else if (s.status === 'error') {
+              reject(new Error(s.error || 'Upload failed'))
+            } else {
+              setStatus('Uploading to YouTube… (this can take a few minutes)')
+              pollTimer = setTimeout(check, 4000)
+            }
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setError(e.message) } finally {
+      clearTimeout(pollTimer)
+      setBusy('')
+    }
   }
 
   const canUpload = auth.connected && workDir && title.trim() && finalUrl

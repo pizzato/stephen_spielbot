@@ -14,6 +14,7 @@ Run it from the repo root:
 import json
 import re
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -1585,32 +1586,27 @@ def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
     return {"attempted": True, "success": False, "error": error}
 
 
-@api.post("/api/youtube/post")
-def yt_post(body: PostBody) -> dict:
-    wd = Path(body.work_dir)
-    if not wd.exists():
-        raise HTTPException(404, "Film directory not found.")
-    final = gapp._final_path_for_work_dir(wd)
-    if not (final.exists() and final.stat().st_size > 10_000):
-        raise HTTPException(400, "No final video found for this film.")
-    cover = wd / "cover.png"
-    thumb = str(cover) if cover.exists() and cover.stat().st_size > 1000 else None
+# In-memory store for background upload tasks {task_id -> {status, ...}}
+_upload_tasks: dict = {}
 
+
+def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
+    """Background thread: upload to YouTube, then send completion reply."""
     try:
         result = _call_matching(
             yt.upload_video,
             client_secrets_path=_client_secrets_path(), client_secrets=_client_secrets_path(),
             video_path=str(final), path=str(final), video=str(final), file=str(final),
             filename=str(final), video_file=str(final),
-            title=body.title, description=body.description,
-            category=body.category, category_id=body.category, categoryId=body.category,
-            privacy=body.privacy, privacy_status=body.privacy, privacyStatus=body.privacy,
+            title=body_dict["title"], description=body_dict["description"],
+            category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
+            privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
             thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
         )
     except Exception as e:
-        raise HTTPException(502, f"Upload failed: {str(e).splitlines()[0][:240]}")
+        _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        return
 
-    # Normalise the return into {video_id, url}.
     video_id, url = "", ""
     if isinstance(result, dict):
         video_id = result.get("video_id") or result.get("id") or result.get("videoId") or ""
@@ -1620,8 +1616,6 @@ def yt_post(body: PostBody) -> dict:
     if video_id and not url:
         url = f"https://youtu.be/{video_id}"
 
-    # Side effects: stamp the job, mark its queue item posted, and notify the
-    # original requester when this upload came from a YouTube comment.
     queue_item_id = ""
     try:
         gapp._write_job_meta(wd, youtube_video_id=video_id, youtube_url=url, status="done")
@@ -1636,7 +1630,7 @@ def yt_post(body: PostBody) -> dict:
     except Exception:
         pass
 
-    completion_reply = _post_completion_reply(queue_item_id, body.title, url)
+    completion_reply = _post_completion_reply(queue_item_id, body_dict["title"], url)
     try:
         gapp._write_job_meta(
             wd,
@@ -1647,9 +1641,43 @@ def yt_post(body: PostBody) -> dict:
     except Exception:
         pass
 
-    return {"ok": True, "video_id": video_id, "url": url,
-            "message": f"Uploaded — {url}" if url else "Uploaded to YouTube.",
-            "completion_reply": completion_reply}
+    _upload_tasks[task_id] = {
+        "status": "done",
+        "video_id": video_id,
+        "url": url,
+        "message": f"Uploaded — {url}" if url else "Uploaded to YouTube.",
+        "completion_reply": completion_reply,
+    }
+
+
+@api.post("/api/youtube/post")
+def yt_post(body: PostBody) -> dict:
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    final = gapp._final_path_for_work_dir(wd)
+    if not (final.exists() and final.stat().st_size > 10_000):
+        raise HTTPException(400, "No final video found for this film.")
+    cover = wd / "cover.png"
+    thumb = str(cover) if cover.exists() and cover.stat().st_size > 1000 else None
+
+    task_id = uuid.uuid4().hex[:12]
+    _upload_tasks[task_id] = {"status": "uploading"}
+    threading.Thread(
+        target=_run_upload_task,
+        args=(task_id, {"title": body.title, "description": body.description,
+                        "category": body.category, "privacy": body.privacy}, wd, final, thumb),
+        daemon=True,
+    ).start()
+    return {"ok": True, "task_id": task_id}
+
+
+@api.get("/api/youtube/post/status")
+def yt_post_status(task_id: str) -> dict:
+    task = _upload_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Upload task not found.")
+    return {"ok": True, **task}
 
 
 # ── YouTube comment actions (fetch / evaluate / approve / reject / reply) ─────
