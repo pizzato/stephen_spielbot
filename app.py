@@ -343,6 +343,8 @@ def _write_job_meta(work_dir: Path, **updates) -> dict:
     except Exception:
         meta = {"work_dir": str(work_dir), "created_at": time.time()}
     meta.update(updates)
+    if "error" in updates and updates["error"] is None:
+        meta.pop("error", None)
     meta["updated_at"] = time.time()
     meta_path.write_text(json.dumps(meta, indent=2))
     return meta
@@ -373,6 +375,7 @@ def _launch_generation_job(work_dir: Path) -> dict:
         work_dir,
         pid=proc.pid,
         status="running",
+        error=None,
         log_path=str(log_path),
         command=[sys.executable, str(RESUME_SCRIPT), str(work_dir)],
     )
@@ -1092,8 +1095,6 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
 
     logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
     return queue_item
-
-
 
 
 

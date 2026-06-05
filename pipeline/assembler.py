@@ -14,6 +14,32 @@ logger = logging.getLogger("video_gen")
 _FFMPEG_TIMEOUT = int(os.environ.get("FFMPEG_TIMEOUT", "600"))
 
 
+def _resolve_media_tool(name: str) -> str:
+    env_name = f"{name.upper()}_PATH"
+    configured = os.environ.get(env_name)
+    if configured:
+        return configured
+
+    found = shutil.which(name)
+    if found:
+        return found
+
+    for candidate in (
+        Path("/opt/homebrew/bin") / name,
+        Path("/usr/local/bin") / name,
+        Path("/opt/local/bin") / name,
+        Path("/usr/bin") / name,
+    ):
+        if candidate.exists():
+            return str(candidate)
+
+    return name
+
+
+_FFMPEG = _resolve_media_tool("ffmpeg")
+_FFPROBE = _resolve_media_tool("ffprobe")
+
+
 def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT, max_retries: int = 2) -> None:
     label = f"ffmpeg {' '.join(str(a) for a in cmd[1:4])}…"
     last_err: Exception | None = None
@@ -44,7 +70,7 @@ def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT, max_retries: int = 2) -
 
 def _get_duration(path: Path) -> float:
     result = subprocess.run(
-        ["ffprobe", "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+        [_FFPROBE, "-v", "quiet", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
         capture_output=True, text=True, timeout=30,
     )
     return float(result.stdout.strip())
@@ -53,7 +79,7 @@ def _get_duration(path: Path) -> float:
 def _get_video_dimensions(path: Path) -> tuple[int, int]:
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error",
+            _FFPROBE, "-v", "error",
             "-select_streams", "v:0",
             "-show_entries", "stream=width,height",
             "-of", "csv=s=x:p=0",
@@ -79,7 +105,7 @@ def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
         actual_w, actual_h, width, height, video_path.name,
     )
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-i", str(video_path),
         "-vf", (
             f"scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -102,7 +128,7 @@ def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
         concat_list = Path(f.name)
 
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(concat_list),
         "-c", "copy",
@@ -115,7 +141,7 @@ def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
 def extract_first_frame(video_path: Path, output_path: Path) -> Path:
     """Extract the first frame of a video to an image file."""
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-i", str(video_path),
         "-vframes", "1",
         "-q:v", "2",
@@ -127,7 +153,7 @@ def extract_first_frame(video_path: Path, output_path: Path) -> Path:
 def extract_last_frame(video_path: Path, output_path: Path) -> Path:
     """Extract the last frame of a video to an image file."""
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-sseof", "-1",
         "-i", str(video_path),
         "-vframes", "1",
@@ -141,7 +167,7 @@ def extract_audio(video_path: Path, output_path: Path, duration: float | None = 
     """Extract the audio track from a video file, optionally trimmed to duration."""
     dur_flag = ["-t", str(duration)] if duration is not None else []
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-i", str(video_path),
         "-map", "0:a:0",
         *dur_flag,
@@ -158,7 +184,7 @@ def concat_audio(audio_paths: list[Path], output_path: Path) -> Path:
             f.write(f"file '{p.resolve()}'\n")
         concat_list = Path(f.name)
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-f", "concat", "-safe", "0",
         "-i", str(concat_list),
         "-c", "copy",
@@ -195,7 +221,7 @@ def mux_video_audio(
             video_dur, audio_dur, target_dur,
         )
         _run([
-            "ffmpeg", "-y",
+            _FFMPEG, "-y",
             "-i", str(video_path),
             "-i", str(audio_path),
             "-map", "0:v:0",
@@ -216,7 +242,7 @@ def mux_video_audio(
             video_dur, audio_dur, target_dur, gap,
         )
         _run([
-            "ffmpeg", "-y",
+            _FFMPEG, "-y",
             "-i", str(video_path),
             "-i", str(audio_path),
             "-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={gap:.3f}[vout]",
@@ -275,7 +301,7 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
 
     # Allow up to 30 min for full re-encode of many scenes
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         *inputs,
         "-filter_complex", ";".join(filters),
         "-map", "[vout]",
@@ -290,7 +316,7 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
 def upscale_video(input_path: Path, output_path: Path, scale: int = 2) -> Path:
     """Upscale video by an integer factor using lanczos resampling."""
     _run([
-        "ffmpeg", "-y",
+        _FFMPEG, "-y",
         "-i", str(input_path),
         "-vf", f"scale=iw*{scale}:ih*{scale}:flags=lanczos",
         "-c:v", "libx264", "-crf", "16", "-preset", "slow",
@@ -334,7 +360,7 @@ def mix_background_music(
 
     try:
         _run([
-            "ffmpeg", "-y",
+            _FFMPEG, "-y",
             *inputs,
             "-filter_complex", filter_str,
             "-map", "0:v",
