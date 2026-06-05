@@ -17,6 +17,7 @@ import sys
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -85,6 +86,32 @@ def _scene_to_json(row: dict) -> dict:
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
+
+
+# ── activity tracker ─────────────────────────────────────────────────────────
+
+_op_lock = threading.Lock()
+_current_op: dict = {}    # {name, detail, started_at} — cleared when done
+_activity_log: list = []  # [{name, detail, ts, duration_s}], newest first, max 20
+
+
+@contextmanager
+def _track_op(name: str, detail: str = ""):
+    started = time.time()
+    with _op_lock:
+        _current_op.clear()
+        _current_op.update({"name": name, "detail": detail, "started_at": started})
+    try:
+        yield
+    finally:
+        end = time.time()
+        with _op_lock:
+            _current_op.clear()
+            _activity_log.insert(0, {
+                "name": name, "detail": detail,
+                "ts": end, "duration_s": round(end - started, 1),
+            })
+            del _activity_log[20:]
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -178,10 +205,12 @@ def script_generate(body: GenerateScriptBody) -> dict:
         topic = f"{topic}\n\n{extra}"
 
     style_hint = body.visual_style or cfg.get("default_visual_style", "") or None
+    display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
-        scenes, music_desc, style = generate_script(
-            topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None
-        )
+        with _track_op("Generating script", display_topic):
+            scenes, music_desc, style = generate_script(
+                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None
+            )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
 
@@ -479,7 +508,8 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         f"Task: {_FIELD_INSTRUCTIONS[field]}"
     )
     try:
-        text = _llm_complete(system, user, cfg).strip().strip('"').strip()
+        with _track_op(f"Regenerating {field}", video_title or topic or f"scene {scene_id}"):
+            text = _llm_complete(system, user, cfg).strip().strip('"').strip()
     except Exception as e:
         raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
 
@@ -1243,6 +1273,47 @@ def badges() -> dict:
         "youtube_publishable": publishable,
         "films": films_new,
         "films_total": films_total,
+    }
+
+
+@api.get("/api/activity")
+def get_activity() -> dict:
+    """What the system is doing right now, plus recent event log."""
+    with _op_lock:
+        op = dict(_current_op)
+        log = list(_activity_log[:10])
+
+    render_active, render_pct, render_msg, render_title = False, 0, "", ""
+    try:
+        render_active = bool(gapp._is_job_running())
+        if render_active:
+            wd = gapp._preferred_work_dir("")
+            if wd is not None:
+                pct, msg = gapp._status_for_work_dir(wd)
+                render_pct = int(round(pct))
+                render_msg = msg
+                store = DurableStore.default()
+                try:
+                    job_row = store.get_job_by_work_dir(str(wd))
+                    render_title = (_row_to_dict(job_row).get("title") or wd.name) if job_row else wd.name
+                finally:
+                    store.close()
+    except Exception:
+        pass
+
+    try:
+        queue_pending = sum(1 for q in yt.load_queue() if q.get("status") == "pending")
+    except Exception:
+        queue_pending = 0
+
+    return {
+        "current_op": op,
+        "recent": log,
+        "render_active": render_active,
+        "render_pct": render_pct,
+        "render_msg": render_msg,
+        "render_title": render_title,
+        "queue_pending": queue_pending,
     }
 
 
@@ -2152,15 +2223,16 @@ def _ensure_descriptions() -> int:
 def _automation_tick() -> dict:
     cfg = gapp.load_config()
     out: dict = {}
-    if cfg.get("youtube_auto_fetch_evaluate"):
-        try:
-            out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
-        except Exception as e:
-            out["fetch_error"] = str(e)[:120]
-    if cfg.get("youtube_auto_start_job"):
-        out["started"] = _auto_start_best()
-    if cfg.get("youtube_auto_post"):
-        out["posted"] = _auto_post_done()
+    with _track_op("Automation tick"):
+        if cfg.get("youtube_auto_fetch_evaluate"):
+            try:
+                out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
+            except Exception as e:
+                out["fetch_error"] = str(e)[:120]
+        if cfg.get("youtube_auto_start_job"):
+            out["started"] = _auto_start_best()
+        if cfg.get("youtube_auto_post"):
+            out["posted"] = _auto_post_done()
     return out
 
 
