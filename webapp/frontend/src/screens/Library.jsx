@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function Library({ go, onOpenProgress, onOpenRemix }) {
+export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -78,6 +78,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix }) {
             <div style={{ padding: '14px 18px 16px' }}>
               <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.label}</div>
               <div className="row gap-10 mt-16">
+                <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
                 <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
                 <Button variant="primary" icon="youtube" onClick={(e) => { e.stopPropagation(); go('youtube', { publishWorkDir: f.work_dir }) }}>Publish</Button>
               </div>
