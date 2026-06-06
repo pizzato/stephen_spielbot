@@ -9,6 +9,7 @@ import Remix from './screens/Remix.jsx'
 import Queue from './screens/Queue.jsx'
 import YouTube from './screens/YouTube.jsx'
 import Library from './screens/Library.jsx'
+import EditFilm from './screens/EditFilm.jsx'
 import Settings from './screens/Settings.jsx'
 
 export default function App() {
@@ -17,6 +18,7 @@ export default function App() {
   const [createSeed, setCreateSeed] = useState(null)  // {title, description, scenes} prefill for Create
   const [job, setJob] = useState(null)            // {job_id, work_dir, title, style, music_desc, scenes, voice, resolution}
   const [progressDir, setProgressDir] = useState('')
+  const [editFilmDir, setEditFilmDir] = useState('')
   const [meta, setMeta] = useState({ config: {}, voices: [], resolutions: [], default_resolution: '' })
   const [badges, setBadges] = useState({})
   const [ytInitial, setYtInitial] = useState(null)   // {view, workDir} to deep-link the YouTube tab
@@ -47,6 +49,7 @@ export default function App() {
     if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
     // Navigate to a specific render or reset to the active render (empty = backend resolves).
     if (id === 'progress' || id === 'remix') setProgressDir(payload?.workDir ?? '')
+    if (id === 'editfilm') setEditFilmDir(payload?.workDir ?? '')
     setRoute(id)
     window.scrollTo({ top: 0 })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
@@ -111,7 +114,8 @@ export default function App() {
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} />
-      case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} />
+      case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
+      case 'editfilm': return <EditFilm workDir={editFilmDir} go={go} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />
       default: return <Home go={go} />
     }
