@@ -2118,6 +2118,7 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
         else None
     )
     preview_img = first_frame if first_frame.exists() else (preview if preview.exists() else None)
+    preview_mtime = int(preview_img.stat().st_mtime) if preview_img else 0
 
     return {
         "has_narration": has_nar,
@@ -2128,7 +2129,7 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
             f"/api/file?path={final}" if has_final
             else (f"/api/file?path={actual_video}" if actual_video else "")
         ),
-        "preview_url": f"/api/file?path={preview_img}" if preview_img else "",
+        "preview_url": f"/api/file?path={preview_img}&t={preview_mtime}" if preview_img else "",
     }
 
 
@@ -2379,6 +2380,7 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
 def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
+    import secrets
     from pipeline.comfyui import generate_scene_image
 
     cfg = gapp.load_config()
@@ -2402,6 +2404,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
         vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
 
+        new_seed = secrets.randbelow(2 ** 32)
         _film_tasks[task_id] = {"status": "running", "step": "image"}
         url = pool.acquire()
         try:
@@ -2409,6 +2412,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
                 image_prompt or row.get("title") or f"Scene {sid}",
                 first_frame,
                 width=vid_w, height=vid_h,
+                seed=new_seed,
                 steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
                 flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
                 clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -2422,7 +2426,8 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         if first_frame.exists():
             shutil.copy2(first_frame, preview)
 
-        preview_url = f"/api/file?path={preview}&t={int(time.time())}" if preview.exists() else ""
+        preview_mtime = int(preview.stat().st_mtime) if preview.exists() else int(time.time())
+        preview_url = f"/api/file?path={preview}&t={preview_mtime}" if preview.exists() else ""
         _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
     except Exception as e:
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
