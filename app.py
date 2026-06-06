@@ -148,7 +148,7 @@ DEFAULT_CFG = {
     "youtube_auto_start_job": False,           # auto-launch best pending job after approval
     "youtube_auto_approve_script": False,      # skip script review, go straight to video gen
     "youtube_auto_post": False,               # auto-publish when video generation completes
-    "youtube_fully_automated": False,          # master toggle — sets all five flags above
+    "youtube_fully_automated": False,          # master toggle — implies the auto_* steps above (honored in _automation_tick)
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
     "description_suffix": "",
