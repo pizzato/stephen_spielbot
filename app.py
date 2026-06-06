@@ -462,8 +462,12 @@ def slugify(text: str, max_len: int = 80) -> str:
 def _active_job_row(active_job_dir: str = ""):
     store = DurableStore.default()
     try:
-        job = store.get_job_by_work_dir(active_job_dir) if active_job_dir else None
-        if job is None:
+        if active_job_dir:
+            # A specific job was named: act on exactly that one, never a fallback.
+            # (A script/partial with no durable row must NOT resolve to the
+            # currently-running render — deleting it would cancel that render.)
+            job = store.get_job_by_work_dir(active_job_dir)
+        else:
             recent = store.recent_jobs(limit=1)
             job = recent[0] if recent else None
         return dict(job) if job else None

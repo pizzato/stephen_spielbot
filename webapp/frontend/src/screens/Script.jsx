@@ -14,6 +14,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [lightbox, setLightbox] = useState(null)
   const [genAll, setGenAll] = useState(false)
   const [fieldBusy, setFieldBusy] = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
 
   useEffect(() => {
     setScenes(job?.scenes || [])
@@ -22,15 +23,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setResolution(job?.resolution || meta.config?.resolution || meta.default_resolution || '')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
-  useEffect(() => {
-    api.listJobs()
-      .then((d) => {
-        const scripts = d.scripts || []
-        setSavedScripts(scripts)
-        setSelectedScript((cur) => cur || scripts[0]?.work_dir || '')
-      })
-      .catch(() => {})
-  }, [])
+  const refreshScripts = () => api.listJobs()
+    .then((d) => {
+      const scripts = d.scripts || []
+      setSavedScripts(scripts)
+      setSelectedScript((cur) => (scripts.some((s) => s.work_dir === cur) ? cur : scripts[0]?.work_dir || ''))
+    })
+    .catch(() => {})
+  useEffect(() => { refreshScripts() }, [])
 
   // Generate any missing scene previews as soon as the script loads. Existing
   // images are reused (cached on disk), so revisiting is cheap. Only the preview
@@ -68,6 +68,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       }
     }
 
+    const deleteSavedScript = async () => {
+      if (!selectedScript) return
+      setBusy('delete'); setError('')
+      try { await api.deleteJob(selectedScript); setConfirmDel(false); await refreshScripts() }
+      catch (e) { setError(e.message) } finally { setBusy('') }
+    }
+
     return (
       <div>
         <div className="page-head"><div className="page-head__intro">
@@ -84,10 +91,18 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 </select>
               </Field>
               <div className="row gap-10 row--wrap">
-                <Button variant="primary" icon="folder-open" disabled={!selectedScript || busy === 'load'} onClick={loadSavedScript}>
+                <Button variant="primary" icon="folder-open" disabled={!selectedScript || !!busy} onClick={loadSavedScript}>
                   {busy === 'load' ? 'Loading…' : 'Load script'}
                 </Button>
                 <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
+                {selectedScript && (confirmDel ? (
+                  <>
+                    <Button variant="danger" icon="trash-can" disabled={busy === 'delete'} onClick={deleteSavedScript}>{busy === 'delete' ? 'Deleting…' : 'Confirm delete'}</Button>
+                    <Button variant="ghost" disabled={busy === 'delete'} onClick={() => setConfirmDel(false)}>Cancel</Button>
+                  </>
+                ) : (
+                  <Button variant="danger" icon="trash-can" onClick={() => setConfirmDel(true)}>Delete</Button>
+                ))}
               </div>
             </div>
           </Card>
@@ -171,6 +186,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message); setBusy('') }
   }
 
+  // Delete the script being edited (its folder + any files), then return to Films.
+  const deleteCurrent = async () => {
+    setBusy('delete'); setError('')
+    try { await api.deleteJob(job.work_dir); setJob(null); go('library') }
+    catch (e) { setError(e.message); setBusy('') }
+  }
+
   return (
     <div>
       <div className="page-head">
@@ -178,8 +200,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <span className="label-sm reveal">Script · {total} scenes</span>
           <h1 className="display-md reveal reveal-d1">{job.title}</h1>
         </div>
-        <div className="row gap-10 reveal reveal-d1">
+        <div className="row gap-10 reveal reveal-d1 row--wrap">
           <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
+          {confirmDel ? (
+            <>
+              <Button variant="danger" icon="trash-can" disabled={busy === 'delete'} onClick={deleteCurrent}>{busy === 'delete' ? 'Deleting…' : 'Confirm delete'}</Button>
+              <Button variant="ghost" disabled={busy === 'delete'} onClick={() => setConfirmDel(false)}>Cancel</Button>
+            </>
+          ) : (
+            <Button variant="ghost" icon="trash-can" onClick={() => setConfirmDel(true)}>Delete</Button>
+          )}
           <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
             onClick={approve}>{busy === 'generate' ? 'Approving…' : '2. Approve → queue'}</Button>
         </div>
