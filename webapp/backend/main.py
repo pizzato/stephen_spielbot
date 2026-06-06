@@ -373,10 +373,9 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
 
 
 @api.post("/api/jobs/{job_id}/previews")
-def generate_all_previews(job_id: str, resolution: str = Query(""), style: str = Query("")) -> dict:
-    """Generate first-frame previews for every scene that doesn't already have one.
-    Existing images are reused (cached on disk via _generate_active_scene_preview's
-    force=False short-circuit), so revisiting the script is cheap."""
+def generate_all_previews(job_id: str, resolution: str = Query(""), style: str = Query(""), force: bool = Query(False)) -> dict:
+    """Generate first-frame previews for all scenes (or only missing ones when force=False).
+    Pass force=True to regenerate every scene even if a preview already exists."""
     import concurrent.futures
 
     store = DurableStore.default()
@@ -387,19 +386,19 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
 
-    missing = [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
+    to_generate = rows if force else [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
     failed: list[int] = []
-    if missing:
+    if to_generate:
         worker_urls = gapp._preview_worker_urls()
         if not worker_urls:
             raise HTTPException(503, "No reachable workers for preview generation.")
         pool = gapp.WorkerPool(worker_urls)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(worker_urls), len(missing))) as ex:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(worker_urls), len(to_generate))) as ex:
             futs = {
                 ex.submit(gapp._generate_active_scene_preview, job_id, int(r["id"]),
                           resolution, style, r.get("title") or "",
-                          r.get("image_prompt") or "", force=False, worker_pool=pool): int(r["id"])
-                for r in missing
+                          r.get("image_prompt") or "", force=force, worker_pool=pool): int(r["id"])
+                for r in to_generate
             }
             for fut in concurrent.futures.as_completed(futs):
                 try:
@@ -413,7 +412,7 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
             store.close()
 
     return {"scenes": [_scene_to_json(r) for r in rows],
-            "generated": len(missing) - len(failed), "failed": failed}
+            "generated": len(to_generate) - len(failed), "failed": failed}
 
 
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────

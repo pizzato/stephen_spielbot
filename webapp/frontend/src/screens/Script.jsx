@@ -134,6 +134,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message); setBusy('') }
   }
 
+  const regenAll = async () => {
+    setGenAll(true); setError('')
+    try {
+      const r = await api.regenAllPreviews(job.job_id, resolution, style)
+      if (r.scenes) setScenes((prev) => prev.map((s) => {
+        const u = r.scenes.find((x) => x.id === s.id)
+        return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview, cb: Date.now() } : s
+      }))
+    } catch (e) { setError(e.message) } finally { setGenAll(false) }
+  }
+
   // ── Scenes tab ────────────────────────────────────────────────────────────────
   const total = scenes.length
   const d = scenes[cur] || {}
@@ -315,6 +326,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </select>
                 </Field>
               </div>
+              <div>
+                <Button variant="ghost" icon="rotate-right" disabled={genAll} onClick={regenAll}>
+                  {genAll ? 'Regenerating all scenes…' : 'Regenerate all scene images'}
+                </Button>
+              </div>
               <Field label={
                 <span className="row center between">
                   <span>YouTube description</span>
@@ -422,7 +438,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
 
             <Card span={12} className="reveal reveal-d4">
-              <span className="label-sm">All scenes</span>
+              <div className="row center between">
+                <span className="label-sm">All scenes</span>
+                <Button variant="ghost" icon="rotate-right" disabled={genAll} onClick={regenAll}>
+                  {genAll ? 'Regenerating…' : 'Regenerate all'}
+                </Button>
+              </div>
               <div className="scene-grid mt-16">
                 {scenes.map((s, i) => (
                   <div key={s.id} className={`scene ${i === cur ? 'is-current' : ''}`} onClick={() => move(i)}>
