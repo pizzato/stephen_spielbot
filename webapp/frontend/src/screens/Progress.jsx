@@ -7,7 +7,7 @@ const STATUS_TONE = {
   failed_retryable: 'warn', failed_terminal: 'danger', lost: 'warn', cancelled: 'neutral',
 }
 
-export default function Progress({ workDir, job, go }) {
+export default function Progress({ workDir, job, go, onOpenScript }) {
   const [p, setP] = useState(null)
   const [error, setError] = useState('')
   const [action, setAction] = useState('')
@@ -44,7 +44,12 @@ export default function Progress({ workDir, job, go }) {
           <span className="label-sm reveal">Rendering</span>
           <h1 className="display-md reveal reveal-d1">{title}</h1>
         </div>
-        <div className="reveal reveal-d1">
+        <div className="row center gap-10 reveal reveal-d1">
+          <Button variant="ghost" icon="feather-pointed" disabled={action === 'script' || !(p?.work_dir || workDir)}
+            onClick={async () => {
+              setAction('script'); setError('')
+              try { await onOpenScript(p?.work_dir || workDir) } catch (e) { setError(e.message); setAction('') }
+            }}>{action === 'script' ? 'Opening…' : 'Edit script'}</Button>
           {done ? <Chip tone="ok" dot>Done</Chip> : <Chip tone="info" dot>{Math.round(pct)}%</Chip>}
         </div>
       </div>
