@@ -2376,6 +2376,58 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
 
 
+def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: re-render first-frame image only (no video)."""
+    import shutil
+    from pipeline.comfyui import generate_scene_image
+
+    cfg = gapp.load_config()
+    worker_urls = gapp._preview_worker_urls()
+    if not worker_urls:
+        _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
+        return
+
+    from pipeline.worker_pool import WorkerPool
+    pool = WorkerPool(worker_urls)
+
+    first_frame = wd / f"scene_{sid:02d}_first_frame.png"
+    preview = wd / f"scene_{sid:02d}_preview.png"
+
+    try:
+        image_prompt = (row.get("image_prompt") or "").strip()
+        style_clean = jc.get("style", "").strip().rstrip(".")
+        if style_clean and image_prompt and not image_prompt.startswith(style_clean):
+            image_prompt = f"{style_clean}. {image_prompt}"
+
+        vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
+        vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
+
+        _film_tasks[task_id] = {"status": "running", "step": "image"}
+        url = pool.acquire()
+        try:
+            generate_scene_image(
+                image_prompt or row.get("title") or f"Scene {sid}",
+                first_frame,
+                width=vid_w, height=vid_h,
+                steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
+                flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
+                flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                comfy_url=url,
+            )
+        finally:
+            pool.release(url)
+
+        if first_frame.exists():
+            shutil.copy2(first_frame, preview)
+
+        preview_url = f"/api/file?path={preview}&t={int(time.time())}" if preview.exists() else ""
+        _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
+    except Exception as e:
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+
+
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
     """Background thread: re-render image → video → mux."""
     from pipeline.assembler import mux_video_audio, _get_duration
@@ -2498,24 +2550,8 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         for f in [f"scene_{sid:02d}_narration.wav", f"scene_{sid:02d}_final.mp4"]:
             (wd / f).unlink(missing_ok=True)
     elif body.component == "image":
-        # For image-only, also regenerate the preview; no video/final changes
-        try:
-            out = gapp._generate_active_scene_preview(
-                job_id, sid,
-                jc.get("resolution") or gapp.load_config().get("resolution", gapp._DEFAULT_RESOLUTION),
-                jc.get("style") or "",
-                row.get("title") or "",
-                row.get("image_prompt") or "",
-                force=True,
-            )
-            # Also copy to first_frame for future video re-renders
-            import shutil
-            ff = wd / f"scene_{sid:02d}_first_frame.png"
-            if out != ff:
-                shutil.copy2(out, ff)
-        except Exception as e:
-            raise HTTPException(503, f"Image re-render failed: {str(e).splitlines()[0][:200]}")
-        return {"ok": True, "preview_url": f"/api/file?path={out}&t={int(time.time())}"}
+        for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
+            (wd / f).unlink(missing_ok=True)
     elif body.component == "video":
         for f in [
             f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png",
@@ -2527,7 +2563,12 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
 
-    target = _run_narration_rerender if body.component == "narration" else _run_video_rerender
+    if body.component == "narration":
+        target = _run_narration_rerender
+    elif body.component == "image":
+        target = _run_image_rerender
+    else:
+        target = _run_video_rerender
     threading.Thread(target=target, args=(tid, wd, sid, jc, row), daemon=True).start()
     return {"ok": True, "task_id": tid}
 
