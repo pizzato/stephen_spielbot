@@ -61,7 +61,7 @@ export default function Progress({ workDir, job, go }) {
 
           {done && (
             <div className="row gap-10 mt-24">
-              <Button variant="primary" icon="sliders" onClick={() => go('remix')}>Open in Remix</Button>
+              <Button variant="primary" icon="sliders" onClick={() => go('remix', { workDir: p?.work_dir || workDir })}>Open in Remix</Button>
               {p?.final_url && <a className="btn btn--ghost" href={p.final_url} download><Icon name="download" /> Download</a>}
             </div>
           )}
