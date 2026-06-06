@@ -45,6 +45,8 @@ export default function App() {
     })
     // Deep-link into the YouTube tab's Publish view (e.g. from a Films card).
     if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
+    // Navigate to a specific render or reset to the active render (empty = backend resolves).
+    if (id === 'progress' || id === 'remix') setProgressDir(payload?.workDir ?? '')
     setRoute(id)
     window.scrollTo({ top: 0 })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
@@ -59,8 +61,7 @@ export default function App() {
     if (choices.autoApprove) {
       if (data.auto_approved) {
         if (data.started) {
-          setProgressDir(data.started.work_dir || nextJob.work_dir)
-          go('progress')
+          go('progress', { workDir: data.started.work_dir || nextJob.work_dir })
         } else {
           go('queue')
         }
@@ -74,7 +75,7 @@ export default function App() {
           style: nextJob.style || '', resolution: choices.resolution || '',
           voice: choices.voice || '', music_desc: nextJob.music_desc || '',
         })
-        if (r.started) { setProgressDir(nextJob.work_dir); go('progress') }
+        if (r.started) go('progress', { workDir: nextJob.work_dir })
         else go('queue')
         return
       } catch {
@@ -86,8 +87,7 @@ export default function App() {
 
   // Script → Progress: generation launched.
   const onGenerationStarted = useCallback((workDir) => {
-    setProgressDir(workDir)
-    go('progress')
+    go('progress', { workDir })
   }, [go])
 
   const screen = (() => {
@@ -99,7 +99,7 @@ export default function App() {
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} />
-      case 'library': return <Library go={go} onOpenProgress={(wd) => { setProgressDir(wd); go('progress') }} onOpenRemix={(wd) => { setProgressDir(wd); go('remix') }} />
+      case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />
       default: return <Home go={go} />
     }
