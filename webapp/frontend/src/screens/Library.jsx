@@ -6,10 +6,18 @@ export default function Library({ go, onOpenProgress, onOpenRemix }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [confirmDel, setConfirmDel] = useState('')   // work_dir pending delete confirm
+  const [busyDel, setBusyDel] = useState('')
 
-  useEffect(() => {
-    api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
-  }, [])
+  const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
+  useEffect(() => { load() }, [])
+
+  // Delete a partial render / unfinished job and its files (cancels it first if running).
+  const del = async (wd) => {
+    setBusyDel(wd); setError('')
+    try { await api.deleteJob(wd); setConfirmDel(''); await load() }
+    catch (e) { setError(e.message) } finally { setBusyDel('') }
+  }
 
   return (
     <div>
@@ -32,11 +40,21 @@ export default function Library({ go, onOpenProgress, onOpenRemix }) {
                 <div style={{ fontWeight: 700 }}>{j.label}</div>
                 <div className="row center between mt-16">
                   <Chip tone={j.running ? 'info' : 'warn'} dot>{j.running ? 'Rendering' : 'Needs attention'}</Chip>
-                  {j.running ? (
-                    <Button variant="ghost" icon="gauge-high" onClick={() => onOpenProgress(j.work_dir)}>View render</Button>
-                  ) : (
-                    <Button variant="ghost" icon="play" onClick={() => onOpenProgress(j.work_dir)}>Continue</Button>
-                  )}
+                  <div className="row gap-6">
+                    {j.running ? (
+                      <Button variant="ghost" icon="gauge-high" onClick={() => onOpenProgress(j.work_dir)}>View render</Button>
+                    ) : (
+                      <Button variant="ghost" icon="play" onClick={() => onOpenProgress(j.work_dir)}>Continue</Button>
+                    )}
+                    {confirmDel === j.work_dir ? (
+                      <>
+                        <Button variant="danger" icon="trash-can" disabled={busyDel === j.work_dir} onClick={() => del(j.work_dir)}>{busyDel === j.work_dir ? 'Deleting…' : 'Confirm'}</Button>
+                        <Button variant="ghost" disabled={busyDel === j.work_dir} onClick={() => setConfirmDel('')}>Cancel</Button>
+                      </>
+                    ) : (
+                      <Button variant="ghost" icon="trash-can" onClick={() => setConfirmDel(j.work_dir)}>Delete</Button>
+                    )}
+                  </div>
                 </div>
               </Card>
             ))}
