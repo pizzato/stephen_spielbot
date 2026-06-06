@@ -3,7 +3,7 @@ import { Card, Field, Segmented, Button, Chip, Icon, Thumb, Banner } from '../co
 import { api, fileUrl } from '../api.js'
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
-  const [view, setView] = useState(job ? 'edit' : 'scripts')
+  const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -11,33 +11,39 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [savedScripts, setSavedScripts] = useState([])
   const [confirmDel, setConfirmDel] = useState('')
 
-  // Edit tab
-  const [scenes, setScenes] = useState(job?.scenes || [])
-  const [cur, setCur] = useState(0)
+  // Shared (used across Cover + Scenes)
   const [style, setStyle] = useState(job?.style || '')
   const [resolution, setResolution] = useState(job?.resolution || meta.default_resolution || '')
-  const [lightbox, setLightbox] = useState(null)
-  const [genAll, setGenAll] = useState(false)
-  const [fieldBusy, setFieldBusy] = useState('')
-  const [editConfirmDel, setEditConfirmDel] = useState(false)
 
-  // YouTube tab
+  // Cover tab
+  const [coverTitle, setCoverTitle] = useState(job?.title || '')
   const [description, setDescription] = useState('')
   const [coverUrl, setCoverUrl] = useState('')
   const [ytBusy, setYtBusy] = useState('')
 
-  // Switch to edit and sync local state whenever a new job is loaded
+  // Scenes tab
+  const [scenes, setScenes] = useState(job?.scenes || [])
+  const [cur, setCur] = useState(0)
+  const [lightbox, setLightbox] = useState(null)
+  const [genAll, setGenAll] = useState(false)
+  const [fieldBusy, setFieldBusy] = useState('')
+  const [confirmDelScript, setConfirmDelScript] = useState(false)
+
+  // Sync state and switch to Cover when a new job loads
   useEffect(() => {
     setScenes(job?.scenes || [])
     setCur(0)
     setStyle(job?.style || '')
     setResolution(job?.resolution || meta.config?.resolution || meta.default_resolution || '')
-    if (job?.job_id) setView('edit')
+    setCoverTitle(job?.title || '')
+    setDescription('')
+    setCoverUrl('')
+    if (job?.job_id) setView('cover')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
-  // Load existing YouTube data when entering that tab
+  // Load saved description + cover whenever the Cover tab is opened
   useEffect(() => {
-    if (view !== 'youtube' || !job?.work_dir) return
+    if (view !== 'cover' || !job?.work_dir) return
     api.ytPostPrefill(job.work_dir)
       .then((p) => { setDescription(p.description || ''); setCoverUrl(p.cover_url || '') })
       .catch(() => {})
@@ -74,7 +80,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         voice: loaded.voice || meta.config?.default_voice || '',
         resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
       })
-      // view switches to 'edit' via useEffect on job?.job_id
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -88,7 +93,48 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  // ── Edit tab ─────────────────────────────────────────────────────────────────
+  // ── Cover tab ─────────────────────────────────────────────────────────────────
+  const genDescription = async () => {
+    setYtBusy('desc'); setError('')
+    try {
+      const r = await api.ytDescribe({ work_dir: job.work_dir, title: coverTitle || job.title || '' })
+      setDescription(r.description || '')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const regenCover = async () => {
+    setYtBusy('cover'); setError('')
+    let pollTimer = null
+    try {
+      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: coverTitle || job.title || '' })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const s = await api.ytCoverStatus(tid)
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); resolve() }
+            else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
+            else pollTimer = setTimeout(check, 2000)
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setError(e.message) } finally {
+      clearTimeout(pollTimer)
+      setYtBusy('')
+    }
+  }
+
+  const deleteCurrent = async () => {
+    setBusy('delete'); setError('')
+    try {
+      await api.deleteJob(job.work_dir)
+      setJob(null)
+      setView('scripts')
+      await refreshScripts()
+    } catch (e) { setError(e.message); setBusy('') }
+  }
+
+  // ── Scenes tab ────────────────────────────────────────────────────────────────
   const total = scenes.length
   const d = scenes[cur] || {}
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
@@ -157,75 +203,36 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message); setBusy('') }
   }
 
-  const deleteCurrent = async () => {
-    setBusy('delete'); setError('')
-    try {
-      await api.deleteJob(job.work_dir)
-      setJob(null)
-      setView('scripts')
-      await refreshScripts()
-    } catch (e) { setError(e.message); setBusy('') }
-  }
-
-  // ── YouTube tab ───────────────────────────────────────────────────────────────
-  const genDescription = async () => {
-    setYtBusy('desc'); setError('')
-    try {
-      const r = await api.ytDescribe({ work_dir: job.work_dir, title: job.title || '' })
-      setDescription(r.description || '')
-    } catch (e) { setError(e.message) } finally { setYtBusy('') }
-  }
-
-  const regenCover = async () => {
-    setYtBusy('cover'); setError('')
-    let pollTimer = null
-    try {
-      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: job.title || '' })
-      await new Promise((resolve, reject) => {
-        const check = async () => {
-          try {
-            const s = await api.ytCoverStatus(tid)
-            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); resolve() }
-            else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
-            else pollTimer = setTimeout(check, 2000)
-          } catch (e) { reject(e) }
-        }
-        check()
-      })
-    } catch (e) { setError(e.message) } finally {
-      clearTimeout(pollTimer)
-      setYtBusy('')
-    }
-  }
-
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div>
       <div className="page-head">
         <div className="page-head__intro">
-          <span className="label-sm reveal">Script{job && view === 'edit' ? ` · ${total} scenes` : ''}</span>
+          <span className="label-sm reveal">Script{job && view === 'scenes' ? ` · ${total} scenes` : ''}</span>
           <h1 className="display-md reveal reveal-d1">{job ? job.title : 'Scripts'}</h1>
         </div>
         <div className="row gap-10 reveal reveal-d1 row--wrap">
           {view === 'scripts' && (
             <Button variant="primary" icon="plus" onClick={() => go('create')}>New script</Button>
           )}
-          {view === 'edit' && job && (
+          {view === 'cover' && job && (
             <>
               <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
-              {editConfirmDel ? (
+              {confirmDelScript ? (
                 <>
                   <Button variant="danger" icon="trash-can" disabled={busy === 'delete'} onClick={deleteCurrent}>
                     {busy === 'delete' ? 'Deleting…' : 'Confirm delete'}
                   </Button>
-                  <Button variant="ghost" disabled={busy === 'delete'} onClick={() => setEditConfirmDel(false)}>Cancel</Button>
+                  <Button variant="ghost" disabled={busy === 'delete'} onClick={() => setConfirmDelScript(false)}>Cancel</Button>
                 </>
               ) : (
-                <Button variant="ghost" icon="trash-can" onClick={() => setEditConfirmDel(true)}>Delete</Button>
+                <Button variant="ghost" icon="trash-can" onClick={() => setConfirmDelScript(true)}>Delete</Button>
               )}
-              <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
-                onClick={approve}>{busy === 'generate' ? 'Approving…' : '2. Approve → queue'}</Button>
             </>
+          )}
+          {view === 'scenes' && job && (
+            <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
+              onClick={approve}>{busy === 'generate' ? 'Approving…' : '2. Approve → queue'}</Button>
           )}
         </div>
       </div>
@@ -236,8 +243,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
-          { value: 'edit', label: 'Edit' },
-          { value: 'youtube', label: 'YouTube' },
+          { value: 'cover', label: 'Cover' },
+          { value: 'scenes', label: 'Scenes' },
         ]} />
       </div>
 
@@ -275,13 +282,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         </div>
       )}
 
-      {/* ── Edit tab (no script) ─────────────────────────────────────────────── */}
-      {view === 'edit' && !job && (
+      {/* ── Cover tab (no script) ────────────────────────────────────────────── */}
+      {view === 'cover' && !job && (
         <div className="bento">
           <Card span={7} well>
-            <p className="body-1" style={{ margin: 0 }}>
-              Load a script from the Scripts tab to start editing, or create a new one.
-            </p>
+            <p className="body-1" style={{ margin: 0 }}>Load a script first to edit its cover settings.</p>
             <div className="row gap-10 mt-16">
               <Button variant="primary" icon="folder-open" onClick={() => setView('scripts')}>Browse scripts</Button>
               <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
@@ -290,25 +295,81 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         </div>
       )}
 
-      {/* ── Edit tab (script loaded) ─────────────────────────────────────────── */}
-      {view === 'edit' && job && (
-        <>
-          <div className="bento">
-            <Card span={12} well className="reveal reveal-d1">
-              <div className="row center between row--wrap gap-16">
+      {/* ── Cover tab (script loaded) ────────────────────────────────────────── */}
+      {view === 'cover' && job && (
+        <div className="bento">
+          <Card span={8} padLg className="reveal reveal-d1">
+            <div className="stack gap-22">
+              <Field label="Title">
+                <input className="input" value={coverTitle} onChange={(e) => setCoverTitle(e.target.value)} />
+              </Field>
+              <div className="row center gap-16 row--wrap">
                 <div className="grow">
                   <Field label="Visual style — applied to every scene">
                     <input className="input" value={style} onChange={(e) => setStyle(e.target.value)} />
                   </Field>
                 </div>
-                <Field label="Preview resolution">
+                <Field label="Resolution">
                   <select className="select" value={resolution} onChange={(e) => setResolution(e.target.value)}>
                     {(meta.resolutions || []).map((r) => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </Field>
               </div>
-            </Card>
+              <Field label={
+                <span className="row center between">
+                  <span>YouTube description</span>
+                  <button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }}
+                    disabled={ytBusy === 'desc'} onClick={genDescription}>
+                    <Icon name="wand-magic-sparkles" /> {ytBusy === 'desc' ? 'Writing…' : 'Generate'}
+                  </button>
+                </span>
+              }>
+                <textarea className="textarea" rows={8} value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="Click Generate to write a YouTube description from your script." />
+              </Field>
+            </div>
+          </Card>
 
+          <div className="col-4 stack gap-16">
+            <Card className="reveal reveal-d2">
+              <span className="label-sm">Cover image</span>
+              <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
+                {coverUrl
+                  ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                  : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
+              </div>
+              <Button variant="ghost" block icon="rotate-right" disabled={ytBusy === 'cover'} onClick={regenCover}>
+                {ytBusy === 'cover' ? 'Generating…' : coverUrl ? 'Regenerate cover' : 'Generate cover'}
+              </Button>
+            </Card>
+            <Card well className="reveal reveal-d3">
+              <div className="row center gap-10">
+                <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
+                <span className="muted" style={{ fontSize: 12.5 }}>Description and cover are saved to the script folder and reused when publishing.</span>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
+
+      {/* ── Scenes tab (no script) ───────────────────────────────────────────── */}
+      {view === 'scenes' && !job && (
+        <div className="bento">
+          <Card span={7} well>
+            <p className="body-1" style={{ margin: 0 }}>Load a script first to edit its scenes.</p>
+            <div className="row gap-10 mt-16">
+              <Button variant="primary" icon="folder-open" onClick={() => setView('scripts')}>Browse scripts</Button>
+              <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* ── Scenes tab (script loaded) ───────────────────────────────────────── */}
+      {view === 'scenes' && job && (
+        <>
+          <div className="bento">
             <Card span={8} padLg className="reveal reveal-d2">
               <div className="row center between">
                 <div className="row center gap-10">
@@ -380,64 +441,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
           )}
         </>
-      )}
-
-      {/* ── YouTube tab (no script) ──────────────────────────────────────────── */}
-      {view === 'youtube' && !job && (
-        <div className="bento">
-          <Card span={7} well>
-            <p className="body-1" style={{ margin: 0 }}>
-              Load a script first to generate YouTube metadata.
-            </p>
-            <div className="row gap-10 mt-16">
-              <Button variant="primary" icon="folder-open" onClick={() => setView('scripts')}>Browse scripts</Button>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      {/* ── YouTube tab (script loaded) ──────────────────────────────────────── */}
-      {view === 'youtube' && job && (
-        <div className="bento">
-          <Card span={8} padLg className="reveal reveal-d1">
-            <span className="label-sm">YouTube metadata for "{job.title}"</span>
-            <div className="stack gap-22 mt-16">
-              <Field label={
-                <span className="row center between">
-                  <span>Description</span>
-                  <button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }}
-                    disabled={ytBusy === 'desc'} onClick={genDescription}>
-                    <Icon name="wand-magic-sparkles" /> {ytBusy === 'desc' ? 'Writing…' : 'Generate'}
-                  </button>
-                </span>
-              }>
-                <textarea className="textarea" rows={8} value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Click Generate to write a YouTube description from your script." />
-              </Field>
-            </div>
-          </Card>
-
-          <div className="col-4 stack gap-16">
-            <Card className="reveal reveal-d2">
-              <span className="label-sm">Cover image</span>
-              <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
-                {coverUrl
-                  ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-                  : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
-              </div>
-              <Button variant="ghost" block icon="rotate-right" disabled={ytBusy === 'cover'} onClick={regenCover}>
-                {ytBusy === 'cover' ? 'Generating…' : coverUrl ? 'Regenerate cover' : 'Generate cover'}
-              </Button>
-            </Card>
-            <Card well className="reveal reveal-d3">
-              <div className="row center gap-10">
-                <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
-                <span className="muted" style={{ fontSize: 12.5 }}>Description and cover are saved to the script folder and reused when publishing.</span>
-              </div>
-            </Card>
-          </div>
-        </div>
       )}
     </div>
   )
