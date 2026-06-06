@@ -62,7 +62,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (!(job.scenes || []).some((s) => !s.has_preview)) return
     setGenAll(true)
     setGenAllMsg('Generating missing scene previews…')
-    api.generateAllPreviews(job.job_id, job.resolution || '', job.style || '')
+    // Generate previews at the SAME resolution the render will use (what approve
+    // sends), so the render reuses these images instead of regenerating them at a
+    // different size. Mirrors the `resolution` state init below.
+    api.generateAllPreviews(job.job_id, job.resolution || meta.config?.resolution || meta.default_resolution || '', job.style || '')
       .then((r) => {
         if (r.scenes) setScenes((prev) => prev.map((s) => {
           const u = r.scenes.find((x) => x.id === s.id)

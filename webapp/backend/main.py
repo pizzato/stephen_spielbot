@@ -2096,6 +2096,491 @@ def queue_from_job(body: FromJobBody) -> dict:
     return {"ok": True, "queue_item_id": entry["id"], "started": started}
 
 
+# ── film scene editor (post-render) ──────────────────────────────────────────
+
+# In-memory background task store for re-render jobs (similar to _upload_tasks)
+_film_tasks: dict = {}
+
+
+def _film_scene_files(work_dir: Path, sid: int) -> dict:
+    narration = work_dir / f"scene_{sid:02d}_narration.wav"
+    raw_video = work_dir / f"scene_{sid:02d}_video.mp4"
+    clip = work_dir / f"scene_{sid:02d}_clip_01.mp4"
+    final = work_dir / f"scene_{sid:02d}_final.mp4"
+    first_frame = work_dir / f"scene_{sid:02d}_first_frame.png"
+    preview = work_dir / f"scene_{sid:02d}_preview.png"
+
+    has_nar = narration.exists() and narration.stat().st_size > 1000
+    has_final = final.exists() and final.stat().st_size > 10_000
+    actual_video = (
+        raw_video if (raw_video.exists() and raw_video.stat().st_size > 10_000)
+        else clip if (clip.exists() and clip.stat().st_size > 10_000)
+        else None
+    )
+    preview_img = first_frame if first_frame.exists() else (preview if preview.exists() else None)
+
+    return {
+        "has_narration": has_nar,
+        "has_video": actual_video is not None,
+        "has_final": has_final,
+        "narration_url": f"/api/file?path={narration}" if has_nar else "",
+        "video_url": (
+            f"/api/file?path={final}" if has_final
+            else (f"/api/file?path={actual_video}" if actual_video else "")
+        ),
+        "preview_url": f"/api/file?path={preview_img}" if preview_img else "",
+    }
+
+
+def _load_scene_order(work_dir: Path) -> list | None:
+    order_file = work_dir / "scene_edit_order.json"
+    if order_file.exists():
+        try:
+            return json.loads(order_file.read_text())
+        except Exception:
+            pass
+    return None
+
+
+def _save_scene_order(work_dir: Path, order: list) -> None:
+    (work_dir / "scene_edit_order.json").write_text(json.dumps(order))
+
+
+def _film_job_config(work_dir: Path) -> dict:
+    try:
+        return json.loads((work_dir / "job_config.json").read_text())
+    except Exception:
+        return {}
+
+
+@api.get("/api/films/scenes")
+def film_scenes(work_dir: str = Query(...)) -> dict:
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+        job_row = store.get_job(job_id)
+    finally:
+        store.close()
+
+    if not rows:
+        script_path = wd / "script.json"
+        if script_path.exists():
+            try:
+                raw = json.loads(script_path.read_text())
+                rows = raw if isinstance(raw, list) else []
+            except Exception:
+                rows = []
+
+    order = _load_scene_order(wd)
+    scene_map = {int(r.get("id") or r.get("scene_id") or 0): r for r in rows}
+
+    if order is not None:
+        ordered = [scene_map[sid] for sid in order if sid in scene_map]
+    else:
+        ordered = rows
+
+    result = []
+    for r in ordered:
+        sid = int(r.get("id") or r.get("scene_id") or 0)
+        result.append({**_scene_to_json(r), **_film_scene_files(wd, sid)})
+
+    jc = _film_job_config(wd)
+    title = ""
+    style = ""
+    if job_row:
+        d = _row_to_dict(job_row)
+        cfg_j = json.loads(d.get("config_json") or "{}")
+        meta_j = json.loads(d.get("metadata_json") or "{}")
+        title = cfg_j.get("video_title") or d.get("title") or wd.name
+        style = meta_j.get("style") or jc.get("style") or ""
+    else:
+        title = jc.get("video_title") or jc.get("title") or wd.name
+
+    cfg = gapp.load_config()
+    resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+
+    return {
+        "scenes": result,
+        "job_id": job_id,
+        "work_dir": str(wd),
+        "title": title,
+        "style": style,
+        "resolution": resolution,
+    }
+
+
+class DeleteFilmSceneBody(BaseModel):
+    work_dir: str
+    scene_id: int
+
+
+@api.post("/api/films/scenes/delete")
+def delete_film_scene(body: DeleteFilmSceneBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    sid = body.scene_id
+    for fname in [
+        f"scene_{sid:02d}_narration.wav",
+        f"scene_{sid:02d}_video.mp4",
+        f"scene_{sid:02d}_clip_01.mp4",
+        f"scene_{sid:02d}_clip_02.mp4",
+        f"scene_{sid:02d}_final.mp4",
+        f"scene_{sid:02d}_first_frame.png",
+        f"scene_{sid:02d}_preview.png",
+    ]:
+        (wd / fname).unlink(missing_ok=True)
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    all_ids = [int(r.get("id") or r.get("scene_id") or 0) for r in rows]
+    order = _load_scene_order(wd) or all_ids
+    new_order = [i for i in order if i != sid]
+    _save_scene_order(wd, new_order)
+    return {"ok": True, "order": new_order}
+
+
+class ReorderFilmScenesBody(BaseModel):
+    work_dir: str
+    order: list
+
+
+@api.post("/api/films/scenes/reorder")
+def reorder_film_scenes(body: ReorderFilmScenesBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    _save_scene_order(wd, [int(x) for x in body.order])
+    return {"ok": True}
+
+
+class ReassembleBody(BaseModel):
+    work_dir: str
+
+
+@api.post("/api/films/reassemble")
+def reassemble_film(body: ReassembleBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    if not rows:
+        raise HTTPException(400, "No scene data found.")
+
+    all_ids = [int(r.get("id") or r.get("scene_id") or 0) for r in rows]
+    order = _load_scene_order(wd) or all_ids
+
+    scene_finals = [
+        wd / f"scene_{sid:02d}_final.mp4"
+        for sid in order
+        if (wd / f"scene_{sid:02d}_final.mp4").exists()
+        and (wd / f"scene_{sid:02d}_final.mp4").stat().st_size > 10_000
+    ]
+    if not scene_finals:
+        raise HTTPException(400, "No rendered scenes found. Re-render scenes first.")
+
+    music_path = wd / "background_music.wav"
+    if not music_path.exists():
+        raise HTTPException(400, "No background music found in this film folder.")
+
+    final_path = gapp._final_path_for_work_dir(wd)
+    combined = wd / "combined.mp4"
+
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    voice_vol = float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0
+    music_vol = float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0
+    ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
+
+    try:
+        with _track_op("Reassembling film", wd.name):
+            from pipeline.assembler import concatenate_scenes, mix_background_music
+            concatenate_scenes(scene_finals, combined)
+            ambient = wd / "ambient.wav"
+            mix_background_music(
+                combined, music_path, final_path,
+                volume=music_vol,
+                voice_volume=voice_vol,
+                ambient_path=ambient if ambient.exists() else None,
+                ambient_volume=ambient_vol,
+            )
+    except Exception as e:
+        raise HTTPException(500, f"Reassembly failed: {str(e).splitlines()[0][:200]}")
+
+    return {
+        "ok": True,
+        "final_url": f"/api/file?path={final_path}",
+        "scene_count": len(scene_finals),
+    }
+
+
+class RerenderSceneBody(BaseModel):
+    work_dir: str
+    component: str  # "narration", "image", or "video"
+
+
+def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: re-render narration then re-mux the scene."""
+    from pipeline.assembler import mux_video_audio, _get_duration
+    from pipeline.tts_worker import generate_narration
+
+    narration_path = wd / f"scene_{sid:02d}_narration.wav"
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    cfg = gapp.load_config()
+
+    try:
+        narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
+        voice_ref_str = jc.get("voice_ref") or ""
+        voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
+        tts_hosts = cfg.get("tts_workers") or []
+        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+
+        _film_tasks[task_id] = {"status": "running", "step": "narration"}
+        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host)
+
+        # Re-mux narration with the existing scene video
+        video_path = wd / f"scene_{sid:02d}_video.mp4"
+        clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"
+        actual_video = (
+            video_path if (video_path.exists() and video_path.stat().st_size > 10_000)
+            else clip_path if (clip_path.exists() and clip_path.stat().st_size > 10_000)
+            else None
+        )
+        if actual_video:
+            _film_tasks[task_id]["step"] = "mux"
+            mux_video_audio(actual_video, narration_path, final_path)
+
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as e:
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+
+
+def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: re-render first-frame image only (no video)."""
+    import shutil
+    from pipeline.comfyui import generate_scene_image
+
+    cfg = gapp.load_config()
+    worker_urls = gapp._preview_worker_urls()
+    if not worker_urls:
+        _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
+        return
+
+    from pipeline.worker_pool import WorkerPool
+    pool = WorkerPool(worker_urls)
+
+    first_frame = wd / f"scene_{sid:02d}_first_frame.png"
+    preview = wd / f"scene_{sid:02d}_preview.png"
+
+    try:
+        image_prompt = (row.get("image_prompt") or "").strip()
+        style_clean = jc.get("style", "").strip().rstrip(".")
+        if style_clean and image_prompt and not image_prompt.startswith(style_clean):
+            image_prompt = f"{style_clean}. {image_prompt}"
+
+        vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
+        vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
+
+        _film_tasks[task_id] = {"status": "running", "step": "image"}
+        url = pool.acquire()
+        try:
+            generate_scene_image(
+                image_prompt or row.get("title") or f"Scene {sid}",
+                first_frame,
+                width=vid_w, height=vid_h,
+                steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
+                flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
+                flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                comfy_url=url,
+            )
+        finally:
+            pool.release(url)
+
+        if first_frame.exists():
+            shutil.copy2(first_frame, preview)
+
+        preview_url = f"/api/file?path={preview}&t={int(time.time())}" if preview.exists() else ""
+        _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
+    except Exception as e:
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+
+
+def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: re-render image → video → mux."""
+    from pipeline.assembler import mux_video_audio, _get_duration
+    from pipeline.comfyui import generate_scene_image
+    from pipeline.llm import Scene
+    from pipeline.scene_video import generate_scene_video as gen_scene_video
+
+    cfg = gapp.load_config()
+    worker_urls = gapp._preview_worker_urls()
+    if not worker_urls:
+        _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
+        return
+
+    from pipeline.worker_pool import WorkerPool
+    pool = WorkerPool(worker_urls)
+
+    first_frame = wd / f"scene_{sid:02d}_first_frame.png"
+    video_path = wd / f"scene_{sid:02d}_video.mp4"
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+
+    try:
+        image_prompt = (row.get("image_prompt") or "").strip()
+        video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
+        style_clean = jc.get("style", "").strip().rstrip(".")
+        if style_clean:
+            if image_prompt and not image_prompt.startswith(style_clean):
+                image_prompt = f"{style_clean}. {image_prompt}"
+            if video_prompt and not video_prompt.startswith(style_clean):
+                video_prompt = f"{style_clean}. {video_prompt}"
+
+        vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
+        vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
+
+        _film_tasks[task_id] = {"status": "running", "step": "image"}
+        url = pool.acquire()
+        try:
+            generate_scene_image(
+                image_prompt or row.get("title") or f"Scene {sid}",
+                first_frame,
+                width=vid_w, height=vid_h,
+                steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
+                flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
+                flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                comfy_url=url,
+            )
+        finally:
+            pool.release(url)
+
+        # Determine narration duration from existing narration wav
+        narration_path = wd / f"scene_{sid:02d}_narration.wav"
+        if not narration_path.exists():
+            raise RuntimeError(f"Narration file missing: {narration_path.name} — re-render narration first.")
+        nar_dur = _get_duration(narration_path)
+
+        _film_tasks[task_id]["step"] = "video"
+        scene = Scene(
+            id=sid,
+            title=row.get("title") or f"Scene {sid}",
+            image_prompt=image_prompt,
+            video_prompt=video_prompt,
+            narration=row.get("narration") or "",
+        )
+        url = pool.acquire()
+        try:
+            scene_video, _ = gen_scene_video(
+                scene, wd, nar_dur, vid_w, vid_h,
+                float(jc.get("max_clip_secs", 12.0)),
+                float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
+                float(jc.get("first_pass_cfg", cfg.get("first_pass_cfg", 1.0))),
+                int(jc.get("first_pass_steps", cfg.get("first_pass_steps", 8))),
+                float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
+                int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
+                url,
+                first_frame if first_frame.exists() else None,
+                {
+                    "model": jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                    "clip_t5": jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                    "clip_l": jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
+                    "vae": jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                    "steps": int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
+                },
+            )
+        finally:
+            pool.release(url)
+
+        _film_tasks[task_id]["step"] = "mux"
+        mux_video_audio(scene_video, narration_path, final_path)
+
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as e:
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+
+
+@api.post("/api/films/scenes/{scene_id}/rerender")
+def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if body.component not in ("narration", "image", "video"):
+        raise HTTPException(400, f"Unknown component: {body.component!r}")
+
+    sid = scene_id
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    row = next((r for r in rows if int(r.get("id") or r.get("scene_id") or 0) == sid), None)
+    if not row:
+        raise HTTPException(404, f"Scene {sid} not found.")
+
+    jc = _film_job_config(wd)
+
+    # Delete stale files for the component and its dependents
+    if body.component == "narration":
+        for f in [f"scene_{sid:02d}_narration.wav", f"scene_{sid:02d}_final.mp4"]:
+            (wd / f).unlink(missing_ok=True)
+    elif body.component == "image":
+        for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
+            (wd / f).unlink(missing_ok=True)
+    elif body.component == "video":
+        for f in [
+            f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png",
+            f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
+            f"scene_{sid:02d}_clip_02.mp4", f"scene_{sid:02d}_final.mp4",
+        ]:
+            (wd / f).unlink(missing_ok=True)
+
+    tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": body.component}
+
+    if body.component == "narration":
+        target = _run_narration_rerender
+    elif body.component == "image":
+        target = _run_image_rerender
+    else:
+        target = _run_video_rerender
+    threading.Thread(target=target, args=(tid, wd, sid, jc, row), daemon=True).start()
+    return {"ok": True, "task_id": tid}
+
+
+@api.get("/api/films/task")
+def film_task_status(task_id: str = Query(...)) -> dict:
+    task = _film_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Task not found.")
+    return {"ok": True, **task}
+
+
 @api.post("/api/films/delete")
 def delete_film(body: JobActionBody) -> dict:
     wd = Path(body.work_dir)
