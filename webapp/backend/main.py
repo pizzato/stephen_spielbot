@@ -2401,8 +2401,8 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         if style_clean and image_prompt and not image_prompt.startswith(style_clean):
             image_prompt = f"{style_clean}. {image_prompt}"
 
-        vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
-        vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
+        resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
 
         new_seed = secrets.randbelow(2 ** 32)
         _film_tasks[task_id] = {"status": "running", "step": "image"}
@@ -2463,8 +2463,8 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
             if video_prompt and not video_prompt.startswith(style_clean):
                 video_prompt = f"{style_clean}. {video_prompt}"
 
-        vid_w = int(jc.get("vid_width", cfg.get("vid_width", 832)))
-        vid_h = int(jc.get("vid_height", cfg.get("vid_height", 480)))
+        resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
 
         _film_tasks[task_id] = {"status": "running", "step": "image"}
         url = pool.acquire()
