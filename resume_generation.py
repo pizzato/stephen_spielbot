@@ -567,11 +567,22 @@ def main(work_dir: Path) -> None:
         image_task = task_id(durable_job_id, "scene", scene.id, "image")
         video_task = task_id(durable_job_id, "scene", scene.id, "video")
         first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
+
+        def _persist_first_frame(frame: Path) -> None:
+            """Record the first-frame image the video actually used as this scene's
+            preview, so loading the script shows exactly that frame and doesn't
+            regenerate it. Keyed by the same job_id load_script reads."""
+            try:
+                store.update_scene_preview(durable_job_id, scene.id, frame)
+            except Exception:
+                logger.debug("Could not persist preview for scene %d", scene.id, exc_info=True)
+
         if existing.exists() and existing.stat().st_size > 10_000:
             logger.info("Scene %d video exists (%d KB), skipping", scene.id, existing.stat().st_size // 1024)
             if first_frame_path.exists():
                 store.complete_task(image_task, result={"path": str(first_frame_path), "skipped": True})
                 store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+                _persist_first_frame(first_frame_path)
             store.complete_task(video_task, result={"path": str(existing), "skipped": True})
             store.record_artifact(durable_job_id, video_task, "scene_video", existing, duration_seconds=_get_duration(existing))
             return scene.id, existing, None
@@ -586,6 +597,7 @@ def main(work_dir: Path) -> None:
             if first_frame_path.exists():
                 store.complete_task(image_task, result={"path": str(first_frame_path), "skipped": True})
                 store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+                _persist_first_frame(first_frame_path)
             store.complete_task(video_task, result={"path": str(single_clip), "skipped": True})
             store.record_artifact(durable_job_id, video_task, "scene_video", single_clip, duration_seconds=_get_duration(single_clip))
             return scene.id, single_clip, amb if amb.exists() else None
@@ -632,6 +644,7 @@ def main(work_dir: Path) -> None:
                 if scene_first_frame and scene_first_frame.exists():
                     store.complete_task(image_task, result={"path": str(scene_first_frame), "skipped": True})
                     store.record_artifact(durable_job_id, image_task, "image", scene_first_frame)
+                    _persist_first_frame(scene_first_frame)
                 else:
                     store.start_task(
                         image_task,
@@ -660,6 +673,7 @@ def main(work_dir: Path) -> None:
                     if produced_first_frame and produced_first_frame.exists():
                         store.complete_task(image_task, result={"path": str(produced_first_frame)})
                         store.record_artifact(durable_job_id, image_task, "image", produced_first_frame)
+                        _persist_first_frame(produced_first_frame)
                     store.record_artifact(
                         durable_job_id,
                         video_task,
