@@ -90,12 +90,24 @@ export default function App() {
     go('progress', { workDir })
   }, [go])
 
+  // Render/Films → Script: load the script behind a given work_dir and open the
+  // Script tab on it. Throws so the caller can surface the error inline.
+  const onOpenScript = useCallback(async (workDir) => {
+    const loaded = await api.loadScript(workDir)
+    setJob({
+      ...loaded,
+      voice: loaded.voice || meta.config?.default_voice || '',
+      resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
+    })
+    go('script')
+  }, [go, meta])
+
   const screen = (() => {
     switch (route) {
       case 'home': return <Home go={go} initialTopic={topic} setTopic={setTopic} />
       case 'create': return <Create seed={createSeed} meta={meta} onGenerated={onScriptGenerated} />
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
-      case 'progress': return <Progress workDir={progressDir} job={job} go={go} />
+      case 'progress': return <Progress workDir={progressDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} />
