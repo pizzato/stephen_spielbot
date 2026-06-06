@@ -26,6 +26,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [cur, setCur] = useState(0)
   const [lightbox, setLightbox] = useState(null)
   const [genAll, setGenAll] = useState(false)
+  const [genAllMsg, setGenAllMsg] = useState('')
+  const [regenStatus, setRegenStatus] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [confirmDelScript, setConfirmDelScript] = useState(false)
 
@@ -59,6 +61,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (!job?.job_id) return
     if (!(job.scenes || []).some((s) => !s.has_preview)) return
     setGenAll(true)
+    setGenAllMsg('Generating missing scene previews…')
     // Generate previews at the SAME resolution the render will use (what approve
     // sends), so the render reuses these images instead of regenerating them at a
     // different size. Mirrors the `resolution` state init below.
@@ -138,13 +141,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   const regenAll = async () => {
-    setGenAll(true); setError('')
+    setGenAll(true)
+    setGenAllMsg('Regenerating all scene images — this may take several minutes…')
+    setError('')
+    setRegenStatus('')
     try {
       const r = await api.regenAllPreviews(job.job_id, resolution, style)
       if (r.scenes) setScenes((prev) => prev.map((s) => {
         const u = r.scenes.find((x) => x.id === s.id)
         return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview, cb: Date.now() } : s
       }))
+      const generated = r.generated ?? 0
+      const failedCount = r.failed?.length ?? 0
+      setRegenStatus(failedCount > 0
+        ? `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''} (${failedCount} failed)`
+        : `Regenerated ${generated} scene image${generated !== 1 ? 's' : ''}`)
     } catch (e) { setError(e.message) } finally { setGenAll(false) }
   }
 
@@ -252,7 +263,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       </div>
 
       <Banner tone="danger">{error}</Banner>
-      {genAll && <Banner tone="info">Generating scene previews… already-painted frames are reused.</Banner>}
+      {genAll && <Banner tone="info">{genAllMsg}</Banner>}
+      {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
