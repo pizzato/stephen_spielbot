@@ -6,8 +6,8 @@ function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone,
 }) {
-  const [expanded, setExpanded] = useState(false)
   const [editing, setEditing] = useState(false)
+  const [lightbox, setLightbox] = useState(false)
   const [title, setTitle] = useState(scene.title || '')
   const [narration, setNarration] = useState(scene.narration || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
@@ -24,6 +24,7 @@ function SceneCard({
     setNarration(scene.narration || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
+    setEditing(false)
   }, [scene.id])
 
   const persist = async () => {
@@ -102,124 +103,174 @@ function SceneCard({
   const videoUrl = scene.video_url
 
   return (
-    <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ display: 'flex', gap: 0 }}>
-        {/* Thumbnail */}
-        <div style={{ width: 160, flexShrink: 0, position: 'relative', background: 'var(--paper-2)', aspectRatio: '16/9', minHeight: 90 }}>
-          {previewUrl
-            ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-            : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
-          }
-          {isRendering && (
-            <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <Icon name="spinner" spin style={{ color: '#fff', fontSize: 20 }} />
-            </div>
-          )}
-          <span style={{ position: 'absolute', top: 6, left: 8, fontWeight: 700, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4 }}>
-            {String(index + 1).padStart(2, '0')}
-          </span>
+    <>
+      {lightbox && previewUrl && (
+        <div
+          onClick={() => setLightbox(false)}
+          style={{
+            position: 'fixed', inset: 0, zIndex: 9999,
+            background: 'rgba(0,0,0,.88)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            cursor: 'zoom-out',
+          }}
+        >
+          <img
+            src={previewUrl}
+            alt=""
+            style={{ maxWidth: '92vw', maxHeight: '92vh', objectFit: 'contain', borderRadius: 6 }}
+            onClick={(e) => e.stopPropagation()}
+          />
+          <button
+            type="button"
+            onClick={() => setLightbox(false)}
+            style={{
+              position: 'fixed', top: 18, right: 22,
+              background: 'rgba(255,255,255,.15)', border: 'none', borderRadius: '50%',
+              width: 36, height: 36, cursor: 'pointer',
+              color: '#fff', fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >
+            <Icon name="xmark" />
+          </button>
         </div>
+      )}
 
-        {/* Content */}
-        <div style={{ flex: 1, padding: '14px 16px', minWidth: 0 }}>
-          {!editing ? (
-            <>
-              <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
-                <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{title || `Scene ${index + 1}`}</div>
-                <div className="row gap-6" style={{ flexShrink: 0 }}>
-                  {videoUrl && (
-                    <Chip tone="ok" dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
-                  )}
-                  {!videoUrl && <Chip tone="warn">No video</Chip>}
-                </div>
+      <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', gap: 0 }}>
+          {/* Thumbnail */}
+          <div
+            onClick={() => previewUrl && setLightbox(true)}
+            style={{
+              width: 160, flexShrink: 0, position: 'relative',
+              background: 'var(--paper-2)', aspectRatio: '16/9', minHeight: 90,
+              cursor: previewUrl ? 'zoom-in' : 'default',
+            }}
+          >
+            {previewUrl
+              ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
+            }
+            {isRendering && (
+              <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <Icon name="spinner" spin style={{ color: '#fff', fontSize: 20 }} />
               </div>
-              {narration && (
-                <p style={{ fontSize: 12.5, color: 'var(--ink-2)', margin: 0, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                  {narration}
-                </p>
-              )}
-            </>
-          ) : (
-            <div className="stack gap-14">
-              <Field label="Title">
-                <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
-              </Field>
-              <Field label="Narration">
-                <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
-              </Field>
-              {expanded && (
-                <>
-                  <Field label="Image prompt" hint="FLUX — static frame">
-                    <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
-                  </Field>
-                  <Field label="Video prompt" hint="LTX — motion & camera">
-                    <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
-                  </Field>
-                </>
-              )}
-              {!expanded && (
-                <button type="button" className="btn btn--quiet" style={{ fontSize: 11, alignSelf: 'flex-start', padding: '2px 8px' }} onClick={() => setExpanded(true)}>
-                  <Icon name="chevron-down" /> Prompts
-                </button>
-              )}
-            </div>
-          )}
-
-          {error && <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6 }}>{error}</div>}
-
-          {/* Action row */}
-          <div className="row gap-6 mt-14" style={{ flexWrap: 'wrap' }}>
-            {/* Edit / Save */}
-            {!editing ? (
-              <Button variant="ghost" icon="pencil" size="sm" onClick={() => { setEditing(true); setExpanded(false) }}>Edit</Button>
-            ) : (
-              <>
-                <Button variant="primary" icon="check" size="sm" onClick={saveAndClose}>Save</Button>
-                <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
-              </>
             )}
-
-            {/* Re-render buttons */}
-            <Button variant="ghost" icon="microphone-lines" size="sm" disabled={isRendering}
-              onClick={() => rerender('narration')}>
-              {busy === 'narration' ? 'Rendering…' : 'Narration'}
-            </Button>
-            <Button variant="ghost" icon="image" size="sm" disabled={isRendering}
-              onClick={() => rerender('image')}>
-              {busy === 'image' ? 'Rendering…' : 'Image'}
-            </Button>
-            <Button variant="ghost" icon="film" size="sm" disabled={isRendering}
-              onClick={() => rerender('video')}>
-              {busy === 'video' ? 'Rendering…' : 'Video'}
-            </Button>
-
-            {/* Spacer */}
-            <div style={{ flex: 1 }} />
-
-            {/* Move up/down */}
-            <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
-            <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
-
-            {/* Delete */}
-            {confirmDel ? (
-              <>
-                <Button variant="danger" icon="trash-can" size="sm" onClick={async () => { setConfirmDel(false); onDelete(scene.id) }}>Confirm</Button>
-                <Button variant="ghost" size="sm" onClick={() => setConfirmDel(false)}>Cancel</Button>
-              </>
-            ) : (
-              <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering} onClick={() => setConfirmDel(true)}>Delete</Button>
+            <span style={{ position: 'absolute', top: 6, left: 8, fontWeight: 700, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4 }}>
+              {String(index + 1).padStart(2, '0')}
+            </span>
+            {previewUrl && !isRendering && (
+              <span style={{ position: 'absolute', bottom: 6, right: 8, color: '#fff', opacity: 0.7, fontSize: 13 }}>
+                <Icon name="magnifying-glass-plus" />
+              </span>
             )}
           </div>
 
-          {/* Video preview */}
-          {videoUrl && (
-            <div style={{ marginTop: 12 }}>
-              <video src={videoUrl} controls style={{ width: '100%', maxWidth: 480, borderRadius: 6, background: '#000' }} />
+          {/* Content */}
+          <div style={{ flex: 1, padding: '14px 16px', minWidth: 0 }}>
+            {!editing ? (
+              <>
+                <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
+                  <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{title || `Scene ${index + 1}`}</div>
+                  <div className="row gap-6" style={{ flexShrink: 0 }}>
+                    {videoUrl
+                      ? <Chip tone={scene.has_final ? 'ok' : 'warn'} dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
+                      : <Chip tone="warn">No video</Chip>
+                    }
+                  </div>
+                </div>
+                {narration && (
+                  <p style={{ fontSize: 12.5, color: 'var(--ink-2)', margin: 0, lineHeight: 1.5, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                    {narration}
+                  </p>
+                )}
+                {(imagePrompt || videoPrompt) && (
+                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    {imagePrompt && (
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                        <span style={{ fontWeight: 600, marginRight: 4 }}>Image:</span>{imagePrompt}
+                      </div>
+                    )}
+                    {videoPrompt && (
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                        <span style={{ fontWeight: 600, marginRight: 4 }}>Video:</span>{videoPrompt}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
+            ) : (
+              <div className="stack gap-14">
+                <Field label="Title">
+                  <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
+                </Field>
+                <Field label="Narration">
+                  <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
+                </Field>
+                <Field label="Image prompt" hint="FLUX — static frame">
+                  <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
+                </Field>
+                <Field label="Video prompt" hint="LTX — motion & camera">
+                  <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
+                </Field>
+              </div>
+            )}
+
+            {error && <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6 }}>{error}</div>}
+
+            {/* Action row */}
+            <div className="row gap-6 mt-14" style={{ flexWrap: 'wrap' }}>
+              {/* Edit / Save */}
+              {!editing ? (
+                <Button variant="ghost" icon="pencil" size="sm" onClick={() => setEditing(true)}>Edit</Button>
+              ) : (
+                <>
+                  <Button variant="primary" icon="check" size="sm" onClick={saveAndClose}>Save</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setEditing(false)}>Cancel</Button>
+                </>
+              )}
+
+              {/* Re-render buttons */}
+              <Button variant="ghost" icon="microphone-lines" size="sm" disabled={isRendering}
+                onClick={() => rerender('narration')}>
+                {busy === 'narration' ? 'Rendering…' : 'Narration'}
+              </Button>
+              <Button variant="ghost" icon="image" size="sm" disabled={isRendering}
+                onClick={() => rerender('image')}>
+                {busy === 'image' ? 'Rendering…' : 'Image'}
+              </Button>
+              <Button variant="ghost" icon="film" size="sm" disabled={isRendering}
+                onClick={() => rerender('video')}>
+                {busy === 'video' ? 'Rendering…' : 'Video'}
+              </Button>
+
+              {/* Spacer */}
+              <div style={{ flex: 1 }} />
+
+              {/* Move up/down */}
+              <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
+              <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
+
+              {/* Delete */}
+              {confirmDel ? (
+                <>
+                  <Button variant="danger" icon="trash-can" size="sm" onClick={async () => { setConfirmDel(false); onDelete(scene.id) }}>Confirm</Button>
+                  <Button variant="ghost" size="sm" onClick={() => setConfirmDel(false)}>Cancel</Button>
+                </>
+              ) : (
+                <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering} onClick={() => setConfirmDel(true)}>Delete</Button>
+              )}
             </div>
-          )}
+
+            {/* Video preview */}
+            {videoUrl && (
+              <div style={{ marginTop: 12 }}>
+                <video src={videoUrl} controls style={{ width: '100%', maxWidth: 480, borderRadius: 6, background: '#000' }} />
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </Card>
+      </Card>
+    </>
   )
 }
 
