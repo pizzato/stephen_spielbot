@@ -4,15 +4,47 @@ import { api } from '../api.js'
 
 const PROMPTS = ['Roman Empire', 'Deep sea', 'How bread is made', 'The cold war']
 
+function timeAgo(ts) {
+  const s = Math.round(Date.now() / 1000 - ts)
+  if (s < 5) return 'just now'
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  return `${Math.floor(m / 60)}h ago`
+}
+
 export default function Home({ go }) {
   const [topic, setTopic] = useState('')
   const [films, setFilms] = useState([])
   const [queueCount, setQueueCount] = useState(0)
+  const [activity, setActivity] = useState({
+    current_op: {}, recent: [], render_active: false,
+    render_pct: 0, render_msg: '', render_title: '', queue_pending: 0,
+  })
 
   useEffect(() => {
     api.listJobs().then((d) => setFilms(d.finished || [])).catch(() => {})
     api.getQueue().then((d) => setQueueCount((d.queue || []).filter((q) => q.status === 'pending').length)).catch(() => {})
   }, [])
+
+  useEffect(() => {
+    const poll = () => api.getActivity().then(setActivity).catch(() => {})
+    poll()
+    const t = setInterval(poll, 3000)
+    return () => clearInterval(t)
+  }, [])
+
+  const op = activity.current_op || {}
+  const isActive = !!(op.name || activity.render_active)
+
+  let statusLabel = '', statusDetail = ''
+  if (op.name) {
+    statusLabel = op.name
+    statusDetail = op.detail || ''
+  } else if (activity.render_active) {
+    statusLabel = `Rendering ${activity.render_pct}%`
+    statusDetail = activity.render_title || activity.render_msg || ''
+  }
 
   return (
     <div>
@@ -54,6 +86,55 @@ export default function Home({ go }) {
           <p className="body-1 mt-16" style={{ fontSize: 14 }}>
             Give me a topic. I'll write the script, paint every scene, record the narration, score it, and cut the whole thing together.
           </p>
+        </Card>
+
+        {/* Activity card — always shows what the system is doing */}
+        <Card span={12} className="reveal reveal-d2">
+          <div className="card__head">
+            <span className="label-sm">Activity</span>
+            {isActive
+              ? <Chip tone="accent" dot>Running</Chip>
+              : <span style={{ fontSize: 12, color: 'var(--ink-4)' }}>Idle</span>}
+          </div>
+          <div className="stream" style={{ marginTop: 4 }}>
+            {isActive && (
+              <div className="stream-entry">
+                <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
+                  <Icon name="rotate" spin />
+                </span>
+                <div className="grow">
+                  <span className="stream-title">{statusLabel}</span>
+                  {statusDetail && (
+                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{statusDetail}</span>
+                  )}
+                </div>
+                {activity.render_active && !op.name && (
+                  <span style={{ fontSize: 12, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums', minWidth: 36, textAlign: 'right' }}>
+                    {activity.render_pct}%
+                  </span>
+                )}
+              </div>
+            )}
+            {activity.recent.slice(0, 5).map((ev, i) => (
+              <div key={i} className="stream-entry">
+                <span className="stream-ico" style={{ background: 'var(--paper-2)', color: 'var(--ink-3)' }}>
+                  <Icon name="clock-rotate-left" />
+                </span>
+                <div className="grow">
+                  <span className="stream-title">{ev.name}</span>
+                  {ev.detail && (
+                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{ev.detail}</span>
+                  )}
+                </div>
+                <span style={{ fontSize: 11.5, color: 'var(--ink-4)', whiteSpace: 'nowrap' }}>
+                  {ev.duration_s}s · {timeAgo(ev.ts)}
+                </span>
+              </div>
+            ))}
+            {!isActive && activity.recent.length === 0 && (
+              <div className="muted" style={{ fontSize: 13, padding: '8px 0' }}>No recent activity.</div>
+            )}
+          </div>
         </Card>
 
         <Card span={7} className="reveal reveal-d2">
