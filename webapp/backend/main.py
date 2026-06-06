@@ -2019,6 +2019,10 @@ def _start_queue_item(item: dict) -> dict:
             resolution=item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
             music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
             style=item.get("gen_style") or _job_meta_field(job_id, "style")))
+        # start_generation wrote queue_item_id="" (the item is already "creating",
+        # not "pending", so its title-match misses). Stamp the reverse link now so
+        # _auto_post_done recognises this as a queue-driven job and posts it.
+        _link_queue_item_to_work_dir(item, Path(wd))
         yt.update_queue_item(item["id"], status="creating")
         return {"job_id": job_id, "work_dir": wd, "title": title}
 
@@ -2032,6 +2036,8 @@ def _start_queue_item(item: dict) -> dict:
         n_scenes=n, voice=cfg.get("default_voice", ""),
         resolution=resolution,
         music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
+    # See above: re-link the work dir to this queue item so auto-post finds it.
+    _link_queue_item_to_work_dir(item, Path(gen["work_dir"]))
     yt.update_queue_item(item["id"], status="creating",
                          video_job_id=gen["job_id"], work_dir=gen["work_dir"])
     return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
@@ -2711,16 +2717,19 @@ def _ensure_descriptions() -> int:
 
 def _automation_tick() -> dict:
     cfg = gapp.load_config()
+    # The master toggle implies every per-step flag below. It's only honored here
+    # (and in the loop gate); nothing expands it into the individual flags on save.
+    full = bool(cfg.get("youtube_fully_automated"))
     out: dict = {}
     with _track_op("Automation tick"):
-        if cfg.get("youtube_auto_fetch_evaluate"):
+        if full or cfg.get("youtube_auto_fetch_evaluate"):
             try:
-                out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
+                out["fetch"] = _fetch_and_evaluate(full or cfg.get("youtube_auto_approve_comments", False))
             except Exception as e:
                 out["fetch_error"] = str(e)[:120]
-        if cfg.get("youtube_auto_start_job"):
+        if full or cfg.get("youtube_auto_start_job"):
             out["started"] = _auto_start_best()
-        if cfg.get("youtube_auto_post"):
+        if full or cfg.get("youtube_auto_post"):
             out["posted"] = _auto_post_done()
     return out
 
