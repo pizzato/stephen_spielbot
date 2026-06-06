@@ -61,6 +61,7 @@ export const api = {
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
 
+  getActivity: () => req('GET', '/activity'),
   getBadges: () => req('GET', '/badges'),
   markSeen: (section) => req('POST', '/badges/seen', { section }),
 

@@ -2,8 +2,8 @@
 // components.jsx / App.jsx into ES modules.
 import React from 'react'
 
-export function Icon({ name, brand, style }) {
-  return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}`} style={style}></i>
+export function Icon({ name, brand, style, spin }) {
+  return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
 }
 
 export function Button({ variant = 'ghost', size, block, icon, iconRight, children, onClick, disabled, type = 'button' }) {
