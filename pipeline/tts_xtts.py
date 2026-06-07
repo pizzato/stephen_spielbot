@@ -12,7 +12,6 @@ Usage (from pipeline):
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 # Override with CHATTERBOX_PYTHON env var, or fall back to ~/miniconda3/envs/chatterbox/bin/python
