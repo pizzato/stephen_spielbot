@@ -18,7 +18,9 @@ export default function Publish({ initialWorkDir, go }) {
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [confirming, setConfirming] = useState(false)
+  const [reuploading, setReuploading] = useState(false)
   const [youtubeUrl, setYoutubeUrl] = useState('')
+  const [youtubeVideoId, setYoutubeVideoId] = useState('')
   const pollRef = useRef(null)
 
   const refreshAuth = () => api.ytAuthStatus().then(setAuth).catch(() => {})
@@ -39,7 +41,7 @@ export default function Publish({ initialWorkDir, go }) {
   }, [initialWorkDir])
 
   const selectFilm = async (wd) => {
-    setWorkDir(wd); setError(''); setStatus(''); setConfirming(false); setYoutubeUrl('')
+    setWorkDir(wd); setError(''); setStatus(''); setConfirming(false); setReuploading(false); setYoutubeUrl(''); setYoutubeVideoId('')
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
@@ -47,6 +49,7 @@ export default function Publish({ initialWorkDir, go }) {
       setCoverUrl(p.cover_url || '')
       setFinalUrl(p.final_url || '')
       setYoutubeUrl(p.youtube_url || '')
+      setYoutubeVideoId(p.youtube_video_id || '')
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
     } catch (e) { setError(e.message) }
@@ -101,6 +104,15 @@ export default function Publish({ initialWorkDir, go }) {
     }
   }
 
+  // Push the current cover to the already-published video's thumbnail.
+  const updateThumbnail = async () => {
+    setBusy('thumb'); setError(''); setStatus('')
+    try {
+      await api.ytThumbnail({ work_dir: workDir, video_id: youtubeVideoId })
+      setStatus('Thumbnail updated on YouTube.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   const upload = async () => {
     setBusy('upload'); setError(''); setStatus('Starting upload…')
     let pollTimer = null
@@ -113,7 +125,9 @@ export default function Publish({ initialWorkDir, go }) {
             if (s.status === 'done') {
               setStatus(s.message || 'Uploaded.')
               setYoutubeUrl(s.url || '')
+              setYoutubeVideoId(s.video_id || '')
               setConfirming(false)
+              setReuploading(false)
               refreshAuth()
               resolve()
             } else if (s.status === 'error') {
@@ -179,16 +193,21 @@ export default function Publish({ initialWorkDir, go }) {
             <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Uploads are flagged as <strong>synthetic media</strong> per the channel's automated settings.</span>
           </div>
 
-          {youtubeUrl ? (
-            <div className="row center gap-10">
+          {confirming ? (
+            <div className="row gap-10 center row--wrap">
+              <span className="muted" style={{ fontSize: 13 }}>
+                {reuploading
+                  ? <>Re-upload "{title}" as a <strong>new</strong> {privacy} video? The existing one stays on your channel.</>
+                  : <>Upload "{title}" as <strong>{privacy}</strong>?</>}
+              </span>
+              <Button variant="primary" icon="youtube" disabled={busy === 'upload'} onClick={upload}>{busy === 'upload' ? 'Uploading…' : (reuploading ? 'Confirm re-upload' : 'Confirm upload')}</Button>
+              <Button variant="ghost" onClick={() => { setConfirming(false); setReuploading(false) }}>Cancel</Button>
+            </div>
+          ) : youtubeUrl ? (
+            <div className="row center gap-10 row--wrap">
               <Button variant="ghost" icon="check" disabled style={{ cursor: 'default' }}>Uploaded to YouTube</Button>
               <a className="btn btn--ghost" href={youtubeUrl} target="_blank" rel="noreferrer"><Icon name="youtube" /> View on YouTube</a>
-            </div>
-          ) : confirming ? (
-            <div className="row gap-10 center">
-              <span className="muted" style={{ fontSize: 13 }}>Upload "{title}" as <strong>{privacy}</strong>?</span>
-              <Button variant="primary" icon="youtube" disabled={busy === 'upload'} onClick={upload}>{busy === 'upload' ? 'Uploading…' : 'Confirm upload'}</Button>
-              <Button variant="ghost" onClick={() => setConfirming(false)}>Cancel</Button>
+              <Button variant="ghost" icon="rotate" disabled={!canUpload} onClick={() => { setReuploading(true); setConfirming(true) }}>Re-upload as new video</Button>
             </div>
           ) : (
             <Button variant="primary" size="lg" icon="youtube" disabled={!canUpload} onClick={() => setConfirming(true)}>Upload to YouTube</Button>
@@ -210,6 +229,10 @@ export default function Publish({ initialWorkDir, go }) {
           </div>
           <Button variant="ghost" block icon="rotate-right" disabled={busy === 'cover' || !workDir} onClick={regenCover}>
             {busy === 'cover' ? 'Queued — waiting for UI worker…' : 'Regenerate cover'}</Button>
+          {youtubeUrl && (
+            <Button variant="ghost" block icon="image" disabled={busy === 'thumb' || !coverUrl} onClick={updateThumbnail}>
+              {busy === 'thumb' ? 'Updating…' : 'Update thumbnail on YouTube'}</Button>
+          )}
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>

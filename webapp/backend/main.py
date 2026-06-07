@@ -1680,6 +1680,35 @@ def yt_cover_status(task_id: str = Query(...)) -> dict:
     return result
 
 
+class ThumbnailBody(BaseModel):
+    work_dir: str
+    video_id: str = ""
+
+
+@api.post("/api/youtube/thumbnail")
+def yt_thumbnail(body: ThumbnailBody) -> dict:
+    """Push the current cover.png to an already-uploaded video's thumbnail."""
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    cover = wd / "cover.png"
+    if not (cover.exists() and cover.stat().st_size > 1000):
+        raise HTTPException(400, "No cover image found for this film.")
+    video_id = body.video_id
+    if not video_id:
+        try:
+            video_id = json.loads((wd / "job.json").read_text()).get("youtube_video_id", "")
+        except Exception:
+            video_id = ""
+    if not video_id:
+        raise HTTPException(400, "This film hasn't been uploaded to YouTube yet.")
+    with _track_op("Updating thumbnail", _video_title_for(wd)):
+        result = yt.set_thumbnail(_client_secrets_path(), video_id, str(cover))
+    if not result.get("success"):
+        raise HTTPException(502, result.get("error", "Thumbnail update failed."))
+    return {"ok": True}
+
+
 class PostBody(BaseModel):
     work_dir: str
     title: str
