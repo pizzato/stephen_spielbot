@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Chip, Button, Icon, Banner, Field } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker } from '../components.jsx'
 import { api } from '../api.js'
 
 const STATUS_CHIP = {
@@ -9,7 +9,7 @@ const STATUS_CHIP = {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
-export default function Queue({ go, onEditScript }) {
+export default function Queue({ go, onEditScript, meta = {} }) {
   const [items, setItems] = useState([])
   const [progress, setProgress] = useState(null)
   const [error, setError] = useState('')
@@ -17,7 +17,7 @@ export default function Queue({ go, onEditScript }) {
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [editId, setEditId] = useState('')         // pending item open for inline edit
-  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6 })
+  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '' })
 
   const refresh = () => Promise.all([
     api.getQueue(),
@@ -41,12 +41,14 @@ export default function Queue({ go, onEditScript }) {
       final_title: it.final_title || it.title || '',
       video_prompt: it.video_prompt || it.comment_text || '',
       suggested_scene_count: it.suggested_scene_count || 6,
+      gen_resolution: it.gen_resolution || meta.config?.resolution || meta.default_resolution || '',
     })
   }
   const saveEdit = (id) => run('save' + id, () => api.queueUpdate(id, {
     final_title: draft.final_title,
     video_prompt: draft.video_prompt,
     suggested_scene_count: Number(draft.suggested_scene_count) || 6,
+    gen_resolution: draft.gen_resolution || '',
   }), () => { setEditId(''); setStatus('Queue item updated.') })
 
   // Open a pending item's script for editing (loads the Script tab, or the
@@ -86,12 +88,15 @@ export default function Queue({ go, onEditScript }) {
             <input className="input" type="number" min={6} max={50} style={{ width: 110 }} value={draft.suggested_scene_count}
               onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
           </Field>
+          <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
+            <ResolutionPicker value={draft.gen_resolution} onChange={(r) => setDraft((d) => ({ ...d, gen_resolution: r }))} meta={meta} />
+          </Field>
           <div className="grow" />
           <div className="row gap-10 row--wrap">
             <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
             <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
             <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
-              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6 })}>
+              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '' })}>
               {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
             </Button>
           </div>
