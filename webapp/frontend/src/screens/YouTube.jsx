@@ -340,7 +340,7 @@ export default function YouTube({ go, initial, meta = {} }) {
         </div>
       )}
 
-      {view === 'publish' && <Publish initialWorkDir={initial?.workDir} />}
+      {view === 'publish' && <Publish initialWorkDir={initial?.workDir} go={go} />}
 
       {view === 'analytics' && (
         <div className="bento">
