@@ -37,6 +37,11 @@ export const api = {
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
 
+  // voices (reference clips F5-TTS clones). `data` is a base64 / data-URL string.
+  addVoice: (name, filename, data) => req('POST', '/voices/add', { name, filename, data }),
+  updateVoice: (name, fields) => req('POST', '/voices/update', { name, ...fields }),
+  deleteVoice: (name) => req('POST', '/voices/delete', { name }),
+
   generateScript: (body) => req('POST', '/script/generate', body),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),

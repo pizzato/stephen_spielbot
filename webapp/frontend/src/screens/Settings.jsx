@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip } from '../components.jsx'
-import { api } from '../api.js'
+import { useState, useEffect, useRef } from 'react'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon } from '../components.jsx'
+import { api, fileUrl } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
@@ -33,12 +33,123 @@ function WorkerStatus({ items, probed = true, extra }) {
   )
 }
 
+// Read a File into a data-URL string (base64) so it can ride in a JSON body.
+function fileToDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(r.result)
+    r.onerror = () => reject(new Error('Could not read that file.'))
+    r.readAsDataURL(file)
+  })
+}
+
+// Compact play/pause toggle for a voice's reference clip.
+function PlayButton({ src }) {
+  const ref = useRef(null)
+  const [playing, setPlaying] = useState(false)
+  return (
+    <>
+      <button type="button" className="btn btn--quiet" title={playing ? 'Pause' : 'Play'}
+        onClick={() => { const a = ref.current; if (a) (a.paused ? a.play() : a.pause()) }}>
+        <Icon name={playing ? 'pause' : 'play'} />
+      </button>
+      <audio ref={ref} src={src} preload="none"
+        onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onEnded={() => setPlaying(false)} />
+    </>
+  )
+}
+
+// Add / rename / replace / delete the reference clips F5-TTS clones. Each
+// operation persists immediately (it writes a file), independent of the
+// page-level "Save settings" button.
+function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
+  const [name, setName] = useState('')
+  const [file, setFile] = useState(null)
+  const [editing, setEditing] = useState(null)   // name of the voice being edited
+  const [editName, setEditName] = useState('')
+  const [editFile, setEditFile] = useState(null)
+  const addRef = useRef(null)
+
+  const add = async () => {
+    try { await onAdd(name.trim(), file) } catch { return }
+    setName(''); setFile(null); if (addRef.current) addRef.current.value = ''
+  }
+  const startEdit = (v) => { setEditing(v.name); setEditName(v.name); setEditFile(null) }
+  const cancelEdit = () => { setEditing(null); setEditName(''); setEditFile(null) }
+  const saveEdit = async (v) => {
+    try { await onUpdate(v.name, editName.trim(), editFile) } catch { return }
+    cancelEdit()
+  }
+
+  const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
+
+  return (
+    <Card span={12} className="reveal reveal-d2">
+      <div className="row center between">
+        <span className="label-sm">Voices</span>
+        <span className="muted" style={{ fontSize: 11.5 }}>changes save immediately</span>
+      </div>
+      <div className="field__hint" style={{ marginTop: 6 }}>
+        Reference clips (15–30s of clear speech) F5-TTS clones for narration. Pick the default voice under <strong>Script &amp; content</strong>.
+      </div>
+
+      <div className="stack gap-10 mt-16">
+        {(voices || []).length === 0 && (
+          <div className="muted" style={{ fontSize: 13 }}>No voices yet — add one below.</div>
+        )}
+        {(voices || []).map((v) => (
+          <div key={v.name} className="row center gap-10 row--wrap" style={rowStyle}>
+            {editing === v.name ? (
+              <>
+                <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ maxWidth: 220 }} />
+                <label className="btn btn--ghost">
+                  <Icon name="upload" /> {editFile ? editFile.name : 'Replace clip'}
+                  <input type="file" accept="audio/*" hidden onChange={(e) => setEditFile(e.target.files?.[0] || null)} />
+                </label>
+                <div className="grow" />
+                <Button variant="primary" icon="check" disabled={busy || !editName.trim()} onClick={() => saveEdit(v)}>Save</Button>
+                <Button variant="ghost" onClick={cancelEdit} disabled={busy}>Cancel</Button>
+              </>
+            ) : (
+              <>
+                <PlayButton src={fileUrl(v.path)} />
+                <span style={{ fontWeight: 600 }}>{v.name}</span>
+                <div className="grow" />
+                <Button variant="ghost" icon="pen" disabled={busy} onClick={() => startEdit(v)}>Edit</Button>
+                <Button variant="danger" icon="trash" disabled={busy} onClick={() => onDelete(v.name)}>Delete</Button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="row center gap-10 row--wrap mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+        <input className="input" placeholder="New voice name" value={name} onChange={(e) => setName(e.target.value)} style={{ maxWidth: 220 }} />
+        <label className="btn btn--ghost">
+          <Icon name="upload" /> {file ? file.name : 'Choose audio…'}
+          <input ref={addRef} type="file" accept="audio/*" hidden onChange={(e) => setFile(e.target.files?.[0] || null)} />
+        </label>
+        <Button variant="primary" icon="plus" disabled={busy || !name.trim() || !file} onClick={add}>Add voice</Button>
+      </div>
+    </Card>
+  )
+}
+
+const TABS = [
+  { id: 'infra', label: 'Infrastructure' },
+  { id: 'content', label: 'Script & content' },
+  { id: 'render', label: 'Render' },
+  { id: 'automation', label: 'Automation' },
+]
+
 export default function Settings({ meta, setMeta }) {
   const [cfg, setCfg] = useState(meta.config || {})
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [vbusy, setVbusy] = useState(false)   // a voice operation is in flight
   const [workers, setWorkers] = useState(null)
+  const [tab, setTab] = useState('infra')
 
   useEffect(() => { setCfg(meta.config || {}) }, [meta.config])
 
@@ -66,6 +177,30 @@ export default function Settings({ meta, setMeta }) {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
+  // Voice ops persist immediately (each writes a file), separate from the Save
+  // button. Merge the returned voice fields into the working copy so unsaved
+  // edits to other fields survive; refresh meta so other screens see the change.
+  const voiceOp = async (run) => {
+    setError(''); setStatus(''); setVbusy(true)
+    try {
+      const r = await run()
+      setCfg((c) => ({ ...c, voices: r.config.voices, default_voice: r.config.default_voice }))
+      setMeta((m) => ({ ...m, config: r.config, voices: r.voices }))
+    } catch (e) { setError(e.message); throw e } finally { setVbusy(false) }
+  }
+  const addVoice = (name, file) => voiceOp(async () =>
+    api.addVoice(name, file.name, await fileToDataUrl(file)))
+  const updateVoice = (name, newName, file) => voiceOp(async () => {
+    const fields = {}
+    if (newName && newName !== name) fields.new_name = newName
+    if (file) { fields.filename = file.name; fields.data = await fileToDataUrl(file) }
+    return api.updateVoice(name, fields)
+  })
+  const deleteVoice = (name) => {
+    if (!window.confirm(`Delete voice “${name}”? This removes its audio file.`)) return Promise.resolve()
+    return voiceOp(() => api.deleteVoice(name))
+  }
+
   const isClaude = cfg.llm_backend === 'claude'
 
   return (
@@ -81,119 +216,136 @@ export default function Settings({ meta, setMeta }) {
       <Banner tone="danger">{error}</Banner>
       {status && <Banner tone="ok">{status}</Banner>}
 
+      <div style={{ marginBottom: 22 }}>
+        <Segmented options={TABS.map((t) => ({ value: t.id, label: t.label }))} value={tab} onChange={setTab} />
+      </div>
+
       <div className="bento">
 
-        {/* ── Infrastructure ── */}
-        <Card span={6} className="reveal reveal-d1">
-          <div className="row center between">
-            <span className="label-sm">Infrastructure</span>
-            <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
-          </div>
-          <div className="stack gap-22 mt-16">
-            <Field label="ComfyUI workers" hint="One URL per line.">
-              <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
-              <WorkerStatus items={workers?.comfy} />
-            </Field>
-            <Field label="TTS workers" hint="One host per line.">
-              <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
-              <WorkerStatus items={workers?.tts} probed={false} />
-            </Field>
-            <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
-              <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
-              <WorkerStatus items={workers?.ui}
-                extra={workers && (workers.ui_worker_running
-                  ? <Chip tone="ok" dot>worker running</Chip>
-                  : <Chip tone="warn" dot>worker not running</Chip>)} />
-            </Field>
-          </div>
-        </Card>
-
-        {/* ── Content settings ── */}
-        <Card span={6} className="reveal reveal-d1">
-          <span className="label-sm">Script & content defaults</span>
-          <div className="stack gap-22 mt-16">
-            <div className="row gap-22 row--wrap">
-              <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={cfg.default_n_scenes ?? ''} onChange={(e) => set('default_n_scenes', +e.target.value)} /></Field></div>
-              <div className="grow"><Field label="Default voice"><select className="select" value={cfg.default_voice || ''} onChange={(e) => set('default_voice', e.target.value)}>
-                <option value="">(F5-TTS default)</option>
-                {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
-              </select></Field></div>
+        {tab === 'infra' && (<>
+          {/* ── Infrastructure ── */}
+          <Card span={6} className="reveal reveal-d1">
+            <div className="row center between">
+              <span className="label-sm">Infrastructure</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
             </div>
-            <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
-              label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
-            <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
-            <Field label="Extra script instructions" hint="Appended to every topic.">
-              <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
-            </Field>
-          </div>
-        </Card>
-
-        {/* ── Generation settings ── */}
-        <Card span={6} className="reveal reveal-d2">
-          <span className="label-sm">Render quality</span>
-          <div className="stack gap-22 mt-16">
-            <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
-              <ResolutionPicker value={cfg.resolution || ''} onChange={(r) => set('resolution', r)} meta={meta} />
-            </Field>
-            <div className="row gap-22 row--wrap">
-              <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">
-                <input className="input" type="number" value={cfg.first_pass_steps ?? ''} onChange={(e) => set('first_pass_steps', +e.target.value)} /></Field></div>
-              <div className="grow"><Field label="Second-pass steps">
-                <input className="input" type="number" value={cfg.second_pass_steps ?? ''} onChange={(e) => set('second_pass_steps', +e.target.value)} /></Field></div>
-            </div>
-            <Field label={`LoRA strength — ${cfg.lora_strength ?? 0}`}>
-              <input className="slider" type="range" min={0} max={1} step={0.05} value={cfg.lora_strength ?? 0} onChange={(e) => set('lora_strength', +e.target.value)} />
-            </Field>
-          </div>
-        </Card>
-
-        <Card span={6} className="reveal reveal-d2">
-          <span className="label-sm">LLM backend</span>
-          <div className="stack gap-22 mt-16">
-            <Field label="Backend">
-              <Segmented value={cfg.llm_backend || 'local'} onChange={(v) => set('llm_backend', v)}
-                options={[{ value: 'local', label: 'Local (vLLM)' }, { value: 'claude', label: 'Claude' }]} />
-            </Field>
-            {isClaude ? (
-              <>
-                <Field label="Claude API key"><input className="input" type="password" value={cfg.claude_api_key || ''} onChange={(e) => set('claude_api_key', e.target.value)} /></Field>
-                <Field label="Claude model"><input className="input" value={cfg.claude_model || ''} onChange={(e) => set('claude_model', e.target.value)} /></Field>
-              </>
-            ) : (
-              <>
-                <Field label="Local LLM URL"><input className="input" value={cfg.local_llm_url || ''} onChange={(e) => set('local_llm_url', e.target.value)} /></Field>
-                <Field label="Local LLM model"><input className="input" value={cfg.local_llm_model || ''} onChange={(e) => set('local_llm_model', e.target.value)} /></Field>
-              </>
-            )}
-          </div>
-        </Card>
-
-        <Card span={6} className="reveal reveal-d3">
-          <span className="label-sm">Narrator & audio</span>
-          <div className="stack gap-22 mt-16">
-            {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
-              <Field key={k} label={`${label} — ${cfg[k] ?? 0}%`}>
-                <input className="slider" type="range" min={0} max={max} value={cfg[k] ?? 0} onChange={(e) => set(k, +e.target.value)} />
+            <div className="stack gap-22 mt-16">
+              <Field label="ComfyUI workers" hint="One URL per line.">
+                <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
+                <WorkerStatus items={workers?.comfy} />
               </Field>
-            ))}
-          </div>
-        </Card>
+              <Field label="TTS workers" hint="One host per line.">
+                <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
+                <WorkerStatus items={workers?.tts} probed={false} />
+              </Field>
+              <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
+                <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
+                <WorkerStatus items={workers?.ui}
+                  extra={workers && (workers.ui_worker_running
+                    ? <Chip tone="ok" dot>worker running</Chip>
+                    : <Chip tone="warn" dot>worker not running</Chip>)} />
+              </Field>
+            </div>
+          </Card>
 
-        {/* ── Publishing ── */}
-        <Card span={6} className="reveal reveal-d3">
-          <span className="label-sm">YouTube automation</span>
-          <div className="stack gap-16 mt-16">
-            <Check checked={!!cfg.youtube_fully_automated} onChange={(v) => set('youtube_fully_automated', v)} label="⚡ Fully automated mode" />
-            <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
-            <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
-            <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start rendering the highest-interest request" />
-            <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve script (skip review)" />
-            <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
-            <Field label="Default privacy">
-              <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
-            </Field>
-          </div>
-        </Card>
+          {/* ── LLM backend ── */}
+          <Card span={6} className="reveal reveal-d1">
+            <span className="label-sm">LLM backend</span>
+            <div className="stack gap-22 mt-16">
+              <Field label="Backend">
+                <Segmented value={cfg.llm_backend || 'local'} onChange={(v) => set('llm_backend', v)}
+                  options={[{ value: 'local', label: 'Local (vLLM)' }, { value: 'claude', label: 'Claude' }]} />
+              </Field>
+              {isClaude ? (
+                <>
+                  <Field label="Claude API key"><input className="input" type="password" value={cfg.claude_api_key || ''} onChange={(e) => set('claude_api_key', e.target.value)} /></Field>
+                  <Field label="Claude model"><input className="input" value={cfg.claude_model || ''} onChange={(e) => set('claude_model', e.target.value)} /></Field>
+                </>
+              ) : (
+                <>
+                  <Field label="Local LLM URL"><input className="input" value={cfg.local_llm_url || ''} onChange={(e) => set('local_llm_url', e.target.value)} /></Field>
+                  <Field label="Local LLM model"><input className="input" value={cfg.local_llm_model || ''} onChange={(e) => set('local_llm_model', e.target.value)} /></Field>
+                </>
+              )}
+            </div>
+          </Card>
+
+          {/* ── Voices ── */}
+          <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+        </>)}
+
+        {tab === 'content' && (
+          /* ── Script & content defaults ── */
+          <Card span={12} className="reveal reveal-d1">
+            <span className="label-sm">Script & content defaults</span>
+            <div className="stack gap-22 mt-16">
+              <div className="row gap-22 row--wrap">
+                <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={cfg.default_n_scenes ?? ''} onChange={(e) => set('default_n_scenes', +e.target.value)} /></Field></div>
+                <div className="grow"><Field label="Default voice"><select className="select" value={cfg.default_voice || ''} onChange={(e) => set('default_voice', e.target.value)}>
+                  <option value="">(F5-TTS default)</option>
+                  {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                </select></Field></div>
+              </div>
+              <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
+                label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
+              <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
+              <Field label="Extra script instructions" hint="Appended to every topic.">
+                <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
+              </Field>
+            </div>
+          </Card>
+        )}
+
+        {tab === 'render' && (<>
+          {/* ── Render quality ── */}
+          <Card span={6} className="reveal reveal-d1">
+            <span className="label-sm">Render quality</span>
+            <div className="stack gap-22 mt-16">
+              <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
+                <ResolutionPicker value={cfg.resolution || ''} onChange={(r) => set('resolution', r)} meta={meta} />
+              </Field>
+              <div className="row gap-22 row--wrap">
+                <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">
+                  <input className="input" type="number" value={cfg.first_pass_steps ?? ''} onChange={(e) => set('first_pass_steps', +e.target.value)} /></Field></div>
+                <div className="grow"><Field label="Second-pass steps">
+                  <input className="input" type="number" value={cfg.second_pass_steps ?? ''} onChange={(e) => set('second_pass_steps', +e.target.value)} /></Field></div>
+              </div>
+              <Field label={`LoRA strength — ${cfg.lora_strength ?? 0}`}>
+                <input className="slider" type="range" min={0} max={1} step={0.05} value={cfg.lora_strength ?? 0} onChange={(e) => set('lora_strength', +e.target.value)} />
+              </Field>
+            </div>
+          </Card>
+
+          {/* ── Narrator & audio ── */}
+          <Card span={6} className="reveal reveal-d1">
+            <span className="label-sm">Narrator & audio</span>
+            <div className="stack gap-22 mt-16">
+              {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
+                <Field key={k} label={`${label} — ${cfg[k] ?? 0}%`}>
+                  <input className="slider" type="range" min={0} max={max} value={cfg[k] ?? 0} onChange={(e) => set(k, +e.target.value)} />
+                </Field>
+              ))}
+            </div>
+          </Card>
+        </>)}
+
+        {tab === 'automation' && (
+          /* ── YouTube automation ── */
+          <Card span={12} className="reveal reveal-d1">
+            <span className="label-sm">YouTube automation</span>
+            <div className="stack gap-16 mt-16">
+              <Check checked={!!cfg.youtube_fully_automated} onChange={(v) => set('youtube_fully_automated', v)} label="⚡ Fully automated mode" />
+              <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
+              <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
+              <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start rendering the highest-interest request" />
+              <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve script (skip review)" />
+              <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
+              <Field label="Default privacy">
+                <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
+              </Field>
+            </div>
+          </Card>
+        )}
 
       </div>
     </div>
