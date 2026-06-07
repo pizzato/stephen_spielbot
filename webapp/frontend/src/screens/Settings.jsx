@@ -78,10 +78,9 @@ function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }
 
-  const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Generates “Hi, I am ${spoken}, and this is my voice.” at the robotic level above (takes a few seconds).`}>
+      hint="Generates “This is the voice of Luiz. What do you think?” in the selected voice at the robotic level above (cached after the first time).">
       <div className="row center gap-10 row--wrap">
         <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ maxWidth: 220 }}>
           <option value="">(F5-TTS default)</option>
@@ -307,6 +306,23 @@ export default function Settings({ meta, setMeta }) {
 
           {/* ── Voices ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+
+          {/* ── Robotic voice & test ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">Robotic voice</span>
+            <div className="stack gap-22 mt-16">
+              <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
+                label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
+              <Field label={`Robotic level — ${Math.round((cfg.default_voice_robotic_amount ?? 0.35) * 100)}%`}
+                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice by default” is on.">
+                <input className="slider" type="range" min={0} max={1} step={0.05}
+                  value={cfg.default_voice_robotic_amount ?? 0.35}
+                  onChange={(e) => set('default_voice_robotic_amount', +e.target.value)} />
+              </Field>
+              <VoiceTester voices={meta.voices} defaultVoice={cfg.default_voice}
+                roboticAmount={cfg.default_voice_robotic_amount} onError={setError} />
+            </div>
+          </Card>
         </>)}
 
         {tab === 'content' && (
@@ -321,16 +337,6 @@ export default function Settings({ meta, setMeta }) {
                   {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
                 </select></Field></div>
               </div>
-              <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
-                label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
-              <Field label={`Robotic level — ${Math.round((cfg.default_voice_robotic_amount ?? 0.35) * 100)}%`}
-                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice by default” is on.">
-                <input className="slider" type="range" min={0} max={1} step={0.05}
-                  value={cfg.default_voice_robotic_amount ?? 0.35}
-                  onChange={(e) => set('default_voice_robotic_amount', +e.target.value)} />
-              </Field>
-              <VoiceTester voices={meta.voices} defaultVoice={cfg.default_voice}
-                roboticAmount={cfg.default_voice_robotic_amount} onError={setError} />
               <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
               <Field label="Extra script instructions" hint="Appended to every topic.">
                 <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
