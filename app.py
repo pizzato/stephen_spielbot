@@ -872,7 +872,10 @@ def on_remix(
     if not combined_path.exists():
         return "", "combined.mp4 not found — nothing to remix."
     work_dir = combined_path.parent
-    final_video = work_dir / f"{work_dir.name}.mp4"
+    # Overwrite the canonical published final (what Publish/EditFilm read) so the
+    # remix IS what gets published. Writing to work_dir/{name}.mp4 left the
+    # published video — OUTPUT_DIR/{name}.mp4 — stale. See issue #14.
+    final_video = _final_path_for_work_dir(work_dir)
     music_path = Path(music_path_str) if music_path_str else None
     ambient_path = Path(ambient_path_str) if ambient_path_str else None
     try:
