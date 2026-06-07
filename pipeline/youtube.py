@@ -32,7 +32,6 @@ _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
-UPLOAD_TRACKING_PATH = _CONFIG_DIR / "youtube_daily_uploads.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -356,44 +355,6 @@ def _eval_local(prompt: str, cfg: dict) -> dict:
     return _parse_eval(data["choices"][0]["message"]["content"])
 
 
-# ── Upload error backoff ──────────────────────────────────────────────────────
-
-def set_upload_backoff(hours: float = 2.0) -> None:
-    """Record a backoff timestamp after a YouTube upload error. Retries are blocked until it expires."""
-    try:
-        retry_after = time.time() + hours * 3600
-        UPLOAD_TRACKING_PATH.parent.mkdir(parents=True, exist_ok=True)
-        UPLOAD_TRACKING_PATH.write_text(json.dumps({"retry_after": retry_after}))
-        logger.info("Upload backoff set — retries blocked for %.0f hours (until %.0f)", hours, retry_after)
-    except Exception as exc:
-        logger.warning("set_upload_backoff failed: %s", exc)
-
-
-def clear_upload_backoff() -> None:
-    """Clear any active upload backoff (e.g. user manually resets)."""
-    try:
-        if UPLOAD_TRACKING_PATH.exists():
-            UPLOAD_TRACKING_PATH.write_text(json.dumps({}))
-    except Exception as exc:
-        logger.warning("clear_upload_backoff failed: %s", exc)
-
-
-def upload_backoff_remaining() -> float:
-    """Return seconds until the upload backoff expires, or 0 if not blocked."""
-    try:
-        data = json.loads(UPLOAD_TRACKING_PATH.read_text())
-        retry_after = float(data.get("retry_after", 0))
-        remaining = retry_after - time.time()
-        return max(0.0, remaining)
-    except Exception:
-        return 0.0
-
-
-def is_upload_blocked() -> bool:
-    """Return True if uploads are currently blocked due to a recent API error backoff."""
-    return upload_backoff_remaining() > 0
-
-
 # ── Video upload ──────────────────────────────────────────────────────────────
 
 def upload_video(
@@ -471,7 +432,6 @@ def upload_video(
         err_str = str(exc)
         if any(s in err_str for s in ("uploadLimitExceeded", "dailyLimitExceeded",
                                        "rateLimitExceeded", "Video Uploads per day")):
-            set_upload_backoff(hours=2)
             return {"video_id": "", "url": "", "error": f"UPLOAD_LIMIT_EXCEEDED: {err_str[:300]}"}
         return {"video_id": "", "url": "", "error": err_str[:400]}
 
@@ -546,17 +506,6 @@ def save_comments_cache(comments: list[dict]) -> None:
     COMMENTS_CACHE_PATH.write_text(json.dumps(comments, indent=2))
 
 
-def upsert_comment(comment: dict) -> None:
-    """Merge a fetched/evaluated comment into the cache by comment_id."""
-    cache = load_comments_cache()
-    idx = next((i for i, c in enumerate(cache) if c.get("comment_id") == comment.get("comment_id")), -1)
-    if idx >= 0:
-        cache[idx].update(comment)
-    else:
-        cache.insert(0, comment)
-    save_comments_cache(cache)
-
-
 def get_pending_requests(cache: list[dict] | None = None) -> list[dict]:
     """Return comments evaluated as video requests that haven't been approved/rejected."""
     if cache is None:
@@ -579,21 +528,6 @@ def load_queue() -> list[dict]:
 def save_queue(queue: list[dict]) -> None:
     QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
     QUEUE_PATH.write_text(json.dumps(queue, indent=2))
-
-
-def _queue_sort_key(item: dict) -> tuple:
-    """Sort key for pending queue items: comment requests first (oldest first), then the rest."""
-    source = item.get("source", "suggestion")
-    group = 0 if source == "comment" else 1
-    return (group, item.get("created_at", 0))
-
-
-def sort_queue_by_priority(queue: list[dict]) -> list[dict]:
-    """Return queue with pending items sorted by priority; non-pending items stay at the end."""
-    non_pending = [q for q in queue if q.get("status") not in ("pending",)]
-    pending = [q for q in queue if q.get("status") == "pending"]
-    pending.sort(key=_queue_sort_key)
-    return pending + non_pending
 
 
 def add_to_queue(comment: dict, final_title: str, source: str = "") -> dict:
