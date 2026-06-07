@@ -2573,6 +2573,27 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
 
 
+def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict) -> None:
+    """Run a re-render worker, then record a completion entry in the Activity log.
+
+    The workers only update _film_tasks (so the live "Re-rendering…" indicator can
+    read their step), so this wrapper adds the "Recent" history entry that
+    _track_op gives every other operation."""
+    started = time.time()
+    try:
+        target(tid, wd, sid, jc, row)
+    finally:
+        end = time.time()
+        status = (_film_tasks.get(tid) or {}).get("status")
+        name = f"Re-render failed — scene {sid}" if status == "error" else f"Re-rendered scene {sid}"
+        with _op_lock:
+            _activity_log.insert(0, {
+                "name": name, "detail": component,
+                "ts": end, "duration_s": round(end - started, 1),
+            })
+            del _activity_log[20:]
+
+
 @api.post("/api/films/scenes/{scene_id}/rerender")
 def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     wd = Path(body.work_dir)
@@ -2620,7 +2641,11 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         target = _run_image_rerender
     else:
         target = _run_video_rerender
-    threading.Thread(target=target, args=(tid, wd, sid, jc, row), daemon=True).start()
+    threading.Thread(
+        target=_run_rerender_logged,
+        args=(target, tid, wd, sid, body.component, jc, row),
+        daemon=True,
+    ).start()
     return {"ok": True, "task_id": tid}
 
 
