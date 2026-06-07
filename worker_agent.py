@@ -96,7 +96,8 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
 
     ref = Path(p["voice_ref"]).expanduser() if p.get("voice_ref") else None
     generate_narration(narration_text, output, reference_wav=ref, host=endpoint,
-                       robotic=bool(p.get("voice_robotic")))
+                       robotic=bool(p.get("voice_robotic")),
+                       robotic_amount=p.get("voice_robotic_amount"))
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
     store.complete_task(task.id, result={"path": str(output), "duration": duration}, message="narration ready")

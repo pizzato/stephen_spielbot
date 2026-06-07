@@ -59,6 +59,41 @@ function PlayButton({ src }) {
   )
 }
 
+// Audition a voice at the current robotic level. F5-TTS runs on the backend
+// (a few seconds for one sentence), so show a "Generating…" state while waiting.
+// Reads the live, unsaved robotic-level slider so you can dial it in by ear
+// before saving. 0% = natural voice.
+function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
+  const [voice, setVoice] = useState(defaultVoice || '')
+  const [busy, setBusy] = useState(false)
+  const audioRef = useRef(null)
+
+  const play = async () => {
+    onError(''); setBusy(true)
+    try {
+      const amount = roboticAmount ?? 0.35
+      const r = await api.testVoice({ voice, robotic: amount > 0, robotic_amount: amount })
+      const a = audioRef.current
+      if (a) { a.src = r.url; a.load(); await a.play() }
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+
+  const spoken = voice || 'the default narrator'
+  return (
+    <Field label="Test voice"
+      hint={`Generates “Hi, I am ${spoken}, and this is my voice.” at the robotic level above (takes a few seconds).`}>
+      <div className="row center gap-10 row--wrap">
+        <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ maxWidth: 220 }}>
+          <option value="">(F5-TTS default)</option>
+          {(voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+        <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
+        <audio ref={audioRef} hidden />
+      </div>
+    </Field>
+  )
+}
+
 // Add / rename / replace / delete the reference clips F5-TTS clones. Each
 // operation persists immediately (it writes a file), independent of the
 // page-level "Save settings" button.
@@ -288,6 +323,14 @@ export default function Settings({ meta, setMeta }) {
               </div>
               <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
                 label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
+              <Field label={`Robotic level — ${Math.round((cfg.default_voice_robotic_amount ?? 0.35) * 100)}%`}
+                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice by default” is on.">
+                <input className="slider" type="range" min={0} max={1} step={0.05}
+                  value={cfg.default_voice_robotic_amount ?? 0.35}
+                  onChange={(e) => set('default_voice_robotic_amount', +e.target.value)} />
+              </Field>
+              <VoiceTester voices={meta.voices} defaultVoice={cfg.default_voice}
+                roboticAmount={cfg.default_voice_robotic_amount} onError={setError} />
               <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
               <Field label="Extra script instructions" hint="Appended to every topic.">
                 <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />

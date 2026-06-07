@@ -60,7 +60,7 @@ def _resolve_ffmpeg() -> str:
 _ROBOT_AMOUNT = 0.35
 
 
-def _robotize_wav(path: Path) -> None:
+def _robotize_wav(path: Path, amount: float | None = None) -> None:
     """Apply a subtle 'robot voice' effect to a narration WAV, in place.
 
     Blends a phase-zeroed copy of the spectrum back over the natural voice at
@@ -73,7 +73,7 @@ def _robotize_wav(path: Path) -> None:
     preserves duration: downstream muxing aligns audio to video by length, which
     must not change.
     """
-    a = max(0.0, min(1.0, _ROBOT_AMOUNT))
+    a = max(0.0, min(1.0, _ROBOT_AMOUNT if amount is None else amount))
     dry, wet = round(1.0 - a, 3), round(a, 3)
     af = (
         f"afftfilt=real='{dry}*re':imag='{dry}*im+{wet}*hypot(re,im)':"
@@ -157,6 +157,7 @@ def generate_narration(
     reference_wav: Path | None = None,
     host: str = "localhost",
     robotic: bool = False,
+    robotic_amount: float | None = None,
 ) -> Path:
     """Generate narration audio, running F5-TTS on host (localhost or remote).
 
@@ -174,5 +175,5 @@ def generate_narration(
     else:
         _f5_remote(text, ref, output_path, host)
     if robotic:
-        _robotize_wav(output_path)
+        _robotize_wav(output_path, robotic_amount)
     return output_path

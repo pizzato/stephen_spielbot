@@ -160,6 +160,7 @@ DEFAULT_CFG = {
     # Generation defaults
     "default_voice": "",
     "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
+    "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_n_scenes": 20,
     "default_visual_style": "",
     "script_extra_instructions": "",
