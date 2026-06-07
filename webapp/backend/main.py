@@ -2556,7 +2556,7 @@ class RerenderSceneBody(BaseModel):
 
 def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
     """Background thread: re-render narration then re-mux the scene."""
-    from pipeline.assembler import mux_video_audio, _get_duration
+    from pipeline.assembler import mux_video_audio
     from pipeline.tts_worker import generate_narration
 
     narration_path = wd / f"scene_{sid:02d}_narration.wav"
@@ -2663,7 +2663,6 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     pool = WorkerPool(worker_urls)
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
-    video_path = wd / f"scene_{sid:02d}_video.mp4"
     final_path = wd / f"scene_{sid:02d}_final.mp4"
 
     try:
