@@ -78,9 +78,10 @@ function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }
 
+  const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint="Generates “This is the voice of Luiz. What do you think?” in the selected voice at the robotic level above (cached after the first time).">
+      hint={`Generates “This is the voice of ${spoken}. What do you think?” at the robotic level above (cached after the first time).`}>
       <div className="row center gap-10 row--wrap">
         <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ maxWidth: 220 }}>
           <option value="">(F5-TTS default)</option>
