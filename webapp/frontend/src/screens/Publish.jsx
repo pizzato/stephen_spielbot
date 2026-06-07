@@ -2,6 +2,43 @@ import { useState, useEffect, useRef } from 'react'
 import { Card, Field, Segmented, Button, Icon, Banner, Check } from '../components.jsx'
 import { api } from '../api.js'
 
+function fmtNum(n) {
+  if (n == null) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return String(Math.round(n))
+}
+const DOW = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const fmtHour = (h) => `${h % 12 === 0 ? 12 : h % 12}${h < 12 ? 'a' : 'p'}`
+
+// Best-time-to-post guidance from the timing model (issue #50). A weekday x hour
+// heatmap of predicted reach. Renders nothing until a model has been built.
+function BestTimesCard({ data }) {
+  if (!data?.available || !data.grid?.length) return null
+  const max = Math.max(1, ...data.grid.map((g) => g.predicted_views))
+  const at = (wd, h) => data.grid.find((g) => g.weekday === wd && g.hour === h)?.predicted_views || 0
+  const best = data.best?.[0]
+  return (
+    <Card className="reveal reveal-d3">
+      <span className="label-sm">Best time to post</span>
+      {best && <div className="mt-8" style={{ fontSize: 13 }}>Try <strong>{DOW[best.weekday]} {fmtHour(best.hour)}</strong> · ~{fmtNum(best.predicted_views)} views</div>}
+      <div className="mt-16" style={{ display: 'grid', gridTemplateColumns: '30px repeat(24, 1fr)', gap: 2 }}>
+        {DOW.flatMap((d, wd) => [
+          <span key={`l${wd}`} className="muted" style={{ fontSize: 10, alignSelf: 'center' }}>{d}</span>,
+          ...Array.from({ length: 24 }, (_, h) => (
+            <div key={`${wd}-${h}`} title={`${d} ${fmtHour(h)} · ~${fmtNum(at(wd, h))} views`}
+              style={{ aspectRatio: '1', borderRadius: 2, background: 'var(--accent)', opacity: 0.1 + 0.9 * (at(wd, h) / max) }} />
+          )),
+        ])}
+      </div>
+      <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
+        {data.reliability && data.reliability !== 'ok' ? 'Rough guidance — ' : 'Advisory — '}
+        uploads still post immediately; times in UTC.
+      </div>
+    </Card>
+  )
+}
+
 export default function Publish({ initialWorkDir, go }) {
   const [opts, setOpts] = useState({ categories: {}, privacy: ['private', 'unlisted', 'public'], finished: [] })
   const [auth, setAuth] = useState({ connected: false })
@@ -14,6 +51,7 @@ export default function Publish({ initialWorkDir, go }) {
   const [finalUrl, setFinalUrl] = useState('')
   const [aspect, setAspect] = useState('16/9')
   const [includeThumbnail, setIncludeThumbnail] = useState(true)
+  const [bestTimes, setBestTimes] = useState(null)   // posting-time guidance (issue #50)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
@@ -52,6 +90,9 @@ export default function Publish({ initialWorkDir, go }) {
       setYoutubeVideoId(p.youtube_video_id || '')
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
+      setBestTimes(null)
+      api.engagementBestTimes({ title: p.title || '', description: p.description || '' })
+        .then(setBestTimes).catch(() => {})
     } catch (e) { setError(e.message) }
   }
 
@@ -239,6 +280,7 @@ export default function Publish({ initialWorkDir, go }) {
             <video src={finalUrl} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: aspect, maxHeight: 360, objectFit: 'contain' }} />
           </Card>
         )}
+        <BestTimesCard data={bestTimes} />
       </div>
     </div>
   )

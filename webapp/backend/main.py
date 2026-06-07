@@ -36,6 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
+import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
 
@@ -3055,6 +3056,76 @@ def _start_automation_loop():
     if not _automation_started:
         _automation_started = True
         threading.Thread(target=_automation_loop, daemon=True).start()
+
+
+# ── engagement prediction (issue #50) ────────────────────────────────────────
+# Estimates first-3-day views for an idea from its title+description, trained on
+# the channel's own history. The build is a slow, in-process background job — it
+# loads the embedding model into THIS process, where predict()/best_times() need
+# it warm — so it reuses the in-memory-task pattern from the YouTube upload above
+# rather than a separate worker.
+
+_engagement_tasks: dict = {}
+
+
+class EngagementBody(BaseModel):
+    title: str = ""
+    description: str = ""
+
+
+def _run_engagement_build(task_id: str) -> None:
+    """Background thread: fetch history → embed → train → evaluate → persist."""
+    def phase(p: str) -> None:
+        _engagement_tasks[task_id] = {"status": "building", "phase": p}
+
+    try:
+        with _track_op("Building engagement model"):
+            result = eng.build(_client_secrets_path(), on_phase=phase)
+    except Exception as e:
+        _engagement_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        return
+    if not result.get("available"):
+        _engagement_tasks[task_id] = {
+            "status": "error",
+            "error": result.get("error", "Could not build a model."),
+            "result": result,
+        }
+        return
+    _engagement_tasks[task_id] = {"status": "done", "result": result}
+
+
+@api.post("/api/engagement/build")
+def engagement_build() -> dict:
+    # Reject a second build while one runs — avoids loading two embedders at once.
+    if any(t.get("status") == "building" for t in _engagement_tasks.values()):
+        raise HTTPException(409, "A model build is already in progress.")
+    task_id = uuid.uuid4().hex[:12]
+    _engagement_tasks[task_id] = {"status": "building", "phase": "fetching"}
+    threading.Thread(target=_run_engagement_build, args=(task_id,), daemon=True).start()
+    return {"ok": True, "task_id": task_id}
+
+
+@api.get("/api/engagement/build/status")
+def engagement_build_status(task_id: str = Query(...)) -> dict:
+    task = _engagement_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Build task not found.")
+    return {"ok": True, **task}
+
+
+@api.get("/api/engagement/status")
+def engagement_status() -> dict:
+    return eng.status()
+
+
+@api.post("/api/engagement/predict")
+def engagement_predict(body: EngagementBody) -> dict:
+    return eng.predict(body.title, body.description)
+
+
+@api.post("/api/engagement/best-times")
+def engagement_best_times(body: EngagementBody) -> dict:
+    return eng.best_times(body.title, body.description)
 
 
 # ── file serving (videos, previews, covers) ──────────────────────────────────

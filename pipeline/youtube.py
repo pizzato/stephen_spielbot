@@ -898,6 +898,121 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
         return {"channel": {}, "videos": [], "error": str(exc)[:300]}
 
 
+# ── Engagement-model training data ────────────────────────────────────────────
+
+def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list[dict]:
+    """Return raw per-video rows for the engagement model (issue #50).
+
+    For every upload on the authenticated channel (newest first, up to
+    ``max_videos``) returns the title, description, full publish timestamp,
+    privacy status, and a ``{date: views}`` map covering the video's first days.
+    The caller derives day-1/2/3 view counts and decides which rows are usable
+    (public, old enough that analytics have finalised); see
+    ``pipeline.engagement.build_dataset``.
+
+    Returns:
+        [{video_id, title, description, published_at, privacy,
+          day_views: {"YYYY-MM-DD": int, ...}}]
+
+    Note: the Analytics API omits days with zero views, so an absent date means
+    "no views that day", not "missing data" — the caller's data-lag filter is
+    what guarantees the first 3 days are complete.
+    """
+    import datetime
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return []
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+
+        ch_resp = youtube.channels().list(part="contentDetails", mine=True).execute()
+        ch_items = ch_resp.get("items", [])
+        if not ch_items:
+            return []
+        uploads_id = ch_items[0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+        # Full uploads playlist (newest first) — no 25-video cap.
+        video_ids: list[str] = []
+        next_page: str | None = None
+        while len(video_ids) < max_videos:
+            resp = youtube.playlistItems().list(
+                part="contentDetails",
+                playlistId=uploads_id,
+                maxResults=min(50, max_videos - len(video_ids)),
+                pageToken=next_page,
+            ).execute()
+            for item in resp.get("items", []):
+                vid = item["contentDetails"].get("videoId", "")
+                if vid:
+                    video_ids.append(vid)
+            next_page = resp.get("nextPageToken")
+            if not next_page:
+                break
+        if not video_ids:
+            return []
+
+        # Title + description + publish time + privacy (batched, 50 at a time).
+        meta: dict[str, dict] = {}
+        for i in range(0, len(video_ids), 50):
+            batch = video_ids[i:i + 50]
+            vresp = youtube.videos().list(
+                part="snippet,status", id=",".join(batch),
+            ).execute()
+            for v in vresp.get("items", []):
+                snip = v.get("snippet", {})
+                meta[v["id"]] = {
+                    "video_id": v["id"],
+                    "title": snip.get("title", ""),
+                    "description": snip.get("description", ""),
+                    "published_at": snip.get("publishedAt", ""),
+                    "privacy": v.get("status", {}).get("privacyStatus", ""),
+                    "day_views": {},
+                }
+
+        # Per-video daily views over each video's first days. One Analytics query
+        # per video, each bounded to a short post-publish window (6 days absorbs
+        # the analytics data lag while keeping every query tiny). Failures are
+        # isolated so one bad video doesn't wipe the batch.
+        today = datetime.date.today()
+        try:
+            yt_analytics = build("youtubeAnalytics", "v2", credentials=creds)
+        except Exception as exc:
+            logger.info("YouTube Analytics API unavailable for training rows: %s", exc)
+            yt_analytics = None
+        if yt_analytics is not None:
+            for vid, row in meta.items():
+                iso = row["published_at"]
+                if not iso:
+                    continue
+                try:
+                    pub = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).date()
+                except Exception:
+                    continue
+                end = min(today, pub + datetime.timedelta(days=6))
+                try:
+                    rep = yt_analytics.reports().query(
+                        ids="channel==MINE",
+                        startDate=pub.isoformat(), endDate=end.isoformat(),
+                        dimensions="day", metrics="views",
+                        filters="video==" + vid,
+                    ).execute()
+                    headers = [h["name"] for h in rep.get("columnHeaders", [])]
+                    di = headers.index("day") if "day" in headers else 0
+                    vi = headers.index("views") if "views" in headers else 1
+                    for r in rep.get("rows", []):
+                        row["day_views"][r[di]] = int(r[vi] or 0)
+                except Exception as exc:
+                    logger.info("Per-video daily-views query failed for %s: %s", vid, exc)
+
+        rows = [meta[vid] for vid in video_ids if vid in meta]
+        logger.info("Fetched %d engagement training rows", len(rows))
+        return rows
+    except Exception as exc:
+        logger.warning("fetch_training_rows failed: %s", exc)
+        return []
+
+
 # ── Channel video title fetching ──────────────────────────────────────────────
 
 def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50) -> list[str]:

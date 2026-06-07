@@ -3,3 +3,9 @@
 # the pipeline deps, etc.):  pip install -r webapp/backend/requirements.txt
 fastapi>=0.110
 uvicorn[standard]>=0.29
+
+# Engagement prediction (issue #50). Imported lazily, so the rest of the backend
+# runs without these — but the "Engagement" tab / view estimates need them.
+fastembed>=0.5,<0.9        # ONNX text embeddings (BAAI/bge-small-en-v1.5); avoids a torch dep
+scikit-learn>=1.4,<1.6     # Ridge regressor; pickles are version-sensitive, keep the range tight
+numpy>=1.24

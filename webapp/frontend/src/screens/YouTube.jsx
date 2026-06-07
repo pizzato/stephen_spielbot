@@ -47,6 +47,20 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
+// Per-idea predicted 3-day reach (issue #50). Renders nothing until an
+// engagement model has been built, so it's a graceful no-op by default.
+function IdeaReach({ idea }) {
+  const [r, setR] = useState(null)
+  useEffect(() => {
+    let live = true
+    api.engagementPredict({ title: idea.title || idea.final_title || '', description: idea.reason || '' })
+      .then((d) => { if (live) setR(d) }).catch(() => {})
+    return () => { live = false }
+  }, [idea])
+  if (!r?.available) return null
+  return <Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(r.predicted_views)}</Chip>
+}
+
 // Orientation follows the video length (short → portrait, else landscape); the
 // pixel/quality tier follows the configured default so AI-idea and audience
 // suggestions queue at the default resolution rather than a hardcoded 1080p.
@@ -323,7 +337,7 @@ export default function YouTube({ go, initial, meta = {} }) {
               <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row center between">
                   <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                  <Stars value={idea.interestingness} />
+                  <div className="row center gap-10"><IdeaReach idea={idea} /><Stars value={idea.interestingness} /></div>
                 </div>
                 {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
                 <div className="row center between mt-16 row--wrap gap-10">
