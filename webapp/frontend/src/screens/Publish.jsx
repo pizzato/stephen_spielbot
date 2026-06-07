@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react'
 import { Card, Field, Segmented, Button, Icon, Banner, Check } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
-export default function Publish({ initialWorkDir }) {
+export default function Publish({ initialWorkDir, go }) {
   const [opts, setOpts] = useState({ categories: {}, privacy: ['private', 'unlisted', 'public'], finished: [] })
   const [auth, setAuth] = useState({ connected: false })
   const [workDir, setWorkDir] = useState('')
@@ -138,7 +138,7 @@ export default function Publish({ initialWorkDir }) {
     <div className="bento">
       <Card span={8} padLg className="reveal reveal-d1">
         <div className="row center between row--wrap gap-16">
-          <span className="label-sm">Publish a finished film</span>
+          <span className="row center gap-10"><span className="label-sm">Publish a finished film</span>{go && <Button variant="ghost" icon="film" disabled={!workDir} onClick={() => go('editfilm', { workDir })}>Edit</Button>}</span>
           {auth.connected
             ? <span className="row center gap-10"><span className="muted" style={{ fontSize: 12.5 }}>{auth.channel_name || 'Connected'}</span><Button variant="ghost" icon="link-slash" onClick={disconnect}>Disconnect</Button></span>
             : <Button variant="primary" icon="youtube" disabled={busy === 'auth'} onClick={connect}>{busy === 'auth' ? 'Waiting for Google…' : 'Connect YouTube'}</Button>}
