@@ -72,5 +72,53 @@ class AppProgressTests(unittest.TestCase):
                 )
 
 
+class WorkerConfigFilterTests(unittest.TestCase):
+    """``/api/progress`` lists workers from the durable store's global registry,
+    which is append-only and keyed by (kind, endpoint). When a host is reassigned
+    — e.g. moved from the UI pool back into the render pool — the old registration
+    lingers, so the same endpoint would show up under two kinds. ``_worker_in_config``
+    filters the registry down to the live config so the render page reflects reality.
+    """
+
+    cfg = {
+        "comfy_workers": ["http://s1:8188", "http://s3:8188"],
+        "tts_workers": ["s1", "s3"],
+        "ui_workers": ["http://localhost:8188"],
+    }
+
+    def test_stale_reassigned_worker_is_hidden(self):
+        from webapp.backend.main import _worker_in_config
+
+        # s3 used to be a UI worker; that registration is now stale.
+        self.assertFalse(
+            _worker_in_config({"kind": "ui", "endpoint": "http://s3:8188"}, self.cfg)
+        )
+        # s3 as a render worker is current config — kept.
+        self.assertTrue(
+            _worker_in_config({"kind": "comfy", "endpoint": "http://s3:8188"}, self.cfg)
+        )
+
+    def test_configured_workers_are_kept(self):
+        from webapp.backend.main import _worker_in_config
+
+        for kind, endpoint in [
+            ("comfy", "http://s1:8188"),
+            ("tts", "s3"),
+            ("ui", "http://localhost:8188"),
+        ]:
+            self.assertTrue(
+                _worker_in_config({"kind": kind, "endpoint": endpoint}, self.cfg),
+                f"{kind} {endpoint} should be kept",
+            )
+
+    def test_internal_local_workers_always_kept(self):
+        """Internal workers (e.g. the assembler) are never in config — keep them."""
+        from webapp.backend.main import _worker_in_config
+
+        self.assertTrue(
+            _worker_in_config({"kind": "local", "endpoint": "assembler"}, self.cfg)
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

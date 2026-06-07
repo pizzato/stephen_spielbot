@@ -58,6 +58,21 @@ def _row_to_dict(row) -> dict:
     return {k: row[k] for k in row.keys()}
 
 
+def _worker_in_config(w: dict, cfg: dict) -> bool:
+    """True if a registered worker still matches the live config.
+
+    The durable `workers` table is an append-only registry keyed by
+    (kind, endpoint); it is never reconciled against config. When a host is
+    reassigned — e.g. a UI worker moved back into the render pool — the old
+    registration lingers, so the same endpoint shows up under two kinds. Filter
+    to the currently-configured pools so the render page reflects reality.
+    Internal `local` workers (e.g. the assembler) are never in config — keep them.
+    """
+    if w.get("kind") == "local":
+        return True
+    return w.get("endpoint") in (cfg.get(f"{w.get('kind')}_workers") or [])
+
+
 def _safe_under(path: Path, *roots: Path) -> bool:
     """True if `path` resolves to something inside one of `roots`."""
     try:
@@ -689,7 +704,9 @@ def progress(work_dir: str = Query("")) -> dict:
             summary = store.job_summary(job["id"])
             counts = summary.get("counts", {})
             tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
-            workers = [_row_to_dict(w) for w in store.worker_rows()]
+            cfg = gapp.load_config()
+            workers = [w for w in (_row_to_dict(r) for r in store.worker_rows())
+                       if _worker_in_config(w, cfg)]
     except Exception:
         pass
     finally:
