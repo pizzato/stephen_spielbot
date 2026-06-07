@@ -104,7 +104,6 @@ def main() -> None:
     scene_finals: list[Path] = []
     for scene in scenes:
         n_clips = clip_counts[scene.id]
-        narration_dur = narration_durs[scene.id]
         step(f"Scene {scene.id}/{len(scenes)}: {scene.title}  ({n_clips} clip{'s' if n_clips > 1 else ''} × {CLIP_DURATION:.0f}s)")
 
         clips: list[Path] = []

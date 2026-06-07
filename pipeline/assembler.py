@@ -313,19 +313,6 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     return output_path
 
 
-def upscale_video(input_path: Path, output_path: Path, scale: int = 2) -> Path:
-    """Upscale video by an integer factor using lanczos resampling."""
-    _run([
-        _FFMPEG, "-y",
-        "-i", str(input_path),
-        "-vf", f"scale=iw*{scale}:ih*{scale}:flags=lanczos",
-        "-c:v", "libx264", "-crf", "16", "-preset", "slow",
-        "-c:a", "copy",
-        str(output_path),
-    ], timeout=3600)
-    return output_path
-
-
 def mix_background_music(
     video_path: Path,
     music_path: Path,

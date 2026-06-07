@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, Field, Segmented, Button, Icon, Banner, Check } from '../components.jsx'
-import { api, fileUrl } from '../api.js'
+import { api } from '../api.js'
 
 export default function Publish({ initialWorkDir, go }) {
   const [opts, setOpts] = useState({ categories: {}, privacy: ['private', 'unlisted', 'public'], finished: [] })
