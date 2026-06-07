@@ -54,22 +54,38 @@ def _resolve_ffmpeg() -> str:
     return "ffmpeg"
 
 
-def _robotize_wav(path: Path) -> None:
-    """Apply a monotone 'robot voice' effect to a narration WAV, in place.
+# How strongly to robotize narration, 0.0 (natural) .. 1.0 (harsh metallic monotone).
+# It's the fraction of the phase-zeroed signal blended over the natural voice; lower
+# values keep more natural prosody so the robot reads as subtle. Tune to taste.
+_ROBOT_AMOUNT = 0.35
 
-    Zeroes the phase spectrum with ffmpeg's afftfilt — the classic robotization
-    effect — flattening prosody into a buzzy monotone so the voice is clearly
-    synthetic and not mistaken for a human (issue #52), while keeping the words
-    intelligible. Spectral, so it preserves duration: downstream muxing aligns
-    audio to video by length, which must not change.
+
+def _robotize_wav(path: Path) -> None:
+    """Apply a subtle 'robot voice' effect to a narration WAV, in place.
+
+    Blends a phase-zeroed copy of the spectrum back over the natural voice at
+    _ROBOT_AMOUNT, all within one ffmpeg afftfilt pass. Zeroing the phase is the
+    classic robotization (it flattens prosody into a synthetic monotone); mixing
+    it only partially keeps the voice clearly synthetic and not mistaken for a
+    human (issue #52) without the harsh metallic buzz of full phase removal. Per
+    bin the output is ((1-a)*re, (1-a)*im + a*|X|), the natural<->full-robot
+    blend, which at a=1 reduces exactly to the original effect. Spectral, so it
+    preserves duration: downstream muxing aligns audio to video by length, which
+    must not change.
     """
+    a = max(0.0, min(1.0, _ROBOT_AMOUNT))
+    dry, wet = round(1.0 - a, 3), round(a, 3)
+    af = (
+        f"afftfilt=real='{dry}*re':imag='{dry}*im+{wet}*hypot(re,im)':"
+        "win_size=512:overlap=0.75"
+    )
     tmp = path.with_suffix(path.suffix + ".robot.wav")
     try:
         subprocess.run(
             [
                 _resolve_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
                 "-i", str(path),
-                "-af", "afftfilt=real='hypot(re,im)*sin(0)':imag='hypot(re,im)*cos(0)':win_size=512:overlap=0.75",
+                "-af", af,
                 "-c:a", "pcm_s16le", str(tmp),
             ],
             capture_output=True, text=True, timeout=_TTS_TIMEOUT, check=True,
