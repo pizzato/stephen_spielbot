@@ -131,8 +131,14 @@ def get_config() -> dict:
     return {
         "config": cfg,
         "voices": gapp.get_voice_choices(),
+        # Kept for backward compatibility (composed name strings stay canonical).
         "resolutions": list(gapp._RESOLUTIONS.keys()),
         "default_resolution": gapp._DEFAULT_RESOLUTION,
+        # Structured selectors so the UI can offer an orientation + pixel toggle.
+        "orientations": gapp._ORIENTATIONS,
+        "pixel_tiers": [{"key": t["key"], "label": t["label"]} for t in gapp._PIXEL_TIERS],
+        "default_orientation": gapp._DEFAULT_ORIENTATION,
+        "default_pixels": gapp._DEFAULT_PIXELS,
     }
 
 

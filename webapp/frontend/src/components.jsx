@@ -50,6 +50,70 @@ export function Segmented({ options, value, onChange }) {
   )
 }
 
+// Compose the backend resolution name string for an (orientation, pixel tier)
+// pair, picked from meta.resolutions so the result is always a name the backend
+// already understands. Names look like "<Orientation>[ <Label>] (<w>×<h>)"; the
+// base tier has no label. Returns "" if no matching name exists.
+export function composeResolution(meta = {}, orientation, tierKey) {
+  const tier = (meta.pixel_tiers || []).find((t) => t.key === tierKey)
+  const label = tier ? tier.label : ''
+  const prefix = label ? `${orientation} ${label} (` : `${orientation} (`
+  return (meta.resolutions || []).find((n) => n.startsWith(prefix)) || ''
+}
+
+// Return the pixel-tier key (e.g. "fhd") of a resolution name string, or "" if
+// it is not one of the known names. The base tier (no label) is matched last so
+// a labelled name like "...HD (...)" is not mistaken for the base tier.
+export function resolutionTier(meta = {}, name) {
+  if (!name) return ''
+  const tiers = meta.pixel_tiers || []
+  const labelled = tiers.filter((t) => t.label)
+  const base = tiers.filter((t) => !t.label)
+  for (const t of [...labelled, ...base]) {
+    const tag = t.label ? ` ${t.label} (` : ' ('
+    if (name.includes(tag)) return t.key
+  }
+  return ''
+}
+
+// Resolution picker: an orientation toggle (Landscape/Portrait/Square) plus a
+// pixels/quality toggle. Emits the same composed name string the backend uses
+// (e.g. "Landscape FHD (1920×1080)").
+export function ResolutionPicker({ value, onChange, meta = {} }) {
+  const orientations = meta.orientations || []
+  const tiers = meta.pixel_tiers || []
+
+  // Parse the current value back into orientation + tier so the toggles reflect it.
+  const current = (() => {
+    for (const o of orientations) {
+      for (const t of tiers) {
+        if (value && composeResolution(meta, o, t.key) === value) return { orientation: o, tier: t.key }
+      }
+    }
+    return { orientation: meta.default_orientation || '', tier: meta.default_pixels || '' }
+  })()
+
+  const emit = (orientation, tierKey) => {
+    const name = composeResolution(meta, orientation, tierKey)
+    if (name) onChange(name)
+  }
+
+  return (
+    <div className="row gap-10 row--wrap">
+      <Segmented
+        options={orientations.map((o) => ({ value: o, label: o }))}
+        value={current.orientation}
+        onChange={(o) => emit(o, current.tier)}
+      />
+      <Segmented
+        options={tiers.map((t) => ({ value: t.key, label: t.label || 'Standard' }))}
+        value={current.tier}
+        onChange={(k) => emit(current.orientation, k)}
+      />
+    </div>
+  )
+}
+
 export function Check({ checked, onChange, label }) {
   return (
     <label className="check">

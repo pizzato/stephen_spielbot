@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Chip, Button, Field, Segmented, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Field, Segmented, Icon, Banner, composeResolution, resolutionTier } from '../components.jsx'
 import { api } from '../api.js'
 import Publish from './Publish.jsx'
 
@@ -47,10 +47,13 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
+// Orientation follows the video length (short → portrait, else landscape); the
+// pixel/quality tier follows the configured default so AI-idea and audience
+// suggestions queue at the default resolution rather than a hardcoded 1080p.
 const LENGTH_PRESETS = {
-  short:  { scenes: 6,  resolution: 'Portrait FHD (1080×1920)' },
-  medium: { scenes: 12, resolution: 'Landscape FHD (1920×1080)' },
-  long:   { scenes: 20, resolution: 'Landscape FHD (1920×1080)' },
+  short:  { scenes: 6,  orientation: 'Portrait' },
+  medium: { scenes: 12, orientation: 'Landscape' },
+  long:   { scenes: 20, orientation: 'Landscape' },
 }
 
 let _analyticsCache = null
@@ -83,7 +86,7 @@ const isDismissedIdea = (idea) => {
 }
 const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(idea))
 
-export default function YouTube({ go, initial }) {
+export default function YouTube({ go, initial, meta = {} }) {
   const [view, setView] = useState(initial?.view || 'analytics')
   const [comments, setComments] = useState([])
   const [ideas, setIdeas] = useState([])
@@ -170,8 +173,18 @@ export default function YouTube({ go, initial }) {
       setBusy('')
     }
   }
+  // Resolution = the configured default's pixel tier at the length's orientation.
+  // Length only chooses orientation; the quality tier follows the default
+  // resolution (Settings), so AI-idea / suggestion videos no longer hardcode 1080p.
+  const presetResolution = (length) => {
+    const preset = LENGTH_PRESETS[length]
+    const configured = meta.config?.resolution || meta.default_resolution || ''
+    const tier = resolutionTier(meta, configured) || meta.default_pixels
+    return composeResolution(meta, preset.orientation, tier) || configured
+  }
   const queueIdea = async (idea, title) => {
-    const { scenes, resolution } = LENGTH_PRESETS[videoLength]
+    const { scenes } = LENGTH_PRESETS[videoLength]
+    const resolution = presetResolution(videoLength)
     setError('')
     try {
       await api.queueAdd(title, scenes, idea.reason || '', resolution)
@@ -183,7 +196,8 @@ export default function YouTube({ go, initial }) {
     }
   }
   const createIdea = async (idea, title) => {
-    const { scenes, resolution } = LENGTH_PRESETS[videoLength]
+    const { scenes } = LENGTH_PRESETS[videoLength]
+    const resolution = presetResolution(videoLength)
     await closeIdea(idea, 'used')
     go('create', { title, description: idea.reason || '', scenes, resolution })
   }

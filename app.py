@@ -81,26 +81,63 @@ SESSION_FILE = CONFIG_FILE.parent / "last_session.json"
 REPO_ROOT    = Path(__file__).parent
 RESUME_SCRIPT = REPO_ROOT / "resume_generation.py"
 
-_RESOLUTIONS = {
-    # Landscape 16:9
-    "Landscape Fast (512×288)":    (512, 288),
-    "Landscape (832×480)":         (832, 480),
-    "Landscape HD (1024×576)":     (1024, 576),
-    "Landscape 720p (1280×720)":   (1280, 720),
-    "Landscape FHD (1920×1080)":   (1920, 1080),
-    # Portrait 9:16
-    "Portrait Fast (288×512)":     (288, 512),
-    "Portrait (480×832)":          (480, 832),
-    "Portrait HD (576×1024)":      (576, 1024),
-    "Portrait 720p (720×1280)":    (720, 1280),
-    "Portrait FHD (1080×1920)":    (1080, 1920),
-    # Square 1:1
-    "Square (512×512)":            (512, 512),
-    "Square HD (576×576)":         (576, 576),
-    "Square 720p (720×720)":       (720, 720),
-    "Square FHD (1080×1080)":      (1080, 1080),
-}
-_DEFAULT_RESOLUTION = "Landscape FHD (1920×1080)"
+# Resolution is chosen as (orientation × pixel tier).  Each tier defines a
+# "long" and "short" edge; orientation decides which axis each maps to (square
+# uses the long edge for both).  The composed name strings below are the
+# canonical keys stored in config.yaml / job_config.json, so they must stay
+# byte-for-byte stable — old saved configs resolve through _RESOLUTIONS.get(name).
+_ORIENTATIONS = ["Landscape", "Portrait", "Square"]
+
+# Ordered low→high.  ``label`` is the in-name tag ("" = the base tier, which has
+# no tag).  (long_edge, short_edge) are the 16:9 dimensions; square uses
+# (long_edge, long_edge).
+_PIXEL_TIERS = [
+    {"key": "fast", "label": "Fast", "long": 512,  "short": 288},
+    {"key": "base", "label": "",     "long": 832,  "short": 480},
+    {"key": "hd",   "label": "HD",   "long": 1024, "short": 576},
+    {"key": "720p", "label": "720p", "long": 1280, "short": 720},
+    {"key": "fhd",  "label": "FHD",  "long": 1920, "short": 1080},
+]
+
+
+def _resolution_dims(orientation: str, tier: dict) -> tuple[int, int]:
+    """(width, height) for an orientation × pixel tier."""
+    long_e, short_e = tier["long"], tier["short"]
+    if orientation == "Portrait":
+        return (short_e, long_e)
+    if orientation == "Square":
+        # Square uses a single edge per tier (the historical 1:1 sizes).
+        side = {"fast": 288, "base": 512, "hd": 576, "720p": 720, "fhd": 1080}[tier["key"]]
+        return (side, side)
+    return (long_e, short_e)  # Landscape
+
+
+def compose_resolution(orientation: str, tier_key: str) -> str:
+    """Compose the canonical resolution name string from orientation + tier key.
+
+    Returns "" if either selector is unknown.
+    """
+    tier = next((t for t in _PIXEL_TIERS if t["key"] == tier_key), None)
+    if orientation not in _ORIENTATIONS or tier is None:
+        return ""
+    w, h = _resolution_dims(orientation, tier)
+    tag = f" {tier['label']}" if tier["label"] else ""
+    return f"{orientation}{tag} ({w}×{h})"
+
+
+def _build_resolutions() -> dict:
+    """Build the canonical {name: (w, h)} map from orientations × pixel tiers."""
+    out = {}
+    for orientation in _ORIENTATIONS:
+        for tier in _PIXEL_TIERS:
+            out[compose_resolution(orientation, tier["key"])] = _resolution_dims(orientation, tier)
+    return out
+
+
+_RESOLUTIONS = _build_resolutions()
+_DEFAULT_ORIENTATION = "Landscape"
+_DEFAULT_PIXELS = "fhd"
+_DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
 
 
 DEFAULT_CFG = {

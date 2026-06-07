@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Check, Button, Banner, Chip, Icon } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon } from '../components.jsx'
 import { api } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
@@ -130,10 +130,8 @@ export default function Settings({ meta, setMeta }) {
         <Card span={6} className="reveal reveal-d2">
           <span className="label-sm">Render quality</span>
           <div className="stack gap-22 mt-16">
-            <Field label="Resolution" hint="Higher = better quality, slower.">
-              <select className="select" value={cfg.resolution || ''} onChange={(e) => set('resolution', e.target.value)}>
-                {(meta.resolutions || []).map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
+            <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
+              <ResolutionPicker value={cfg.resolution || ''} onChange={(r) => set('resolution', r)} meta={meta} />
             </Field>
             <div className="row gap-22 row--wrap">
               <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">

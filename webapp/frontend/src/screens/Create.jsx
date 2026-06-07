@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { Card, Field, Check, Button, Icon, Banner } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
 const PIPELINE = [
@@ -106,10 +106,8 @@ export default function Create({ seed, meta, onGenerated }) {
                 </Field>
               </div>
               <div className="grow">
-                <Field label="Resolution" hint="Higher = better quality, slower.">
-                  <select className="select" value={resolution} onChange={(e) => setResolution(e.target.value)}>
-                    {(meta.resolutions || []).map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
+                <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
+                  <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
                 </Field>
               </div>
             </div>
