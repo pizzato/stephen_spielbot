@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect, Fragment } from 'react'
 import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker } from '../components.jsx'
 import { api } from '../api.js'
 
@@ -112,7 +112,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     const isPending = it.status === 'pending'
     const editing = editId === it.id
     return (
-      <React.Fragment key={it.id || idx}>
+      <Fragment key={it.id || idx}>
         <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
           <div className="stack" style={{ gap: 2 }}>
             <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
@@ -141,7 +141,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
           </div>
         </div>
         {editing && editPanel(it)}
-      </React.Fragment>
+      </Fragment>
     )
   }
 

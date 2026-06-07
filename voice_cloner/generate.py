@@ -5,7 +5,6 @@ Called as a subprocess by pipeline/tts_xtts.py.
 """
 
 import argparse
-import sys
 from pathlib import Path
 
 import torch

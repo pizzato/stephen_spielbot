@@ -7,7 +7,6 @@ process start (no code edits required).
 from __future__ import annotations
 
 import logging
-import os
 from pathlib import Path
 from string import Template
 from typing import Any

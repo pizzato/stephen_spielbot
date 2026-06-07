@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Sidebar } from './components.jsx'
 import { api } from './api.js'
 import Home from './screens/Home.jsx'

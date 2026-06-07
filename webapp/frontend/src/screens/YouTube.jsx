@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, Chip, Button, Field, Segmented, Icon, Banner, composeResolution, resolutionTier } from '../components.jsx'
 import { api } from '../api.js'
 import Publish from './Publish.jsx'

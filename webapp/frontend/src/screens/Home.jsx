@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon } from '../components.jsx'
 import { api } from '../api.js'
 

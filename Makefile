@@ -7,7 +7,8 @@ W ?=
 .PHONY: install download-models download-flux download-flux-cluster \
         start stop restart restart-server status worker-agent ui-worker help \
         web-install web-build web web-dev \
-        launchd-install launchd-uninstall
+        launchd-install launchd-uninstall \
+        lint lint-fix lint-web ensure-ruff
 
 ## Install everything: local deps, models, workers, config.yaml, AND the web UI
 ## (backend deps + React build). First run seeds config.yaml; set workers
@@ -109,6 +110,24 @@ web-dev:
 	  cd $(FRONTEND) && npm run dev; \
 	  kill %1 2>/dev/null || true
 
+# ── Linting / dead-code ──
+RUFF := .venv/bin/ruff
+ensure-ruff:
+	@$(RUFF) --version >/dev/null 2>&1 || .venv/bin/pip install -q -r requirements-dev.txt
+
+## Lint Python with ruff (pyflakes + syntax errors). Auto-installs ruff on first run.
+lint: ensure-ruff
+	@$(RUFF) check .
+
+## Auto-fix the Python lint issues ruff can fix safely (e.g. unused imports).
+lint-fix: ensure-ruff
+	@$(RUFF) check --fix .
+
+## Hunt for dead frontend code (unused files / exports / deps) with knip.
+## Needs the frontend deps — run 'make web-install' first.
+lint-web:
+	@cd $(FRONTEND) && npx --yes knip
+
 help:
 	@echo "Usage: make <target> [W=<worker>]"
 	@echo ""
@@ -141,6 +160,11 @@ help:
 	@echo "  web             Build the SPA and serve UI + API (localhost:8001)"
 	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"
 	@echo "  web-build       Build the React frontend to webapp/frontend/dist"
+	@echo ""
+	@echo "Linting / dead-code:"
+	@echo "  lint            Lint Python with ruff (unused imports/vars, undefined names)"
+	@echo "  lint-fix        Auto-fix the lint issues ruff can fix safely"
+	@echo "  lint-web        Hunt dead frontend code (unused files/exports/deps) with knip"
 	@echo ""
 	@echo "  Worker lists (comfy/tts/ui) live in ~/.config/video-generator/config.yaml"
 	@echo "  — edit them in the Settings screen, or directly in that file."

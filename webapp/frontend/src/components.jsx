@@ -1,6 +1,5 @@
 // Reusable primitives for the redesign — ported from the design system's
 // components.jsx / App.jsx into ES modules.
-import React from 'react'
 
 export function Icon({ name, brand, style, spin }) {
   return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
@@ -137,18 +136,6 @@ export function Thumb({ variant = 0, loading, label, src, aspect }) {
         : <div className={`gfill ${loading ? 'skel' : 'g' + (variant % 6)}`}></div>}
       {label ? <span className="scene__no">{label}</span> : null}
       {loading ? <div className="scene__state">rendering…</div> : null}
-    </div>
-  )
-}
-
-export function PageHead({ kicker, title, children }) {
-  return (
-    <div className="page-head">
-      <div className="page-head__intro">
-        <span className="label-sm reveal">{kicker}</span>
-        <h1 className="display-md reveal reveal-d1">{title}</h1>
-      </div>
-      {children ? <div className="row gap-10 reveal reveal-d1 center">{children}</div> : null}
     </div>
   )
 }

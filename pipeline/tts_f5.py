@@ -9,7 +9,6 @@ Usage (standalone):
 
 import os
 import subprocess
-import sys
 from pathlib import Path
 
 # Override with F5TTS_PYTHON env var, or fall back to ~/miniconda3/envs/f5tts/bin/python
