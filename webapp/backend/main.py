@@ -1472,6 +1472,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
             meta = json.loads(job_json.read_text())
     except Exception:
         pass
+    vid_w, vid_h = _film_dimensions(wd)
+    orientation = "portrait" if vid_h > vid_w else ("square" if vid_h == vid_w else "landscape")
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -1480,6 +1482,11 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
+        "orientation": orientation,
+        "vid_width": vid_w,
+        "vid_height": vid_h,
+        # Shorts (portrait) don't take custom thumbnails — default the upload off.
+        "include_thumbnail_default": orientation != "portrait",
     }
 
 
@@ -1583,6 +1590,7 @@ def yt_cover(body: CoverBody) -> dict:
     job_id = job_id_from_work_dir(wd)
     title = body.title or _video_title_for(wd)
     cfg = gapp.load_config()
+    vid_width, vid_height = _film_dimensions(wd)
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
@@ -1594,6 +1602,8 @@ def yt_cover(body: CoverBody) -> dict:
                 "work_dir": str(wd),
                 "title": title,
                 "style": body.style or "",
+                "vid_width": vid_width,
+                "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
                 "flux_steps": cfg.get("flux_steps", 4),
                 "flux_model": cfg.get("ui_flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
@@ -1634,6 +1644,7 @@ class PostBody(BaseModel):
     description: str = ""
     category: str = "22"
     privacy: str = "private"
+    include_thumbnail: bool = True
 
 
 def _completion_reply_text(title: str, url: str) -> str:
@@ -1778,7 +1789,8 @@ def yt_post(body: PostBody) -> dict:
     if not (final.exists() and final.stat().st_size > 10_000):
         raise HTTPException(400, "No final video found for this film.")
     cover = wd / "cover.png"
-    thumb = str(cover) if cover.exists() and cover.stat().st_size > 1000 else None
+    thumb = (str(cover) if body.include_thumbnail
+             and cover.exists() and cover.stat().st_size > 1000 else None)
 
     task_id = uuid.uuid4().hex[:12]
     _upload_tasks[task_id] = {"status": "uploading"}
@@ -2197,6 +2209,28 @@ def _film_job_config(work_dir: Path) -> dict:
         return json.loads((work_dir / "job_config.json").read_text())
     except Exception:
         return {}
+
+
+def _film_dimensions(work_dir: Path) -> tuple[int, int]:
+    """Best-effort (width, height) of the rendered video for a work dir.
+
+    Prefers explicit vid_width/vid_height in job_config.json, then falls back to
+    the named resolution, then the configured default. Used to orient the cover
+    image and to decide the default thumbnail-upload behaviour.
+    """
+    jc = _film_job_config(work_dir)
+    w, h = int(jc.get("vid_width") or 0), int(jc.get("vid_height") or 0)
+    if w > 0 and h > 0:
+        return w, h
+    cfg = gapp.load_config()
+    resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+    return gapp._RESOLUTIONS.get(resolution, (1920, 1080))
+
+
+def _is_portrait_film(work_dir: Path) -> bool:
+    """True when the rendered video is taller than wide (a YouTube Short)."""
+    w, h = _film_dimensions(work_dir)
+    return h > w
 
 
 @api.get("/api/films/scenes")
@@ -2762,7 +2796,9 @@ def _auto_post_done() -> list[str]:
             res = yt_post(PostBody(
                 work_dir=str(p), title=title,
                 description=description, category=cfg.get("youtube_post_category", "22"),
-                privacy=cfg.get("youtube_post_privacy", "private")))
+                privacy=cfg.get("youtube_post_privacy", "private"),
+                # Shorts (portrait) don't take custom thumbnails — skip by default.
+                include_thumbnail=not _is_portrait_film(p)))
             if res.get("video_id"):
                 posted.append(res["video_id"])
         except Exception:

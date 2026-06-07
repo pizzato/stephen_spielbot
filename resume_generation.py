@@ -54,9 +54,8 @@ from pipeline.worker_pool import WorkerPool, alive_workers
 from pipeline.cover import (
     overlay_title_on_image as _overlay_title_on_image,
     build_cover_prompt as _cover_prompt,
+    cover_dimensions as _cover_dimensions,
     shorten_title_for_cover as _shorten_title,
-    COVER_WIDTH as _COVER_W,
-    COVER_HEIGHT as _COVER_H,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -527,13 +526,14 @@ def main(work_dir: Path) -> None:
     if not cover_path.exists():
         logger.info("Generating YouTube cover image for '%s'", video_title)
         _cover_url: str | None = None
+        cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         try:
             _cover_url = worker_pool.acquire()
             generate_scene_image(
                 _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
                 cover_base,
-                width=_COVER_W,
-                height=_COVER_H,
+                width=cover_w,
+                height=cover_h,
                 steps=flux_cfg["steps"],
                 flux_model=flux_cfg["model"],
                 clip_t5=flux_cfg["clip_t5"],
