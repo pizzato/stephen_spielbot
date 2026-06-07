@@ -2104,13 +2104,15 @@ class QueueUpdateBody(BaseModel):
     final_title: str | None = None
     video_prompt: str | None = None
     suggested_scene_count: int | None = None
+    gen_resolution: str | None = None
 
 
 @api.post("/api/queue/update")
 def queue_update(body: QueueUpdateBody) -> dict:
     """Edit a pending queue item's basic fields in place — title, prompt, scene
-    count (issue #43). Only pending items are editable; anything already
-    rendering/posted is left untouched. Fields left as None are not changed."""
+    count, resolution (issue #43). Only pending items are editable; anything
+    already rendering/posted is left untouched. Fields left as None are not
+    changed."""
     item = next((q for q in yt.load_queue() if q.get("id") == body.id), None)
     if not item:
         raise HTTPException(404, "Queue item not found.")
@@ -2126,6 +2128,8 @@ def queue_update(body: QueueUpdateBody) -> dict:
         updates["video_prompt"] = body.video_prompt.strip()
     if body.suggested_scene_count is not None:
         updates["suggested_scene_count"] = max(6, min(50, int(body.suggested_scene_count)))
+    if body.gen_resolution is not None:
+        updates["gen_resolution"] = body.gen_resolution.strip()
     if updates:
         yt.update_queue_item(body.id, **updates)
     return {"ok": True, "queue": yt.load_queue()}
