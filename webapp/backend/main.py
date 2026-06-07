@@ -2602,7 +2602,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
     import secrets
-    from pipeline.comfyui import generate_scene_image
+    from pipeline.comfyui import generate_scene_image, ltx_dimensions
 
     cfg = gapp.load_config()
     worker_urls = gapp._preview_worker_urls()
@@ -2624,6 +2624,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
 
         new_seed = secrets.randbelow(2 ** 32)
         _film_tasks[task_id] = {"status": "running", "step": "image"}
@@ -2657,7 +2658,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
     """Background thread: re-render image → video → mux."""
     from pipeline.assembler import mux_video_audio, _get_duration
-    from pipeline.comfyui import generate_scene_image
+    from pipeline.comfyui import generate_scene_image, ltx_dimensions
     from pipeline.llm import Scene
     from pipeline.scene_video import generate_scene_video as gen_scene_video
 
@@ -2685,6 +2686,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
 
         _film_tasks[task_id] = {"status": "running", "step": "image"}
         url = pool.acquire()
