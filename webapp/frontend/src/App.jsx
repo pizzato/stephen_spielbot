@@ -113,7 +113,7 @@ export default function App() {
       case 'progress': return <Progress workDir={progressDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'remix': return <Remix workDir={progressDir} go={go} />
       case 'queue': return <Queue go={go} />
-      case 'youtube': return <YouTube go={go} initial={ytInitial} />
+      case 'youtube': return <YouTube go={go} initial={ytInitial} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={editFilmDir} go={go} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />

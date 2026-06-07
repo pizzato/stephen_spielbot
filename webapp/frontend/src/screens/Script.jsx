@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Button, Chip, Icon, Thumb, Banner } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
@@ -336,9 +336,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </Field>
                 </div>
                 <Field label="Resolution">
-                  <select className="select" value={resolution} onChange={(e) => setResolution(e.target.value)}>
-                    {(meta.resolutions || []).map((r) => <option key={r} value={r}>{r}</option>)}
-                  </select>
+                  <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
                 </Field>
               </div>
               <div>
