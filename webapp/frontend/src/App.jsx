@@ -11,6 +11,7 @@ import Queue from './screens/Queue.jsx'
 import YouTube from './screens/YouTube.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
+import Engagement from './screens/Engagement.jsx'
 import Settings from './screens/Settings.jsx'
 
 export default function App() {
@@ -197,6 +198,7 @@ export default function App() {
       case 'youtube': return <YouTube go={go} initial={ytInitial} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />
+      case 'engagement': return <Engagement meta={meta} go={go} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} />
       default: return <Home go={go} />
     }
