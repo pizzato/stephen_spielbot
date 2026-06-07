@@ -41,6 +41,8 @@ export const api = {
   addVoice: (name, filename, data) => req('POST', '/voices/add', { name, filename, data }),
   updateVoice: (name, fields) => req('POST', '/voices/update', { name, ...fields }),
   deleteVoice: (name) => req('POST', '/voices/delete', { name }),
+  // Synthesize a short sample at a given robotic level (0..1) and return its URL.
+  testVoice: (body) => req('POST', '/voices/test', body),
 
   generateScript: (body) => req('POST', '/script/generate', body),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
