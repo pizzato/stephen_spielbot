@@ -295,6 +295,7 @@ def main(work_dir: Path) -> None:
     voice_vol         = cfg.get("voice_vol", 100) / 100.0
     voice_name        = cfg.get("default_voice", "Thomas")
     voice_robotic     = bool(cfg.get("voice_robotic", cfg.get("default_voice_robotic", False)))
+    voice_robotic_amount = float(cfg.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35)))
     voice_ref_str     = None
     for v in cfg.get("voices", []):
         if v["name"] == voice_name:
@@ -333,6 +334,7 @@ def main(work_dir: Path) -> None:
         "vid_height": vid_height,
         "voice_ref": voice_ref_str or "",
         "voice_robotic": voice_robotic,
+        "voice_robotic_amount": voice_robotic_amount,
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)
@@ -381,7 +383,7 @@ def main(work_dir: Path) -> None:
                     lease_seconds=600,
                     start_message=f"TTS on {host}",
                 ) as run:
-                    generate_narration(scene.narration, out, reference_wav=ref, host=host, robotic=voice_robotic)
+                    generate_narration(scene.narration, out, reference_wav=ref, host=host, robotic=voice_robotic, robotic_amount=voice_robotic_amount)
                     dur = _get_duration(out)
                     store.record_artifact(
                         durable_job_id,

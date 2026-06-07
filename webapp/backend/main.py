@@ -259,6 +259,48 @@ def voices_delete(body: VoiceDelete) -> dict:
     return _voice_response(cfg)
 
 
+class VoiceTest(BaseModel):
+    voice: str = ""
+    robotic: bool = False
+    robotic_amount: float | None = None
+    text: str = ""
+
+
+@api.post("/api/voices/test")
+def voices_test(body: VoiceTest) -> dict:
+    """Synthesize a short sample so the user can audition a voice and dial in the
+    robotic level before committing it to a render. Writes one scratch file in the
+    config dir (served by /api/file) and returns its URL.
+
+    F5-TTS runs synchronously here (a few seconds for one sentence) — the client
+    shows a 'Generating…' state while it waits.
+    """
+    from pipeline.tts_worker import generate_narration
+
+    cfg = gapp.load_config()
+    voice = (body.voice or "").strip()
+    spoken = voice if voice and voice != gapp.F5TTS_DEFAULT_OPTION else "the default narrator"
+    text = (body.text or "").strip() or f"Hi, I am {spoken}, and this is my voice."
+
+    ref_str = gapp.voice_path_for(voice)
+    ref = Path(ref_str).expanduser() if ref_str else None
+
+    amount = (body.robotic_amount if body.robotic_amount is not None
+              else float(cfg.get("default_voice_robotic_amount", 0.35)))
+    tts_hosts = cfg.get("tts_workers") or []
+    tts_host = tts_hosts[0] if tts_hosts else "localhost"
+
+    out = gapp.CONFIG_FILE.parent / "voice_test.wav"
+    try:
+        with _track_op("Testing voice", spoken):
+            generate_narration(text, out, reference_wav=ref, host=tts_host,
+                               robotic=bool(body.robotic), robotic_amount=amount)
+    except Exception as e:
+        raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
+
+    return {"ok": True, "url": f"/api/file?path={out}&t={int(out.stat().st_mtime)}"}
+
+
 @api.get("/api/workers/status")
 def workers_status() -> dict:
     """Live, read-only health of the configured workers.
@@ -725,6 +767,7 @@ def start_generation(body: GenerateBody) -> dict:
         "resolution": resolution, "max_clip_secs": 0,
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         "voice_robotic": voice_robotic,
+        "voice_robotic_amount": cfg.get("default_voice_robotic_amount", 0.35),
         "music_desc": body.music_desc or "", "title": title,
         "video_title": (body.video_title or "").strip(), "style": style_clean,
     })
@@ -2696,11 +2739,12 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
         voice_robotic = bool(jc.get("voice_robotic", False))
+        voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
         tts_hosts = cfg.get("tts_workers") or []
         tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
         _film_tasks[task_id] = {"status": "running", "step": "narration"}
-        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic)
+        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount)
 
         # Re-mux narration with the existing scene video
         video_path = wd / f"scene_{sid:02d}_video.mp4"
