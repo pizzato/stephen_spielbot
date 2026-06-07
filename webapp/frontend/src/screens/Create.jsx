@@ -67,8 +67,9 @@ export default function Create({ seed, meta, onGenerated }) {
         auto_approve: autoApprove,
         voice,
         resolution,
+        queue_item_id: seed?.queueItemId || '',
       })
-      onGenerated(data, { voice, resolution, autoApprove })
+      onGenerated(data, { voice, resolution, autoApprove, queueItemId: seed?.queueItemId || '' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -86,6 +87,7 @@ export default function Create({ seed, meta, onGenerated }) {
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {seed?.queueItemId && <Banner tone="info">Editing a queued request — generating a script here will fill its existing queue slot (it keeps its position) and make it render faster.</Banner>}
 
       <div className="bento">
         <Card span={8} padLg className="reveal reveal-d1">

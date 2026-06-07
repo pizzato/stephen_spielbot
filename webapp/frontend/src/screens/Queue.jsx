@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Field } from '../components.jsx'
 import { api } from '../api.js'
 
 const STATUS_CHIP = {
@@ -9,13 +9,15 @@ const STATUS_CHIP = {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
-export default function Queue({ go }) {
+export default function Queue({ go, onEditScript }) {
   const [items, setItems] = useState([])
   const [progress, setProgress] = useState(null)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
+  const [editId, setEditId] = useState('')         // pending item open for inline edit
+  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6 })
 
   const refresh = () => Promise.all([
     api.getQueue(),
@@ -33,6 +35,29 @@ export default function Queue({ go }) {
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const startEdit = (it) => {
+    setEditId(it.id); setError(''); setStatus('')
+    setDraft({
+      final_title: it.final_title || it.title || '',
+      video_prompt: it.video_prompt || it.comment_text || '',
+      suggested_scene_count: it.suggested_scene_count || 6,
+    })
+  }
+  const saveEdit = (id) => run('save' + id, () => api.queueUpdate(id, {
+    final_title: draft.final_title,
+    video_prompt: draft.video_prompt,
+    suggested_scene_count: Number(draft.suggested_scene_count) || 6,
+  }), () => { setEditId(''); setStatus('Queue item updated.') })
+
+  // Open a pending item's script for editing (loads the Script tab, or the
+  // Create form for items with no script yet). `overrides` carries unsaved
+  // inline-edit values into the Create prefill. Navigates away on success.
+  const openScript = async (it, overrides) => {
+    setBusy('e' + it.id); setError('')
+    try { await onEditScript(overrides ? { ...it, ...overrides } : it) }
+    catch (e) { setError(e.message); setBusy('') }
+  }
+
   const pendingItems = items.filter((i) => i.status === 'pending')
   const renderingItems = items.filter((i) => ['creating', 'running'].includes(i.status))
   const readyItems = items.filter((i) => ['done', 'upload_pending'].includes(i.status))
@@ -47,36 +72,71 @@ export default function Queue({ go }) {
     posted: items.filter((i) => i.status === 'posted').length,
   }
 
+  const editPanel = (it) => (
+    <div style={{ padding: '4px 22px 18px', background: 'var(--paper-2)', borderBottom: '1px solid var(--line)' }}>
+      <div className="stack gap-16">
+        <Field label="Title">
+          <input className="input" value={draft.final_title} onChange={(e) => setDraft((d) => ({ ...d, final_title: e.target.value }))} />
+        </Field>
+        <Field label="Prompt / direction" hint="What the video should cover — used to draft the script.">
+          <textarea className="textarea" rows={3} value={draft.video_prompt} onChange={(e) => setDraft((d) => ({ ...d, video_prompt: e.target.value }))} />
+        </Field>
+        <div className="row center gap-16 row--wrap">
+          <Field label="Scenes">
+            <input className="input" type="number" min={6} max={50} style={{ width: 110 }} value={draft.suggested_scene_count}
+              onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
+          </Field>
+          <div className="grow" />
+          <div className="row gap-10 row--wrap">
+            <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
+            <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
+            <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
+              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6 })}>
+              {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+
   const queueRow = (it, idx, sectionItems, { dim = false } = {}) => {
     const [tone, label] = STATUS_CHIP[it.status] || ['neutral', it.status]
     const titleText = it.final_title || it.title || '(untitled)'
     const scenes = it.suggested_scene_count
     const isPending = it.status === 'pending'
+    const editing = editId === it.id
     return (
-      <div key={it.id || idx} className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
-        <div className="stack" style={{ gap: 2 }}>
-          <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
-          <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
-        </div>
-        <div className="grow">
-          <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
-          <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
-            {it.source && <Chip tone="info">{it.source}</Chip>}
-            {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
-            {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
-            {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
+      <React.Fragment key={it.id || idx}>
+        <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
+          <div className="stack" style={{ gap: 2 }}>
+            <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
+            <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
+          </div>
+          <div className="grow">
+            <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
+            <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
+              {it.source && <Chip tone="info">{it.source}</Chip>}
+              {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
+              {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
+              {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
+            </div>
+          </div>
+          {isPending && it.script_ready && <Chip tone="ok" dot>Script ready</Chip>}
+          <Chip tone={tone} dot>{label}</Chip>
+          <div className="row gap-6 row--wrap">
+            {isPending && it.script_ready && <Button variant="ghost" icon="feather-pointed" disabled={!!busy} onClick={() => openScript(it)}>{busy === 'e' + it.id ? 'Opening…' : 'Edit script'}</Button>}
+            {isPending && !it.script_ready && <Button variant="ghost" icon="pencil" disabled={!!busy} onClick={() => editing ? setEditId('') : startEdit(it)}>Edit</Button>}
+            {isPending && <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
+            {it.status === 'creating' && <Button variant="ghost" icon="stop" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueAbandon(it.id))}>Cancel</Button>}
+            {['done', 'upload_pending'].includes(it.status) && <Button variant="ghost" icon="youtube" onClick={() => go('youtube')}>Publish</Button>}
+            {it.status === 'posted' && it.comment_id && !it.completion_replied && <Button variant="ghost" icon="reply" disabled={!!busy} onClick={() => run('r' + it.id, () => api.queueRetryReply(it.id), () => setStatus('Reply sent.'))}>Retry reply</Button>}
+            {(isPending || it.status === 'creating' || ['done', 'upload_pending', 'posted', 'cancelled'].includes(it.status)) &&
+              <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => it.status === 'creating' ? api.queueAbandon(it.id) : api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
           </div>
         </div>
-        <Chip tone={tone} dot>{label}</Chip>
-        <div className="row gap-6">
-          {isPending && <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
-          {it.status === 'creating' && <Button variant="ghost" icon="stop" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueAbandon(it.id))}>Cancel</Button>}
-          {['done', 'upload_pending'].includes(it.status) && <Button variant="ghost" icon="youtube" onClick={() => go('youtube')}>Publish</Button>}
-          {it.status === 'posted' && it.comment_id && !it.completion_replied && <Button variant="ghost" icon="reply" disabled={!!busy} onClick={() => run('r' + it.id, () => api.queueRetryReply(it.id), () => setStatus('Reply sent.'))}>Retry reply</Button>}
-          {(isPending || it.status === 'creating' || ['done', 'upload_pending', 'posted', 'cancelled'].includes(it.status)) &&
-            <button className="qmove qmove--lg" disabled={!!busy} onClick={() => run('d' + it.id, () => it.status === 'creating' ? api.queueAbandon(it.id) : api.queueRemove(it.id))} title="Remove"><Icon name="trash-can" /></button>}
-        </div>
-      </div>
+        {editing && editPanel(it)}
+      </React.Fragment>
     )
   }
 
