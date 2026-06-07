@@ -261,7 +261,12 @@ def script_generate(body: GenerateScriptBody) -> dict:
         "music_desc": music_desc,
         "scenes": [_scene_to_json(s) for s in scenes_list],
     }
-    if body.auto_approve:
+    # Attach the script to the queue. Auto-approve enqueues a fresh slot (and may
+    # auto-start a render). Editing a queued request (queue_item_id set) links the
+    # script to that existing slot in place — even without auto-approve — so the
+    # Queue then offers "Edit script" instead of "Create script". An in-place link
+    # never auto-starts a render.
+    if body.auto_approve or body.queue_item_id:
         queued = queue_from_job(FromJobBody(
             job_id=job_id,
             work_dir=str(work_dir),
@@ -274,7 +279,7 @@ def script_generate(body: GenerateScriptBody) -> dict:
             queue_item_id=body.queue_item_id,
         ))
         result.update({
-            "auto_approved": True,
+            "auto_approved": bool(body.auto_approve),
             "queue_item_id": queued.get("queue_item_id", ""),
             "started": queued.get("started"),
         })
@@ -584,8 +589,7 @@ def start_generation(body: GenerateBody) -> dict:
     vid_width, vid_height = gapp._RESOLUTIONS.get(resolution, (832, 480))
 
     style_clean = body.style.strip().rstrip(".") if body.style and body.style.strip() else ""
-    default_style = cfg.get("default_visual_style", "").strip().rstrip(".")
-    combined_style = ". ".join(p for p in [style_clean, default_style] if p)
+    combined_style = gapp._compose_visual_style(body.style, cfg)
 
     n = int(body.n_scenes) if body.n_scenes else len(scene_rows)
     title = body.title or body.video_title
