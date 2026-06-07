@@ -150,37 +150,59 @@ function SceneCard({
       )}
 
       <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
-        <div style={{ display: 'flex', gap: 0 }}>
-          {/* Thumbnail */}
-          <div
-            onClick={() => previewUrl && setLightbox(true)}
-            style={{
-              width: 160, flexShrink: 0, position: 'relative',
-              background: 'var(--paper-2)', aspectRatio: '16/9', minHeight: 90,
-              cursor: previewUrl ? 'zoom-in' : 'default',
-            }}
-          >
-            {previewUrl
-              ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-              : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
-            }
-            {isRendering && (
-              <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <Icon name="spinner" spin style={{ color: '#fff', fontSize: 20 }} />
-              </div>
-            )}
-            <span style={{ position: 'absolute', top: 6, left: 8, fontWeight: 700, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4 }}>
-              {String(index + 1).padStart(2, '0')}
-            </span>
-            {previewUrl && !isRendering && (
-              <span style={{ position: 'absolute', bottom: 6, right: 8, color: '#fff', opacity: 0.7, fontSize: 13 }}>
-                <Icon name="magnifying-glass-plus" />
+        <div>
+          {/* Media: initial frame + film, side by side, equal width */}
+          <div style={{ display: 'flex', gap: 1, background: 'var(--line)' }}>
+            {/* Initial frame */}
+            <div
+              onClick={() => previewUrl && setLightbox(true)}
+              style={{
+                flex: 1, position: 'relative',
+                background: 'var(--paper-2)', aspectRatio: '16/9',
+                cursor: previewUrl ? 'zoom-in' : 'default',
+              }}
+            >
+              {previewUrl
+                ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
+              }
+              {isRendering && (
+                <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,.6)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <Icon name="spinner" spin style={{ color: '#fff', fontSize: 20 }} />
+                </div>
+              )}
+              <span style={{ position: 'absolute', top: 6, left: 8, fontWeight: 700, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4 }}>
+                {String(index + 1).padStart(2, '0')}
               </span>
-            )}
+              <span style={{ position: 'absolute', top: 6, right: 8, fontSize: 10, letterSpacing: '.04em', textTransform: 'uppercase', color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4, pointerEvents: 'none' }}>
+                Initial frame
+              </span>
+              {previewUrl && !isRendering && (
+                <span style={{ position: 'absolute', bottom: 6, right: 8, color: '#fff', opacity: 0.7, fontSize: 13 }}>
+                  <Icon name="magnifying-glass-plus" />
+                </span>
+              )}
+            </div>
+
+            {/* Film */}
+            <div style={{ flex: 1, position: 'relative', background: '#000', aspectRatio: '16/9' }}>
+              {videoUrl
+                ? <video src={videoUrl} controls style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
+                : (
+                  <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6, color: 'rgba(255,255,255,.55)' }}>
+                    <Icon name="film" style={{ fontSize: 22 }} />
+                    <span style={{ fontSize: 12 }}>No video yet</span>
+                  </div>
+                )
+              }
+              <span style={{ position: 'absolute', top: 6, left: 8, fontSize: 10, letterSpacing: '.04em', textTransform: 'uppercase', color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4, pointerEvents: 'none' }}>
+                Film
+              </span>
+            </div>
           </div>
 
           {/* Content */}
-          <div style={{ flex: 1, padding: '14px 16px', minWidth: 0 }}>
+          <div style={{ padding: '14px 16px' }}>
             {!editing ? (
               <>
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
@@ -274,13 +296,6 @@ function SceneCard({
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering} onClick={() => setConfirmDel(true)}>Delete</Button>
               )}
             </div>
-
-            {/* Video preview */}
-            {videoUrl && (
-              <div style={{ marginTop: 12 }}>
-                <video src={videoUrl} controls style={{ width: '100%', maxWidth: 480, borderRadius: 6, background: '#000' }} />
-              </div>
-            )}
           </div>
         </div>
       </Card>
