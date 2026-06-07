@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, Button, Icon, Banner } from '../components.jsx'
+import { Card, Field, Segmented, Button, Icon, Banner, Check } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 export default function Publish({ initialWorkDir }) {
@@ -12,6 +12,8 @@ export default function Publish({ initialWorkDir }) {
   const [privacy, setPrivacy] = useState('private')
   const [coverUrl, setCoverUrl] = useState('')
   const [finalUrl, setFinalUrl] = useState('')
+  const [aspect, setAspect] = useState('16/9')
+  const [includeThumbnail, setIncludeThumbnail] = useState(true)
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
@@ -45,6 +47,8 @@ export default function Publish({ initialWorkDir }) {
       setCoverUrl(p.cover_url || '')
       setFinalUrl(p.final_url || '')
       setYoutubeUrl(p.youtube_url || '')
+      setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
+      setIncludeThumbnail(p.include_thumbnail_default !== false)
     } catch (e) { setError(e.message) }
   }
 
@@ -101,7 +105,7 @@ export default function Publish({ initialWorkDir }) {
     setBusy('upload'); setError(''); setStatus('Starting upload…')
     let pollTimer = null
     try {
-      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy })
+      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy, include_thumbnail: includeThumbnail })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -195,17 +199,21 @@ export default function Publish({ initialWorkDir }) {
       <div className="col-4 stack gap-16">
         <Card className="reveal reveal-d2">
           <span className="label-sm">Thumbnail</span>
-          <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
+          <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, maxHeight: 360, margin: '16px auto 0', opacity: includeThumbnail ? 1 : 0.5 }}>
             {coverUrl
-              ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#15171a' }} />
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
+          </div>
+          <div className="mt-16">
+            <Check checked={includeThumbnail} onChange={setIncludeThumbnail}
+              label="Upload thumbnail to YouTube" />
           </div>
           <Button variant="ghost" block icon="rotate-right" disabled={busy === 'cover' || !workDir} onClick={regenCover}>
             {busy === 'cover' ? 'Queued — waiting for UI worker…' : 'Regenerate cover'}</Button>
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
-            <video src={finalUrl} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: '16/9' }} />
+            <video src={finalUrl} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: aspect, maxHeight: 360, objectFit: 'contain' }} />
           </Card>
         )}
       </div>
