@@ -203,6 +203,7 @@ class GenerateScriptBody(BaseModel):
     visual_style: str | None = None
     auto_approve: bool = False
     voice: str = ""
+    voice_robotic: bool = False
     resolution: str = ""
     queue_item_id: str = ""
 
@@ -275,6 +276,7 @@ def script_generate(body: GenerateScriptBody) -> dict:
             style=style,
             resolution=body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
             voice=body.voice or cfg.get("default_voice", ""),
+            voice_robotic=body.voice_robotic,
             music_desc=music_desc,
             queue_item_id=body.queue_item_id,
         ))
@@ -351,6 +353,7 @@ def load_script(work_dir: str = Query("")) -> dict:
         "style": style,
         "music_desc": music_desc,
         "voice": cfg.get("default_voice", ""),
+        "voice_robotic": bool(cfg.get("default_voice_robotic", False)),
         "resolution": cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         "scenes": [_scene_to_json(r) for r in rows],
     }
@@ -557,6 +560,7 @@ class GenerateBody(BaseModel):
     title: str = ""
     n_scenes: int = 0
     voice: str = ""
+    voice_robotic: bool | None = None
     resolution: str = ""
     music_desc: str = ""
     style: str = ""
@@ -585,6 +589,8 @@ def start_generation(body: GenerateBody) -> dict:
     if not voice_name or voice_name == gapp.F5TTS_DEFAULT_OPTION:
         voice_name = cfg.get("default_voice", voice_name)
     voice_ref = gapp.voice_path_for(voice_name)
+    voice_robotic = (body.voice_robotic if body.voice_robotic is not None
+                     else bool(cfg.get("default_voice_robotic", False)))
     resolution = body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
     vid_width, vid_height = gapp._RESOLUTIONS.get(resolution, (832, 480))
 
@@ -613,6 +619,7 @@ def start_generation(body: GenerateBody) -> dict:
     job_cfg.update({
         "resolution": resolution, "max_clip_secs": 0,
         "default_voice": voice_name, "voice_ref": voice_ref or "",
+        "voice_robotic": voice_robotic,
         "music_desc": body.music_desc or "", "title": title,
         "video_title": (body.video_title or "").strip(), "style": style_clean,
     })
@@ -2183,6 +2190,7 @@ def _start_queue_item(item: dict) -> dict:
         start_generation(GenerateBody(
             job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
             voice=item.get("gen_voice") or cfg.get("default_voice", ""),
+            voice_robotic=item.get("gen_voice_robotic"),
             resolution=item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
             music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
             style=item.get("gen_style") or _job_meta_field(job_id, "style")))
@@ -2201,6 +2209,7 @@ def _start_queue_item(item: dict) -> dict:
     start_generation(GenerateBody(
         job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
         n_scenes=n, voice=cfg.get("default_voice", ""),
+        voice_robotic=item.get("gen_voice_robotic"),
         resolution=resolution,
         music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
     # See above: re-link the work dir to this queue item so auto-post finds it.
@@ -2228,6 +2237,7 @@ class FromJobBody(BaseModel):
     style: str = ""
     resolution: str = ""
     voice: str = ""
+    voice_robotic: bool | None = None
     music_desc: str = ""
     queue_item_id: str = ""
 
@@ -2260,7 +2270,7 @@ def queue_from_job(body: FromJobBody) -> dict:
     script_fields = dict(
         video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
         gen_style=body.style, gen_resolution=body.resolution,
-        gen_voice=body.voice, gen_music=body.music_desc,
+        gen_voice=body.voice, gen_voice_robotic=body.voice_robotic, gen_music=body.music_desc,
     )
 
     # In-place update of an existing pending slot — keep its queue position.
@@ -2575,11 +2585,12 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
+        voice_robotic = bool(jc.get("voice_robotic", False))
         tts_hosts = cfg.get("tts_workers") or []
         tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
         _film_tasks[task_id] = {"status": "running", "step": "narration"}
-        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host)
+        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic)
 
         # Re-mux narration with the existing scene video
         video_path = wd / f"scene_{sid:02d}_video.mp4"
