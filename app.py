@@ -50,6 +50,7 @@ from pipeline.llm import generate_video_prompt, generate_video_suggestions
 import pipeline.youtube as yt
 from pipeline.comfyui import (
     generate_scene_image,
+    ltx_dimensions,
 )
 from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
@@ -746,6 +747,9 @@ def _generate_active_scene_preview(
     img_width, img_height = _RESOLUTIONS.get(
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
     )
+    # Match the render: snap the preview to LTX's renderable grid so the cached
+    # preview is reused as the first frame instead of regenerated at a new size.
+    img_width, img_height = ltx_dimensions(img_width, img_height)
     combined_style = _compose_visual_style(style, cfg)
     base_prompt = image_prompt or scene.get("image_prompt") or title
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt

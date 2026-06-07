@@ -33,6 +33,19 @@ DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
 DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
 
+
+def ltx_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Snap (width, height) to the grid LTX can actually render.
+
+    The i2v workflow builds its first-pass latent at half resolution and the LTX
+    VAE compresses space by 32, so each half-dimension is floored to a multiple
+    of 32 — i.e. the full output dimension lands on a multiple of 64. Passing an
+    arbitrary size (e.g. 1080) makes LTX silently shrink it (1080 → 1024), so the
+    clips no longer match the FLUX first frame. Snapping up front keeps the first
+    frame, the clips and the final video identical, with no rescaling.
+    """
+    return (max(64, (width // 64) * 64), max(64, (height // 64) * 64))
+
 # First-pass sigma schedules.
 # The 8-step schedule is the distilled LoRA preset (trained specifically for these values).
 # For the dev model (LoRA strength=0), use more steps with a linear schedule.
