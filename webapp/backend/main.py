@@ -204,6 +204,7 @@ class GenerateScriptBody(BaseModel):
     auto_approve: bool = False
     voice: str = ""
     resolution: str = ""
+    queue_item_id: str = ""
 
 
 @api.post("/api/script/generate")
@@ -270,6 +271,7 @@ def script_generate(body: GenerateScriptBody) -> dict:
             resolution=body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
             voice=body.voice or cfg.get("default_voice", ""),
             music_desc=music_desc,
+            queue_item_id=body.queue_item_id,
         ))
         result.update({
             "auto_approved": True,
@@ -2097,6 +2099,38 @@ def queue_add(body: QueueAddBody) -> dict:
     return {"ok": bool(entry), "queue": yt.load_queue()}
 
 
+class QueueUpdateBody(BaseModel):
+    id: str
+    final_title: str | None = None
+    video_prompt: str | None = None
+    suggested_scene_count: int | None = None
+
+
+@api.post("/api/queue/update")
+def queue_update(body: QueueUpdateBody) -> dict:
+    """Edit a pending queue item's basic fields in place — title, prompt, scene
+    count (issue #43). Only pending items are editable; anything already
+    rendering/posted is left untouched. Fields left as None are not changed."""
+    item = next((q for q in yt.load_queue() if q.get("id") == body.id), None)
+    if not item:
+        raise HTTPException(404, "Queue item not found.")
+    if item.get("status") != "pending":
+        raise HTTPException(400, "Only queued (pending) items can be edited.")
+    updates: dict = {}
+    if body.final_title is not None:
+        title = body.final_title.strip()
+        if not title:
+            raise HTTPException(400, "Title cannot be empty.")
+        updates["final_title"] = title
+    if body.video_prompt is not None:
+        updates["video_prompt"] = body.video_prompt.strip()
+    if body.suggested_scene_count is not None:
+        updates["suggested_scene_count"] = max(6, min(50, int(body.suggested_scene_count)))
+    if updates:
+        yt.update_queue_item(body.id, **updates)
+    return {"ok": True, "queue": yt.load_queue()}
+
+
 def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
     try:
         store = DurableStore.default()
@@ -2187,13 +2221,20 @@ class FromJobBody(BaseModel):
     resolution: str = ""
     voice: str = ""
     music_desc: str = ""
+    queue_item_id: str = ""
 
 
 @api.post("/api/queue/from-job")
 def queue_from_job(body: FromJobBody) -> dict:
     """Add an approved (already-generated) script to the queue. Does NOT render
     unless 'auto-start next' (youtube_auto_start_job) is on and nothing is
-    currently rendering."""
+    currently rendering.
+
+    If body.queue_item_id points at a still-pending slot, update THAT item in
+    place (keeping its position) instead of appending a new entry. This is how
+    the Queue "Edit" flow attaches a ready script to an existing slot so it
+    renders fast (issue #43). In-place updates never auto-start — the item stays
+    queued exactly where it was."""
     cfg = gapp.load_config()
     title = (body.video_title or "").strip() or Path(body.work_dir).name
     n = body.n_scenes
@@ -2208,13 +2249,27 @@ def queue_from_job(body: FromJobBody) -> dict:
             n = cfg.get("default_n_scenes", 6)
     n = max(6, int(n or 6))
 
+    script_fields = dict(
+        video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
+        gen_style=body.style, gen_resolution=body.resolution,
+        gen_voice=body.voice, gen_music=body.music_desc,
+    )
+
+    # In-place update of an existing pending slot — keep its queue position.
+    existing = None
+    if body.queue_item_id:
+        existing = next((q for q in yt.load_queue() if q.get("id") == body.queue_item_id), None)
+    if existing is not None and existing.get("status") == "pending":
+        yt.update_queue_item(body.queue_item_id, final_title=title,
+                             suggested_scene_count=n, **script_fields)
+        return {"ok": True, "queue_item_id": body.queue_item_id,
+                "started": None, "updated_in_place": True}
+
     entry = yt.add_to_queue({"comment_id": "", "text": "", "commenter": "you",
                              "suggested_scene_count": n}, title, source="script")
     if not entry:
         raise HTTPException(500, "Could not enqueue the script.")
-    yt.update_queue_item(entry["id"], video_job_id=body.job_id, work_dir=body.work_dir,
-                         script_ready=True, gen_style=body.style, gen_resolution=body.resolution,
-                         gen_voice=body.voice, gen_music=body.music_desc)
+    yt.update_queue_item(entry["id"], **script_fields)
 
     started = None
     if cfg.get("youtube_auto_start_job") and not gapp._is_job_running():

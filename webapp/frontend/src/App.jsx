@@ -39,11 +39,14 @@ export default function App() {
   const go = useCallback((id, payload) => {
     if (payload?.topic != null) setTopic(payload.topic)
     // Carry an idea's title/description/scene-count into the Create form.
+    // queueItemId links the resulting script back to an existing queue slot so
+    // approving it updates that slot in place instead of appending (issue #43).
     if (id === 'create') setCreateSeed({
       title: payload?.title ?? payload?.topic ?? '',
       description: payload?.description ?? '',
       scenes: payload?.scenes ?? null,
       resolution: payload?.resolution ?? '',
+      queueItemId: payload?.queueItemId ?? null,
     })
     // Deep-link into the YouTube tab's Publish view (e.g. from a Films card).
     if (id === 'youtube') setYtInitial(payload?.publishWorkDir ? { view: 'publish', workDir: payload.publishWorkDir } : null)
@@ -59,7 +62,7 @@ export default function App() {
   // Create → Script: a fresh script was generated. If the user opted to
   // auto-approve, launch generation immediately and jump to the render screen.
   const onScriptGenerated = useCallback(async (data, choices) => {
-    const nextJob = { ...data, voice: choices.voice, resolution: choices.resolution }
+    const nextJob = { ...data, voice: choices.voice, resolution: choices.resolution, queue_item_id: choices.queueItemId || '' }
     setJob(nextJob)
     if (choices.autoApprove) {
       if (data.auto_approved) {
@@ -77,6 +80,7 @@ export default function App() {
           n_scenes: nextJob.scenes?.length || 0,
           style: nextJob.style || '', resolution: choices.resolution || '',
           voice: choices.voice || '', music_desc: nextJob.music_desc || '',
+          queue_item_id: choices.queueItemId || '',
         })
         if (r.started) go('progress', { workDir: nextJob.work_dir })
         else go('queue')
@@ -105,6 +109,32 @@ export default function App() {
     go('script')
   }, [go, meta])
 
+  // Queue → Script/Create: edit the script behind a pending queue item, linked
+  // to its slot so "Approve → queue" updates it in place (issue #43). Items that
+  // already have a ready script open straight in the Script tab; script-less
+  // ones go to the Create form, prefilled, to draft a script first.
+  const onEditQueueScript = useCallback(async (item) => {
+    if (item.script_ready && item.work_dir && item.video_job_id) {
+      const loaded = await api.loadScript(item.work_dir)
+      setJob({
+        ...loaded,
+        voice: item.gen_voice || loaded.voice || meta.config?.default_voice || '',
+        resolution: item.gen_resolution || loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
+        style: item.gen_style || loaded.style || '',
+        queue_item_id: item.id,
+      })
+      go('script')
+      return
+    }
+    go('create', {
+      title: item.final_title || item.title || '',
+      description: item.video_prompt || item.comment_text || '',
+      scenes: item.suggested_scene_count || null,
+      resolution: item.gen_resolution || '',
+      queueItemId: item.id,
+    })
+  }, [go, meta])
+
   const screen = (() => {
     switch (route) {
       case 'home': return <Home go={go} initialTopic={topic} setTopic={setTopic} />
@@ -112,7 +142,7 @@ export default function App() {
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
       case 'progress': return <Progress workDir={progressDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'remix': return <Remix workDir={progressDir} go={go} />
-      case 'queue': return <Queue go={go} />
+      case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={editFilmDir} go={go} />
