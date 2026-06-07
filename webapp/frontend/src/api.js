@@ -90,6 +90,7 @@ export const api = {
   queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueRetryReply: (id) => req('POST', '/queue/retry-reply', { id }),
   queueAdd: (title, nScenes, prompt, resolution) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '', resolution: resolution || '' }),
+  queueUpdate: (id, fields) => req('POST', '/queue/update', { id, ...fields }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
   queueFromJob: (body) => req('POST', '/queue/from-job', body),
 

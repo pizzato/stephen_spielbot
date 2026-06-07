@@ -221,6 +221,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         job_id: job.job_id, work_dir: job.work_dir,
         video_title: job.video_title || job.title || '', n_scenes: total,
         style, resolution, voice: job.voice || '', music_desc: job.music_desc || '',
+        queue_item_id: job.queue_item_id || '',
       })
       setJob({ ...job, scenes, style })
       if (r.started) onGenerate(job.work_dir)
@@ -257,12 +258,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           )}
           {view === 'scenes' && job && (
             <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
-              onClick={approve}>{busy === 'generate' ? 'Approving…' : '2. Approve → queue'}</Button>
+              onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
           )}
         </div>
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {job?.queue_item_id && view === 'scenes' && <Banner tone="info">Editing a queued request — “Save to queue slot” keeps its position and lets it render straight from this script.</Banner>}
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
 
