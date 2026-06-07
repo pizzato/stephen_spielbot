@@ -84,6 +84,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       setJob({
         ...loaded,
         voice: loaded.voice || meta.config?.default_voice || '',
+        voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
         resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
       })
     } catch (e) { setError(e.message) } finally { setBusy('') }
@@ -220,7 +221,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const r = await api.queueFromJob({
         job_id: job.job_id, work_dir: job.work_dir,
         video_title: job.video_title || job.title || '', n_scenes: total,
-        style, resolution, voice: job.voice || '', music_desc: job.music_desc || '',
+        style, resolution, voice: job.voice || '', voice_robotic: job.voice_robotic,
+        music_desc: job.music_desc || '',
         queue_item_id: job.queue_item_id || '',
       })
       setJob({ ...job, scenes, style })
