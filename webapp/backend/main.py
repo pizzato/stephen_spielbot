@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -40,7 +40,17 @@ import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
 
-api = FastAPI(title="Stephen Spielbot API")
+@asynccontextmanager
+async def _lifespan(_app: "FastAPI"):
+    # Startup: launch the opt-in background automation loop (defined near the
+    # bottom of this module; the name resolves at startup, not import). Replaces
+    # the deprecated @app.on_event("startup") handler.
+    _start_automation_loop()
+    yield
+    # Shutdown: nothing to clean up — the loop runs in a daemon thread.
+
+
+api = FastAPI(title="Stephen Spielbot API", lifespan=_lifespan)
 # `uvicorn webapp.backend.main:app` is the conventional entry point — expose the
 # instance under both names so either `:app` or `:api` works.
 app = api
@@ -3050,7 +3060,6 @@ def _automation_loop():
             pass
 
 
-@api.on_event("startup")
 def _start_automation_loop():
     global _automation_started
     if not _automation_started:
