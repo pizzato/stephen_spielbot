@@ -115,6 +115,10 @@ function SceneCard({
   const isRendering = !!busy || !!taskId
   const previewUrl = scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : '')
   const videoUrl = scene.video_url
+  // Match the panels to the film's real orientation so portrait frames aren't
+  // cropped into a landscape box. Derived from the resolution name (e.g.
+  // "Portrait FHD (1080×1920)"), falling back to 16/9 when it's unparseable.
+  const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
 
   return (
     <>
@@ -158,12 +162,12 @@ function SceneCard({
               onClick={() => previewUrl && setLightbox(true)}
               style={{
                 flex: 1, position: 'relative',
-                background: 'var(--paper-2)', aspectRatio: '16/9',
+                background: 'var(--paper-2)', aspectRatio: aspect,
                 cursor: previewUrl ? 'zoom-in' : 'default',
               }}
             >
               {previewUrl
-                ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                ? <img src={previewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
                 : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
               }
               {isRendering && (
@@ -185,7 +189,7 @@ function SceneCard({
             </div>
 
             {/* Film */}
-            <div style={{ flex: 1, position: 'relative', background: '#000', aspectRatio: '16/9' }}>
+            <div style={{ flex: 1, position: 'relative', background: '#000', aspectRatio: aspect }}>
               {videoUrl
                 ? <video src={videoUrl} controls style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
                 : (
