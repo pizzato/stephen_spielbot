@@ -109,6 +109,7 @@ export const api = {
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
+  ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),
 
