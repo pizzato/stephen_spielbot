@@ -114,6 +114,15 @@ def _track_op(name: str, detail: str = ""):
             del _activity_log[20:]
 
 
+# Live sub-phase labels for scene re-render tasks (keyed by _film_tasks["step"]).
+_RERENDER_STEP_LABELS = {
+    "narration": "recording narration",
+    "image": "painting first frame",
+    "video": "rendering video",
+    "mux": "muxing audio",
+}
+
+
 # ── config ───────────────────────────────────────────────────────────────────
 
 @api.get("/api/config")
@@ -1281,6 +1290,31 @@ def get_activity() -> dict:
     with _op_lock:
         op = dict(_current_op)
         log = list(_activity_log[:10])
+
+    # Scene re-renders run in daemon threads that record progress in _film_tasks
+    # (not via _track_op), so surface the most recent running one as the current
+    # op when nothing else is tracked — otherwise the Activity panel shows nothing.
+    if not op:
+        best = None  # (started_ts, scene_id, step)
+        for key, task in list(_film_tasks.items()):
+            if not key.startswith("rerender_") or task.get("status") != "running":
+                continue
+            parts = key.split("_")  # rerender_<sid>_<component>_<ts>
+            if len(parts) < 4:
+                continue
+            try:
+                sid, started = int(parts[1]), int(parts[3])
+            except ValueError:
+                continue
+            if best is None or started > best[0]:
+                best = (started, sid, task.get("step", ""))
+        if best is not None:
+            started, sid, step = best
+            op = {
+                "name": f"Re-rendering scene {sid}",
+                "detail": _RERENDER_STEP_LABELS.get(step, step),
+                "started_at": started,
+            }
 
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
     try:
