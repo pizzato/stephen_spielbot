@@ -114,6 +114,15 @@ def _track_op(name: str, detail: str = ""):
             del _activity_log[20:]
 
 
+# Live sub-phase labels for scene re-render tasks (keyed by _film_tasks["step"]).
+_RERENDER_STEP_LABELS = {
+    "narration": "recording narration",
+    "image": "painting first frame",
+    "video": "rendering video",
+    "mux": "muxing audio",
+}
+
+
 # ── config ───────────────────────────────────────────────────────────────────
 
 @api.get("/api/config")
@@ -1282,6 +1291,31 @@ def get_activity() -> dict:
         op = dict(_current_op)
         log = list(_activity_log[:10])
 
+    # Scene re-renders run in daemon threads that record progress in _film_tasks
+    # (not via _track_op), so surface the most recent running one as the current
+    # op when nothing else is tracked — otherwise the Activity panel shows nothing.
+    if not op:
+        best = None  # (started_ts, scene_id, step)
+        for key, task in list(_film_tasks.items()):
+            if not key.startswith("rerender_") or task.get("status") != "running":
+                continue
+            parts = key.split("_")  # rerender_<sid>_<component>_<ts>
+            if len(parts) < 4:
+                continue
+            try:
+                sid, started = int(parts[1]), int(parts[3])
+            except ValueError:
+                continue
+            if best is None or started > best[0]:
+                best = (started, sid, task.get("step", ""))
+        if best is not None:
+            started, sid, step = best
+            op = {
+                "name": f"Re-rendering scene {sid}",
+                "detail": _RERENDER_STEP_LABELS.get(step, step),
+                "started_at": started,
+            }
+
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
     try:
         render_active = bool(gapp._is_job_running())
@@ -2106,6 +2140,11 @@ def queue_from_job(body: FromJobBody) -> dict:
 
 # In-memory background task store for re-render jobs (similar to _upload_tasks)
 _film_tasks: dict = {}
+# Side registry: tid -> {work_dir, scene_id, component}. Set once at task
+# creation and never overwritten by the worker threads (which reassign
+# _film_tasks[tid] wholesale), so it survives long enough to map a running task
+# back to its film when the edit page reloads.
+_film_task_meta: dict = {}
 
 
 def _film_scene_files(work_dir: Path, sid: int) -> dict:
@@ -2534,6 +2573,27 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
 
 
+def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict) -> None:
+    """Run a re-render worker, then record a completion entry in the Activity log.
+
+    The workers only update _film_tasks (so the live "Re-rendering…" indicator can
+    read their step), so this wrapper adds the "Recent" history entry that
+    _track_op gives every other operation."""
+    started = time.time()
+    try:
+        target(tid, wd, sid, jc, row)
+    finally:
+        end = time.time()
+        status = (_film_tasks.get(tid) or {}).get("status")
+        name = f"Re-render failed — scene {sid}" if status == "error" else f"Re-rendered scene {sid}"
+        with _op_lock:
+            _activity_log.insert(0, {
+                "name": name, "detail": component,
+                "ts": end, "duration_s": round(end - started, 1),
+            })
+            del _activity_log[20:]
+
+
 @api.post("/api/films/scenes/{scene_id}/rerender")
 def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     wd = Path(body.work_dir)
@@ -2573,6 +2633,7 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
 
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": body.component}
 
     if body.component == "narration":
         target = _run_narration_rerender
@@ -2580,7 +2641,11 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         target = _run_image_rerender
     else:
         target = _run_video_rerender
-    threading.Thread(target=target, args=(tid, wd, sid, jc, row), daemon=True).start()
+    threading.Thread(
+        target=_run_rerender_logged,
+        args=(target, tid, wd, sid, body.component, jc, row),
+        daemon=True,
+    ).start()
     return {"ok": True, "task_id": tid}
 
 
@@ -2590,6 +2655,28 @@ def film_task_status(task_id: str = Query(...)) -> dict:
     if not task:
         raise HTTPException(404, "Task not found.")
     return {"ok": True, **task}
+
+
+@api.get("/api/films/tasks")
+def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
+    """Running re-render tasks for a film, so the edit page can resume its
+    progress indicators after a reload (the task ids live only in client state
+    otherwise)."""
+    wd = str(Path(work_dir))
+    out = []
+    for tid, meta in list(_film_task_meta.items()):
+        if meta.get("work_dir") != wd:
+            continue
+        task = _film_tasks.get(tid)
+        if not task or task.get("status") != "running":
+            continue
+        out.append({
+            "task_id": tid,
+            "scene_id": meta.get("scene_id"),
+            "component": meta.get("component"),
+            "step": task.get("step", ""),
+        })
+    return {"ok": True, "tasks": out}
 
 
 @api.post("/api/films/delete")

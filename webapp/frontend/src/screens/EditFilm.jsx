@@ -4,7 +4,7 @@ import { api, fileUrl } from '../api.js'
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
-  onDelete, onMove, onSaved, onRerenderStart, onRerenderDone,
+  onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState(false)
@@ -18,6 +18,7 @@ function SceneCard({
   const [error, setError] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const pollRef = useRef(null)
+  const resumedRef = useRef(null)
 
   useEffect(() => {
     setTitle(scene.title || '')
@@ -77,6 +78,19 @@ function SceneCard({
   }, [onRerenderDone])
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
+
+  // Resume polling for a re-render already running on the server (e.g. the user
+  // left the edit page and came back). The parent counts these in activeRenders,
+  // so we don't call onRerenderStart here. resumedRef makes this idempotent: the
+  // effect must not restart polling for a task it already picked up (startPolling
+  // changes identity on every parent re-render).
+  useEffect(() => {
+    if (initialTask && initialTask.task_id !== resumedRef.current && !pollRef.current) {
+      resumedRef.current = initialTask.task_id
+      setBusy(initialTask.component || '')
+      startPolling(initialTask.task_id)
+    }
+  }, [initialTask, startPolling])
 
   const rerender = async (component) => {
     await persist()
@@ -285,6 +299,7 @@ export default function EditFilm({ workDir, go }) {
   const [assembling, setAssembling] = useState(false)
   const [assembleResult, setAssembleResult] = useState(null)
   const [activeRenders, setActiveRenders] = useState(0)
+  const [resumeTasks, setResumeTasks] = useState({})
 
   const load = useCallback(async () => {
     setError('')
@@ -303,6 +318,18 @@ export default function EditFilm({ workDir, go }) {
   }, [workDir])
 
   useEffect(() => { load() }, [load])
+
+  // On (re)load, pick up any re-render still running on the server so returning
+  // to this page resumes the per-scene spinner + the "Re-rendering…" banner.
+  useEffect(() => {
+    api.filmTasksForWorkDir(workDir).then((r) => {
+      const tasks = r.tasks || []
+      const byScene = {}
+      tasks.forEach((t) => { byScene[t.scene_id] = t })
+      setResumeTasks(byScene)
+      setActiveRenders(tasks.length)
+    }).catch(() => {})
+  }, [workDir])
 
   const handleDelete = async (sceneId) => {
     setError('')
@@ -412,6 +439,7 @@ export default function EditFilm({ workDir, go }) {
               onSaved={load}
               onRerenderStart={() => setActiveRenders((n) => n + 1)}
               onRerenderDone={() => { setActiveRenders((n) => Math.max(0, n - 1)); load() }}
+              initialTask={resumeTasks[scene.id]}
             />
           ))}
         </div>
