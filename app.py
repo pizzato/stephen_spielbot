@@ -462,6 +462,93 @@ def voice_path_for(name: str) -> str | None:
     return None
 
 
+def _under_voices_dir(p: Path) -> bool:
+    """True if *p* lives inside VOICES_DIR (so we own it and may delete it)."""
+    try:
+        p.resolve().relative_to(VOICES_DIR.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _new_voice_path(name: str, ext: str) -> Path:
+    """A non-colliding path under VOICES_DIR for a voice's reference clip."""
+    VOICES_DIR.mkdir(parents=True, exist_ok=True)
+    stem = slugify(name) or "voice"
+    candidate = VOICES_DIR / f"{stem}{ext}"
+    n = 2
+    while candidate.exists():
+        candidate = VOICES_DIR / f"{stem}-{n}{ext}"
+        n += 1
+    return candidate
+
+
+def add_voice(name: str, audio: bytes, ext: str = ".wav") -> dict:
+    """Save a new reference clip and register the voice. Returns the new config."""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("Voice name is required.")
+    cfg = load_config()
+    voices = cfg.get("voices", []) or []
+    if name == F5TTS_DEFAULT_OPTION or any(v["name"] == name for v in voices):
+        raise ValueError(f"A voice named “{name}” already exists.")
+    path = _new_voice_path(name, ext)
+    path.write_bytes(audio)
+    voices.append({"name": name, "path": str(path)})
+    cfg["voices"] = voices
+    save_config(cfg)
+    return cfg
+
+
+def update_voice(name: str, new_name: str | None = None,
+                 audio: bytes | None = None, ext: str = ".wav") -> dict:
+    """Rename a voice and/or replace its reference clip. Returns the new config."""
+    cfg = load_config()
+    voices = cfg.get("voices", []) or []
+    voice = next((v for v in voices if v["name"] == name), None)
+    if voice is None:
+        raise ValueError(f"No voice named “{name}”.")
+    if new_name is not None:
+        new_name = new_name.strip()
+        if not new_name:
+            raise ValueError("Voice name is required.")
+        if new_name != name:
+            if new_name == F5TTS_DEFAULT_OPTION or any(v["name"] == new_name for v in voices):
+                raise ValueError(f"A voice named “{new_name}” already exists.")
+            voice["name"] = new_name
+            if cfg.get("default_voice") == name:
+                cfg["default_voice"] = new_name
+    if audio is not None:
+        old_path = Path(voice["path"])
+        new_path = _new_voice_path(voice["name"], ext)
+        new_path.write_bytes(audio)
+        voice["path"] = str(new_path)
+        if old_path != new_path and _under_voices_dir(old_path) and old_path.exists():
+            old_path.unlink()
+    save_config(cfg)
+    return cfg
+
+
+def delete_voice(name: str) -> dict:
+    """Remove a voice and delete its reference clip. Returns the new config."""
+    cfg = load_config()
+    voices = cfg.get("voices", []) or []
+    voice = next((v for v in voices if v["name"] == name), None)
+    if voice is None:
+        raise ValueError(f"No voice named “{name}”.")
+    cfg["voices"] = [v for v in voices if v["name"] != name]
+    if cfg.get("default_voice") == name:
+        cfg["default_voice"] = ""
+    save_config(cfg)
+    path = Path(voice["path"])
+    if _under_voices_dir(path) and path.exists():
+        try:
+            path.unlink()
+        except OSError:
+            pass
+    return cfg
+
+
 
 
 # ── UI helpers ───────────────────────────────────────────────────────────────

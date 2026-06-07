@@ -11,6 +11,7 @@ Run it from the repo root:
     uvicorn webapp.backend.main:app --port 8001 --reload
 """
 
+import base64
 import json
 import re
 import sys
@@ -181,6 +182,81 @@ def post_config(body: ConfigUpdate) -> dict:
     cfg.update(body.config)
     gapp.save_config(cfg)
     return {"ok": True, "config": gapp.load_config()}
+
+
+# ── voices ───────────────────────────────────────────────────────────────────
+
+_AUDIO_EXTS = {".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".webm", ".opus"}
+
+
+def _decode_audio(data: str, filename: str) -> tuple[bytes, str]:
+    """Decode a base64 (optionally data-URL) audio payload to (bytes, extension)."""
+    if not data:
+        raise HTTPException(400, "No audio provided.")
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        raise HTTPException(400, "Could not read the audio file.")
+    if not raw:
+        raise HTTPException(400, "The audio file is empty.")
+    ext = Path(filename or "").suffix.lower()
+    if ext not in _AUDIO_EXTS:
+        ext = ".wav"
+    return raw, ext
+
+
+def _voice_response(cfg: dict) -> dict:
+    return {"ok": True, "config": cfg, "voices": gapp.get_voice_choices()}
+
+
+class VoiceAdd(BaseModel):
+    name: str
+    filename: str = ""
+    data: str
+
+
+class VoiceUpdate(BaseModel):
+    name: str
+    new_name: str | None = None
+    filename: str = ""
+    data: str | None = None
+
+
+class VoiceDelete(BaseModel):
+    name: str
+
+
+@api.post("/api/voices/add")
+def voices_add(body: VoiceAdd) -> dict:
+    raw, ext = _decode_audio(body.data, body.filename)
+    try:
+        cfg = gapp.add_voice(body.name, raw, ext)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _voice_response(cfg)
+
+
+@api.post("/api/voices/update")
+def voices_update(body: VoiceUpdate) -> dict:
+    audio, ext = None, ".wav"
+    if body.data:
+        audio, ext = _decode_audio(body.data, body.filename)
+    try:
+        cfg = gapp.update_voice(body.name, new_name=body.new_name, audio=audio, ext=ext)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _voice_response(cfg)
+
+
+@api.post("/api/voices/delete")
+def voices_delete(body: VoiceDelete) -> dict:
+    try:
+        cfg = gapp.delete_voice(body.name)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _voice_response(cfg)
 
 
 @api.get("/api/workers/status")
