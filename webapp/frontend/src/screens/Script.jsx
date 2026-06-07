@@ -333,16 +333,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <Field label="Title">
                 <input className="input" value={coverTitle} onChange={(e) => setCoverTitle(e.target.value)} />
               </Field>
-              <div className="row center gap-16 row--wrap">
-                <div className="grow">
-                  <Field label="Visual style — applied to every scene">
-                    <input className="input" value={style} onChange={(e) => setStyle(e.target.value)} />
-                  </Field>
-                </div>
-                <Field label="Resolution">
-                  <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
-                </Field>
-              </div>
+              <Field label="Visual style — applied to every scene">
+                <input className="input" value={style} onChange={(e) => setStyle(e.target.value)} />
+              </Field>
+              <Field label="Resolution">
+                <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
+              </Field>
               <div>
                 <Button variant="ghost" icon="rotate-right" disabled={genAll} onClick={regenAll}>
                   {genAll ? 'Regenerating all scenes…' : 'Regenerate all scene images'}
