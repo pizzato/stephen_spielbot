@@ -705,7 +705,7 @@ def generate_youtube_description(
             api_key = cfg.get("claude_api_key", "")
             if not api_key:
                 raise RuntimeError("No Claude API key configured")
-            import anthropic, httpx, os
+            import anthropic, httpx
             timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
             client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
             text = _claude_call(

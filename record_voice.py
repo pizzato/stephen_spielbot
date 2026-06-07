@@ -13,7 +13,6 @@ Usage:
 import argparse
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 SAMPLE_TEXT = """
@@ -63,7 +62,7 @@ def record(output_path: Path, seconds: int) -> None:
     print(f"File size: {size_kb} KB")
     print()
     print("Next step — test voice cloning:")
-    print(f'  source ~/github/comfyui-env/bin/activate')
+    print('  source ~/github/comfyui-env/bin/activate')
     print(f'  python -m pipeline.tts_xtts --ref {output_path} --text "Testing my cloned voice." --out test_clone.wav')
     print()
     print("Then use in video generation:")

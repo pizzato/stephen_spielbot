@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon } from '../components.jsx'
+import { useState, useEffect } from 'react'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip } from '../components.jsx'
 import { api } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')

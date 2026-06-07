@@ -8,7 +8,6 @@ import concurrent.futures
 import json
 import logging
 import logging.handlers
-import math
 import shutil
 import sys
 import time
@@ -35,7 +34,7 @@ from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import Scene, NEGATIVE_PROMPT
+from pipeline.llm import Scene
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_scene_image, StuckJobError
 from pipeline.assembler import (
@@ -52,7 +51,6 @@ from pipeline.orchestrator import (
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
 from pipeline.cover import (
-    overlay_title_on_image as _overlay_title_on_image,
     build_cover_prompt as _cover_prompt,
     cover_dimensions as _cover_dimensions,
     shorten_title_for_cover as _shorten_title,

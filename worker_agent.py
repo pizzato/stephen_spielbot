@@ -92,7 +92,7 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
         # Fall back to the scene title so TTS never receives blank text,
         # which causes F5-TTS to emit boilerplate audio.
         narration_text = (p.get("title") or f"Scene {sid}").strip()
-        logger.warning("Scene %d has empty narration — using title as TTS fallback: %r", sid, narration_text)
+        LOG.warning("Scene %d has empty narration — using title as TTS fallback: %r", sid, narration_text)
 
     ref = Path(p["voice_ref"]).expanduser() if p.get("voice_ref") else None
     generate_narration(narration_text, output, reference_wav=ref, host=endpoint)
