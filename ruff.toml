@@ -1,0 +1,18 @@
+# Ruff configuration — Python linting for Stephen Spielbot.
+#
+# Scoped to high-signal correctness checks rather than style: pyflakes (F)
+# catches dead code and bugs — unused imports (F401), unused locals (F841),
+# undefined names (F821), f-string mistakes — and E9 catches syntax errors.
+#
+# Style rules (E4/E7) are intentionally omitted: this codebase deliberately
+# imports after sys.path setup (E402), so enforcing them would be noise.
+target-version = "py310"
+
+exclude = [
+    ".venv",
+    "node_modules",
+    "webapp/frontend",
+]
+
+[lint]
+select = ["F", "E9"]

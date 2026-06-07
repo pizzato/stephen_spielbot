@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Card, Chip, Button, ProgressBar, Icon, Banner } from '../components.jsx'
-import { api, fileUrl } from '../api.js'
+import { api } from '../api.js'
 
 const STATUS_TONE = {
   running: 'ok', leased: 'info', queued: 'accent', succeeded: 'neutral',

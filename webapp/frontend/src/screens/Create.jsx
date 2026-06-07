@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 

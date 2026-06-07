@@ -9,14 +9,11 @@ work-dir bookkeeping, job launching, progress polling, and automation.
 
 import concurrent.futures
 import threading
-import html
 import json
 import logging
 import logging.handlers
-import math
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -49,27 +46,13 @@ logger.info("Logging to %s", LOG_FILE)
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import generate_script, generate_youtube_description, generate_video_prompt, generate_video_suggestions, Scene, NEGATIVE_PROMPT
+from pipeline.llm import generate_video_prompt, generate_video_suggestions
 import pipeline.youtube as yt
 from pipeline.comfyui import (
-    generate_video_clip, generate_video_continuation, generate_music,
-    generate_scene_image, StuckJobError,
+    generate_scene_image,
 )
-from pipeline.assembler import (
-    _get_duration, concat_clips, mux_video_audio, extract_first_frame,
-    extract_last_frame, extract_audio, concat_audio, concatenate_scenes,
-    ensure_video_resolution, mix_background_music,
-)
-from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id
-from pipeline.scene_video import generate_scene_video as _generate_scene_video
-from pipeline.worker_pool import WorkerPool, alive_workers, idle_workers
-from pipeline.cover import (
-    overlay_title_on_image as _overlay_title_on_image,
-    build_cover_prompt as _cover_prompt,
-    shorten_title_for_cover as _shorten_title,
-    COVER_WIDTH as _COVER_W,
-    COVER_HEIGHT as _COVER_H,
-)
+from pipeline.orchestrator import DurableStore
+from pipeline.worker_pool import WorkerPool, idle_workers
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
