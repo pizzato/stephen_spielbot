@@ -131,6 +131,9 @@ def get_config() -> dict:
     return {
         "config": cfg,
         "voices": gapp.get_voice_choices(),
+        # Root of every work_dir; the frontend joins it with a URL slug to
+        # reconstruct a full path for deep links (issue #32).
+        "videos_dir": str(gapp.OUTPUT_DIR),
         # Kept for backward compatibility (composed name strings stay canonical).
         "resolutions": list(gapp._RESOLUTIONS.keys()),
         "default_resolution": gapp._DEFAULT_RESOLUTION,
