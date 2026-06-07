@@ -2343,15 +2343,18 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
     preview_img = first_frame if first_frame.exists() else (preview if preview.exists() else None)
     preview_mtime = int(preview_img.stat().st_mtime) if preview_img else 0
 
+    # Cache-bust the video URL with the file's mtime so a re-rendered clip at the
+    # same path isn't served stale from the browser cache (the path alone never
+    # changes, so without &t= the <video> element keeps the old file).
+    video_file = final if has_final else actual_video
+    video_mtime = int(video_file.stat().st_mtime) if video_file else 0
+
     return {
         "has_narration": has_nar,
         "has_video": actual_video is not None,
         "has_final": has_final,
         "narration_url": f"/api/file?path={narration}" if has_nar else "",
-        "video_url": (
-            f"/api/file?path={final}" if has_final
-            else (f"/api/file?path={actual_video}" if actual_video else "")
-        ),
+        "video_url": f"/api/file?path={video_file}&t={video_mtime}" if video_file else "",
         "preview_url": f"/api/file?path={preview_img}&t={preview_mtime}" if preview_img else "",
     }
 
