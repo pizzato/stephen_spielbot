@@ -437,6 +437,7 @@ class DurableStore:
             "flux_vae": config.get("flux_vae"),
             "flux_steps": config.get("flux_steps"),
             "voice_ref": config.get("voice_ref"),
+            "voice_robotic": config.get("voice_robotic"),
         }
         resource_classes = config.get("resource_classes", {}) or {}
 
