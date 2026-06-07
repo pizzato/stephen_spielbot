@@ -36,7 +36,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene
 from pipeline import prompts as _prompts
-from pipeline.comfyui import generate_music, generate_scene_image, StuckJobError
+from pipeline.comfyui import generate_music, generate_scene_image, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio,
     concat_audio, concatenate_scenes,
@@ -50,6 +50,10 @@ from pipeline.orchestrator import (
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
+# Resolution name → (w, h) map. Import the canonical table from app rather than
+# keeping a copy here — a stale local copy silently dropped the 720p tier and
+# rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
+from app import _RESOLUTIONS, _DEFAULT_RESOLUTION
 from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
     cover_dimensions as _cover_dimensions,
@@ -290,6 +294,7 @@ def main(work_dir: Path) -> None:
     music_vol         = cfg.get("music_vol", 18) / 100.0
     voice_vol         = cfg.get("voice_vol", 100) / 100.0
     voice_name        = cfg.get("default_voice", "Thomas")
+    voice_robotic     = bool(cfg.get("voice_robotic", cfg.get("default_voice_robotic", False)))
     voice_ref_str     = None
     for v in cfg.get("voices", []):
         if v["name"] == voice_name:
@@ -311,21 +316,11 @@ def main(work_dir: Path) -> None:
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 
-    res_name = cfg.get("resolution", "Landscape FHD (1920×1080)")
-    _RESOLUTIONS = {
-        "Landscape Fast (512×288)":    (512, 288),
-        "Landscape (832×480)":         (832, 480),
-        "Landscape HD (1024×576)":     (1024, 576),
-        "Landscape FHD (1920×1080)":   (1920, 1080),
-        "Portrait Fast (288×512)":     (288, 512),
-        "Portrait (480×832)":          (480, 832),
-        "Portrait HD (576×1024)":      (576, 1024),
-        "Portrait FHD (1080×1920)":    (1080, 1920),
-        "Square (512×512)":            (512, 512),
-        "Square HD (576×576)":         (576, 576),
-        "Square FHD (1080×1080)":      (1080, 1080),
-    }
-    vid_width, vid_height = _RESOLUTIONS.get(res_name, (1920, 1080))
+    res_name = cfg.get("resolution", _DEFAULT_RESOLUTION)
+    vid_width, vid_height = _RESOLUTIONS.get(res_name, _RESOLUTIONS[_DEFAULT_RESOLUTION])
+    # Snap to LTX's renderable grid so the FLUX first frame, the LTX clips and the
+    # final video are all the same size (no silent shrink + rescale). See ltx_dimensions.
+    vid_width, vid_height = ltx_dimensions(vid_width, vid_height)
     logger.info("Resolution: %s → %dx%d", res_name, vid_width, vid_height)
     logger.info("Workers: %s", worker_urls)
     logger.info("TTS hosts: %s", tts_hosts)
@@ -337,6 +332,7 @@ def main(work_dir: Path) -> None:
         "vid_width": vid_width,
         "vid_height": vid_height,
         "voice_ref": voice_ref_str or "",
+        "voice_robotic": voice_robotic,
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)
@@ -385,7 +381,7 @@ def main(work_dir: Path) -> None:
                     lease_seconds=600,
                     start_message=f"TTS on {host}",
                 ) as run:
-                    generate_narration(scene.narration, out, reference_wav=ref, host=host)
+                    generate_narration(scene.narration, out, reference_wav=ref, host=host, robotic=voice_robotic)
                     dur = _get_duration(out)
                     store.record_artifact(
                         durable_job_id,
