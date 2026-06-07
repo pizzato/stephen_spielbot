@@ -282,7 +282,7 @@ def voices_test(body: VoiceTest) -> dict:
     cfg = gapp.load_config()
     voice = (body.voice or "").strip()
     spoken = voice if voice and voice != gapp.F5TTS_DEFAULT_OPTION else "the default narrator"
-    text = (body.text or "").strip() or "This is the voice of Luiz. What do you think?"
+    text = (body.text or "").strip() or f"This is the voice of {spoken}. What do you think?"
 
     ref_str = gapp.voice_path_for(voice)
     ref = Path(ref_str).expanduser() if ref_str else None
