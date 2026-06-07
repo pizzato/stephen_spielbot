@@ -373,9 +373,10 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview")
 def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style: str = "") -> dict:
     try:
-        out = gapp._generate_active_scene_preview(
-            job_id, int(scene_id), resolution, style, "", "", force=True
-        )
+        with _track_op("Generating preview", f"scene {scene_id}"):
+            out = gapp._generate_active_scene_preview(
+                job_id, int(scene_id), resolution, style, "", "", force=True
+            )
     except Exception as e:
         raise HTTPException(503, f"Preview failed: {str(e).splitlines()[0][:200]}")
     return {"ok": True, "preview_path": str(out)}
@@ -402,7 +403,8 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         if not worker_urls:
             raise HTTPException(503, "No reachable workers for preview generation.")
         pool = gapp.WorkerPool(worker_urls)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(worker_urls), len(to_generate))) as ex:
+        with _track_op("Generating previews", f"{len(to_generate)} scenes"), \
+                concurrent.futures.ThreadPoolExecutor(max_workers=min(len(worker_urls), len(to_generate))) as ex:
             futs = {
                 ex.submit(gapp._generate_active_scene_preview, job_id, int(r["id"]),
                           resolution, style, r.get("title") or "",
@@ -816,11 +818,12 @@ def remix_apply(body: RemixBody) -> dict:
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
-    final_path, message = gapp.on_remix(
-        str(combined), str(music),
-        str(ambient) if ambient.exists() else "",
-        voice_vol=body.voice_vol, music_vol=body.music_vol, ambient_vol=body.ambient_vol,
-    )
+    with _track_op("Remixing audio", wd.name):
+        final_path, message = gapp.on_remix(
+            str(combined), str(music),
+            str(ambient) if ambient.exists() else "",
+            voice_vol=body.voice_vol, music_vol=body.music_vol, ambient_vol=body.ambient_vol,
+        )
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": f"/api/file?path={final_path}"}
@@ -1121,24 +1124,25 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
         if cached:
             return {"suggestions": _visible_suggestions(cached), "cached": True}
 
-    try:
-        # Channel titles (YouTube API + posted queue) come first; supplement with
-        # any local completed jobs not yet published to the channel.
-        previous = gapp._channel_video_titles(cfg)
-        seen = {t.lower() for t in previous}
-        for label, _ in gapp._list_recent_jobs(max_results=500):
-            if label.lower() not in seen:
-                previous.append(label)
-                seen.add(label.lower())
-    except Exception:
-        previous = []
-    try:
-        if g:
-            ideas = _guided_suggestions(g, previous, cfg)
-        else:
-            ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg))
-    except Exception as e:
-        raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
+    with _track_op("Generating suggestions", g):
+        try:
+            # Channel titles (YouTube API + posted queue) come first; supplement with
+            # any local completed jobs not yet published to the channel.
+            previous = gapp._channel_video_titles(cfg)
+            seen = {t.lower() for t in previous}
+            for label, _ in gapp._list_recent_jobs(max_results=500):
+                if label.lower() not in seen:
+                    previous.append(label)
+                    seen.add(label.lower())
+        except Exception:
+            previous = []
+        try:
+            if g:
+                ideas = _guided_suggestions(g, previous, cfg)
+            else:
+                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg))
+        except Exception as e:
+            raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
     try:
         ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
@@ -1497,7 +1501,8 @@ class DescribeBody(BaseModel):
 
 @api.post("/api/youtube/describe")
 def yt_describe(body: DescribeBody) -> dict:
-    desc = _generate_and_cache_description(body.work_dir, body.title)
+    with _track_op("Generating description", body.title):
+        desc = _generate_and_cache_description(body.work_dir, body.title)
     return {"description": desc}
 
 
@@ -1582,6 +1587,31 @@ def _best_cover_comfy_url() -> str:
     return ui_url
 
 
+def _track_durable_task(tid: str, name: str, detail: str, poll: float = 1.5) -> None:
+    """Background thread: surface a durable-store task (run by an external worker)
+    in the Activity panel.
+
+    Cover generation runs in a separate `worker_agent --kind ui` process, so its
+    work can't be wrapped by _track_op inline. Instead we poll the task to a
+    terminal state inside _track_op — so it shows as in-progress while the worker
+    runs it and lands in the recent log when done, like every other operation."""
+    terminal = {"succeeded", "failed_terminal", "cancelled"}
+    deadline = time.time() + 600  # safety cap so a stuck task can't pin the marker
+    try:
+        with _track_op(name, detail):
+            while time.time() < deadline:
+                store = DurableStore.default()
+                try:
+                    t = store.get_task(tid)
+                finally:
+                    store.close()
+                if t is None or t.status in terminal:
+                    return
+                time.sleep(poll)
+    except Exception:
+        pass
+
+
 @api.post("/api/youtube/cover")
 def yt_cover(body: CoverBody) -> dict:
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
@@ -1616,6 +1646,12 @@ def yt_cover(body: CoverBody) -> dict:
         )
     finally:
         store.close()
+    # Surface the worker-run cover task in the Activity panel as it happens.
+    threading.Thread(
+        target=_track_durable_task,
+        args=(tid, "Generating thumbnail", title),
+        daemon=True,
+    ).start()
     return {"task_id": tid}
 
 
@@ -1723,16 +1759,19 @@ _upload_tasks: dict = {}
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
-        result = _call_matching(
-            yt.upload_video,
-            client_secrets_path=_client_secrets_path(), client_secrets=_client_secrets_path(),
-            video_path=str(final), path=str(final), video=str(final), file=str(final),
-            filename=str(final), video_file=str(final),
-            title=body_dict["title"], description=body_dict["description"],
-            category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
-            privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
-            thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
-        )
+        # Track around the actual upload (the slow part) so it shows as
+        # in-progress in the Activity panel and lands in the recent log.
+        with _track_op("Uploading to YouTube", body_dict["title"]):
+            result = _call_matching(
+                yt.upload_video,
+                client_secrets_path=_client_secrets_path(), client_secrets=_client_secrets_path(),
+                video_path=str(final), path=str(final), video=str(final), file=str(final),
+                filename=str(final), video_file=str(final),
+                title=body_dict["title"], description=body_dict["description"],
+                category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
+                privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
+                thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
+            )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
         return
@@ -1875,7 +1914,8 @@ def youtube_fetch(body: FetchBody | None = None) -> dict:
     body = body or FetchBody()
     cfg = gapp.load_config()
     aa = cfg.get("youtube_auto_approve_comments", False) if body.auto_approve is None else body.auto_approve
-    result = _fetch_and_evaluate(aa)
+    with _track_op("Fetching comments"):
+        result = _fetch_and_evaluate(aa)
     return {**result, "comments": yt.load_comments_cache()}
 
 
