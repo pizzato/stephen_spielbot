@@ -122,6 +122,13 @@ export const api = {
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
+
+  // engagement prediction (issue #50)
+  engagementStatus: () => req('GET', '/engagement/status'),
+  engagementBuild: () => req('POST', '/engagement/build'),
+  engagementBuildStatus: (taskId) => req('GET', `/engagement/build/status?task_id=${encodeURIComponent(taskId)}`),
+  engagementPredict: (body) => req('POST', '/engagement/predict', body),
+  engagementBestTimes: (body) => req('POST', '/engagement/best-times', body),
 }
 
 // Build a URL the <img>/<video> tags can load straight from the backend.

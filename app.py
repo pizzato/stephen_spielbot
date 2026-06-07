@@ -172,6 +172,10 @@ DEFAULT_CFG = {
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
     "description_suffix": "",
+    # Engagement prediction (issue #50) — config-file-only advanced knobs.
+    "engagement_embed_model": "BAAI/bge-small-en-v1.5",  # fastembed text-embedding model
+    "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
+    "engagement_data_lag_days": 5,       # exclude videos newer than this (analytics not finalised)
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"

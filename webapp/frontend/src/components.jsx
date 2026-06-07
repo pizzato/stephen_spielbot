@@ -160,6 +160,7 @@ const NAV = [
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'youtube', label: 'YouTube', icon: 'youtube', brand: true },
   { id: 'library', label: 'Films', icon: 'film' },
+  { id: 'engagement', label: 'Engagement', icon: 'chart-line' },
   { sep: true },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]

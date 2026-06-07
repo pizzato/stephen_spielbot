@@ -2,6 +2,13 @@ import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
+function fmtNum(n) {
+  if (n == null) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return String(Math.round(n))
+}
+
 const PIPELINE = [
   ['feather-pointed', 'Script', 'An LLM drafts every scene'],
   ['palette', 'Visuals', 'FLUX paints, LTX animates'],
@@ -26,6 +33,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [autoApprove, setAutoApprove] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   useEffect(() => {
     if (!voiceTouched) setVoice(configuredVoice)
@@ -55,6 +63,17 @@ export default function Create({ seed, meta, onGenerated }) {
   useEffect(() => {
     setStyle(meta.config?.default_visual_style || '')
   }, [meta.config?.default_visual_style])
+
+  // Estimate the idea's 3-day reach (debounced). Silently no-ops when no model
+  // has been built — the card simply doesn't render. (issue #50)
+  useEffect(() => {
+    if (!videoTitle.trim() && !direction.trim()) { setReach(null); return }
+    const t = setTimeout(() => {
+      api.engagementPredict({ title: videoTitle, description: direction })
+        .then(setReach).catch(() => setReach(null))
+    }, 600)
+    return () => clearTimeout(t)
+  }, [videoTitle, direction])
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -135,6 +154,18 @@ export default function Create({ seed, meta, onGenerated }) {
         </Card>
 
         <div className="col-4 stack gap-16">
+          {reach?.available && (
+            <Card className="reveal reveal-d1">
+              <span className="label-sm">Predicted reach</span>
+              <div className="row center gap-12 mt-16">
+                <div style={{ fontSize: 30, fontWeight: 700, color: 'var(--accent)', letterSpacing: '-0.02em' }}>{fmtNum(reach.predicted_views)}</div>
+                <div className="muted" style={{ fontSize: 12 }}>
+                  est. views in the first 3 days
+                  {reach.reliability && reach.reliability !== 'ok' && <><br /><span style={{ color: 'var(--warn)' }}>rough estimate ({reach.reliability})</span></>}
+                </div>
+              </div>
+            </Card>
+          )}
           <Card className="reveal reveal-d2">
             <span className="label-sm">The pipeline</span>
             <div className="stack gap-16 mt-16">
