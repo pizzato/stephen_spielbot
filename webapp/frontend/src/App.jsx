@@ -62,7 +62,7 @@ export default function App() {
   // Create → Script: a fresh script was generated. If the user opted to
   // auto-approve, launch generation immediately and jump to the render screen.
   const onScriptGenerated = useCallback(async (data, choices) => {
-    const nextJob = { ...data, voice: choices.voice, resolution: choices.resolution, queue_item_id: choices.queueItemId || '' }
+    const nextJob = { ...data, voice: choices.voice, voice_robotic: choices.voice_robotic, resolution: choices.resolution, queue_item_id: choices.queueItemId || '' }
     setJob(nextJob)
     if (choices.autoApprove) {
       if (data.auto_approved) {
@@ -79,7 +79,8 @@ export default function App() {
           video_title: nextJob.video_title || nextJob.title || '',
           n_scenes: nextJob.scenes?.length || 0,
           style: nextJob.style || '', resolution: choices.resolution || '',
-          voice: choices.voice || '', music_desc: nextJob.music_desc || '',
+          voice: choices.voice || '', voice_robotic: choices.voice_robotic,
+          music_desc: nextJob.music_desc || '',
           queue_item_id: choices.queueItemId || '',
         })
         if (r.started) go('progress', { workDir: nextJob.work_dir })
@@ -104,6 +105,7 @@ export default function App() {
     setJob({
       ...loaded,
       voice: loaded.voice || meta.config?.default_voice || '',
+      voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
       resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
     })
     go('script')
@@ -119,6 +121,7 @@ export default function App() {
       setJob({
         ...loaded,
         voice: item.gen_voice || loaded.voice || meta.config?.default_voice || '',
+        voice_robotic: item.gen_voice_robotic ?? loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
         resolution: item.gen_resolution || loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
         style: item.gen_style || loaded.style || '',
         queue_item_id: item.id,

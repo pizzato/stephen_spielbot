@@ -95,7 +95,8 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
         LOG.warning("Scene %d has empty narration — using title as TTS fallback: %r", sid, narration_text)
 
     ref = Path(p["voice_ref"]).expanduser() if p.get("voice_ref") else None
-    generate_narration(narration_text, output, reference_wav=ref, host=endpoint)
+    generate_narration(narration_text, output, reference_wav=ref, host=endpoint,
+                       robotic=bool(p.get("voice_robotic")))
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
     store.complete_task(task.id, result={"path": str(output), "duration": duration}, message="narration ready")

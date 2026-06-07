@@ -21,6 +21,8 @@ export default function Create({ seed, meta, onGenerated }) {
   const [scenes, setScenes] = useState(seed?.scenes || meta.config?.default_n_scenes || 12)
   const [voice, setVoice] = useState(configuredVoice)
   const [voiceTouched, setVoiceTouched] = useState(false)
+  const [robotic, setRobotic] = useState(!!meta.config?.default_voice_robotic)
+  const [roboticTouched, setRoboticTouched] = useState(false)
   const [resolution, setResolution] = useState(meta.config?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(meta.config?.default_visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
@@ -34,6 +36,10 @@ export default function Create({ seed, meta, onGenerated }) {
   useEffect(() => {
     if (!voiceChoices.includes(voice)) setVoice(configuredVoice)
   }, [configuredVoice, voice, voiceChoices])
+
+  useEffect(() => {
+    if (!roboticTouched) setRobotic(!!meta.config?.default_voice_robotic)
+  }, [meta.config?.default_voice_robotic, roboticTouched])
 
   useEffect(() => {
     if (!seed) return
@@ -66,10 +72,11 @@ export default function Create({ seed, meta, onGenerated }) {
         visual_style: style.trim() || null,
         auto_approve: autoApprove,
         voice,
+        voice_robotic: robotic,
         resolution,
         queue_item_id: seed?.queueItemId || '',
       })
-      onGenerated(data, { voice, resolution, autoApprove, queueItemId: seed?.queueItemId || '' })
+      onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -123,6 +130,10 @@ export default function Create({ seed, meta, onGenerated }) {
               <select className="select" value={voice} onChange={(e) => { setVoiceTouched(true); setVoice(e.target.value) }}>
                 {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
+              <div className="mt-8">
+                <Check checked={robotic} onChange={(v) => { setRoboticTouched(true); setRobotic(v) }}
+                  label="Make it robotic — a synthetic monotone so it isn't mistaken for a human" />
+              </div>
             </Field>
 
             <div className="row center between mt-8 row--wrap gap-16">
