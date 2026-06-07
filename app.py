@@ -689,6 +689,22 @@ def _preview_worker_urls() -> list[str]:
         return []
 
 
+def _compose_visual_style(style: str, cfg: dict) -> str:
+    """Combine a per-job visual style with the configured default, de-duplicated.
+
+    The Create/Script UI pre-fills the per-job style from ``default_visual_style``,
+    so the two are usually identical. Joining them blindly repeated the style in the
+    FLUX prompt (e.g. "Cinematic …. Cinematic …. <scene>"), which over-stylized the
+    images. Keep genuinely distinct styles; drop case-insensitive repeats.
+    """
+    parts: list[str] = []
+    for raw in (style, cfg.get("default_visual_style", "")):
+        p = (raw or "").strip().rstrip(".")
+        if p and p.lower() not in [q.lower() for q in parts]:
+            parts.append(p)
+    return ". ".join(parts)
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,
@@ -730,10 +746,7 @@ def _generate_active_scene_preview(
     img_width, img_height = _RESOLUTIONS.get(
         resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
     )
-    style_clean = style.strip().rstrip(".") if style and style.strip() else ""
-    default_style = cfg.get("default_visual_style", "").strip().rstrip(".")
-    combined_parts = [p for p in [style_clean, default_style] if p]
-    combined_style = ". ".join(combined_parts)
+    combined_style = _compose_visual_style(style, cfg)
     base_prompt = image_prompt or scene.get("image_prompt") or title
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
 
