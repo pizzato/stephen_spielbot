@@ -12,6 +12,25 @@ COVER_WIDTH  = 1280
 COVER_HEIGHT = 720
 
 
+def cover_dimensions(vid_width: int, vid_height: int) -> tuple[int, int]:
+    """Cover dimensions matching the video's aspect ratio.
+
+    Keeps the YouTube-standard 1280×720 for landscape, 720×1280 for portrait,
+    and ~960×960 for square videos. The pixel area is held roughly constant
+    (≈ a 1280×720 cover) so render cost doesn't balloon across orientations,
+    and each side is snapped to a multiple of 16 for the image model.
+    """
+    if vid_width <= 0 or vid_height <= 0:
+        return COVER_WIDTH, COVER_HEIGHT
+    import math
+    area = COVER_WIDTH * COVER_HEIGHT
+    ratio = vid_width / vid_height
+    h = math.sqrt(area / ratio)
+    w = h * ratio
+    snap = lambda v: max(16, int(round(v / 16)) * 16)
+    return snap(w), snap(h)
+
+
 def shorten_title_for_cover(title: str, max_chars: int = 40) -> str:
     """Return a thumbnail-friendly title: drop subtitle after ':' or '—', then cap length."""
     for sep in (":", "—", " - "):
