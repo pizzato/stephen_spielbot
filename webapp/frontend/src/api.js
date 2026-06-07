@@ -119,6 +119,7 @@ export const api = {
   rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
+  filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
 }
 
 // Build a URL the <img>/<video> tags can load straight from the backend.

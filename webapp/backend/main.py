@@ -2140,6 +2140,11 @@ def queue_from_job(body: FromJobBody) -> dict:
 
 # In-memory background task store for re-render jobs (similar to _upload_tasks)
 _film_tasks: dict = {}
+# Side registry: tid -> {work_dir, scene_id, component}. Set once at task
+# creation and never overwritten by the worker threads (which reassign
+# _film_tasks[tid] wholesale), so it survives long enough to map a running task
+# back to its film when the edit page reloads.
+_film_task_meta: dict = {}
 
 
 def _film_scene_files(work_dir: Path, sid: int) -> dict:
@@ -2607,6 +2612,7 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
 
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": body.component}
 
     if body.component == "narration":
         target = _run_narration_rerender
@@ -2624,6 +2630,28 @@ def film_task_status(task_id: str = Query(...)) -> dict:
     if not task:
         raise HTTPException(404, "Task not found.")
     return {"ok": True, **task}
+
+
+@api.get("/api/films/tasks")
+def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
+    """Running re-render tasks for a film, so the edit page can resume its
+    progress indicators after a reload (the task ids live only in client state
+    otherwise)."""
+    wd = str(Path(work_dir))
+    out = []
+    for tid, meta in list(_film_task_meta.items()):
+        if meta.get("work_dir") != wd:
+            continue
+        task = _film_tasks.get(tid)
+        if not task or task.get("status") != "running":
+            continue
+        out.append({
+            "task_id": tid,
+            "scene_id": meta.get("scene_id"),
+            "component": meta.get("component"),
+            "step": task.get("step", ""),
+        })
+    return {"ok": True, "tasks": out}
 
 
 @api.post("/api/films/delete")
