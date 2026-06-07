@@ -476,6 +476,34 @@ def upload_video(
         return {"video_id": "", "url": "", "error": err_str[:400]}
 
 
+def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str) -> dict:
+    """Replace the thumbnail on an already-uploaded video. Returns {success, error}.
+
+    YouTube allows updating the thumbnail of an existing video in place (unlike
+    the video bytes, which cannot be replaced), so this is how a regenerated
+    cover gets pushed to a published video.
+    """
+    if not video_id:
+        return {"success": False, "error": "Missing video ID."}
+    if not thumbnail_path or not Path(thumbnail_path).exists():
+        return {"success": False, "error": f"Thumbnail not found: {thumbnail_path}"}
+    creds = _load_credentials(client_secrets_path)
+    if not creds:
+        return {"success": False, "error": "Not authenticated. Connect YouTube first."}
+    try:
+        _Creds, _Req, _Flow, build, MediaFileUpload = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        youtube.thumbnails().set(
+            videoId=video_id,
+            media_body=MediaFileUpload(thumbnail_path),
+        ).execute()
+        logger.info("Thumbnail updated for video %s", video_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.exception("Thumbnail update failed")
+        return {"success": False, "error": str(exc)[:400]}
+
+
 # ── Comment replies ───────────────────────────────────────────────────────────
 
 def reply_to_comment(client_secrets_path: str, parent_comment_id: str, text: str) -> dict:
