@@ -12,6 +12,7 @@ Run it from the repo root:
 """
 
 import base64
+import hashlib
 import json
 import re
 import sys
@@ -269,36 +270,53 @@ class VoiceTest(BaseModel):
 @api.post("/api/voices/test")
 def voices_test(body: VoiceTest) -> dict:
     """Synthesize a short sample so the user can audition a voice and dial in the
-    robotic level before committing it to a render. Writes one scratch file in the
-    config dir (served by /api/file) and returns its URL.
+    robotic level. The result is cached by (voice, robotic level, text, reference
+    clip) in the config dir (served by /api/file): replaying the same setup is
+    instant, and re-recording a voice invalidates its cached sample.
 
-    F5-TTS runs synchronously here (a few seconds for one sentence) — the client
-    shows a 'Generating…' state while it waits.
+    On a cache miss F5-TTS runs synchronously (a few seconds for one sentence) —
+    the client shows a 'Generating…' state while it waits.
     """
-    from pipeline.tts_worker import generate_narration
+    from pipeline.tts_worker import generate_narration, DEFAULT_REF
 
     cfg = gapp.load_config()
     voice = (body.voice or "").strip()
     spoken = voice if voice and voice != gapp.F5TTS_DEFAULT_OPTION else "the default narrator"
-    text = (body.text or "").strip() or f"Hi, I am {spoken}, and this is my voice."
+    text = (body.text or "").strip() or "This is the voice of Luiz. What do you think?"
 
     ref_str = gapp.voice_path_for(voice)
     ref = Path(ref_str).expanduser() if ref_str else None
 
     amount = (body.robotic_amount if body.robotic_amount is not None
               else float(cfg.get("default_voice_robotic_amount", 0.35)))
-    tts_hosts = cfg.get("tts_workers") or []
-    tts_host = tts_hosts[0] if tts_hosts else "localhost"
+    robotic = bool(body.robotic)
 
-    out = gapp.CONFIG_FILE.parent / "voice_test.wav"
+    # Content-addressed cache key: a given (voice, robotic level, text, source
+    # clip) always maps to the same file, so F5-TTS never re-runs for a setup
+    # we've already rendered. Folding in the clip's mtime+size means replacing a
+    # voice's reference audio busts its cached sample.
     try:
-        with _track_op("Testing voice", spoken):
-            generate_narration(text, out, reference_wav=ref, host=tts_host,
-                               robotic=bool(body.robotic), robotic_amount=amount)
-    except Exception as e:
-        raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
+        st = (ref or DEFAULT_REF).stat()
+        ref_stamp = f"{st.st_mtime_ns}:{st.st_size}"
+    except OSError:
+        ref_stamp = ""
+    key = hashlib.md5(
+        f"{voice}|{robotic}|{round(amount, 3)}|{text}|{ref_stamp}".encode()
+    ).hexdigest()[:16]
+    out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
-    return {"ok": True, "url": f"/api/file?path={out}&t={int(out.stat().st_mtime)}"}
+    cached = out.exists() and out.stat().st_size > 1000
+    if not cached:
+        tts_hosts = cfg.get("tts_workers") or []
+        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+        try:
+            with _track_op("Testing voice", spoken):
+                generate_narration(text, out, reference_wav=ref, host=tts_host,
+                                   robotic=robotic, robotic_amount=amount)
+        except Exception as e:
+            raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
+
+    return {"ok": True, "url": f"/api/file?path={out}&t={int(out.stat().st_mtime)}", "cached": cached}
 
 
 @api.get("/api/workers/status")
