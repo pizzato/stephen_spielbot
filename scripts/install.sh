@@ -195,6 +195,16 @@ fi
 banner "Setting up web UI"
 "$VENV/bin/pip" install --quiet -r "$REPO_ROOT/webapp/backend/requirements.txt"
 echo "[web] backend deps installed"
+
+# Pre-fetch the engagement-prediction embedding model (~130 MB, BAAI/bge-small-en-v1.5)
+# so the first model build works offline without a surprise download. Non-fatal —
+# fastembed lazy-downloads it on first use anyway if this is skipped.
+echo "[web] pre-fetching engagement embedding model ..."
+if "$VENV/bin/python" -c "from fastembed import TextEmbedding; TextEmbedding(model_name='BAAI/bge-small-en-v1.5')" >/dev/null 2>&1; then
+    echo "[web] embedding model ready"
+else
+    echo "[web] WARNING: could not pre-fetch the embedding model — it will download on first build."
+fi
 if command -v npm &>/dev/null; then
     if ( cd "$REPO_ROOT/webapp/frontend" && npm install && npm run build ); then
         echo "[web] frontend built → webapp/frontend/dist"

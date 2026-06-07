@@ -22,6 +22,7 @@ const ROUTES = {
   queue:    { seg: ['queue'] },
   youtube:  { seg: ['youtube'],  name: true, sub: 'publish' },
   library:  { seg: ['films'] },
+  engagement: { seg: ['engagement'] },
   settings: { seg: ['settings'] },
 }
 
