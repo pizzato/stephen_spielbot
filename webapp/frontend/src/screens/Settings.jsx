@@ -119,6 +119,8 @@ export default function Settings({ meta, setMeta }) {
                 {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
               </select></Field></div>
             </div>
+            <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
+              label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
             <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
             <Field label="Extra script instructions" hint="Appended to every topic.">
               <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />

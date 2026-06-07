@@ -4,6 +4,7 @@ import base64
 import json
 import logging
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -40,6 +41,46 @@ _LOCAL_PYTHON = _find_local_python()
 
 
 _TTS_TIMEOUT = int(os.environ.get("TTS_TIMEOUT", "300"))  # seconds per narration
+
+
+def _resolve_ffmpeg() -> str:
+    """Locate ffmpeg (used for the robotic voice effect)."""
+    found = os.environ.get("FFMPEG_PATH") or shutil.which("ffmpeg")
+    if found:
+        return found
+    for candidate in ("/opt/homebrew/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/usr/bin/ffmpeg"):
+        if Path(candidate).exists():
+            return candidate
+    return "ffmpeg"
+
+
+def _robotize_wav(path: Path) -> None:
+    """Apply a monotone 'robot voice' effect to a narration WAV, in place.
+
+    Zeroes the phase spectrum with ffmpeg's afftfilt — the classic robotization
+    effect — flattening prosody into a buzzy monotone so the voice is clearly
+    synthetic and not mistaken for a human (issue #52), while keeping the words
+    intelligible. Spectral, so it preserves duration: downstream muxing aligns
+    audio to video by length, which must not change.
+    """
+    tmp = path.with_suffix(path.suffix + ".robot.wav")
+    try:
+        subprocess.run(
+            [
+                _resolve_ffmpeg(), "-y", "-hide_banner", "-loglevel", "error",
+                "-i", str(path),
+                "-af", "afftfilt=real='hypot(re,im)*sin(0)':imag='hypot(re,im)*cos(0)':win_size=512:overlap=0.75",
+                "-c:a", "pcm_s16le", str(tmp),
+            ],
+            capture_output=True, text=True, timeout=_TTS_TIMEOUT, check=True,
+        )
+        tmp.replace(path)
+    except subprocess.TimeoutExpired:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("Robotic voice effect timed out")
+    except subprocess.CalledProcessError as e:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(f"Robotic voice effect failed:\n{e.stderr}")
 
 
 def _f5_local(text: str, ref: Path, output_path: Path) -> None:
@@ -99,15 +140,23 @@ def generate_narration(
     output_path: Path,
     reference_wav: Path | None = None,
     host: str = "localhost",
+    robotic: bool = False,
 ) -> Path:
-    """Generate narration audio, running F5-TTS on host (localhost or remote)."""
+    """Generate narration audio, running F5-TTS on host (localhost or remote).
+
+    When robotic is set, post-process the result into a robotic monotone so the
+    voice is not mistaken for a human (issue #52). The effect runs locally on
+    the produced WAV, so remote TTS hosts need no extra tooling.
+    """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
         raise RuntimeError(f"TTS reference audio not found: {ref}")
 
-    logger.info("TTS on %s: %r", host, text[:60])
+    logger.info("TTS on %s%s: %r", host, " (robotic)" if robotic else "", text[:60])
     if host in ("localhost", "127.0.0.1"):
         _f5_local(text, ref, output_path)
     else:
         _f5_remote(text, ref, output_path, host)
+    if robotic:
+        _robotize_wav(output_path)
     return output_path
