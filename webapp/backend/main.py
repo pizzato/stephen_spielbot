@@ -805,16 +805,20 @@ def remix_load(work_dir: str = Query("")) -> dict:
     music = wd / "background_music.wav"
     if not combined.exists() or not music.exists():
         raise HTTPException(404, f"Required files not found in {wd.name}.")
-    candidates = sorted(wd.glob("*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
-    final_vid = next((p for p in candidates if not p.name.startswith("scene_")
-                      and not p.name.startswith("remixed")), combined)
+    # Preview the actual published final (full voice/music/ambient mix) — the
+    # same file Publish reads. Globbing the work dir returned combined.mp4
+    # (narration only, no music) before any remix existed. See issue #14.
+    final_vid = gapp._final_path_for_work_dir(wd)
+    # Default the sliders to the volumes that produced that final (per-film
+    # job_config, then global config) so a no-op re-mix reproduces it.
     cfg = gapp.load_config()
+    jc = _film_job_config(wd)
     return {
         "work_dir": str(wd),
         "final_url": f"/api/file?path={final_vid}",
-        "voice_vol": cfg.get("voice_vol", 100),
-        "music_vol": cfg.get("music_vol", 18),
-        "ambient_vol": cfg.get("ambient_vol", 0),
+        "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
+        "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
+        "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
     }
 
 
