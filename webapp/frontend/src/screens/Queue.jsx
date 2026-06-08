@@ -199,7 +199,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: renderingItems.length ? '1px solid var(--line)' : 'none' }}>
                 <div className="grow">
                   <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{progress.title || 'Rendering'}</div>
-                  <div className="muted mt-8" style={{ fontSize: 12.5 }}>{Math.round(progress.pct || 0)}% · {progress.msg || 'Running'}</div>
+                  <div className="muted mt-8" style={{ fontSize: 12.5 }}>{Math.round(progress.pct || 0)}% · {progress.msg || 'Running'}{progress.eta?.eta_text ? ` · ${progress.eta.eta_text} left` : ''}</div>
                 </div>
                 <Chip tone="info" dot>Rendering</Chip>
                 <Button variant="ghost" icon="gauge-high" onClick={() => go('progress')}>View render</Button>
