@@ -900,18 +900,31 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
 
 # ── Engagement-model training data ────────────────────────────────────────────
 
+_ISO8601_DURATION_RE = re.compile(r"^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$")
+
+
+def _iso8601_duration_seconds(s: str) -> int:
+    """Parse a YouTube ISO-8601 duration like 'PT1M30S' into total seconds (0 if unparseable)."""
+    m = _ISO8601_DURATION_RE.match(s or "")
+    if not m:
+        return 0
+    h, mn, sec = (int(g) if g else 0 for g in m.groups())
+    return h * 3600 + mn * 60 + sec
+
+
 def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list[dict]:
     """Return raw per-video rows for the engagement model (issue #50).
 
     For every upload on the authenticated channel (newest first, up to
     ``max_videos``) returns the title, description, full publish timestamp,
-    privacy status, and a ``{date: views}`` map covering the video's first days.
-    The caller derives day-1/2/3 view counts and decides which rows are usable
-    (public, old enough that analytics have finalised); see
+    privacy status, video duration (seconds), and a ``{date: views}`` map
+    covering the video's first days. The caller derives day-1/2/3 view counts,
+    a Short/long-form flag, and decides which rows are usable (public, old
+    enough to have a complete first-3-day window); see
     ``pipeline.engagement.build_dataset``.
 
     Returns:
-        [{video_id, title, description, published_at, privacy,
+        [{video_id, title, description, published_at, privacy, duration_seconds,
           day_views: {"YYYY-MM-DD": int, ...}}]
 
     Note: the Analytics API omits days with zero views, so an absent date means
@@ -952,12 +965,12 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list
         if not video_ids:
             return []
 
-        # Title + description + publish time + privacy (batched, 50 at a time).
+        # Title + description + publish time + privacy + duration (batched, 50 at a time).
         meta: dict[str, dict] = {}
         for i in range(0, len(video_ids), 50):
             batch = video_ids[i:i + 50]
             vresp = youtube.videos().list(
-                part="snippet,status", id=",".join(batch),
+                part="snippet,status,contentDetails", id=",".join(batch),
             ).execute()
             for v in vresp.get("items", []):
                 snip = v.get("snippet", {})
@@ -967,6 +980,8 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list
                     "description": snip.get("description", ""),
                     "published_at": snip.get("publishedAt", ""),
                     "privacy": v.get("status", {}).get("privacyStatus", ""),
+                    "duration_seconds": _iso8601_duration_seconds(
+                        v.get("contentDetails", {}).get("duration", "")),
                     "day_views": {},
                 }
 

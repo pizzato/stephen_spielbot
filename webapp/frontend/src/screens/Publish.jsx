@@ -91,7 +91,9 @@ export default function Publish({ initialWorkDir, go }) {
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
       setBestTimes(null)
-      api.engagementBestTimes({ title: p.title || '', description: p.description || '' })
+      // A portrait film is a Short — the timing model weighs that differently.
+      const isShort = !!(p.vid_width && p.vid_height && Number(p.vid_height) > Number(p.vid_width))
+      api.engagementBestTimes({ title: p.title || '', description: p.description || '', is_short: isShort })
         .then(setBestTimes).catch(() => {})
     } catch (e) { setError(e.message) }
   }
