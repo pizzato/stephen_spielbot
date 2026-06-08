@@ -159,6 +159,7 @@ const NAV = [
   { sep: true },
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'youtube', label: 'YouTube', icon: 'youtube', brand: true },
+  { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },
   { id: 'engagement', label: 'Engagement', icon: 'chart-line' },
   { sep: true },
