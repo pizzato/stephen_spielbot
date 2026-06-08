@@ -96,6 +96,40 @@ def _scene_value(scene: Any, key: str, default: Any = None) -> Any:
     return getattr(scene, key, default)
 
 
+# Task kinds whose run durations we learn, to predict render ETA.  Maps the
+# orchestrator task ``kind`` to a short, stable label used as the timing key.
+TIMING_KIND_LABELS = {
+    "scene.image.generate": "image",
+    "scene.video.generate": "video",
+    "scene.narration.generate": "narration",
+    "music.generate": "music",
+    "scene.video.mux": "mux",
+    "video.finalize": "finalize",
+}
+
+# Labels whose duration depends on output resolution (the rest are flat).
+TIMING_RES_SENSITIVE = {"image", "video", "finalize"}
+
+
+def timing_signature(kind: str, payload: dict[str, Any] | None) -> str | None:
+    """Stable key grouping "similar setup" tasks for duration learning.
+
+    Resolution-sensitive kinds (image/video/finalize) are keyed by output
+    dimensions, so an FHD scene and an SD scene are learned separately — that
+    distinction is what drives render time.  Returns ``None`` for kinds we
+    don't predict (e.g. the synthetic ``story.ready`` marker).
+    """
+    label = TIMING_KIND_LABELS.get(kind)
+    if label is None:
+        return None
+    if label in TIMING_RES_SENSITIVE:
+        payload = payload or {}
+        w, h = payload.get("vid_width"), payload.get("vid_height")
+        res = f"{int(w)}x{int(h)}" if w and h else "unknown"
+        return f"{label}|{res}"
+    return label
+
+
 def _file_checksum(path: Path) -> str:
     h = hashlib.sha256()
     with path.open("rb") as fh:
@@ -235,6 +269,18 @@ class DurableStore:
                     message TEXT NOT NULL,
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at REAL NOT NULL
+                );
+
+                -- Learned per-task-kind durations, used to predict render ETA.
+                -- One row per "signature" (e.g. "video|1920x1080"); avg_seconds
+                -- is a running mean that adapts to the current cluster.
+                CREATE TABLE IF NOT EXISTS timing_stats (
+                    signature TEXT PRIMARY KEY,
+                    kind TEXT NOT NULL,
+                    sample_count INTEGER NOT NULL DEFAULT 0,
+                    avg_seconds REAL NOT NULL DEFAULT 0,
+                    last_seconds REAL,
+                    updated_at REAL NOT NULL
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_tasks_job_status
@@ -951,6 +997,10 @@ class DurableStore:
     ) -> None:
         ts = now_ts()
         with self._lock:
+            prior = self._conn.execute(
+                "SELECT kind, payload_json, started_at, attempt FROM tasks WHERE id=?",
+                (task_id_value,),
+            ).fetchone()
             self._conn.execute(
                 """
                 UPDATE tasks
@@ -968,6 +1018,93 @@ class DurableStore:
                     task_id_value,
                 ),
             )
+            if prior is not None:
+                self._learn_timing_from_completion(prior, ts)
+
+    # ── timing learning (render-ETA prediction) ──────────────────────────────
+
+    # Ignore samples outside this range: sub-second completions are skips/no-ops
+    # and multi-hour ones are almost certainly clock skew or a hung lease.
+    _TIMING_MIN_SECONDS = 0.75
+    _TIMING_MAX_SECONDS = 6 * 3600.0
+
+    def _learn_timing_from_completion(self, row: sqlite3.Row, finished_at: float) -> None:
+        """Record a duration sample from a just-completed task row.
+
+        Only clean, first-attempt successes with a real ``started_at`` feed the
+        model, so skipped tasks (no start) and retry-spanning durations don't
+        pollute the averages.  Never raises — timing is best-effort bookkeeping.
+        """
+        try:
+            started_at = row["started_at"]
+            if started_at is None or int(row["attempt"] or 0) > 1:
+                return
+            elapsed = float(finished_at) - float(started_at)
+            if not (self._TIMING_MIN_SECONDS <= elapsed <= self._TIMING_MAX_SECONDS):
+                return
+            sig = timing_signature(row["kind"], json_loads(row["payload_json"]))
+            if sig is None:
+                return
+            self._record_timing_sample(sig, row["kind"], elapsed, finished_at)
+        except Exception:
+            pass
+
+    def _record_timing_sample(
+        self, signature: str, kind: str, seconds: float, ts: float
+    ) -> None:
+        # Caller must hold ``self._lock``.  Running mean that behaves as a true
+        # average for the first few samples then settles into a light EMA so it
+        # tracks the current cluster's hardware rather than ancient runs.
+        existing = self._conn.execute(
+            "SELECT sample_count, avg_seconds FROM timing_stats WHERE signature=?",
+            (signature,),
+        ).fetchone()
+        if existing is None:
+            self._conn.execute(
+                """
+                INSERT INTO timing_stats
+                    (signature, kind, sample_count, avg_seconds, last_seconds, updated_at)
+                VALUES (?, ?, 1, ?, ?, ?)
+                """,
+                (signature, kind, seconds, seconds, ts),
+            )
+            return
+        count = int(existing["sample_count"])
+        alpha = max(1.0 / (count + 1), 0.25)
+        new_avg = (1.0 - alpha) * float(existing["avg_seconds"]) + alpha * seconds
+        self._conn.execute(
+            """
+            UPDATE timing_stats
+            SET sample_count=?, avg_seconds=?, last_seconds=?, updated_at=?
+            WHERE signature=?
+            """,
+            (count + 1, new_avg, seconds, ts, signature),
+        )
+
+    def record_timing_sample(
+        self, kind: str, payload: dict[str, Any], seconds: float
+    ) -> None:
+        """Public hook to feed a duration sample (used by tests/external paths)."""
+        sig = timing_signature(kind, payload)
+        if sig is None or seconds <= 0:
+            return
+        with self._lock:
+            self._record_timing_sample(sig, kind, float(seconds), now_ts())
+
+    def timing_table(self) -> dict[str, dict[str, Any]]:
+        """Learned durations: {signature: {kind, avg_seconds, sample_count}}."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT signature, kind, sample_count, avg_seconds FROM timing_stats",
+            ).fetchall()
+        return {
+            r["signature"]: {
+                "kind": r["kind"],
+                "avg_seconds": float(r["avg_seconds"]),
+                "sample_count": int(r["sample_count"]),
+            }
+            for r in rows
+        }
 
     def fail_task(
         self,

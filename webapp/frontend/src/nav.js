@@ -21,6 +21,7 @@ const ROUTES = {
   editfilm: { seg: ['edit'],     name: true },
   queue:    { seg: ['queue'] },
   youtube:  { seg: ['youtube'],  name: true, sub: 'publish' },
+  ideas:    { seg: ['ideas'] },
   library:  { seg: ['films'] },
   engagement: { seg: ['engagement'] },
   settings: { seg: ['settings'] },
