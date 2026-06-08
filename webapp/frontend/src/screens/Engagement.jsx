@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Button, Icon, Banner, ProgressBar, Chip } from '../components.jsx'
+import { Card, Field, Button, Segmented, Icon, Banner, ProgressBar, Chip } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -73,9 +73,10 @@ export default function Engagement() {
   const [note, setNote] = useState('')
   const pollRef = useRef(null)
 
-  // try-an-idea predictor
+  // try-an-idea predictor (live — estimates as you type)
   const [tTitle, setTTitle] = useState('')
   const [tDesc, setTDesc] = useState('')
+  const [tShort, setTShort] = useState(false)
   const [pred, setPred] = useState(null)
   const [predicting, setPredicting] = useState(false)
 
@@ -105,11 +106,16 @@ export default function Engagement() {
     } catch (e) { setError(e.message) } finally { setBuilding(false); setPhase('') }
   }
 
-  const tryIt = async () => {
-    setPredicting(true); setPred(null); setError('')
-    try { setPred(await api.engagementPredict({ title: tTitle, description: tDesc })) }
-    catch (e) { setError(e.message) } finally { setPredicting(false) }
-  }
+  // Live estimate — debounced so it fires once typing settles (the model is fast).
+  useEffect(() => {
+    if (!tTitle.trim() && !tDesc.trim()) { setPred(null); setPredicting(false); return }
+    setPredicting(true)
+    const t = setTimeout(() => {
+      api.engagementPredict({ title: tTitle, description: tDesc, is_short: tShort })
+        .then(setPred).catch(() => setPred(null)).finally(() => setPredicting(false))
+    }, 400)
+    return () => clearTimeout(t)
+  }, [tTitle, tDesc, tShort])
 
   const available = status?.available
   const content = status?.content
@@ -120,7 +126,7 @@ export default function Engagement() {
     <div>
       <div className="page-head">
         <div className="page-head__intro">
-          <span className="label-sm reveal">Engagement</span>
+          <span className="label-sm reveal">Predictive Model</span>
           <h1 className="display-md reveal reveal-d1">Predict a video's reach</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
@@ -155,7 +161,7 @@ export default function Engagement() {
               <div style={{ fontWeight: 600, fontSize: 15 }}>No model yet</div>
               <p className="muted" style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 640 }}>
                 {status?.needs_rebuild
-                  ? 'A model exists but was built with a different scikit-learn version. Rebuild it to use predictions again.'
+                  ? 'A model exists but is out of date (different library version or feature set). Rebuild it to use predictions again.'
                   : "Build a model from your channel's history to estimate how many views a new idea will get in its first 3 days. Predictions then appear on the Create screen and on YouTube ideas, with posting-time guidance on the Publish screen."}
               </p>
             </div>
@@ -194,8 +200,11 @@ export default function Engagement() {
           </Card>
 
           <Card span={6} className="reveal reveal-d2">
-            <div style={{ fontWeight: 600, marginBottom: 10 }}>Try an idea</div>
-            <div className="stack gap-10">
+            <div className="row center between">
+              <div style={{ fontWeight: 600 }}>Try an idea</div>
+              {predicting && <span className="muted" style={{ fontSize: 11 }}><Icon name="spinner" spin /> estimating…</span>}
+            </div>
+            <div className="stack gap-10" style={{ marginTop: 10 }}>
               <Field label="Title">
                 <input className="input" placeholder="The rise and fall of the Roman Empire"
                   value={tTitle} onChange={(e) => setTTitle(e.target.value)} />
@@ -203,9 +212,10 @@ export default function Engagement() {
               <Field label="Description" hint="Optional — the angle or focus.">
                 <textarea className="textarea" rows={2} value={tDesc} onChange={(e) => setTDesc(e.target.value)} />
               </Field>
-              <Button variant="primary" icon="bolt" disabled={predicting || !tTitle.trim()} onClick={tryIt}>
-                {predicting ? 'Estimating…' : 'Estimate 3-day views'}
-              </Button>
+              <Field label="Format" hint="Shorts and long-form get very different reach.">
+                <Segmented value={tShort ? 'short' : 'long'} onChange={(v) => setTShort(v === 'short')}
+                  options={[{ value: 'long', label: 'Long-form' }, { value: 'short', label: 'Short' }]} />
+              </Field>
               {pred && pred.available && (
                 <div className="row center gap-10" style={{ padding: '12px 14px', background: 'var(--accent-soft)', borderRadius: 'var(--r-md)' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--accent)' }}>{fmtNum(pred.predicted_views)}</div>
@@ -219,8 +229,8 @@ export default function Engagement() {
           <Card span={12} well className="reveal reveal-d3">
             <div className="row center between row--wrap gap-10" style={{ fontSize: 12.5 }}>
               <span className="muted">
-                Built {fmtDate(status.built_at)} · embeddings: {status.embed_model} ·
-                videos newer than {status.data_lag_days} days excluded (analytics not finalised)
+                Built {fmtDate(status.built_at)} · embeddings: {status.embed_model} · {status.n_short ?? 0} of {status.n_samples} Shorts ·
+                videos newer than {status.data_lag_days} days excluded (no full 3-day window yet)
               </span>
               <span className="muted">
                 Timing model correlation: {status.timing?.pearson != null ? status.timing.pearson.toFixed(2) : '—'} · drives the Publish tab's best-time guidance

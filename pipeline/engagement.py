@@ -1,18 +1,22 @@
 """Engagement prediction (issue #50).
 
-Estimates a video's first-3-day view count from its title + description, trained
+Estimates a video's first-3-day view count from its title + description plus a
+few structural features (currently whether it's a Short vs long-form), trained
 on the channel's own YouTube history. Title+description are embedded with
-``BAAI/bge-small-en-v1.5`` (via fastembed / ONNX — no torch) and fed to a Ridge
-regressor. A second model adds post weekday + hour to suggest *when* to publish.
+``BAAI/bge-small-en-v1.5`` (via fastembed / ONNX — no torch), concatenated with
+the structural features, and fed to a Ridge regressor. A second model adds post
+weekday + hour to suggest *when* to publish.
 
 Two design notes that keep the numbers honest:
   * Target = sum of views over the first 3 *calendar* days (UTC) after publish.
     A late-day upload gets a short calendar day-1; the timing model's hour
     feature absorbs that effect, so the content/timing models are not strictly
     apples-to-apples (surfaced in the eval UI).
-  * The YouTube Analytics API finalises a day's views ~2-3 days late, so videos
-    younger than ``engagement_data_lag_days`` (default 5) are excluded from
-    training — otherwise their day-3 labels would be truncated.
+  * A video needs a full first-3-day calendar window to have a label, so ones
+    younger than ``engagement_data_lag_days`` (default 3) are excluded. The
+    Analytics API finalises a day's views ~2-3 days late, so the freshest
+    included videos may have slightly under-counted 3-day totals — accepted to
+    keep recent uploads in the training set.
 
 Heavy deps (numpy, scikit-learn, fastembed) are imported lazily inside functions
 so importing this module — and the FastAPI backend / test suite that import it —
@@ -44,7 +48,9 @@ _METRICS_PATH = _ENG_DIR / "metrics.json"
 
 _DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_MIN_SAMPLES = 15
-_DEFAULT_LAG_DAYS = 5
+_DEFAULT_LAG_DAYS = 3
+_DEFAULT_SHORT_MAX_SECONDS = 180  # videos this long (s) or shorter count as a Short
+_FEATURE_VERSION = 2              # bump when the feature set changes (forces a rebuild)
 
 # Warm, process-local state so predict()/best_times() are fast. Guarded by _lock;
 # reloaded from disk when metrics.json changes (a fresh build needs no restart).
@@ -147,14 +153,25 @@ def _embed(texts: list[str]):
     return np.vstack(out)
 
 
-def _timing_features(np, emb, weekdays, hours):
-    """Concatenate embeddings with one-hot weekday[7] + cyclical hour sin/cos[2]."""
+def _short_column(np, shorts):
+    """The binary is-Short feature as an (n, 1) float column."""
+    return np.asarray(shorts, dtype=np.float32).reshape(-1, 1)
+
+
+def _content_features(np, emb, shorts):
+    """Embeddings concatenated with the binary is-Short flag."""
+    return np.hstack([emb, _short_column(np, shorts)]).astype(np.float32)
+
+
+def _timing_features(np, emb, weekdays, hours, shorts):
+    """Concatenate embeddings with one-hot weekday[7] + cyclical hour sin/cos[2]
+    + the binary is-Short flag."""
     weekdays = np.asarray(weekdays, dtype=int)
     hours = np.asarray(hours, dtype=float)
     wd = np.eye(7, dtype=np.float32)[weekdays]
     hsin = np.sin(2 * np.pi * hours / 24.0).reshape(-1, 1)
     hcos = np.cos(2 * np.pi * hours / 24.0).reshape(-1, 1)
-    return np.hstack([emb, wd, hsin, hcos]).astype(np.float32)
+    return np.hstack([emb, wd, hsin, hcos, _short_column(np, shorts)]).astype(np.float32)
 
 
 # ── dataset ───────────────────────────────────────────────────────────────────
@@ -163,13 +180,15 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
     """Fetch channel history and turn it into training rows.
 
     Returns ``(dataset, n_dropped)`` where each row is
-    ``{video_id, title, description, views, weekday, hour}`` and ``views`` is the
-    first-3-calendar-day total. Drops non-public videos and ones too recent for
-    finalised analytics.
+    ``{video_id, title, description, views, weekday, hour, is_short}`` and
+    ``views`` is the first-3-calendar-day total. ``is_short`` flags videos whose
+    duration is ``<= engagement_short_max_seconds``. Drops non-public videos and
+    ones too recent to have a full 3-day window.
     """
     import datetime
     cfg = _load_cfg()
     lag = int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS))
+    short_max = int(cfg.get("engagement_short_max_seconds", _DEFAULT_SHORT_MAX_SECONDS))
     cutoff = datetime.date.today() - datetime.timedelta(days=lag)
     rows = yt.fetch_training_rows(client_secrets_path)
     dataset: list[dict] = []
@@ -185,7 +204,7 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
             dropped += 1
             continue
         pub = dt.date()
-        if pub > cutoff:   # too recent — day-3 views not finalised yet
+        if pub > cutoff:   # too recent — no complete 3-day window yet
             dropped += 1
             continue
         dv = r.get("day_views") or {}
@@ -193,6 +212,7 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
             int(dv.get((pub + datetime.timedelta(days=k)).isoformat(), 0) or 0)
             for k in range(3)
         )
+        dur = int(r.get("duration_seconds") or 0)
         dataset.append({
             "video_id": r.get("video_id", ""),
             "title": r.get("title", ""),
@@ -200,6 +220,7 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
             "views": int(views),
             "weekday": dt.weekday(),   # Mon=0 .. Sun=6 (UTC)
             "hour": dt.hour,           # 0..23 (UTC)
+            "is_short": 1 if 0 < dur <= short_max else 0,
         })
     return dataset, dropped
 
@@ -293,7 +314,7 @@ def build(client_secrets_path: str, on_phase=None) -> dict:
     n = len(dataset)
     if n < 2:
         return {"available": False, "n_samples": n, "n_dropped": dropped,
-                "error": "Not enough public videos with finalised 3-day analytics "
+                "error": "Not enough public videos with a complete first-3-day window "
                          "to train a model. Publish a few more, then rebuild."}
 
     m = _ml()
@@ -303,18 +324,22 @@ def build(client_secrets_path: str, on_phase=None) -> dict:
     phase("embedding")
     emb = _embed([_text(d["title"], d["description"]) for d in dataset])
     y = np.log1p(np.array([d["views"] for d in dataset], dtype=float))
-    Xt = _timing_features(np, emb, [d["weekday"] for d in dataset], [d["hour"] for d in dataset])
+    shorts = [d["is_short"] for d in dataset]
+    Xc = _content_features(np, emb, shorts)
+    Xt = _timing_features(np, emb, [d["weekday"] for d in dataset], [d["hour"] for d in dataset], shorts)
 
     phase("training")
-    content = _fit_pipeline(m, emb, y)
+    content = _fit_pipeline(m, Xc, y)
     timing = _fit_pipeline(m, Xt, y)
-    metrics = _evaluate(m, emb, Xt, y, dataset, n,
+    metrics = _evaluate(m, Xc, Xt, y, dataset, n,
                         dropped, int(cfg.get("engagement_min_samples", _DEFAULT_MIN_SAMPLES)))
     metrics.update({
         "built_at": time.time(),
         "sklearn_version": m.sklearn_version,
+        "feature_version": _FEATURE_VERSION,
         "embed_model": cfg.get("engagement_embed_model", _DEFAULT_EMBED_MODEL),
         "data_lag_days": int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS)),
+        "n_short": int(sum(shorts)),
     })
 
     _ENG_DIR.mkdir(parents=True, exist_ok=True)
@@ -356,6 +381,11 @@ def _get_models():
                            metrics.get("sklearn_version"), cur)
             _state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
             return None, None, metrics
+        if metrics.get("feature_version") != _FEATURE_VERSION:
+            logger.warning("Engagement model uses feature set v%s but v%s is current; rebuild needed",
+                           metrics.get("feature_version"), _FEATURE_VERSION)
+            _state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
+            return None, None, metrics
         try:
             with open(_CONTENT_PATH, "rb") as f:
                 content = pickle.load(f)
@@ -379,16 +409,18 @@ def status() -> dict:
     return res
 
 
-def predict(title: str, description: str) -> dict:
-    """Estimate first-3-day views for an idea. Never raises — returns
-    ``{"available": False}`` when no usable model exists (the common case on the
-    create screens before a model is built)."""
+def predict(title: str, description: str, is_short: bool = False) -> dict:
+    """Estimate first-3-day views for an idea. ``is_short`` flags a Short vs a
+    long-form video. Never raises — returns ``{"available": False}`` when no
+    usable model exists (the common case on the create screens before a model is
+    built)."""
     try:
         content, _timing, metrics = _get_models()
         if content is None:
             return {"available": False}
         import numpy as np
-        pred = float(np.clip(np.expm1(content.predict(_embed([_text(title, description)]))), 0, None)[0])
+        X = _content_features(np, _embed([_text(title, description)]), [1 if is_short else 0])
+        pred = float(np.clip(np.expm1(content.predict(X)), 0, None)[0])
         return {"available": True, "predicted_views": int(round(pred)),
                 "reliability": metrics.get("reliability", "weak"),
                 "n_samples": metrics.get("n_samples", 0)}
@@ -397,9 +429,10 @@ def predict(title: str, description: str) -> dict:
         return {"available": False, "error": str(exc)[:200]}
 
 
-def best_times(title: str, description: str, top_k: int = 5) -> dict:
+def best_times(title: str, description: str, is_short: bool = False, top_k: int = 5) -> dict:
     """Score every (weekday, hour) slot with the timing model and return the
-    top-k plus the full 7x24 grid (for a heatmap). Advisory only."""
+    top-k plus the full 7x24 grid (for a heatmap). ``is_short`` flags a Short vs
+    a long-form video. Advisory only."""
     try:
         _content, timing, metrics = _get_models()
         if timing is None:
@@ -408,7 +441,8 @@ def best_times(title: str, description: str, top_k: int = 5) -> dict:
         emb = _embed([_text(title, description)])
         weekdays = [wd for wd in range(7) for _ in range(24)]
         hours = [h for _ in range(7) for h in range(24)]
-        X = _timing_features(np, np.repeat(emb, len(weekdays), axis=0), weekdays, hours)
+        shorts = [1 if is_short else 0] * len(weekdays)
+        X = _timing_features(np, np.repeat(emb, len(weekdays), axis=0), weekdays, hours, shorts)
         preds = np.clip(np.expm1(timing.predict(X)), 0, None)
         grid = [{"weekday": weekdays[i], "hour": hours[i], "predicted_views": int(round(float(preds[i])))}
                 for i in range(len(weekdays))]

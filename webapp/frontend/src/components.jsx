@@ -161,7 +161,7 @@ const NAV = [
   { id: 'youtube', label: 'YouTube', icon: 'youtube', brand: true },
   { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },
-  { id: 'engagement', label: 'Engagement', icon: 'chart-line' },
+  { id: 'engagement', label: 'Predictive Model', icon: 'chart-line' },
   { sep: true },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
