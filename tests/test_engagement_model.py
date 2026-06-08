@@ -31,7 +31,7 @@ def _synthetic(n, signal=True, seed=0):
     views = np.clip(np.expm1(3.0 + 1.2 * base), 0, None).round().astype(int)
     dataset = [
         {"video_id": f"v{i}", "title": f"title {i}", "description": "",
-         "views": int(views[i]), "weekday": i % 7, "hour": i % 24}
+         "views": int(views[i]), "weekday": i % 7, "hour": i % 24, "is_short": i % 2}
         for i in range(n)
     ]
     return dataset, emb
