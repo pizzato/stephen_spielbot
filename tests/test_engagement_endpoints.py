@@ -53,7 +53,7 @@ class EngagementEndpointTests(unittest.TestCase):
                                return_value={"available": False}) as p:
             out = backend.engagement_predict(backend.EngagementBody(title="x", description="y"))
         self.assertEqual(out, {"available": False})
-        p.assert_called_once_with("x", "y")
+        p.assert_called_once_with("x", "y", False)
 
 
 if __name__ == "__main__":

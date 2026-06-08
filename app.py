@@ -179,6 +179,7 @@ DEFAULT_CFG = {
     "engagement_embed_model": "BAAI/bge-small-en-v1.5",  # fastembed text-embedding model
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
     "engagement_data_lag_days": 3,       # exclude videos newer than this (no full 3-day window yet)
+    "engagement_short_max_seconds": 180, # videos this long (s) or shorter count as a Short
 }
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"

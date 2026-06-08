@@ -71,15 +71,16 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [meta.config?.default_visual_style])
 
   // Estimate the idea's 3-day reach (debounced). Silently no-ops when no model
-  // has been built — the card simply doesn't render. (issue #50)
+  // has been built — the card simply doesn't render. A portrait resolution means
+  // a Short, which the model weighs differently. (issue #50)
   useEffect(() => {
     if (!videoTitle.trim() && !direction.trim()) { setReach(null); return }
     const t = setTimeout(() => {
-      api.engagementPredict({ title: videoTitle, description: direction })
+      api.engagementPredict({ title: videoTitle, description: direction, is_short: resolution.startsWith('Portrait') })
         .then(setReach).catch(() => setReach(null))
     }, 600)
     return () => clearTimeout(t)
-  }, [videoTitle, direction])
+  }, [videoTitle, direction, resolution])
 
   const generate = async () => {
     setBusy(true); setError('')

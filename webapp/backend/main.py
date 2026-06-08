@@ -3283,6 +3283,7 @@ _engagement_tasks: dict = {}
 class EngagementBody(BaseModel):
     title: str = ""
     description: str = ""
+    is_short: bool = False
 
 
 def _run_engagement_build(task_id: str) -> None:
@@ -3332,12 +3333,12 @@ def engagement_status() -> dict:
 
 @api.post("/api/engagement/predict")
 def engagement_predict(body: EngagementBody) -> dict:
-    return eng.predict(body.title, body.description)
+    return eng.predict(body.title, body.description, body.is_short)
 
 
 @api.post("/api/engagement/best-times")
 def engagement_best_times(body: EngagementBody) -> dict:
-    return eng.best_times(body.title, body.description)
+    return eng.best_times(body.title, body.description, body.is_short)
 
 
 # ── file serving (videos, previews, covers) ──────────────────────────────────
