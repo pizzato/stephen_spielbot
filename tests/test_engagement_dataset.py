@@ -32,7 +32,7 @@ class BuildDatasetTests(unittest.TestCase):
                 "published_at": "2024-03-15T10:00:00Z", "privacy": "private",
                 "day_views": {"2024-03-15": 999},
             },
-            {  # dropped: too recent (within the 5-day analytics lag)
+            {  # dropped: too recent (no full 3-day window yet)
                 "video_id": "new", "title": "fresh", "description": "",
                 "published_at": _recent_iso(2), "privacy": "public",
                 "day_views": {},
