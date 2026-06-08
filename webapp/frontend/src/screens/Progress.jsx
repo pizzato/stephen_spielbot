@@ -31,6 +31,8 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
   const tasks = p?.tasks || []
   const counts = p?.counts || {}
   const title = p?.title || job?.title || 'Rendering'
+  const eta = p?.eta
+  const fmtSecs = (s) => (s < 90 ? `${Math.round(s)}s` : `${Math.round(s / 60)} min`)
 
   const doAction = async (fn) => {
     setAction('busy'); setError('')
@@ -50,6 +52,7 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
               setAction('script'); setError('')
               try { await onOpenScript(p?.work_dir || workDir) } catch (e) { setError(e.message); setAction('') }
             }}>{action === 'script' ? 'Opening…' : 'Edit script'}</Button>
+          {!done && eta?.eta_text && <Chip tone="accent" dot>{eta.eta_text} left</Chip>}
           {done ? <Chip tone="ok" dot>Done</Chip> : <Chip tone="info" dot>{Math.round(pct)}%</Chip>}
         </div>
       </div>
@@ -90,6 +93,41 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
         </Card>
 
         <div className="col-4 stack gap-16">
+          {!done && eta && (
+            <Card className="reveal reveal-d1">
+              <div className="row center between">
+                <span className="label-sm">Time estimate</span>
+                {eta.confidence === 'rough'
+                  ? <Chip tone="warn" dot>rough</Chip>
+                  : <Chip tone="ok" dot>learned</Chip>}
+              </div>
+              <div className="row center gap-10 mt-16" style={{ alignItems: 'baseline' }}>
+                <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>{eta.eta_text}</span>
+                <span className="muted" style={{ fontSize: 13 }}>remaining</span>
+              </div>
+              <div className="muted mono mt-8" style={{ fontSize: 11 }}>
+                full render {eta.total_text} · {eta.workers.comfy}× comfy · {eta.workers.tts}× tts
+              </div>
+              {eta.confidence === 'rough' && (
+                <div className="muted mt-8" style={{ fontSize: 11.5 }}>
+                  First render builds the timing table — estimates sharpen next time.
+                </div>
+              )}
+              <div className="stack gap-6 mt-16">
+                {(eta.table || []).map((r, i) => (
+                  <div key={i} className="row center between" style={{ fontSize: 12.5 }}>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      {r.label}{r.estimated ? <span className="muted"> · est</span> : null}
+                    </span>
+                    <span className="muted mono" style={{ whiteSpace: 'nowrap', paddingLeft: 8 }}>
+                      {fmtSecs(r.seconds)}{r.count > 1 ? ` ×${r.count}` : ''}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
           <Card className="reveal reveal-d2">
             <span className="label-sm">Workers</span>
             <div className="stack gap-10 mt-16">

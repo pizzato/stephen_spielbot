@@ -41,6 +41,7 @@ import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
+from pipeline.timing import estimate_eta  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -840,7 +841,7 @@ def progress(work_dir: str = Query("")) -> dict:
     done = final_path.exists() and final_path.stat().st_size > 10_000 and combined.exists()
     cover = wd / "cover.png"
 
-    tasks, workers, counts, job = [], [], {}, None
+    tasks, workers, counts, job, eta = [], [], {}, None, None
     store = DurableStore.default()
     try:
         job_row = store.get_job_by_work_dir(str(wd))
@@ -855,6 +856,11 @@ def progress(work_dir: str = Query("")) -> dict:
             cfg = gapp.load_config()
             workers = [w for w in (_row_to_dict(r) for r in store.worker_rows())
                        if _worker_in_config(w, cfg)]
+            if not done:
+                try:
+                    eta = estimate_eta(tasks, store.timing_table(), cfg)
+                except Exception:
+                    eta = None
     except Exception:
         pass
     finally:
@@ -869,6 +875,7 @@ def progress(work_dir: str = Query("")) -> dict:
         "title": title,
         "status": (job or {}).get("status", ""),
         "tasks": tasks, "workers": workers, "counts": counts,
+        "eta": eta,
     }
 
 
