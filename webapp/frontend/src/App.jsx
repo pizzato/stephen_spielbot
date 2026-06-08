@@ -9,6 +9,7 @@ import Progress from './screens/Progress.jsx'
 import Remix from './screens/Remix.jsx'
 import Queue from './screens/Queue.jsx'
 import YouTube from './screens/YouTube.jsx'
+import Ideas from './screens/Ideas.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
 import Engagement from './screens/Engagement.jsx'
@@ -195,7 +196,8 @@ export default function App() {
       case 'progress': return <Progress workDir={workDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'remix': return <Remix workDir={workDir} go={go} />
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />
-      case 'youtube': return <YouTube go={go} initial={ytInitial} meta={meta} />
+      case 'youtube': return <YouTube go={go} initial={ytInitial} />
+      case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />
       case 'engagement': return <Engagement meta={meta} go={go} />
