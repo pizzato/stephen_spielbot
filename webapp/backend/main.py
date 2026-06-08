@@ -2838,8 +2838,20 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
 
 
+def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
+    """True only if *path* is a readable image with exactly width×height pixels."""
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            return img.size == (width, height)
+    except Exception:
+        return False
+
+
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
-    """Background thread: re-render image → video → mux."""
+    """Background thread: re-render video from the existing first frame → mux.
+
+    Reuses the already-made first frame; only regenerates it when none is usable."""
     from pipeline.assembler import mux_video_audio, _get_duration
     from pipeline.comfyui import generate_scene_image, ltx_dimensions
     from pipeline.llm import Scene
@@ -2871,22 +2883,38 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
         vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
 
-        _film_tasks[task_id] = {"status": "running", "step": "image"}
-        url = pool.acquire()
-        try:
-            generate_scene_image(
-                image_prompt or row.get("title") or f"Scene {sid}",
-                first_frame,
-                width=vid_w, height=vid_h,
-                steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
-                flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-                clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-                clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
-                flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
-                comfy_url=url,
-            )
-        finally:
-            pool.release(url)
+        # Reuse the already-made first frame instead of regenerating it. Prefer the
+        # image the edit screen shows (preview_path), then any on-disk frame matching
+        # the render resolution; only regenerate when none is usable.
+        scene_first_frame = None
+        candidates = []
+        pv = (row.get("preview_path") or "").strip()
+        if pv:
+            candidates.append(Path(pv))
+        candidates += [wd / f"scene_{sid:02d}_preview.png", first_frame]
+        for p in candidates:
+            if p.exists() and _image_matches_resolution(p, vid_w, vid_h):
+                scene_first_frame = p
+                break
+
+        if scene_first_frame is None:
+            _film_tasks[task_id] = {"status": "running", "step": "image"}
+            url = pool.acquire()
+            try:
+                generate_scene_image(
+                    image_prompt or row.get("title") or f"Scene {sid}",
+                    first_frame,
+                    width=vid_w, height=vid_h,
+                    steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
+                    flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                    clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                    clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
+                    flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                    comfy_url=url,
+                )
+            finally:
+                pool.release(url)
+            scene_first_frame = first_frame
 
         # Determine narration duration from existing narration wav
         narration_path = wd / f"scene_{sid:02d}_narration.wav"
@@ -2913,7 +2941,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
                 float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
                 int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
                 url,
-                first_frame if first_frame.exists() else None,
+                scene_first_frame if scene_first_frame.exists() else None,
                 {
                     "model": jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
                     "clip_t5": jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -2984,8 +3012,9 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
             (wd / f).unlink(missing_ok=True)
     elif body.component == "video":
+        # Keep the existing first frame — re-rendering video reuses it, doesn't
+        # regenerate it. Only clear the video clips and muxed output.
         for f in [
-            f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png",
             f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
             f"scene_{sid:02d}_clip_02.mp4", f"scene_{sid:02d}_final.mp4",
         ]:
