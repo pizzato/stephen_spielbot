@@ -120,7 +120,7 @@ export default function Engagement() {
     <div>
       <div className="page-head">
         <div className="page-head__intro">
-          <span className="label-sm reveal">Engagement</span>
+          <span className="label-sm reveal">Predictive Model</span>
           <h1 className="display-md reveal reveal-d1">Predict a video's reach</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
@@ -220,7 +220,7 @@ export default function Engagement() {
             <div className="row center between row--wrap gap-10" style={{ fontSize: 12.5 }}>
               <span className="muted">
                 Built {fmtDate(status.built_at)} · embeddings: {status.embed_model} ·
-                videos newer than {status.data_lag_days} days excluded (analytics not finalised)
+                videos newer than {status.data_lag_days} days excluded (no full 3-day window yet)
               </span>
               <span className="muted">
                 Timing model correlation: {status.timing?.pearson != null ? status.timing.pearson.toFixed(2) : '—'} · drives the Publish tab's best-time guidance

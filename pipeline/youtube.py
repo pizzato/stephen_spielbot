@@ -907,7 +907,7 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list
     ``max_videos``) returns the title, description, full publish timestamp,
     privacy status, and a ``{date: views}`` map covering the video's first days.
     The caller derives day-1/2/3 view counts and decides which rows are usable
-    (public, old enough that analytics have finalised); see
+    (public, old enough to have a complete first-3-day window); see
     ``pipeline.engagement.build_dataset``.
 
     Returns:

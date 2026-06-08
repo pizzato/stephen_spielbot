@@ -10,9 +10,11 @@ Two design notes that keep the numbers honest:
     A late-day upload gets a short calendar day-1; the timing model's hour
     feature absorbs that effect, so the content/timing models are not strictly
     apples-to-apples (surfaced in the eval UI).
-  * The YouTube Analytics API finalises a day's views ~2-3 days late, so videos
-    younger than ``engagement_data_lag_days`` (default 5) are excluded from
-    training — otherwise their day-3 labels would be truncated.
+  * A video needs a full first-3-day calendar window to have a label, so ones
+    younger than ``engagement_data_lag_days`` (default 3) are excluded. The
+    Analytics API finalises a day's views ~2-3 days late, so the freshest
+    included videos may have slightly under-counted 3-day totals — accepted to
+    keep recent uploads in the training set.
 
 Heavy deps (numpy, scikit-learn, fastembed) are imported lazily inside functions
 so importing this module — and the FastAPI backend / test suite that import it —
@@ -44,7 +46,7 @@ _METRICS_PATH = _ENG_DIR / "metrics.json"
 
 _DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_MIN_SAMPLES = 15
-_DEFAULT_LAG_DAYS = 5
+_DEFAULT_LAG_DAYS = 3
 
 # Warm, process-local state so predict()/best_times() are fast. Guarded by _lock;
 # reloaded from disk when metrics.json changes (a fresh build needs no restart).
@@ -164,8 +166,8 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
 
     Returns ``(dataset, n_dropped)`` where each row is
     ``{video_id, title, description, views, weekday, hour}`` and ``views`` is the
-    first-3-calendar-day total. Drops non-public videos and ones too recent for
-    finalised analytics.
+    first-3-calendar-day total. Drops non-public videos and ones too recent to
+    have a full 3-day window.
     """
     import datetime
     cfg = _load_cfg()
@@ -185,7 +187,7 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
             dropped += 1
             continue
         pub = dt.date()
-        if pub > cutoff:   # too recent — day-3 views not finalised yet
+        if pub > cutoff:   # too recent — no complete 3-day window yet
             dropped += 1
             continue
         dv = r.get("day_views") or {}
@@ -293,7 +295,7 @@ def build(client_secrets_path: str, on_phase=None) -> dict:
     n = len(dataset)
     if n < 2:
         return {"available": False, "n_samples": n, "n_dropped": dropped,
-                "error": "Not enough public videos with finalised 3-day analytics "
+                "error": "Not enough public videos with a complete first-3-day window "
                          "to train a model. Publish a few more, then rebuild."}
 
     m = _ml()
