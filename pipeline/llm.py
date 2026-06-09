@@ -653,7 +653,7 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
                 cfg.get("claude_model", "claude-sonnet-4-6"),
                 sys_msg,
                 user_msg,
-                max_tokens=700,
+                max_tokens=2048,
                 label="video_suggestions",
             )
             return _parse_suggestions(text)
@@ -665,7 +665,7 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
                 {"role": "system", "content": sys_msg},
                 {"role": "user", "content": user_msg},
             ],
-            max_tokens=700,
+            max_tokens=2048,
             url=url,
             model=model,
         )
