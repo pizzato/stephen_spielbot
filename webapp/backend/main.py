@@ -618,12 +618,16 @@ _FIELD_INSTRUCTIONS = {
 }
 
 
-def _llm_complete(system: str, user: str, cfg: dict) -> str:
+def _llm_complete(system: str, user: str, cfg: dict, max_tokens: int = 700) -> str:
     """Lightweight direct LLM call honouring the configured backend.
 
     NOTE: kept self-contained (stdlib urllib) rather than importing
     pipeline.llm's internals. If pipeline.llm later changes models/prompting,
     this can be unified with it.
+
+    Raises if the model hit ``max_tokens`` before finishing, so callers that
+    parse the output (e.g. JSON) fail loudly instead of silently dropping a
+    truncated response.
     """
     import urllib.request
     if cfg.get("llm_backend", "local") == "claude":
@@ -632,7 +636,7 @@ def _llm_complete(system: str, user: str, cfg: dict) -> str:
             raise RuntimeError("No Claude API key configured (Settings → LLM backend).")
         payload = json.dumps({
             "model": cfg.get("claude_model", "claude-sonnet-4-6"),
-            "max_tokens": 700, "system": system,
+            "max_tokens": max_tokens, "system": system,
             "messages": [{"role": "user", "content": user}],
         }).encode()
         req = urllib.request.Request(
@@ -641,18 +645,25 @@ def _llm_complete(system: str, user: str, cfg: dict) -> str:
                      "content-type": "application/json"})
         with urllib.request.urlopen(req, timeout=120) as resp:
             data = json.loads(resp.read())
+        if data.get("stop_reason") == "max_tokens":
+            raise RuntimeError(
+                f"LLM response was truncated at the {max_tokens}-token limit.")
         return "".join(b.get("text", "") for b in data.get("content", [])).strip()
 
     url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
     payload = json.dumps({
         "model": cfg.get("local_llm_model", ""),
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": 0.9, "max_tokens": 700,
+        "temperature": 0.9, "max_tokens": max_tokens,
     }).encode()
     req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json"})
     with urllib.request.urlopen(req, timeout=120) as resp:
         data = json.loads(resp.read())
-    return data["choices"][0]["message"]["content"].strip()
+    choice = data["choices"][0]
+    if choice.get("finish_reason") == "length":
+        raise RuntimeError(
+            f"LLM response was truncated at the {max_tokens}-token limit.")
+    return choice["message"]["content"].strip()
 
 
 class FieldRegenBody(BaseModel):
@@ -1231,9 +1242,11 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
         + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
         '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
     )
-    text = _llm_complete(system, user, cfg)
+    text = _llm_complete(system, user, cfg, max_tokens=2048)
     m = re.search(r"\[.*\]", text, re.DOTALL)
-    arr = json.loads(m.group()) if m else []
+    if not m:
+        raise RuntimeError("LLM did not return a JSON array of ideas.")
+    arr = json.loads(m.group())
     out = []
     for it in arr if isinstance(arr, list) else []:
         title = str(it.get("title", "")).strip()
