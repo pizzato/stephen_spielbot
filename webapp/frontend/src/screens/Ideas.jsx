@@ -12,7 +12,6 @@ function fmtNum(n) {
   if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
   return String(n)
 }
-function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
 // Per-idea predicted 3-day reach (issue #50). Renders nothing until an
 // engagement model has been built, so it's a graceful no-op by default.
@@ -71,7 +70,6 @@ export default function Ideas({ go, meta = {} }) {
   const [status, setStatus] = useState('')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [guidance, setGuidance] = useState('')
-  const [videoLength, setVideoLength] = useState('medium')
   const [busy, setBusy] = useState('')          // action key currently running
 
   // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
@@ -89,6 +87,13 @@ export default function Ideas({ go, meta = {} }) {
     const key = ideaKey(idea)
     const title = idea?.title || idea?.final_title || idea
     setIdeas((arr) => arr.filter((it) => ideaKey(it) !== key && (it.title || it.final_title || it) !== title))
+  }
+  // Per-idea video length: stored on the idea itself so each card keeps its own
+  // choice. New ideas have no length and default to 'medium' until toggled.
+  const ideaLength = (idea) => idea?.length || 'medium'
+  const setIdeaLength = (idea, length) => {
+    const key = ideaKey(idea)
+    setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, length } : it)))
   }
   const closeIdea = async (idea, reason = 'dismissed') => {
     const title = idea.title || idea.final_title || idea
@@ -116,8 +121,8 @@ export default function Ideas({ go, meta = {} }) {
     return composeResolution(meta, preset.orientation, tier) || configured
   }
   const queueIdea = async (idea, title) => {
-    const { scenes } = LENGTH_PRESETS[videoLength]
-    const resolution = presetResolution(videoLength)
+    const { scenes } = LENGTH_PRESETS[ideaLength(idea)]
+    const resolution = presetResolution(ideaLength(idea))
     setError('')
     try {
       await api.queueAdd(title, scenes, idea.reason || '', resolution)
@@ -129,8 +134,8 @@ export default function Ideas({ go, meta = {} }) {
     }
   }
   const createIdea = async (idea, title) => {
-    const { scenes } = LENGTH_PRESETS[videoLength]
-    const resolution = presetResolution(videoLength)
+    const { scenes } = LENGTH_PRESETS[ideaLength(idea)]
+    const resolution = presetResolution(ideaLength(idea))
     await closeIdea(idea, 'used')
     go('create', { title, description: idea.reason || '', scenes, resolution })
   }
@@ -162,28 +167,28 @@ export default function Ideas({ go, meta = {} }) {
             <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
               {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
           </div>
-          <div className="row center gap-10 mt-16" style={{ flexWrap: 'wrap' }}>
-            <span className="muted" style={{ fontSize: 12.5 }}>Video length</span>
-            <Segmented value={videoLength} onChange={setVideoLength} options={[
-              { value: 'short',  label: `Short · ${LENGTH_PRESETS.short.scenes} scenes · portrait` },
-              { value: 'medium', label: `Medium · ${LENGTH_PRESETS.medium.scenes} scenes · landscape` },
-              { value: 'long',   label: `Long · ${LENGTH_PRESETS.long.scenes} scenes · landscape` },
-            ]} />
-          </div>
         </Card>
         {ideas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
-          const { scenes: presetScenes } = LENGTH_PRESETS[videoLength]
+          const length = ideaLength(idea)
+          const { scenes, orientation } = LENGTH_PRESETS[length]
           const key = ideaKey(idea) || `${title}-${i}`
           return (
             <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                <div className="row center gap-10"><IdeaReach idea={idea} isShort={videoLength === 'short'} /><Stars value={idea.interestingness} /></div>
+                <div className="row center gap-10"><IdeaReach idea={idea} isShort={length === 'short'} /><Stars value={idea.interestingness} /></div>
               </div>
               {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
+              <div className="row center mt-16">
+                <Segmented value={length} onChange={(v) => setIdeaLength(idea, v)} options={[
+                  { value: 'short',  label: 'Short' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'long',   label: 'Long' },
+                ]} />
+              </div>
               <div className="row center between mt-16 row--wrap gap-10">
-                <span className="muted" style={{ fontSize: 12.5 }}>{presetScenes} scenes · {tier(presetScenes)}</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientation}</span>
                 <div className="row gap-10">
                   <Button variant="ghost" icon="xmark" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea)}>Close</Button>
                   <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title)}>Queue</Button>
