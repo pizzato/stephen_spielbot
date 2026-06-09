@@ -5,6 +5,17 @@ import { api, fileUrl } from '../api.js'
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
 
+// "Fully automated mode" is exactly the sum of these per-step toggles: it shows
+// ticked only when all of them are, and ticking it turns every one on. Keeping it
+// derived means it can never claim to automate a step whose own toggle is off.
+const AUTO_FLAGS = [
+  'youtube_auto_fetch_evaluate',
+  'youtube_auto_approve_comments',
+  'youtube_auto_start_job',
+  'youtube_auto_approve_script',
+  'youtube_auto_post',
+]
+
 // Extract a short display name from a worker URL or hostname
 function shortHost(url) {
   try { return new URL(url).hostname } catch { return url }
@@ -199,10 +210,19 @@ export default function Settings({ meta, setMeta }) {
 
   const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
 
+  // Master toggle: derived from the per-step flags, and ticking it sets them all.
+  const fullyAutomated = AUTO_FLAGS.every((f) => cfg[f])
+  const setFullyAutomated = (v) => setCfg((c) => {
+    const next = { ...c, youtube_fully_automated: v }
+    AUTO_FLAGS.forEach((f) => { next[f] = v })
+    return next
+  })
+
   const save = async () => {
     setBusy(true); setError(''); setStatus('')
     try {
       const out = { ...cfg }
+      out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
       out.ui_workers = fromLines(toLines(cfg.ui_workers))
@@ -384,7 +404,7 @@ export default function Settings({ meta, setMeta }) {
           <Card span={12} className="reveal reveal-d1">
             <span className="label-sm">YouTube automation</span>
             <div className="stack gap-16 mt-16">
-              <Check checked={!!cfg.youtube_fully_automated} onChange={(v) => set('youtube_fully_automated', v)} label="⚡ Fully automated mode" />
+              <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every step below" />
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
               <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start rendering the highest-interest request" />
