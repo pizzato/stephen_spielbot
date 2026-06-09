@@ -3215,19 +3215,19 @@ def _ensure_descriptions() -> int:
 
 def _automation_tick() -> dict:
     cfg = gapp.load_config()
-    # The master toggle implies every per-step flag below. It's only honored here
-    # (and in the loop gate); nothing expands it into the individual flags on save.
-    full = bool(cfg.get("youtube_fully_automated"))
+    # Each step is gated solely by its own toggle. "Fully automated mode" is just
+    # the UI shorthand for "all of these on" — it never forces a step whose own
+    # flag is off, so the behaviour can't contradict what's ticked.
     out: dict = {}
     with _track_op("Automation tick"):
-        if full or cfg.get("youtube_auto_fetch_evaluate"):
+        if cfg.get("youtube_auto_fetch_evaluate"):
             try:
-                out["fetch"] = _fetch_and_evaluate(full or cfg.get("youtube_auto_approve_comments", False))
+                out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
             except Exception as e:
                 out["fetch_error"] = str(e)[:120]
-        if full or cfg.get("youtube_auto_start_job"):
+        if cfg.get("youtube_auto_start_job"):
             out["started"] = _auto_start_best()
-        if full or cfg.get("youtube_auto_post"):
+        if cfg.get("youtube_auto_post"):
             out["posted"] = _auto_post_done()
     return out
 
@@ -3276,7 +3276,7 @@ def _automation_loop():
             pass
         try:
             cfg = gapp.load_config()
-            if cfg.get("youtube_fully_automated") or any(cfg.get(k) for k in (
+            if any(cfg.get(k) for k in (
                     "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post")):
                 _automation_tick()
         except Exception:
