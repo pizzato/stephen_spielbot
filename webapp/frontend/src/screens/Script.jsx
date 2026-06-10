@@ -43,12 +43,25 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (job?.job_id) setView('cover')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
-  // Load saved description + cover whenever the Cover tab is opened
+  // Load saved description + cover whenever the Cover tab is opened. A fresh
+  // script's description is written by a background task right after
+  // generation, so if it isn't there yet keep polling briefly until it lands.
   useEffect(() => {
     if (view !== 'cover' || !job?.work_dir) return
-    api.ytPostPrefill(job.work_dir)
-      .then((p) => { setDescription(p.description || ''); setCoverUrl(p.cover_url || '') })
-      .catch(() => {})
+    let alive = true
+    let tries = 0
+    let timer = null
+    const load = async () => {
+      try {
+        const p = await api.ytPostPrefill(job.work_dir)
+        if (!alive) return
+        if (p.description) setDescription((cur) => cur || p.description)
+        setCoverUrl(p.cover_url || '')
+        if (!p.description && tries++ < 10) timer = setTimeout(load, 3000)
+      } catch { /* prefill is best-effort */ }
+    }
+    load()
+    return () => { alive = false; clearTimeout(timer) }
   }, [view, job?.work_dir])
 
   const refreshScripts = () => api.listJobs()
@@ -356,7 +369,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               }>
                 <textarea className="textarea" rows={8} value={description}
                   onChange={(e) => setDescription(e.target.value)}
-                  placeholder="Click Generate to write a YouTube description from your script." />
+                  placeholder="Written automatically when the script is generated — click Generate to rewrite it." />
               </Field>
             </div>
           </Card>
