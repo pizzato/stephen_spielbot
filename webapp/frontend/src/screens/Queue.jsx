@@ -17,7 +17,8 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [editId, setEditId] = useState('')         // pending item open for inline edit
-  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '' })
+  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '', gen_style_name: '' })
+  const styleList = meta.config?.styles || []
 
   const refresh = () => Promise.all([
     api.getQueue(),
@@ -42,6 +43,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
       video_prompt: it.video_prompt || it.comment_text || '',
       suggested_scene_count: it.suggested_scene_count || 6,
       gen_resolution: it.gen_resolution || meta.config?.resolution || meta.default_resolution || '',
+      gen_style_name: it.gen_style_name || meta.config?.default_style || '',
     })
   }
   const saveEdit = (id) => run('save' + id, () => api.queueUpdate(id, {
@@ -49,6 +51,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     video_prompt: draft.video_prompt,
     suggested_scene_count: Number(draft.suggested_scene_count) || 6,
     gen_resolution: draft.gen_resolution || '',
+    gen_style_name: draft.gen_style_name || '',
   }), () => { setEditId(''); setStatus('Queue item updated.') })
 
   // Open a pending item's script for editing (loads the Script tab, or the
@@ -88,6 +91,13 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             <input className="input" type="number" min={6} max={50} style={{ width: 110 }} value={draft.suggested_scene_count}
               onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
           </Field>
+          {styleList.length > 0 && (
+            <Field label="Style" hint="Script, render and audio settings.">
+              <select className="select" value={draft.gen_style_name} onChange={(e) => setDraft((d) => ({ ...d, gen_style_name: e.target.value }))}>
+                {styleList.map((s) => <option key={s.name} value={s.name}>{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}</option>)}
+              </select>
+            </Field>
+          )}
           <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
             <ResolutionPicker value={draft.gen_resolution} onChange={(r) => setDraft((d) => ({ ...d, gen_resolution: r }))} meta={meta} />
           </Field>
@@ -96,7 +106,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
             <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
             <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
-              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '' })}>
+              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '', gen_style_name: draft.gen_style_name || '' })}>
               {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
             </Button>
           </div>
@@ -122,6 +132,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
             <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
               {it.source && <Chip tone="info">{it.source}</Chip>}
+              {it.gen_style_name && <Chip tone="accent">{it.gen_style_name}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
               {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}

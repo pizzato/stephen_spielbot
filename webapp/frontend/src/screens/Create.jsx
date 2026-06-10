@@ -21,21 +21,40 @@ export default function Create({ seed, meta, onGenerated }) {
   const voiceChoices = useMemo(() => (
     meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
   ), [meta.voices])
-  const configuredVoice = meta.config?.default_voice || voiceChoices[0] || 'Default (F5-TTS)'
+
+  // Style profiles (issue #66): the picked style drives every prefill below
+  // (scenes, voice, robotic, resolution, visual style) and rides along with
+  // the job so the render uses that style's quality + audio mix too.
+  const styleList = meta.config?.styles || []
+  const [styleName, setStyleName] = useState(seed?.styleName || '')
+  const profile = useMemo(() => (
+    styleList.find((s) => s.name === styleName)
+    || styleList.find((s) => s.name === meta.config?.default_style)
+    || styleList[0] || {}
+  ), [styleList, styleName, meta.config?.default_style])
+
+  const configuredVoice = profile.voice || voiceChoices[0] || 'Default (F5-TTS)'
 
   const [videoTitle, setVideoTitle] = useState(seed?.title || '')
   const [direction, setDirection] = useState(seed?.description || '')
-  const [scenes, setScenes] = useState(seed?.scenes || meta.config?.default_n_scenes || 12)
+  const [scenes, setScenes] = useState(seed?.scenes || profile.n_scenes || 12)
   const [voice, setVoice] = useState(configuredVoice)
   const [voiceTouched, setVoiceTouched] = useState(false)
-  const [robotic, setRobotic] = useState(!!meta.config?.default_voice_robotic)
+  const [robotic, setRobotic] = useState(!!profile.voice_robotic)
   const [roboticTouched, setRoboticTouched] = useState(false)
-  const [resolution, setResolution] = useState(meta.config?.resolution || meta.default_resolution || '')
-  const [style, setStyle] = useState(meta.config?.default_visual_style || '')
+  const [resolution, setResolution] = useState(profile.resolution || meta.default_resolution || '')
+  const [style, setStyle] = useState(profile.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
+
+  // Picking a style re-applies its prefills (clears any manual voice tweaks).
+  const pickStyle = (name) => {
+    setStyleName(name)
+    setVoiceTouched(false)
+    setRoboticTouched(false)
+  }
 
   useEffect(() => {
     if (!voiceTouched) setVoice(configuredVoice)
@@ -46,8 +65,8 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [configuredVoice, voice, voiceChoices])
 
   useEffect(() => {
-    if (!roboticTouched) setRobotic(!!meta.config?.default_voice_robotic)
-  }, [meta.config?.default_voice_robotic, roboticTouched])
+    if (!roboticTouched) setRobotic(!!profile.voice_robotic)
+  }, [profile.voice_robotic, roboticTouched])
 
   useEffect(() => {
     if (!seed) return
@@ -55,20 +74,21 @@ export default function Create({ seed, meta, onGenerated }) {
     setDirection(seed.description || '')
     if (seed.scenes) setScenes(seed.scenes)
     if (seed.resolution) setResolution(seed.resolution)
+    if (seed.styleName) setStyleName(seed.styleName)
   }, [seed])
 
   useEffect(() => {
-    if (!seed?.scenes && meta.config?.default_n_scenes) setScenes(meta.config.default_n_scenes)
-  }, [meta.config?.default_n_scenes, seed?.scenes])
+    if (!seed?.scenes && profile.n_scenes) setScenes(profile.n_scenes)
+  }, [profile.n_scenes, seed?.scenes])
 
   useEffect(() => {
     if (seed?.resolution) return
-    setResolution(meta.config?.resolution || meta.default_resolution || '')
-  }, [meta.config?.resolution, meta.default_resolution])
+    setResolution(profile.resolution || meta.default_resolution || '')
+  }, [profile.resolution, meta.default_resolution, seed?.resolution])
 
   useEffect(() => {
-    setStyle(meta.config?.default_visual_style || '')
-  }, [meta.config?.default_visual_style])
+    setStyle(profile.visual_style || '')
+  }, [profile.visual_style])
 
   // Estimate the idea's 3-day reach (debounced). Silently no-ops when no model
   // has been built — the card simply doesn't render. A portrait resolution means
@@ -95,8 +115,9 @@ export default function Create({ seed, meta, onGenerated }) {
         voice_robotic: robotic,
         resolution,
         queue_item_id: seed?.queueItemId || '',
+        style_name: profile.name || '',
       })
-      onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '' })
+      onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile.name || '' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -119,6 +140,18 @@ export default function Create({ seed, meta, onGenerated }) {
       <div className="bento">
         <Card span={8} padLg className="reveal reveal-d1">
           <div className="stack gap-22">
+            {styleList.length > 0 && (
+              <Field label="Style"
+                hint={profile.description || 'Script, render and audio settings for this film — manage styles in Settings.'}>
+                <select className="select" value={profile.name || ''} onChange={(e) => pickStyle(e.target.value)} style={{ maxWidth: 320 }}>
+                  {styleList.map((s) => (
+                    <option key={s.name} value={s.name}>
+                      {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
             <Field label="Title">
               <input className="input input--xl" placeholder="The rise and fall of the Roman Empire"
                 value={videoTitle} onChange={(e) => setVideoTitle(e.target.value)} />
