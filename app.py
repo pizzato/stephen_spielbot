@@ -166,6 +166,12 @@ DEFAULT_CFG = {
     "script_extra_instructions": "",
     # YouTube integration
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
+    # Connected channels (issue #22): [{id, name, channel_id}] where `id` is the
+    # local key the token file is stored under ("default" = the legacy
+    # youtube_token.json login, otherwise the YouTube channel ID). Managed from
+    # Settings → YouTube; each style picks one via its `channel` field.
+    "youtube_channels": [],
+    "youtube_channel": "",   # flat mirror of the DEFAULT style's channel key
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
     "youtube_auto_start_job": False,           # auto-prepare best pending request: generate its script, park as "Script ready"
@@ -199,6 +205,8 @@ STYLE_FIELD_TO_FLAT = {
     "voice_robotic":        "default_voice_robotic",
     "voice_robotic_amount": "default_voice_robotic_amount",
     "n_scenes":             "default_n_scenes",
+    # Publishing (issue #22) — which connected YouTube channel this style posts to
+    "channel":              "youtube_channel",
     # Render quality
     "resolution":           "resolution",
     "lora_strength":        "lora_strength",
@@ -279,6 +287,52 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         cfg[flat] = default[field]
     return cfg
+
+
+def _ensure_channels(cfg: dict) -> dict:
+    """Normalize the connected-channels list (issue #22) in place.
+
+    Drops malformed entries, dedupes keys, seeds the reserved "default" entry
+    when a pre-multi-channel token file exists so the original login shows up
+    as a channel, and clears style channel references that point at a channel
+    that is no longer connected. Runs BEFORE _ensure_styles so the styles'
+    flat-key mirror sees the cleaned values.
+    """
+    channels, seen = [], set()
+    for c in (cfg.get("youtube_channels") or []):
+        key = str(c.get("id") or "").strip() if isinstance(c, dict) else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        channels.append({
+            "id": key,
+            "name": str(c.get("name") or ""),
+            "channel_id": str(c.get("channel_id") or ""),
+        })
+    if not channels and yt._token_path().exists():
+        # Pre-#22 setups have one token at the legacy path — surface it as the
+        # "default" channel so styles can reference it without re-connecting.
+        channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": ""}]
+        seen = {yt.DEFAULT_CHANNEL_KEY}
+    cfg["youtube_channels"] = channels
+    for s in (cfg.get("styles") or []):
+        if isinstance(s, dict) and s.get("channel") and s["channel"] not in seen:
+            s["channel"] = ""
+    if cfg.get("youtube_channel") and cfg["youtube_channel"] not in seen:
+        cfg["youtube_channel"] = ""
+    return cfg
+
+
+def channel_for_style(cfg: dict, style_name: str = "") -> str:
+    """Channel KEY a style publishes to: the style's own channel if connected,
+    else the first connected channel, else '' (the legacy single-channel
+    token)."""
+    keys = [c["id"] for c in (cfg.get("youtube_channels") or [])
+            if isinstance(c, dict) and c.get("id")]
+    ch = str(style_settings(cfg, style_name).get("channel") or "")
+    if ch and ch in keys:
+        return ch
+    return keys[0] if keys else ""
 
 
 def style_settings(cfg: dict, name: str = "") -> dict:
@@ -396,10 +450,12 @@ def load_config() -> dict:
     # an install-seeded file with only worker lists) starts with a blank
     # "Default" style.
     fresh = not any(flat in data for flat in STYLE_FIELD_TO_FLAT.values())
+    _ensure_channels(cfg)
     return _ensure_styles(cfg, fresh=fresh)
 
 
 def save_config(cfg: dict) -> None:
+    _ensure_channels(cfg)
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
@@ -1298,12 +1354,16 @@ def _load_scenes_for_work_dir(work_dir: Path) -> list[dict]:
 
 
 
-def _channel_video_titles(cfg: dict) -> list[str]:
-    """Collect known video titles: YouTube API first, posted queue items as fallback."""
+def _channel_video_titles(cfg: dict, style_name: str = "") -> list[str]:
+    """Collect known video titles: YouTube API first, posted queue items as fallback.
+
+    Titles come from the channel the style publishes to (issue #22), so the
+    dedup check runs against the channel the new video would actually join."""
     secrets = cfg.get("youtube_client_secrets", "")
     titles: list[str] = []
     try:
-        titles = yt.fetch_channel_video_titles(secrets, max_results=500)
+        titles = yt.fetch_channel_video_titles(
+            secrets, max_results=500, channel=channel_for_style(cfg, style_name))
     except Exception as exc:
         logger.warning("fetch_channel_video_titles error: %s", exc)
     # Supplement with posted queue items in case the API call failed or is partial

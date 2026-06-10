@@ -29,6 +29,7 @@ import json
 import logging
 import math
 import pickle
+import re
 import threading
 import time
 import types
@@ -52,13 +53,41 @@ _DEFAULT_LAG_DAYS = 3
 _DEFAULT_SHORT_MAX_SECONDS = 180  # videos this long (s) or shorter count as a Short
 _FEATURE_VERSION = 2              # bump when the feature set changes (forces a rebuild)
 
-# Warm, process-local state so predict()/best_times() are fast. Guarded by _lock;
-# reloaded from disk when metrics.json changes (a fresh build needs no restart).
+# Warm, process-local state so predict()/best_times() are fast. One entry per
+# channel (issue #22), guarded by _lock; reloaded from disk when that channel's
+# metrics.json changes (a fresh build needs no restart).
 _lock = threading.Lock()
-_state: dict = {"content": None, "timing": None, "metrics": None, "mtime": 0.0, "loaded": False}
+_states: dict[str, dict] = {}
 _embedder = None
 _embedder_name = ""
 _embedder_lock = threading.Lock()
+
+
+def _channel_slug(channel: str) -> str:
+    """Filesystem-safe channel key; '' for the legacy/default channel."""
+    key = (channel or "").strip()
+    if not key or key == "default":
+        return ""
+    return re.sub(r"[^A-Za-z0-9_-]+", "_", key)
+
+
+def _paths(channel: str = "") -> tuple[Path, Path, Path]:
+    """(content, timing, metrics) paths for a channel's model. The legacy/
+    default channel keeps the original flat filenames so existing models stay
+    valid; other channels get suffixed files in the same directory."""
+    slug = _channel_slug(channel)
+    if not slug:
+        return _CONTENT_PATH, _TIMING_PATH, _METRICS_PATH
+    return (_ENG_DIR / f"model_content_{slug}.pkl",
+            _ENG_DIR / f"model_timing_{slug}.pkl",
+            _ENG_DIR / f"metrics_{slug}.json")
+
+
+def _state_for(channel: str = "") -> dict:
+    """Per-channel warm-model cache entry (call with _lock held)."""
+    return _states.setdefault(
+        _channel_slug(channel),
+        {"content": None, "timing": None, "metrics": None, "mtime": 0.0, "loaded": False})
 
 
 # ── lazy imports ──────────────────────────────────────────────────────────────
@@ -176,7 +205,7 @@ def _timing_features(np, emb, weekdays, hours, shorts):
 
 # ── dataset ───────────────────────────────────────────────────────────────────
 
-def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
+def build_dataset(client_secrets_path: str, channel: str = "") -> tuple[list[dict], int]:
     """Fetch channel history and turn it into training rows.
 
     Returns ``(dataset, n_dropped)`` where each row is
@@ -190,7 +219,7 @@ def build_dataset(client_secrets_path: str) -> tuple[list[dict], int]:
     lag = int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS))
     short_max = int(cfg.get("engagement_short_max_seconds", _DEFAULT_SHORT_MAX_SECONDS))
     cutoff = datetime.date.today() - datetime.timedelta(days=lag)
-    rows = yt.fetch_training_rows(client_secrets_path)
+    rows = yt.fetch_training_rows(client_secrets_path, channel=channel)
     dataset: list[dict] = []
     dropped = 0
     for r in rows:
@@ -298,9 +327,10 @@ def _evaluate(m, Xc, Xt, y, dataset, n, dropped, min_samples) -> dict:
     return out
 
 
-def build(client_secrets_path: str, on_phase=None) -> dict:
+def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
     """Full pipeline: fetch → embed → train both models → evaluate → persist →
-    warm the in-memory cache. ``on_phase(name)`` is called with the current phase
+    warm the in-memory cache. One model set per channel (issue #22).
+    ``on_phase(name)`` is called with the current phase
     ('fetching'|'embedding'|'training'|'done') for progress reporting."""
     def phase(p: str) -> None:
         if on_phase:
@@ -310,7 +340,7 @@ def build(client_secrets_path: str, on_phase=None) -> dict:
                 pass
 
     phase("fetching")
-    dataset, dropped = build_dataset(client_secrets_path)
+    dataset, dropped = build_dataset(client_secrets_path, channel=channel)
     n = len(dataset)
     if n < 2:
         return {"available": False, "n_samples": n, "n_dropped": dropped,
@@ -340,35 +370,39 @@ def build(client_secrets_path: str, on_phase=None) -> dict:
         "embed_model": cfg.get("engagement_embed_model", _DEFAULT_EMBED_MODEL),
         "data_lag_days": int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS)),
         "n_short": int(sum(shorts)),
+        "channel": channel or "",
     })
 
+    content_path, timing_path, metrics_path = _paths(channel)
     _ENG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(_CONTENT_PATH, "wb") as f:
+    with open(content_path, "wb") as f:
         pickle.dump(content, f)
-    with open(_TIMING_PATH, "wb") as f:
+    with open(timing_path, "wb") as f:
         pickle.dump(timing, f)
-    _METRICS_PATH.write_text(json.dumps(metrics, indent=2))
+    metrics_path.write_text(json.dumps(metrics, indent=2))
     with _lock:
-        _state.update({"content": content, "timing": timing, "metrics": metrics,
-                       "mtime": _METRICS_PATH.stat().st_mtime, "loaded": True})
+        _state_for(channel).update({"content": content, "timing": timing, "metrics": metrics,
+                                    "mtime": metrics_path.stat().st_mtime, "loaded": True})
     phase("done")
     return {"available": True, **metrics}
 
 
 # ── inference (fast path) ─────────────────────────────────────────────────────
 
-def _get_models():
-    """Return (content, timing, metrics), loading/refreshing from disk as needed.
-    A scikit-learn version mismatch yields (None, None, metrics) so callers can
-    prompt a rebuild instead of crashing on a stale pickle."""
+def _get_models(channel: str = ""):
+    """Return (content, timing, metrics) for a channel, loading/refreshing from
+    disk as needed. A scikit-learn version mismatch yields (None, None, metrics)
+    so callers can prompt a rebuild instead of crashing on a stale pickle."""
+    content_path, timing_path, metrics_path = _paths(channel)
     with _lock:
-        if not _METRICS_PATH.exists() or not _CONTENT_PATH.exists():
+        state = _state_for(channel)
+        if not metrics_path.exists() or not content_path.exists():
             return None, None, None
-        mtime = _METRICS_PATH.stat().st_mtime
-        if _state["loaded"] and _state["mtime"] == mtime:
-            return _state["content"], _state["timing"], _state["metrics"]
+        mtime = metrics_path.stat().st_mtime
+        if state["loaded"] and state["mtime"] == mtime:
+            return state["content"], state["timing"], state["metrics"]
         try:
-            metrics = json.loads(_METRICS_PATH.read_text())
+            metrics = json.loads(metrics_path.read_text())
         except Exception:
             return None, None, None
         try:
@@ -379,28 +413,28 @@ def _get_models():
         if metrics.get("sklearn_version") and cur and metrics["sklearn_version"] != cur:
             logger.warning("Engagement model built with scikit-learn %s but %s is installed; rebuild needed",
                            metrics.get("sklearn_version"), cur)
-            _state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
+            state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
             return None, None, metrics
         if metrics.get("feature_version") != _FEATURE_VERSION:
             logger.warning("Engagement model uses feature set v%s but v%s is current; rebuild needed",
                            metrics.get("feature_version"), _FEATURE_VERSION)
-            _state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
+            state.update({"content": None, "timing": None, "metrics": metrics, "mtime": mtime, "loaded": True})
             return None, None, metrics
         try:
-            with open(_CONTENT_PATH, "rb") as f:
+            with open(content_path, "rb") as f:
                 content = pickle.load(f)
-            with open(_TIMING_PATH, "rb") as f:
+            with open(timing_path, "rb") as f:
                 timing = pickle.load(f)
         except Exception as exc:
             logger.warning("Failed to load engagement models: %s", exc)
             return None, None, metrics
-        _state.update({"content": content, "timing": timing, "metrics": metrics, "mtime": mtime, "loaded": True})
+        state.update({"content": content, "timing": timing, "metrics": metrics, "mtime": mtime, "loaded": True})
         return content, timing, metrics
 
 
-def status() -> dict:
-    """Current model state + evaluation, for the Engagement tab."""
-    content, _timing, metrics = _get_models()
+def status(channel: str = "") -> dict:
+    """Current model state + evaluation for a channel, for the Engagement tab."""
+    content, _timing, metrics = _get_models(channel)
     if metrics is None:
         return {"available": False}
     res = {"available": content is not None, **metrics}
@@ -409,13 +443,13 @@ def status() -> dict:
     return res
 
 
-def predict(title: str, description: str, is_short: bool = False) -> dict:
-    """Estimate first-3-day views for an idea. ``is_short`` flags a Short vs a
-    long-form video. Never raises — returns ``{"available": False}`` when no
-    usable model exists (the common case on the create screens before a model is
-    built)."""
+def predict(title: str, description: str, is_short: bool = False, channel: str = "") -> dict:
+    """Estimate first-3-day views for an idea using the channel's model.
+    ``is_short`` flags a Short vs a long-form video. Never raises — returns
+    ``{"available": False}`` when no usable model exists (the common case on the
+    create screens before a model is built)."""
     try:
-        content, _timing, metrics = _get_models()
+        content, _timing, metrics = _get_models(channel)
         if content is None:
             return {"available": False}
         import numpy as np
@@ -429,12 +463,13 @@ def predict(title: str, description: str, is_short: bool = False) -> dict:
         return {"available": False, "error": str(exc)[:200]}
 
 
-def best_times(title: str, description: str, is_short: bool = False, top_k: int = 5) -> dict:
-    """Score every (weekday, hour) slot with the timing model and return the
-    top-k plus the full 7x24 grid (for a heatmap). ``is_short`` flags a Short vs
-    a long-form video. Advisory only."""
+def best_times(title: str, description: str, is_short: bool = False, top_k: int = 5,
+               channel: str = "") -> dict:
+    """Score every (weekday, hour) slot with the channel's timing model and
+    return the top-k plus the full 7x24 grid (for a heatmap). ``is_short`` flags
+    a Short vs a long-form video. Advisory only."""
     try:
-        _content, timing, metrics = _get_models()
+        _content, timing, metrics = _get_models(channel)
         if timing is None:
             return {"available": False}
         import numpy as np
