@@ -1264,9 +1264,11 @@ def youtube_comments() -> dict:
     return {"comments": []}
 
 
-def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6) -> list[dict]:
+def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6,
+                        style: dict | None = None) -> list[dict]:
     """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
-    the 90s'). Uses the configured LLM backend via _llm_complete."""
+    the 90s') and, optionally, a style profile. Uses the configured LLM
+    backend via _llm_complete."""
     import re
     avoid = "; ".join(previous)
     system = ("You are a content strategist for an educational/documentary YouTube channel. "
@@ -1274,6 +1276,7 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     user = (
         f'Generate {n} specific, compelling video ideas guided by this theme: "{guidance}".\n'
         f"Each must be a concrete documentary topic that clearly fits the theme.\n"
+        + llm.style_suggestion_context(style)
         + (f"Avoid duplicating these existing titles: {avoid}\n" if avoid else "")
         + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
         '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
@@ -1349,29 +1352,45 @@ def _normalize_suggestions(raw: list) -> list[dict]:
             "suggested_scene_count": max(6, min(50, int(sc or 12))),
             "interestingness": float(it.get("interestingness", it.get("interest", 0.7)) or 0.7),
             "source": it.get("source", "ai"),
+            "style_name": str(it.get("style_name") or ""),
             "used": used,
             "dismissed": bool(it.get("dismissed")),
         })
     return out
 
 
+def _idea_style_key(idea: dict, default_name: str) -> str:
+    """Which style an idea belongs to — legacy ideas (no stamp) count as the
+    default style's."""
+    return str(idea.get("style_name") or "") or default_name
+
+
 @api.get("/api/youtube/suggestions")
-def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False)) -> dict:
-    """Return AI video ideas. Without guidance or refresh, returns the last
-    cached set (no LLM call) so reopening the tab is instant; only generates when
-    the cache is empty, the user asks (refresh), or a guidance theme is given."""
+def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
+                        style_name: str = Query("")) -> dict:
+    """Return AI video ideas for a style profile (issue #66) — ideas belong to
+    the style they were generated for, since a children-story channel needs
+    different topics than a documentary one. Without guidance or refresh,
+    returns the cached set for that style (no LLM call); only generates when
+    that style's cache is empty, the user asks (refresh), or a guidance theme
+    is given."""
     cfg = gapp.load_config()
     g = guidance.strip()
+    ss = gapp.style_settings(cfg, style_name)
+    default_name = cfg.get("default_style", "")
+    target = ss["name"] or default_name
 
     if not g and not refresh:
         try:
             cached = yt.load_suggestions()
         except Exception:
             cached = []
-        if cached:
-            return {"suggestions": _visible_suggestions(cached), "cached": True}
+        cached_for_style = [s for s in _visible_suggestions(cached)
+                            if _idea_style_key(s, default_name) == target]
+        if cached_for_style:
+            return {"suggestions": cached_for_style, "cached": True, "style_name": target}
 
-    with _track_op("Generating suggestions", g):
+    with _track_op("Generating suggestions", g or target):
         try:
             # Channel titles (YouTube API + posted queue) come first; supplement with
             # any local completed jobs not yet published to the channel.
@@ -1385,20 +1404,27 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
             previous = []
         try:
             if g:
-                ideas = _guided_suggestions(g, previous, cfg)
+                ideas = _guided_suggestions(g, previous, cfg, style=ss)
             else:
-                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg))
+                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg, style=ss))
         except Exception as e:
             raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
     try:
         ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
+                  "style_name": target,
                   "created_at": time.time(), "used": False, "dismissed": False}
                  for idea in ideas]
-        yt.save_suggestions(ideas)  # cache the last generated set
+        # Cache per style: replace this style's set, keep the other styles'.
+        try:
+            others = [s for s in yt.load_suggestions()
+                      if _idea_style_key(s, default_name) != target]
+        except Exception:
+            others = []
+        yt.save_suggestions(others + ideas)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(ideas), "cached": False}
+    return {"suggestions": _visible_suggestions(ideas), "cached": False, "style_name": target}
 
 
 class SuggestionDismissBody(BaseModel):

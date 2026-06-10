@@ -622,10 +622,35 @@ def _parse_suggestions(text: str) -> list[dict]:
     return []
 
 
-def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None) -> list[dict]:
+def style_suggestion_context(style: dict | None) -> str:
+    """Render a style profile (issue #66) into prompt lines steering idea
+    generation. Empty when there's nothing distinctive to say."""
+    if not style:
+        return ""
+    lines = []
+    name = (style.get("name") or "").strip()
+    description = (style.get("description") or "").strip()
+    visual = (style.get("visual_style") or "").strip()
+    if name and name != "(none)":
+        lines.append(f'The new videos will be produced in the channel\'s "{name}" style.')
+    if description:
+        lines.append(f"That style is described as: {description}")
+    if visual:
+        lines.append(f"Its visuals look like: {visual}")
+    if not lines:
+        return ""
+    lines.append("Every suggested topic must suit videos made in that style.")
+    return "\n" + "\n".join(lines) + "\n"
+
+
+def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None,
+                               style: dict | None = None) -> list[dict]:
     """Generate 5 video topic suggestions complementary to the channel's existing content.
 
-    Returns a list of dicts with keys: title, reason, interestingness.
+    ``style`` (optional) is a style profile dict (name/description/visual_style)
+    whose character steers the ideas — a children-story style should yield
+    children-story topics. Returns a list of dicts with keys: title, reason,
+    interestingness.
     """
     if cfg is None:
         cfg = _load_cfg()
@@ -635,7 +660,8 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
         else "(no previous videos yet — suggest a varied starting set)"
     )
     sys_msg = _prompts.system("video_suggestions")
-    user_msg = _prompts.user("video_suggestions", titles_list=titles_list)
+    user_msg = _prompts.user("video_suggestions", titles_list=titles_list,
+                             style_context=style_suggestion_context(style))
     backend = cfg.get("llm_backend", "local")
     try:
         if backend == "claude":

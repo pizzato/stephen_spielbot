@@ -76,10 +76,11 @@ export const api = {
 
   getQueue: () => req('GET', '/queue'),
   getComments: () => req('GET', '/youtube/comments'),
-  getSuggestions: (guidance, refresh) => {
+  getSuggestions: (guidance, refresh, styleName) => {
     const p = new URLSearchParams()
     if (guidance) p.set('guidance', guidance)
     if (refresh) p.set('refresh', 'true')
+    if (styleName) p.set('style_name', styleName)
     const qs = p.toString()
     return req('GET', '/youtube/suggestions' + (qs ? `?${qs}` : ''))
   },
@@ -96,7 +97,7 @@ export const api = {
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
   queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueRetryReply: (id) => req('POST', '/queue/retry-reply', { id }),
-  queueAdd: (title, nScenes, prompt, resolution) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '', resolution: resolution || '' }),
+  queueAdd: (title, nScenes, prompt, resolution, styleName) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '', resolution: resolution || '', style_name: styleName || '' }),
   queueUpdate: (id, fields) => req('POST', '/queue/update', { id, ...fields }),
   queueStart: (id) => req('POST', '/queue/start', { id }),
   queueFromJob: (body) => req('POST', '/queue/from-job', body),
