@@ -404,8 +404,16 @@ def script_generate(body: GenerateScriptBody) -> dict:
     display_title = (body.video_title or "").strip() or topic
     work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
+    # Bake the visual style prefix into each image_prompt so it's visible in the
+    # scene editor and consistent even if the style profile is later renamed/edited.
+    # The render step guards against re-adding a prefix that's already present.
+    combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
     scenes_list = [
-        {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+        {"id": s.id, "title": s.title,
+         "image_prompt": (f"{combined_style}. {s.image_prompt}"
+                          if combined_style and s.image_prompt
+                          and not s.image_prompt.startswith(combined_style)
+                          else s.image_prompt),
          "video_prompt": s.video_prompt, "narration": s.narration}
         for s in scenes
     ]
@@ -701,7 +709,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         raise HTTPException(400, f"Unknown field: {field}")
     cfg = gapp.load_config()
 
-    video_title, topic, style, outline = "", "", "", ""
+    video_title, topic, style, style_name, outline = "", "", "", "", ""
     try:
         store = DurableStore.default()
         try:
@@ -716,6 +724,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
             video_title = jc.get("video_title") or d.get("title") or ""
             topic = jc.get("topic") or ""
             style = jm.get("style") or ""
+            style_name = jc.get("style_name", "")
         outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
     except Exception:
         pass
@@ -736,6 +745,11 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     except Exception as e:
         raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
 
+    # For image_prompt, bake the visual style prefix so the editor shows what renders.
+    if field == "image_prompt" and style_name:
+        prefix = gapp._compose_visual_style(style, cfg, style_name)
+        text = _apply_style_prefix(prefix, text)
+
     # Persist the regenerated field together with the user's current values.
     fields = {"title": body.title, "narration": body.narration,
               "image_prompt": body.image_prompt, "video_prompt": body.video_prompt}
@@ -746,6 +760,14 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     except Exception:
         pass  # the client also persists on blur — never lose the regenerated text
     return {"field": field, "value": text}
+
+
+def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
+    """Prepend combined_style to image_prompt, skipping if already present."""
+    ip = (image_prompt or "").strip()
+    if combined_style and ip and not ip.startswith(combined_style):
+        return f"{combined_style}. {ip}"
+    return ip or image_prompt
 
 
 # ── approve & generate (launches the background pipeline) ─────────────────────
@@ -813,8 +835,7 @@ def start_generation(body: GenerateBody) -> dict:
         Scene(
             id=int(row["id"]),
             title=row.get("title") or f"Scene {int(row['id'])}",
-            image_prompt=(f"{combined_style}. {row.get('image_prompt') or title}"
-                          if combined_style else (row.get("image_prompt") or title)),
+            image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
         )
