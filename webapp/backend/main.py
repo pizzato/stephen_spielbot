@@ -1423,8 +1423,9 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
     with _track_op("Generating suggestions", g or target):
         try:
             # Channel titles (YouTube API + posted queue) come first; supplement with
-            # any local completed jobs not yet published to the channel.
-            previous = gapp._channel_video_titles(cfg)
+            # any local completed jobs not yet published to the channel. Titles come
+            # from the channel this style publishes to (issue #22).
+            previous = gapp._channel_video_titles(cfg, style_name=target)
             seen = {t.lower() for t in previous}
             for label, _ in gapp._list_recent_jobs(max_results=500):
                 if label.lower() not in seen:
@@ -1695,18 +1696,100 @@ def _client_secrets_path() -> str:
     return str(Path(p).expanduser()) if p else ""
 
 
+# ── Multi-channel support (issue #22) ────────────────────────────────────────
+# Channels are configured in Settings → YouTube and referenced by styles; every
+# YouTube call resolves which channel's token to use from the style involved.
+
+def _channel_for_style(style_name: str = "") -> str:
+    return gapp.channel_for_style(gapp.load_config(), style_name)
+
+
+def _channel_for_work_dir(wd: Path | None) -> str:
+    """Channel key the work dir's video publishes to (via its style profile)."""
+    return _channel_for_style(_work_dir_style_name(wd))
+
+
+def _channel_key_of(item: dict) -> str:
+    """Channel key a queue item's source comment lives on ('' = legacy token)."""
+    return str(item.get("channel") or "")
+
+
+@api.get("/api/youtube/channels")
+def yt_channels() -> dict:
+    """Configured channels with live connection status, for Settings/Publish.
+
+    Also backfills each entry's name/channel_id once a status check resolves
+    them — that is how the migrated legacy "default" entry learns who it is.
+    """
+    cfg = gapp.load_config()
+    secrets = _client_secrets_path()
+    out, dirty = [], False
+    for entry in (cfg.get("youtube_channels") or []):
+        st = yt.check_auth_status(secrets, channel=entry["id"])
+        if st.get("connected") and st.get("channel_id"):
+            if (entry.get("name") != st["channel_name"]
+                    or entry.get("channel_id") != st["channel_id"]):
+                entry["name"] = st["channel_name"]
+                entry["channel_id"] = st["channel_id"]
+                dirty = True
+        out.append({**entry, "connected": bool(st.get("connected")),
+                    "error": st.get("error", "")})
+    if dirty:
+        gapp.save_config(cfg)
+    return {"channels": out, "auth_running": yt.poll_auth_flow().get("running", False)}
+
+
+def _finalize_new_channel(channel_id: str, channel_name: str) -> str:
+    """Auth-flow callback: record the just-authorized channel in the config and
+    return the key its token is stored under.
+
+    Reconnecting a known channel reuses its entry. If the legacy "default"
+    entry hasn't resolved its identity yet, resolve it now (its own token, an
+    independent file, may still work) so reconnecting that same channel updates
+    the default entry instead of creating a duplicate.
+    """
+    cfg = gapp.load_config()
+    chans = cfg.get("youtube_channels") or []
+    key = channel_id or yt.DEFAULT_CHANNEL_KEY
+    entry = next((c for c in chans if c.get("id") == key
+                  or (channel_id and c.get("channel_id") == channel_id)), None)
+    if entry is None and channel_id:
+        legacy = next((c for c in chans if c.get("id") == yt.DEFAULT_CHANNEL_KEY
+                       and not c.get("channel_id")), None)
+        if legacy is not None:
+            st = yt.check_auth_status(_client_secrets_path(), force=True,
+                                      channel=yt.DEFAULT_CHANNEL_KEY)
+            if st.get("channel_id"):
+                legacy["channel_id"] = st["channel_id"]
+                legacy["name"] = st.get("channel_name", "") or legacy.get("name", "")
+            if st.get("channel_id") == channel_id:
+                entry = legacy
+    if entry is None:
+        entry = {"id": key, "name": "", "channel_id": ""}
+        chans.append(entry)
+    if channel_id:
+        entry["channel_id"] = channel_id
+    if channel_name:
+        entry["name"] = channel_name
+    cfg["youtube_channels"] = chans
+    gapp.save_config(cfg)
+    return entry["id"]
+
+
 @api.get("/api/youtube/auth")
-def yt_auth_status() -> dict:
+def yt_auth_status(channel: str = Query("")) -> dict:
     try:
-        return yt.check_auth_status(_client_secrets_path())
+        return yt.check_auth_status(_client_secrets_path(), channel=channel)
     except Exception as e:
         return {"connected": False, "channel_name": "", "error": str(e)[:200]}
 
 
 @api.post("/api/youtube/auth/start")
 def yt_auth_start() -> dict:
+    """Start the OAuth flow that connects a (new or re-connected) channel."""
     try:
-        return {"auth_url": yt.start_auth_flow(_client_secrets_path())}
+        msg = yt.start_auth_flow(_client_secrets_path(), finalize=_finalize_new_channel)
+        return {"ok": not msg.startswith("Error"), "message": msg}
     except Exception as e:
         raise HTTPException(503, str(e).splitlines()[0][:200])
 
@@ -1719,19 +1802,32 @@ def yt_auth_poll() -> dict:
         return {"status": "error", "error": str(e)[:200]}
 
 
+class DisconnectBody(BaseModel):
+    channel: str = ""
+
+
 @api.post("/api/youtube/disconnect")
-def yt_disconnect() -> dict:
+def yt_disconnect(body: DisconnectBody | None = None) -> dict:
+    """Remove a channel: delete its token and drop it from the config (styles
+    pointing at it fall back to the first remaining channel)."""
+    channel = (body.channel if body else "") or ""
     try:
-        yt.disconnect_youtube()
+        yt.disconnect_youtube(channel)
     except Exception:
         pass
-    return {"ok": True}
+    cfg = gapp.load_config()
+    chans = [c for c in (cfg.get("youtube_channels") or [])
+             if c.get("id") != (channel or yt.DEFAULT_CHANNEL_KEY)]
+    cfg["youtube_channels"] = chans
+    gapp.save_config(cfg)  # _ensure_channels clears style refs to the removed key
+    return {"ok": True, "channels": chans}
 
 
 @api.get("/api/youtube/analytics")
-def yt_analytics() -> dict:
+def yt_analytics(channel: str = Query("")) -> dict:
     try:
-        return yt.fetch_channel_analytics(_client_secrets_path())
+        return yt.fetch_channel_analytics(
+            _client_secrets_path(), channel=channel or _channel_for_style(""))
     except Exception as e:
         return {"channel": {}, "videos": [], "error": str(e)[:200]}
 
@@ -1789,6 +1885,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
+        # Channel this film publishes to, resolved from its style (issue #22).
+        "channel": _channel_for_work_dir(wd),
         "orientation": orientation,
         "vid_width": vid_w,
         "vid_height": vid_h,
@@ -2035,7 +2133,8 @@ def yt_thumbnail(body: ThumbnailBody) -> dict:
     if not video_id:
         raise HTTPException(400, "This film hasn't been uploaded to YouTube yet.")
     with _track_op("Updating thumbnail", _video_title_for(wd)):
-        result = yt.set_thumbnail(_client_secrets_path(), video_id, str(cover))
+        result = yt.set_thumbnail(_client_secrets_path(), video_id, str(cover),
+                                  channel=_channel_for_work_dir(wd))
     if not result.get("success"):
         raise HTTPException(502, result.get("error", "Thumbnail update failed."))
     return {"ok": True}
@@ -2048,6 +2147,7 @@ class PostBody(BaseModel):
     category: str = "22"
     privacy: str = "private"
     include_thumbnail: bool = True
+    channel: str = ""   # channel key override; empty → the film's style's channel
 
 
 def _completion_reply_text(title: str, url: str) -> str:
@@ -2095,7 +2195,9 @@ def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
         return {"attempted": False, "already_replied": True}
 
     text = _completion_reply_text(title, url)
-    result = yt.reply_to_comment(_client_secrets_path(), comment_id, text)
+    # Reply as the channel the comment was posted on, not the upload channel.
+    result = yt.reply_to_comment(_client_secrets_path(), comment_id, text,
+                                 channel=_channel_key_of(item))
     now = time.time()
     if result.get("success"):
         updates = {
@@ -2138,6 +2240,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
                 privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
                 thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
+                channel=body_dict.get("channel", ""),
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
@@ -2200,10 +2303,12 @@ def yt_post(body: PostBody) -> dict:
 
     task_id = uuid.uuid4().hex[:12]
     _upload_tasks[task_id] = {"status": "uploading"}
+    channel = body.channel or _channel_for_work_dir(wd)
     threading.Thread(
         target=_run_upload_task,
         args=(task_id, {"title": body.title, "description": body.description,
-                        "category": body.category, "privacy": body.privacy}, wd, final, thumb),
+                        "category": body.category, "privacy": body.privacy,
+                        "channel": channel}, wd, final, thumb),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": task_id}
@@ -2227,21 +2332,31 @@ _AUTO_APPROVE_THRESHOLD = 0.7
 def _fetch_and_evaluate(auto_approve: bool) -> dict:
     cfg = gapp.load_config()
     secrets = cfg.get("youtube_client_secrets", "")
+    # Sweep every connected channel (issue #22); each cached comment is stamped
+    # with the channel it came from so replies go out as that channel.
+    channels = [c.get("id", "") for c in (cfg.get("youtube_channels") or [])] or [""]
     new_count = 0
-    try:
-        fetched = yt.fetch_channel_comments(secrets)
-        cache = yt.load_comments_cache()
-        existing = {c.get("comment_id") for c in cache}
+    errors: list[str] = []
+    fetched_any = False
+    cache = yt.load_comments_cache()
+    existing = {c.get("comment_id") for c in cache}
+    for ch in channels:
+        try:
+            fetched = yt.fetch_channel_comments(secrets, channel=ch)
+            fetched_any = True
+        except Exception as e:
+            errors.append(f"{ch or 'default'}: {str(e).splitlines()[0][:120]}")
+            continue
         for fc in fetched:
             if fc.get("comment_id") not in existing:
-                cache.insert(0, {**fc, "evaluated": False, "is_request": False,
+                cache.insert(0, {**fc, "channel": ch, "evaluated": False, "is_request": False,
                                  "suggested_title": "", "confidence": 0.0,
                                  "interestingness": 0.0, "reason": "", "status": "new"})
+                existing.add(fc.get("comment_id"))
                 new_count += 1
-        yt.save_comments_cache(cache)
-    except Exception as e:
-        cache = yt.load_comments_cache()
-        raise HTTPException(503, f"Fetch failed: {str(e).splitlines()[0][:160]}")
+    yt.save_comments_cache(cache)
+    if not fetched_any:
+        raise HTTPException(503, f"Fetch failed: {errors[0] if errors else 'no channels configured'}")
 
     approved = thanked = 0
     for c in [x for x in cache if not x.get("evaluated")]:
@@ -2252,7 +2367,8 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
                   "status": "evaluated" if c.get("status") == "new" else c.get("status")})
         if r["is_request"] and not c.get("thanked"):
             rep = yt.reply_to_comment(secrets, c.get("comment_id", ""),
-                                      "Thanks for the suggestion! We'll look into making a video about this. 🎬")
+                                      "Thanks for the suggestion! We'll look into making a video about this. 🎬",
+                                      channel=c.get("channel", ""))
             if rep.get("success"):
                 c["thanked"] = True
                 thanked += 1
@@ -2327,8 +2443,12 @@ def youtube_reject(body: CommentActionBody) -> dict:
 def youtube_reply(body: CommentActionBody) -> dict:
     if not body.text.strip():
         raise HTTPException(400, "Reply text required.")
+    # Reply as the channel the comment was fetched from.
+    c = next((x for x in yt.load_comments_cache()
+              if x.get("comment_id") == body.comment_id), None)
     res = yt.reply_to_comment(gapp.load_config().get("youtube_client_secrets", ""),
-                              body.comment_id, body.text.strip())
+                              body.comment_id, body.text.strip(),
+                              channel=(c or {}).get("channel", ""))
     if not res.get("success"):
         raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
     return {"ok": True}
@@ -3493,16 +3613,28 @@ class EngagementBody(BaseModel):
     title: str = ""
     description: str = ""
     is_short: bool = False
+    # Which channel's model to use (issue #22): an explicit channel key wins,
+    # else the channel of the named style, else the first connected channel.
+    channel: str = ""
+    style_name: str = ""
 
 
-def _run_engagement_build(task_id: str) -> None:
+def _engagement_channel(channel: str = "", style_name: str = "") -> str:
+    return channel or _channel_for_style(style_name)
+
+
+class EngagementBuildBody(BaseModel):
+    channel: str = ""
+
+
+def _run_engagement_build(task_id: str, channel: str) -> None:
     """Background thread: fetch history → embed → train → evaluate → persist."""
     def phase(p: str) -> None:
         _engagement_tasks[task_id] = {"status": "building", "phase": p}
 
     try:
-        with _track_op("Building engagement model"):
-            result = eng.build(_client_secrets_path(), on_phase=phase)
+        with _track_op("Building engagement model", channel):
+            result = eng.build(_client_secrets_path(), on_phase=phase, channel=channel)
     except Exception as e:
         _engagement_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
         return
@@ -3517,13 +3649,14 @@ def _run_engagement_build(task_id: str) -> None:
 
 
 @api.post("/api/engagement/build")
-def engagement_build() -> dict:
+def engagement_build(body: EngagementBuildBody | None = None) -> dict:
     # Reject a second build while one runs — avoids loading two embedders at once.
     if any(t.get("status") == "building" for t in _engagement_tasks.values()):
         raise HTTPException(409, "A model build is already in progress.")
+    channel = _engagement_channel((body.channel if body else "") or "")
     task_id = uuid.uuid4().hex[:12]
     _engagement_tasks[task_id] = {"status": "building", "phase": "fetching"}
-    threading.Thread(target=_run_engagement_build, args=(task_id,), daemon=True).start()
+    threading.Thread(target=_run_engagement_build, args=(task_id, channel), daemon=True).start()
     return {"ok": True, "task_id": task_id}
 
 
@@ -3536,18 +3669,20 @@ def engagement_build_status(task_id: str = Query(...)) -> dict:
 
 
 @api.get("/api/engagement/status")
-def engagement_status() -> dict:
-    return eng.status()
+def engagement_status(channel: str = Query("")) -> dict:
+    return eng.status(channel=_engagement_channel(channel))
 
 
 @api.post("/api/engagement/predict")
 def engagement_predict(body: EngagementBody) -> dict:
-    return eng.predict(body.title, body.description, body.is_short)
+    return eng.predict(body.title, body.description, body.is_short,
+                       channel=_engagement_channel(body.channel, body.style_name))
 
 
 @api.post("/api/engagement/best-times")
 def engagement_best_times(body: EngagementBody) -> dict:
-    return eng.best_times(body.title, body.description, body.is_short)
+    return eng.best_times(body.title, body.description, body.is_short,
+                          channel=_engagement_channel(body.channel, body.style_name))
 
 
 # ── file serving (videos, previews, covers) ──────────────────────────────────
