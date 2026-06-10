@@ -187,6 +187,44 @@ class StyleSettingsTests(TempConfigCase):
         self.assertEqual(app._compose_visual_style("", cfg), "Cinematic")
         self.assertEqual(app._compose_visual_style("Noir", cfg, "B"), "Noir. Anime")
 
+    def test_no_style_blanks_content_but_keeps_render_and_mix(self):
+        self.write_config({
+            "styles": [_style("A", music_vol=77), _style("B")],
+            "default_style": "A",
+        })
+        cfg = app.load_config()
+        ss = app.style_settings(cfg, app.NO_STYLE)
+        self.assertEqual(ss["name"], app.NO_STYLE)
+        # nothing content-shaped is imposed…
+        self.assertEqual(ss["visual_style"], "")
+        self.assertEqual(ss["extra_instructions"], "")
+        self.assertEqual(ss["voice"], "")
+        self.assertFalse(ss["voice_robotic"])
+        # …but render quality + audio mix still come from the default style
+        self.assertEqual(ss["music_vol"], 77)
+        self.assertEqual(ss["resolution"], "Landscape HD (1024×576)")
+        self.assertEqual(ss["lora_strength"], 0.4)
+
+    def test_no_style_suppresses_profile_visual_style_merge(self):
+        self.write_config({
+            "styles": [_style("A", visual_style="Cinematic")],
+            "default_style": "A",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app._compose_visual_style("Noir", cfg, app.NO_STYLE), "Noir")
+        self.assertEqual(app._compose_visual_style("", cfg, app.NO_STYLE), "")
+
+    def test_reserved_no_style_name_is_not_claimable(self):
+        self.write_config({
+            "styles": [_style(app.NO_STYLE), _style("B")],
+            "default_style": app.NO_STYLE,
+        })
+        cfg = app.load_config()
+        names = [s["name"] for s in cfg["styles"]]
+        self.assertNotIn(app.NO_STYLE, names)   # renamed away from the sentinel
+        self.assertIn("B", names)
+        self.assertNotEqual(cfg["default_style"], app.NO_STYLE)
+
 
 class VoicePropagationTests(TempConfigCase):
     def _seed_voices(self):
@@ -274,6 +312,19 @@ class StartGenerationStyleTests(TempConfigCase):
         jc = json.loads((work_dir / "job_config.json").read_text())
         self.assertEqual(jc["style_name"], "A")
         self.assertEqual(jc["music_vol"], 11)
+
+    def test_no_style_render_keeps_default_mix_but_imposes_nothing(self):
+        job_id, work_dir = self._seed()
+        with mock.patch.object(app, "_launch_generation_job", return_value={}):
+            backend.start_generation(backend.GenerateBody(
+                job_id=job_id, work_dir=str(work_dir), video_title="Styled job",
+                style_name=app.NO_STYLE,
+            ))
+        jc = json.loads((work_dir / "job_config.json").read_text())
+        self.assertEqual(jc["style_name"], app.NO_STYLE)
+        self.assertEqual(jc["music_vol"], 11)        # default style A's mix
+        self.assertEqual(jc["default_voice"], "")    # no voice imposed → F5 default
+        self.assertFalse(jc["voice_robotic"])
 
 
 class QueueItemStyleTests(TempConfigCase):

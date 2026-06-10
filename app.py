@@ -216,6 +216,13 @@ STYLE_FIELD_TO_FLAT = {
 LEGACY_STYLE_NAME = "Stephen Spielbot"
 BLANK_STYLE_NAME = "Default"
 
+# Reserved style_name meaning "no style profile" (the Create screen's
+# experiment mode): nothing content-shaped is imposed — no visual style, no
+# extra script instructions, no voice — while render quality and the audio mix
+# still come from the default style (they have no per-video controls).
+# _ensure_styles keeps real styles from taking this name.
+NO_STYLE = "(none)"
+
 
 def _style_from_flat(cfg: dict, name: str) -> dict:
     """Build a style profile from the flat config keys (migration helper)."""
@@ -234,7 +241,8 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     if not styles:
         styles = [_style_from_flat(cfg, BLANK_STYLE_NAME if fresh else LEGACY_STYLE_NAME)]
 
-    normalized, seen = [], set()
+    # NO_STYLE is pre-seeded as taken so no real style can claim the sentinel.
+    normalized, seen = [], {NO_STYLE}
     for s in styles:
         base = str(s.get("name")).strip()
         name, n = base, 2
@@ -247,7 +255,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         normalized.append(row)
 
     cfg["styles"] = normalized
-    if cfg.get("default_style") not in seen:
+    if cfg.get("default_style") not in {s["name"] for s in normalized}:
         cfg["default_style"] = normalized[0]["name"]
     default = next(s for s in normalized if s["name"] == cfg["default_style"])
     for field, flat in STYLE_FIELD_TO_FLAT.items():
@@ -260,16 +268,29 @@ def style_settings(cfg: dict, name: str = "") -> dict:
 
     Falls back to the default style when *name* is empty or unknown, and to
     the flat keys / built-in defaults for any missing field — so this is safe
-    to call with non-normalized dicts too."""
+    to call with non-normalized dicts too.
+
+    ``name == NO_STYLE`` is the experiment mode: the content-shaped fields
+    (visual style, extra instructions, voice, robotic) come back blank so
+    nothing is imposed on the video, while render quality and the audio mix
+    keep the default style's values."""
     out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
            for field, flat in STYLE_FIELD_TO_FLAT.items()}
+    requested = (name or "").strip()
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
-    target = next((s for s in styles if s.get("name") == (name or "").strip()), None)
+    target = None
+    if requested != NO_STYLE:
+        target = next((s for s in styles if s.get("name") == requested), None)
     if target is None:
         target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
                       styles[0] if styles else None)
     if target:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
+    if requested == NO_STYLE:
+        out.update(visual_style="", extra_instructions="", voice="", voice_robotic=False)
+        out["name"] = NO_STYLE
+        out["description"] = ""
+        return out
     out["name"] = (target or {}).get("name", "")
     out["description"] = (target or {}).get("description", "")
     return out

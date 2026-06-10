@@ -95,6 +95,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             <Field label="Style" hint="Script, render and audio settings.">
               <select className="select" value={draft.gen_style_name} onChange={(e) => setDraft((d) => ({ ...d, gen_style_name: e.target.value }))}>
                 {styleList.map((s) => <option key={s.name} value={s.name}>{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}</option>)}
+                <option value="(none)">No style — experiment</option>
               </select>
             </Field>
           )}
