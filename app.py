@@ -180,7 +180,139 @@ DEFAULT_CFG = {
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
     "engagement_data_lag_days": 3,       # exclude videos newer than this (no full 3-day window yet)
     "engagement_short_max_seconds": 180, # videos this long (s) or shorter count as a Short
+    # Style profiles (issue #66) — named bundles of the script/content, render
+    # quality and audio-mix settings above. load/save normalize this list and
+    # mirror the default style back onto the flat keys (see _ensure_styles).
+    "styles": [],
+    "default_style": "",
 }
+
+# Per-style field → the legacy flat config key it replaces. The flat keys stay
+# in the config as a mirror of the DEFAULT style, so job_config.json and every
+# old fallback path keep working; the styles list is the source of truth.
+STYLE_FIELD_TO_FLAT = {
+    # Script & content
+    "visual_style":         "default_visual_style",
+    "extra_instructions":   "script_extra_instructions",
+    "description_suffix":   "description_suffix",
+    "voice":                "default_voice",
+    "voice_robotic":        "default_voice_robotic",
+    "voice_robotic_amount": "default_voice_robotic_amount",
+    "n_scenes":             "default_n_scenes",
+    # Render quality
+    "resolution":           "resolution",
+    "lora_strength":        "lora_strength",
+    "first_pass_cfg":       "first_pass_cfg",
+    "first_pass_steps":     "first_pass_steps",
+    "second_pass_cfg":      "second_pass_cfg",
+    "second_pass_steps":    "second_pass_steps",
+    # Narrator & audio mix
+    "music_vol":            "music_vol",
+    "voice_vol":            "voice_vol",
+    "ambient_vol":          "ambient_vol",
+}
+
+# A pre-styles config that has been customized gets its settings preserved
+# under this name; a fresh install starts with a blank "Default" style.
+LEGACY_STYLE_NAME = "Stephen Spielbot"
+BLANK_STYLE_NAME = "Default"
+
+# Reserved style_name meaning "no style profile" (the Create screen's
+# experiment mode): nothing content-shaped is imposed — no visual style, no
+# extra script instructions, no voice — while render quality and the audio mix
+# still come from the default style (they have no per-video controls).
+# _ensure_styles keeps real styles from taking this name.
+NO_STYLE = "(none)"
+
+
+def _style_from_flat(cfg: dict, name: str) -> dict:
+    """Build a style profile from the flat config keys (migration helper)."""
+    style = {"name": name, "description": ""}
+    for field, flat in STYLE_FIELD_TO_FLAT.items():
+        style[field] = cfg.get(flat, DEFAULT_CFG.get(flat))
+    return style
+
+
+def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
+    """Normalize the style list in place: migrate a pre-styles config, drop
+    malformed entries, fill missing fields, dedupe names, validate
+    default_style, and mirror the default style onto the flat keys."""
+    styles = [s for s in (cfg.get("styles") or [])
+              if isinstance(s, dict) and str(s.get("name") or "").strip()]
+    if not styles:
+        styles = [_style_from_flat(cfg, BLANK_STYLE_NAME if fresh else LEGACY_STYLE_NAME)]
+
+    # NO_STYLE is pre-seeded as taken so no real style can claim the sentinel.
+    normalized, seen, missing = [], {NO_STYLE}, []
+    for s in styles:
+        base = str(s.get("name")).strip()
+        name, n = base, 2
+        while name in seen:
+            name, n = f"{base} {n}", n + 1
+        seen.add(name)
+        row = {"name": name, "description": str(s.get("description") or "")}
+        absent = set()
+        for field, flat in STYLE_FIELD_TO_FLAT.items():
+            if field in s:
+                row[field] = s[field]
+            else:
+                row[field] = DEFAULT_CFG.get(flat)
+                absent.add(field)
+        normalized.append(row)
+        missing.append(absent)
+
+    cfg["styles"] = normalized
+    if cfg.get("default_style") not in {s["name"] for s in normalized}:
+        cfg["default_style"] = normalized[0]["name"]
+    default_idx = next(i for i, s in enumerate(normalized) if s["name"] == cfg["default_style"])
+    # A field that became per-style AFTER this config migrated (e.g.
+    # description_suffix) has no value on any style yet. The flat key still
+    # holds its real value and, by the mirror invariant, the flat keys ARE the
+    # default style's settings — so the default style inherits it. Other
+    # styles keep the built-in blank: leaking e.g. the Spielbot suffix into
+    # every style was exactly the bug being fixed.
+    for field in missing[default_idx]:
+        flat = STYLE_FIELD_TO_FLAT[field]
+        if flat in cfg:
+            normalized[default_idx][field] = cfg[flat]
+    default = normalized[default_idx]
+    for field, flat in STYLE_FIELD_TO_FLAT.items():
+        cfg[flat] = default[field]
+    return cfg
+
+
+def style_settings(cfg: dict, name: str = "") -> dict:
+    """Resolved settings for the named style profile.
+
+    Falls back to the default style when *name* is empty or unknown, and to
+    the flat keys / built-in defaults for any missing field — so this is safe
+    to call with non-normalized dicts too.
+
+    ``name == NO_STYLE`` is the experiment mode: the content-shaped fields
+    (visual style, extra instructions, voice, robotic) come back blank so
+    nothing is imposed on the video, while render quality and the audio mix
+    keep the default style's values."""
+    out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
+           for field, flat in STYLE_FIELD_TO_FLAT.items()}
+    requested = (name or "").strip()
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    target = None
+    if requested != NO_STYLE:
+        target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None:
+        target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
+                      styles[0] if styles else None)
+    if target:
+        out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
+    if requested == NO_STYLE:
+        out.update(visual_style="", extra_instructions="", description_suffix="",
+                   voice="", voice_robotic=False)
+        out["name"] = NO_STYLE
+        out["description"] = ""
+        return out
+    out["name"] = (target or {}).get("name", "")
+    out["description"] = (target or {}).get("description", "")
+    return out
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
 
@@ -254,14 +386,21 @@ def load_config() -> dict:
     lists (comfy_workers/tts_workers/ui_workers) live here and are edited from
     the Settings screen."""
     cfg = DEFAULT_CFG.copy()
+    data = {}
     if CONFIG_FILE.exists():
         data = yaml.safe_load(CONFIG_FILE.read_text()) or {}
         if isinstance(data, dict):
             cfg.update(data)
-    return cfg
+    # A config that predates styles but already carries customized content
+    # settings becomes the "Stephen Spielbot" style; anything else (no file, or
+    # an install-seeded file with only worker lists) starts with a blank
+    # "Default" style.
+    fresh = not any(flat in data for flat in STYLE_FIELD_TO_FLAT.values())
+    return _ensure_styles(cfg, fresh=fresh)
 
 
 def save_config(cfg: dict) -> None:
+    _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
 
@@ -412,6 +551,10 @@ def _launch_generation_job(work_dir: Path) -> dict:
 def _job_config_snapshot(cfg: dict) -> dict:
     """Persist only non-secret runtime settings needed by the background worker."""
     job_cfg = cfg.copy()
+    # The job stores its RESOLVED style values under the flat keys (plus
+    # style_name); carrying the whole style list would just go stale.
+    job_cfg.pop("styles", None)
+    job_cfg.pop("default_style", None)
     for key in list(job_cfg):
         lowered = key.lower()
         if "api_key" in lowered or "token" in lowered or "secret" in lowered:
@@ -520,6 +663,9 @@ def update_voice(name: str, new_name: str | None = None,
             voice["name"] = new_name
             if cfg.get("default_voice") == name:
                 cfg["default_voice"] = new_name
+            for s in cfg.get("styles") or []:
+                if isinstance(s, dict) and s.get("voice") == name:
+                    s["voice"] = new_name
     if audio is not None:
         old_path = Path(voice["path"])
         new_path = _new_voice_path(voice["name"], ext)
@@ -541,6 +687,9 @@ def delete_voice(name: str) -> dict:
     cfg["voices"] = [v for v in voices if v["name"] != name]
     if cfg.get("default_voice") == name:
         cfg["default_voice"] = ""
+    for s in cfg.get("styles") or []:
+        if isinstance(s, dict) and s.get("voice") == name:
+            s["voice"] = ""
     save_config(cfg)
     path = Path(voice["path"])
     if _under_voices_dir(path) and path.exists():
@@ -784,16 +933,18 @@ def _preview_worker_urls() -> list[str]:
         return []
 
 
-def _compose_visual_style(style: str, cfg: dict) -> str:
-    """Combine a per-job visual style with the configured default, de-duplicated.
+def _compose_visual_style(style: str, cfg: dict, style_name: str = "") -> str:
+    """Combine a per-job visual style with the job's style profile, de-duplicated.
 
-    The Create/Script UI pre-fills the per-job style from ``default_visual_style``,
-    so the two are usually identical. Joining them blindly repeated the style in the
-    FLUX prompt (e.g. "Cinematic …. Cinematic …. <scene>"), which over-stylized the
-    images. Keep genuinely distinct styles; drop case-insensitive repeats.
+    The Create/Script UI pre-fills the per-job style from the profile's
+    ``visual_style``, so the two are usually identical. Joining them blindly
+    repeated the style in the FLUX prompt (e.g. "Cinematic …. Cinematic ….
+    <scene>"), which over-stylized the images. Keep genuinely distinct styles;
+    drop case-insensitive repeats. ``style_name`` picks the profile; empty
+    falls back to the default style (the pre-#66 behaviour).
     """
     parts: list[str] = []
-    for raw in (style, cfg.get("default_visual_style", "")):
+    for raw in (style, style_settings(cfg, style_name).get("visual_style", "")):
         p = (raw or "").strip().rstrip(".")
         if p and p.lower() not in [q.lower() for q in parts]:
             parts.append(p)
@@ -818,11 +969,21 @@ def _generate_active_scene_preview(
     store = DurableStore.default()
     try:
         scene = store.get_scene(job_id, sid) or {}
+        job_row = store.get_job(job_id)
     finally:
         store.close()
     existing = scene.get("preview_path") or ""
     if existing and Path(existing).exists() and not force:
         return Path(existing)
+
+    # Resolve the job's style profile (stamped at script time) so previews use
+    # that profile's visual style and resolution, not the global default's.
+    style_name = ""
+    if job_row is not None:
+        try:
+            style_name = json.loads(dict(job_row).get("config_json") or "{}").get("style_name", "")
+        except Exception:
+            style_name = ""
 
     cfg = load_config()
     if worker_pool is None:
@@ -839,12 +1000,13 @@ def _generate_active_scene_preview(
     flux_vae = cfg.get("flux_vae", "ae.safetensors")
     flux_steps = int(cfg.get("flux_steps", 4))
     img_width, img_height = _RESOLUTIONS.get(
-        resolution or cfg.get("resolution", _DEFAULT_RESOLUTION), (1024, 576)
+        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
+        (1024, 576),
     )
     # Match the render: snap the preview to LTX's renderable grid so the cached
     # preview is reused as the first frame instead of regenerated at a new size.
     img_width, img_height = ltx_dimensions(img_width, img_height)
-    combined_style = _compose_visual_style(style, cfg)
+    combined_style = _compose_visual_style(style, cfg, style_name)
     base_prompt = image_prompt or scene.get("image_prompt") or title
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
 
@@ -1170,10 +1332,12 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
     unused = [s for s in suggestions if not s.get("used")]
 
     if not unused:
-        # Ask the LLM for a fresh batch of 5
+        # Ask the LLM for a fresh batch of 5, steered by the default style —
+        # automation invents ideas for the channel's default persona.
         logger.info("No unused suggestions — generating a new batch")
+        ss = style_settings(cfg)
         existing_titles = _channel_video_titles(cfg)
-        new_data = generate_video_suggestions(existing_titles, cfg)
+        new_data = generate_video_suggestions(existing_titles, cfg, style=ss)
         if not new_data:
             logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
             return None
@@ -1183,6 +1347,7 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
                 "title": s["title"],
                 "reason": s["reason"],
                 "interestingness": s["interestingness"],
+                "style_name": ss["name"],
                 "created_at": time.time(),
                 "used": False,
             }
@@ -1221,6 +1386,13 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
     if not queue_item:
         logger.warning("_auto_pick_suggestion: add_to_queue returned empty for %r", suggestion["title"])
         return None
+
+    # The idea's style profile rides onto the queue item so the render uses it
+    # (legacy un-stamped ideas resolve to the default style downstream).
+    style_name = str(suggestion.get("style_name") or "")
+    if style_name:
+        yt.update_queue_item(queue_item["id"], gen_style_name=style_name)
+        queue_item["gen_style_name"] = style_name
 
     # Generate directorial brief synchronously (we're already in a background context)
     try:
