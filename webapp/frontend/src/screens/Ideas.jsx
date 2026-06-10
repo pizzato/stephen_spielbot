@@ -20,7 +20,7 @@ function IdeaReach({ idea, isShort }) {
   const [r, setR] = useState(null)
   useEffect(() => {
     let live = true
-    api.engagementPredict({ title: idea.title || idea.final_title || '', description: idea.reason || '', is_short: isShort })
+    api.engagementPredict({ title: idea.title || idea.final_title || '', description: idea.reason || '', is_short: isShort, style_name: idea.style_name || '' })
       .then((d) => { if (live) setR(d) }).catch(() => {})
     return () => { live = false }
   }, [idea, isShort])

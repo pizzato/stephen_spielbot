@@ -24,7 +24,9 @@ from typing import Any
 logger = logging.getLogger("video_gen")
 
 # ── Auth status cache (avoids a live API call on every tab visit) ─────────────
-_auth_cache: dict[str, Any] = {"result": None, "ts": 0.0, "path": ""}
+# Keyed by channel key (issue #22) — each connected channel has its own token
+# and its own cached status entry {result, ts, path}.
+_auth_cache: dict[str, dict] = {}
 _AUTH_CACHE_TTL = 60.0  # seconds before re-checking with the API
 
 _CONFIG_DIR = Path.home() / ".config" / "video-generator"
@@ -32,6 +34,20 @@ _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
+
+# Reserved channel key for the pre-multi-channel login: its token lives at the
+# legacy youtube_token.json path, so existing setups keep working unchanged.
+DEFAULT_CHANNEL_KEY = "default"
+
+
+def _token_path(channel: str = "") -> Path:
+    """Token file for a channel key. '' / 'default' → the legacy single-channel
+    token; anything else (normally the YouTube channel ID) gets its own file."""
+    key = (channel or "").strip()
+    if not key or key == DEFAULT_CHANNEL_KEY:
+        return _TOKEN_PATH
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", key)
+    return _CONFIG_DIR / f"youtube_token_{safe}.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/youtube.readonly",
@@ -73,13 +89,14 @@ def _google_imports():
 
 # ── Credentials management ────────────────────────────────────────────────────
 
-def _load_credentials(client_secrets_path: str) -> Any | None:
+def _load_credentials(client_secrets_path: str, channel: str = "") -> Any | None:
     """Return valid Credentials from saved token, refreshing if needed. Returns None if not authenticated."""
     Credentials, Request, _Flow, _build, _MFU = _google_imports()
-    if not _TOKEN_PATH.exists():
+    token_path = _token_path(channel)
+    if not token_path.exists():
         return None
     try:
-        creds = Credentials.from_authorized_user_file(str(_TOKEN_PATH), SCOPES)
+        creds = Credentials.from_authorized_user_file(str(token_path), SCOPES)
     except Exception as exc:
         logger.warning("Failed to load YouTube token: %s", exc)
         return None
@@ -88,15 +105,19 @@ def _load_credentials(client_secrets_path: str) -> Any | None:
     if creds and creds.expired and creds.refresh_token:
         try:
             creds.refresh(Request())
-            _TOKEN_PATH.write_text(creds.to_json())
+            token_path.write_text(creds.to_json())
             return creds
         except Exception as exc:
             logger.warning("Failed to refresh YouTube token: %s", exc)
     return None
 
 
-def check_auth_status(client_secrets_path: str, force: bool = False) -> dict:
-    """Return {connected, channel_name, channel_id, error}.
+def _clear_auth_cache(channel: str = "") -> None:
+    _auth_cache.pop((channel or "").strip() or DEFAULT_CHANNEL_KEY, None)
+
+
+def check_auth_status(client_secrets_path: str, force: bool = False, channel: str = "") -> dict:
+    """Return {connected, channel_name, channel_id, error} for one channel key.
 
     Results are cached for _AUTH_CACHE_TTL seconds to avoid blocking the UI on
     every tab visit.  Pass force=True (e.g. after connect/disconnect) to bypass.
@@ -104,20 +125,22 @@ def check_auth_status(client_secrets_path: str, force: bool = False) -> dict:
     if not client_secrets_path or not Path(client_secrets_path).expanduser().exists():
         return {
             "connected": False, "channel_name": "", "channel_id": "",
-            "error": "client_secrets.json path not configured (see Config tab → YouTube section)",
+            "error": "client_secrets.json path not configured (see Settings → YouTube section)",
         }
+    cache_key = (channel or "").strip() or DEFAULT_CHANNEL_KEY
     now = time.time()
+    cached = _auth_cache.get(cache_key)
     if (not force
-            and _auth_cache["result"] is not None
-            and _auth_cache["path"] == client_secrets_path
-            and (now - _auth_cache["ts"]) < _AUTH_CACHE_TTL):
-        return _auth_cache["result"]
+            and cached is not None
+            and cached["path"] == client_secrets_path
+            and (now - cached["ts"]) < _AUTH_CACHE_TTL):
+        return cached["result"]
     # Wrap the ENTIRE check (credential load + possible token refresh + API call)
     # in a background thread with a hard timeout.  _load_credentials() calls
     # creds.refresh(Request()) which is a network call with no built-in timeout
     # and can block for 30+ seconds if the network is slow or stalled.
     def _full_check() -> dict:
-        creds = _load_credentials(client_secrets_path)
+        creds = _load_credentials(client_secrets_path, channel)
         if not creds:
             return {
                 "connected": False, "channel_name": "", "channel_id": "",
@@ -148,7 +171,7 @@ def check_auth_status(client_secrets_path: str, force: bool = False) -> dict:
         result = {"connected": False, "channel_name": "", "channel_id": "", "error": str(exc)[:300]}
     finally:
         pool.shutdown(wait=False)  # don't block — let any slow I/O finish in background
-    _auth_cache.update(result=result, ts=now, path=client_secrets_path)
+    _auth_cache[cache_key] = {"result": result, "ts": now, "path": client_secrets_path}
     return result
 
 
@@ -160,7 +183,15 @@ class _AuthFlow:
         self.result: dict | None = None
         self._thread: threading.Thread | None = None
 
-    def start(self, client_secrets_path: str) -> str:
+    def start(self, client_secrets_path: str, finalize=None) -> str:
+        """Run the OAuth flow for a (possibly new) channel in a background thread.
+
+        After the Google login completes, the freshly-authorized channel is
+        identified via the API and ``finalize(channel_id, channel_name)`` — if
+        given — decides the channel KEY the token is stored under (the backend
+        uses it to record the channel in the config). The key defaults to the
+        YouTube channel ID, falling back to the legacy single-channel token.
+        """
         if self.running:
             return "Auth flow already in progress — check your browser."
         secrets_path = str(Path(client_secrets_path).expanduser())
@@ -171,12 +202,30 @@ class _AuthFlow:
 
         def _run():
             try:
-                _Creds, _Req, InstalledAppFlow, _build, _MFU = _google_imports()
+                _Creds, _Req, InstalledAppFlow, build, _MFU = _google_imports()
                 flow = InstalledAppFlow.from_client_secrets_file(secrets_path, SCOPES)
                 creds = flow.run_local_server(port=0, open_browser=True)
-                _TOKEN_PATH.parent.mkdir(parents=True, exist_ok=True)
-                _TOKEN_PATH.write_text(creds.to_json())
-                self.result = {"success": True, "error": ""}
+                channel_id, channel_name = "", ""
+                try:
+                    ytapi = build("youtube", "v3", credentials=creds)
+                    items = ytapi.channels().list(part="snippet", mine=True).execute().get("items", [])
+                    if items:
+                        channel_id = items[0]["id"]
+                        channel_name = items[0]["snippet"]["title"]
+                except Exception as exc:
+                    logger.warning("Could not resolve channel identity after auth: %s", exc)
+                key = channel_id
+                if finalize is not None:
+                    try:
+                        key = finalize(channel_id, channel_name) or key
+                    except Exception as exc:
+                        logger.warning("Channel finalize callback failed: %s", exc)
+                token_path = _token_path(key)
+                token_path.parent.mkdir(parents=True, exist_ok=True)
+                token_path.write_text(creds.to_json())
+                _clear_auth_cache(key)
+                self.result = {"success": True, "error": "", "channel": key,
+                               "channel_id": channel_id, "channel_name": channel_name}
             except Exception as exc:
                 self.result = {"success": False, "error": str(exc)[:300]}
             finally:
@@ -186,9 +235,10 @@ class _AuthFlow:
         self._thread.start()
         return "Browser opened — complete the Google authorization in your browser."
 
-    def disconnect(self):
-        if _TOKEN_PATH.exists():
-            _TOKEN_PATH.unlink()
+    def disconnect(self, channel: str = ""):
+        token_path = _token_path(channel)
+        if token_path.exists():
+            token_path.unlink()
         self.result = None
         self.running = False
 
@@ -196,25 +246,24 @@ class _AuthFlow:
 _auth_flow = _AuthFlow()
 
 
-def start_auth_flow(client_secrets_path: str) -> str:
-    return _auth_flow.start(client_secrets_path)
+def start_auth_flow(client_secrets_path: str, finalize=None) -> str:
+    return _auth_flow.start(client_secrets_path, finalize=finalize)
 
 
 def poll_auth_flow() -> dict:
     return {"running": _auth_flow.running, "result": _auth_flow.result}
 
 
-def disconnect_youtube():
-    _auth_flow.disconnect()
-    _auth_cache["result"] = None
-    _auth_cache["ts"] = 0.0
+def disconnect_youtube(channel: str = ""):
+    _auth_flow.disconnect(channel)
+    _clear_auth_cache(channel)
 
 
 # ── Comment fetching ──────────────────────────────────────────────────────────
 
-def fetch_channel_comments(client_secrets_path: str, max_results: int = 50) -> list[dict]:
+def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, channel: str = "") -> list[dict]:
     """Fetch recent comment threads from the authenticated user's channel."""
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         raise RuntimeError("Not authenticated. Connect YouTube first.")
     _Creds, _Req, _Flow, build, _MFU = _google_imports()
@@ -367,12 +416,14 @@ def upload_video(
     privacy_status: str = "private",
     thumbnail_path: str | None = None,
     progress_callback=None,
+    channel: str = "",
 ) -> dict:
     """Upload video to YouTube. Returns {video_id, url, error}.
 
+    ``channel`` selects which connected channel's credentials to upload with.
     progress_callback(pct, msg) is called during upload if provided.
     """
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return {"video_id": "", "url": "", "error": "Not authenticated. Connect YouTube first."}
     if not video_path or not Path(video_path).exists():
@@ -436,7 +487,7 @@ def upload_video(
         return {"video_id": "", "url": "", "error": err_str[:400]}
 
 
-def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str) -> dict:
+def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str, channel: str = "") -> dict:
     """Replace the thumbnail on an already-uploaded video. Returns {success, error}.
 
     YouTube allows updating the thumbnail of an existing video in place (unlike
@@ -447,7 +498,7 @@ def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str) 
         return {"success": False, "error": "Missing video ID."}
     if not thumbnail_path or not Path(thumbnail_path).exists():
         return {"success": False, "error": f"Thumbnail not found: {thumbnail_path}"}
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return {"success": False, "error": "Not authenticated. Connect YouTube first."}
     try:
@@ -466,11 +517,15 @@ def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str) 
 
 # ── Comment replies ───────────────────────────────────────────────────────────
 
-def reply_to_comment(client_secrets_path: str, parent_comment_id: str, text: str) -> dict:
-    """Post a reply to a top-level comment thread. Returns {success, error}."""
+def reply_to_comment(client_secrets_path: str, parent_comment_id: str, text: str, channel: str = "") -> dict:
+    """Post a reply to a top-level comment thread. Returns {success, error}.
+
+    ``channel`` must be the channel the comment was fetched from — the reply is
+    posted as that channel.
+    """
     if not parent_comment_id or not text:
         return {"success": False, "error": "Missing comment ID or reply text"}
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return {"success": False, "error": "Not authenticated"}
     try:
@@ -547,6 +602,9 @@ def add_to_queue(comment: dict, final_title: str, source: str = "") -> dict:
         "id": str(uuid.uuid4())[:8],
         "comment_id": comment_id,
         "video_id": comment.get("video_id", ""),
+        # Channel the source comment was fetched from (issue #22) — the
+        # completion reply must be posted as that channel.
+        "channel": comment.get("channel", ""),
         "commenter": comment.get("commenter", ""),
         "comment_text": comment.get("text", ""),
         "final_title": final_title,
@@ -643,7 +701,7 @@ def _parse_duration(iso: str) -> str:
     return f"{mins}:{s:02d}"
 
 
-def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> dict:
+def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25, channel: str = "") -> dict:
     """Return channel-level stats and per-video stats for the most recent uploads.
 
     Returns:
@@ -656,7 +714,7 @@ def fetch_channel_analytics(client_secrets_path: str, max_videos: int = 25) -> d
         }
     """
     import datetime
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return {"channel": {}, "videos": []}
     try:
@@ -912,7 +970,7 @@ def _iso8601_duration_seconds(s: str) -> int:
     return h * 3600 + mn * 60 + sec
 
 
-def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list[dict]:
+def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel: str = "") -> list[dict]:
     """Return raw per-video rows for the engagement model (issue #50).
 
     For every upload on the authenticated channel (newest first, up to
@@ -932,7 +990,7 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list
     what guarantees the first 3 days are complete.
     """
     import datetime
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return []
     try:
@@ -1030,9 +1088,9 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500) -> list
 
 # ── Channel video title fetching ──────────────────────────────────────────────
 
-def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50) -> list[str]:
+def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50, channel: str = "") -> list[str]:
     """Return titles of videos uploaded to the authenticated user's channel (newest first)."""
-    creds = _load_credentials(client_secrets_path)
+    creds = _load_credentials(client_secrets_path, channel)
     if not creds:
         return []
     try:

@@ -108,11 +108,12 @@ export const api = {
   autoPost: () => req('POST', '/automation/post'),
   autoTick: () => req('POST', '/automation/tick'),
 
-  ytAnalytics: () => req('GET', '/youtube/analytics'),
-  ytAuthStatus: () => req('GET', '/youtube/auth'),
+  ytAnalytics: (channel) => req('GET', '/youtube/analytics' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
+  // multi-channel management (issue #22) — channels live in Settings → YouTube
+  ytChannels: () => req('GET', '/youtube/channels'),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
-  ytDisconnect: () => req('POST', '/youtube/disconnect'),
+  ytDisconnect: (channel) => req('POST', '/youtube/disconnect', { channel: channel || '' }),
   ytPostOptions: () => req('GET', '/youtube/post/options'),
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
@@ -131,9 +132,9 @@ export const api = {
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
 
-  // engagement prediction (issue #50)
-  engagementStatus: () => req('GET', '/engagement/status'),
-  engagementBuild: () => req('POST', '/engagement/build'),
+  // engagement prediction (issue #50); per-channel models (issue #22)
+  engagementStatus: (channel) => req('GET', '/engagement/status' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
+  engagementBuild: (channel) => req('POST', '/engagement/build', { channel: channel || '' }),
   engagementBuildStatus: (taskId) => req('GET', `/engagement/build/status?task_id=${encodeURIComponent(taskId)}`),
   engagementPredict: (body) => req('POST', '/engagement/predict', body),
   engagementBestTimes: (body) => req('POST', '/engagement/best-times', body),

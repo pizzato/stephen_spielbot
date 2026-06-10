@@ -36,7 +36,7 @@ class EngagementEndpointTests(unittest.TestCase):
         with mock.patch.object(backend.eng, "build",
                                return_value={"available": True, "reliability": "ok", "n_samples": 20}), \
              mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"):
-            backend._run_engagement_build("t1")
+            backend._run_engagement_build("t1", "")
         self.assertEqual(backend._engagement_tasks["t1"]["status"], "done")
         self.assertTrue(backend._engagement_tasks["t1"]["result"]["available"])
 
@@ -44,7 +44,7 @@ class EngagementEndpointTests(unittest.TestCase):
         with mock.patch.object(backend.eng, "build",
                                return_value={"available": False, "error": "not enough data"}), \
              mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"):
-            backend._run_engagement_build("t2")
+            backend._run_engagement_build("t2", "")
         self.assertEqual(backend._engagement_tasks["t2"]["status"], "error")
         self.assertIn("not enough data", backend._engagement_tasks["t2"]["error"])
 
@@ -53,7 +53,15 @@ class EngagementEndpointTests(unittest.TestCase):
                                return_value={"available": False}) as p:
             out = backend.engagement_predict(backend.EngagementBody(title="x", description="y"))
         self.assertEqual(out, {"available": False})
-        p.assert_called_once_with("x", "y", False)
+        p.assert_called_once_with("x", "y", False, channel="")
+
+    def test_predict_uses_the_styles_channel(self):
+        with mock.patch.object(backend.eng, "predict",
+                               return_value={"available": False}) as p, \
+             mock.patch.object(backend, "_channel_for_style", return_value="UC123") as ch:
+            backend.engagement_predict(backend.EngagementBody(title="x", style_name="Kids"))
+        ch.assert_called_once_with("Kids")
+        p.assert_called_once_with("x", "", False, channel="UC123")
 
 
 if __name__ == "__main__":

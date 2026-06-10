@@ -71,6 +71,9 @@ export default function Engagement() {
   const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  // One model per channel (issue #22) — the selector picks whose model is shown/built.
+  const [channels, setChannels] = useState(null)
+  const [channel, setChannel] = useState('')
   const pollRef = useRef(null)
 
   // try-an-idea predictor (live — estimates as you type)
@@ -80,16 +83,24 @@ export default function Engagement() {
   const [pred, setPred] = useState(null)
   const [predicting, setPredicting] = useState(false)
 
-  const load = () => {
+  const load = (ch = channel) => {
     setLoading(true)
-    return api.engagementStatus().then(setStatus).catch((e) => setError(e.message)).finally(() => setLoading(false))
+    return api.engagementStatus(ch).then(setStatus).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
-  useEffect(() => { load(); return () => clearTimeout(pollRef.current) }, [])
+  useEffect(() => {
+    api.ytChannels().then((r) => {
+      const list = r.channels || []
+      setChannels(list)
+      setChannel((c) => c || list[0]?.id || '')
+    }).catch(() => setChannels([]))
+    return () => clearTimeout(pollRef.current)
+  }, [])
+  useEffect(() => { if (channels !== null) load() }, [channel, channels])
 
   const build = async () => {
     setBuilding(true); setError(''); setNote(''); setPhase('fetching')
     try {
-      const { task_id } = await api.engagementBuild()
+      const { task_id } = await api.engagementBuild(channel)
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -111,11 +122,11 @@ export default function Engagement() {
     if (!tTitle.trim() && !tDesc.trim()) { setPred(null); setPredicting(false); return }
     setPredicting(true)
     const t = setTimeout(() => {
-      api.engagementPredict({ title: tTitle, description: tDesc, is_short: tShort })
+      api.engagementPredict({ title: tTitle, description: tDesc, is_short: tShort, channel })
         .then(setPred).catch(() => setPred(null)).finally(() => setPredicting(false))
     }, 400)
     return () => clearTimeout(t)
-  }, [tTitle, tDesc, tShort])
+  }, [tTitle, tDesc, tShort, channel])
 
   const available = status?.available
   const content = status?.content
@@ -130,6 +141,11 @@ export default function Engagement() {
           <h1 className="display-md reveal reveal-d1">Predict a video's reach</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
+          {(channels || []).length > 1 && (
+            <select className="select" value={channel} onChange={(e) => setChannel(e.target.value)} style={{ maxWidth: 220 }}>
+              {(channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+            </select>
+          )}
           <Button variant={available ? 'ghost' : 'primary'} icon="wand-magic-sparkles"
             disabled={building} onClick={build}>
             {building ? 'Building…' : (available ? 'Rebuild model' : 'Build model')}
