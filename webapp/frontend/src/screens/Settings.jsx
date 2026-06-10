@@ -70,12 +70,13 @@ function PlayButton({ src }) {
   )
 }
 
-// Audition a voice at the current robotic level. F5-TTS runs on the backend
-// (a few seconds for one sentence), so show a "Generating…" state while waiting.
-// Reads the live, unsaved robotic-level slider so you can dial it in by ear
-// before saving. 0% = natural voice.
-function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
-  const [voice, setVoice] = useState(defaultVoice || '')
+// Audition the style's narrator voice at the current robotic level. F5-TTS
+// runs on the backend (a few seconds for one sentence), so show a
+// "Generating…" state while waiting. Reads the live, unsaved narrator-voice
+// and robotic-level fields so you can dial them in by ear before saving.
+// Deliberately no voice picker of its own: a second dropdown here looked like
+// the style's voice setting but silently saved nothing.
+function VoiceTester({ voice, roboticAmount, onError }) {
   const [busy, setBusy] = useState(false)
   const audioRef = useRef(null)
 
@@ -83,7 +84,7 @@ function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
     onError(''); setBusy(true)
     try {
       const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice, robotic: amount > 0, robotic_amount: amount })
+      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount })
       const a = audioRef.current
       if (a) { a.src = r.url; a.load(); await a.play() }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
@@ -92,12 +93,8 @@ function VoiceTester({ voices, defaultVoice, roboticAmount, onError }) {
   const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Generates “This is the voice of ${spoken}. What do you think?” at the robotic level above (cached after the first time).`}>
+      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level (cached after the first time).`}>
       <div className="row center gap-10 row--wrap">
-        <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)} style={{ maxWidth: 220 }}>
-          <option value="">(F5-TTS default)</option>
-          {(voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
         <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
         <audio ref={audioRef} hidden />
       </div>
@@ -276,9 +273,10 @@ function ChannelsCard({ onConfigChanged, onError }) {
 
 export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [cfg, setCfg] = useState(meta.config || {})
-  // True when `cfg` holds Save-required edits not yet persisted. Voice and
-  // channel ops auto-save server-side, so they deliberately don't set this.
-  const [dirty, setDirty] = useState(false)
+  // True while `cfg` holds Save-required edits not yet persisted. Voice and
+  // channel ops auto-save server-side, so they deliberately don't set it.
+  // A ref, not state: only the sync effect and leave guards read it.
+  const dirtyRef = useRef(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -291,27 +289,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [newDesc, setNewDesc] = useState('')
 
   // A fresh server config (initial load, Save, voice/channel op) replaces the
-  // working copy and clears the unsaved flag.
-  useEffect(() => { setCfg(meta.config || {}); setDirty(false) }, [meta.config])
-
-  // Stage a Save-required edit and flag it as unsaved (see `dirty`).
-  const editCfg = (updater) => { setDirty(true); setCfg(updater) }
-
-  // Warn before leaving with unsaved edits — for in-app navigation (App's `go`
-  // consults this guard) and browser reload/close (beforeunload). Voice and
-  // channel ops auto-save, so `dirty` stays false and they never prompt.
+  // working copy — but never over staged edits: a voice op refreshing
+  // meta.config used to silently wipe an unsaved narrator-voice change.
   useEffect(() => {
-    if (!leaveGuardRef) return
-    leaveGuardRef.current = () => !dirty ||
+    if (!dirtyRef.current) setCfg(meta.config || {})
+  }, [meta.config])
+
+  // Re-sync with the server on every visit. The app fetches config once per
+  // tab load, so a long-lived tab would otherwise show (and later Save —
+  // clobbering newer values) a stale snapshot here.
+  useEffect(() => { api.getConfig().then(setMeta).catch(() => {}) }, [setMeta])
+
+  // Stage a Save-required edit and flag it as unsaved (see dirtyRef).
+  const editCfg = (updater) => { dirtyRef.current = true; setCfg(updater) }
+
+  // Warn before leaving with unsaved edits — in-app navigation consults the
+  // guard (via App's `go`), reload/close hits beforeunload. Voice and channel
+  // ops auto-save, so they never prompt.
+  useEffect(() => {
+    if (leaveGuardRef) leaveGuardRef.current = () => !dirtyRef.current ||
       window.confirm('You have unsaved settings changes. Leave without saving?')
-    return () => { leaveGuardRef.current = null }
-  }, [dirty, leaveGuardRef])
-  useEffect(() => {
-    if (!dirty) return
-    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    const warn = (e) => { if (dirtyRef.current) { e.preventDefault(); e.returnValue = '' } }
     window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [dirty])
+    return () => {
+      if (leaveGuardRef) leaveGuardRef.current = null
+      window.removeEventListener('beforeunload', warn)
+    }
+  }, [leaveGuardRef])
 
   // Poll live cluster status (read-only). Start/stop is via `make start`/`stop`.
   useEffect(() => {
@@ -389,6 +393,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.ui_workers = fromLines(toLines(cfg.ui_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
+      dirtyRef.current = false   // saved — let the sync effect adopt r.config
       setMeta((m) => ({ ...m, config: r.config }))
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -607,8 +612,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   value={st.voice_robotic_amount ?? 0.35}
                   onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
               </Field>
-              <VoiceTester key={st.name} voices={meta.voices} defaultVoice={st.voice}
-                roboticAmount={st.voice_robotic_amount} onError={setError} />
+              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} onError={setError} />
             </div>
           </Card>
 
