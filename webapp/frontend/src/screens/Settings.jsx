@@ -184,8 +184,95 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
 const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
+  { id: 'youtube', label: 'YouTube' },
   { id: 'automation', label: 'Automation' },
 ]
+
+// Connected YouTube channels (issue #22). Connecting runs the backend OAuth
+// flow (a Google window opens on the server machine); each channel's token is
+// stored separately, and styles pick which channel they publish to.
+function ChannelsCard({ onConfigChanged, onError }) {
+  const [channels, setChannels] = useState(null)
+  const [connecting, setConnecting] = useState(false)
+  const [busy, setBusy] = useState('')
+  const pollRef = useRef(null)
+
+  const refresh = () => api.ytChannels()
+    .then((r) => { setChannels(r.channels || []); if (r.auth_running) startPolling() })
+    .catch((e) => onError(e.message))
+  useEffect(() => { refresh(); return () => clearInterval(pollRef.current) }, [])
+
+  const startPolling = () => {
+    setConnecting(true)
+    clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await api.ytAuthPoll()
+        if (r.running) return
+        clearInterval(pollRef.current)
+        setConnecting(false)
+        if (r.result && !r.result.success) onError(r.result.error || 'Authorization failed.')
+        await refresh()
+        onConfigChanged()   // the channel list lives in the config
+      } catch { /* keep polling */ }
+    }, 2000)
+  }
+
+  const connect = async () => {
+    onError('')
+    try {
+      const r = await api.ytAuthStart()
+      if (!r.ok) { onError(r.message || 'Could not start the Google authorization.'); return }
+      startPolling()
+    } catch (e) { onError(e.message) }
+  }
+
+  const disconnect = async (ch) => {
+    const label = ch.name || ch.id
+    if (!window.confirm(`Disconnect “${label}”? Styles publishing to it fall back to the first remaining channel.`)) return
+    setBusy(ch.id); onError('')
+    try {
+      await api.ytDisconnect(ch.id)
+      await refresh()
+      onConfigChanged()
+    } catch (e) { onError(e.message) } finally { setBusy('') }
+  }
+
+  const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
+  return (
+    <Card span={12} className="reveal reveal-d1">
+      <div className="row center between">
+        <span className="label-sm">Channels</span>
+        <Button variant="primary" icon="youtube" disabled={connecting} onClick={connect}>
+          {connecting ? 'Waiting for Google…' : 'Connect channel'}
+        </Button>
+      </div>
+      <div className="field__hint" style={{ marginTop: 6 }}>
+        Each connected Google login is one channel. Pick the channel a style publishes to under <strong>Styles</strong>; comments and uploads use the right channel automatically.
+      </div>
+      <div className="stack gap-10 mt-16">
+        {channels === null && <div className="muted" style={{ fontSize: 13 }}>Checking…</div>}
+        {channels !== null && channels.length === 0 && (
+          <div className="muted" style={{ fontSize: 13 }}>No channels connected yet — click <strong>Connect channel</strong> and finish the Google login in the browser window.</div>
+        )}
+        {(channels || []).map((ch) => (
+          <div key={ch.id} className="row center gap-10 row--wrap" style={rowStyle}>
+            <Icon name="youtube" style={{ color: 'var(--accent)' }} />
+            <span style={{ fontWeight: 600 }}>{ch.name || ch.id}</span>
+            {ch.connected
+              ? <Chip tone="ok" dot>connected</Chip>
+              : <Chip tone="danger" dot title={ch.error}>not connected</Chip>}
+            {!ch.connected && ch.error && <span className="muted" style={{ fontSize: 11.5 }}>{ch.error}</span>}
+            <div className="grow" />
+            <Button variant="danger" icon="link-slash" disabled={busy === ch.id} onClick={() => disconnect(ch)}>
+              {busy === ch.id ? 'Removing…' : 'Disconnect'}
+            </Button>
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
 
 export default function Settings({ meta, setMeta }) {
   const [cfg, setCfg] = useState(meta.config || {})
@@ -316,6 +403,23 @@ export default function Settings({ meta, setMeta }) {
     return voiceOp(() => api.deleteVoice(name))
   }
 
+  // Connect/disconnect rewrites the channel list (and may clear style channel
+  // refs) server-side — merge just those fields into the staged copy so other
+  // unsaved edits survive.
+  const reloadChannels = async () => {
+    try {
+      const r = await api.getConfig()
+      setCfg((c) => ({
+        ...c,
+        youtube_channels: r.config.youtube_channels,
+        styles: (c.styles || []).map((s) => {
+          const srv = (r.config.styles || []).find((x) => x.name === s.name)
+          return srv ? { ...s, channel: srv.channel } : s
+        }),
+      }))
+    } catch { /* the next full load picks it up */ }
+  }
+
   const isClaude = cfg.llm_backend === 'claude'
 
   return (
@@ -442,6 +546,12 @@ export default function Settings({ meta, setMeta }) {
               <Field label="Description" hint="What this style is for — shown when choosing a style for a video.">
                 <textarea className="textarea" rows={2} value={st.description || ''} onChange={(e) => setStyleField('description', e.target.value)} />
               </Field>
+              <Field label="YouTube channel" hint="Where videos in this style are published — connect channels in the YouTube tab.">
+                <select className="select" value={st.channel || ''} onChange={(e) => setStyleField('channel', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="">(first connected channel)</option>
+                  {(cfg.youtube_channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+                </select>
+              </Field>
             </div>
           </Card>
 
@@ -506,6 +616,19 @@ export default function Settings({ meta, setMeta }) {
                   <input className="slider" type="range" min={0} max={max} value={st[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />
                 </Field>
               ))}
+            </div>
+          </Card>
+        </>)}
+
+        {tab === 'youtube' && (<>
+          {/* ── YouTube channels (issue #22) ── */}
+          <ChannelsCard onConfigChanged={reloadChannels} onError={setError} />
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">Google API</span>
+            <div className="stack gap-22 mt-16">
+              <Field label="Client secrets file" hint="Path to the OAuth client JSON from Google Cloud Console — one app shared by every channel.">
+                <input className="input" value={cfg.youtube_client_secrets || ''} onChange={(e) => set('youtube_client_secrets', e.target.value)} />
+              </Field>
             </div>
           </Card>
         </>)}

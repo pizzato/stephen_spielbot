@@ -1,5 +1,5 @@
-import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, Button, Icon, Banner, Check } from '../components.jsx'
+import { useState, useEffect } from 'react'
+import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -41,7 +41,10 @@ function BestTimesCard({ data }) {
 
 export default function Publish({ initialWorkDir, go }) {
   const [opts, setOpts] = useState({ categories: {}, privacy: ['private', 'unlisted', 'public'], finished: [] })
-  const [auth, setAuth] = useState({ connected: false })
+  // Connected channels (issue #22). The upload goes to `channel` — prefilled
+  // from the film's style, overridable here. Connecting lives in Settings.
+  const [channels, setChannels] = useState([])
+  const [channel, setChannel] = useState('')
   const [workDir, setWorkDir] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
@@ -59,9 +62,8 @@ export default function Publish({ initialWorkDir, go }) {
   const [reuploading, setReuploading] = useState(false)
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [youtubeVideoId, setYoutubeVideoId] = useState('')
-  const pollRef = useRef(null)
 
-  const refreshAuth = () => api.ytAuthStatus().then(setAuth).catch(() => {})
+  const refreshChannels = () => api.ytChannels().then((r) => setChannels(r.channels || [])).catch(() => {})
 
   useEffect(() => {
     api.ytPostOptions().then((o) => {
@@ -74,8 +76,7 @@ export default function Publish({ initialWorkDir, go }) {
         : o.finished?.[0]?.work_dir
       if (target) selectFilm(target)
     }).catch((e) => setError(e.message))
-    refreshAuth()
-    return () => clearInterval(pollRef.current)
+    refreshChannels()
   }, [initialWorkDir])
 
   const selectFilm = async (wd) => {
@@ -88,34 +89,16 @@ export default function Publish({ initialWorkDir, go }) {
       setFinalUrl(p.final_url || '')
       setYoutubeUrl(p.youtube_url || '')
       setYoutubeVideoId(p.youtube_video_id || '')
+      setChannel(p.channel || '')   // the film's style decides the target channel
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
       setBestTimes(null)
       // A portrait film is a Short — the timing model weighs that differently.
       const isShort = !!(p.vid_width && p.vid_height && Number(p.vid_height) > Number(p.vid_width))
-      api.engagementBestTimes({ title: p.title || '', description: p.description || '', is_short: isShort })
+      api.engagementBestTimes({ title: p.title || '', description: p.description || '', is_short: isShort, channel: p.channel || '' })
         .then(setBestTimes).catch(() => {})
     } catch (e) { setError(e.message) }
   }
-
-  const connect = async () => {
-    setBusy('auth'); setError('')
-    try {
-      const { auth_url } = await api.ytAuthStart()
-      if (auth_url) window.open(auth_url, '_blank', 'noopener')
-      // Poll until the local OAuth redirect completes.
-      clearInterval(pollRef.current)
-      pollRef.current = setInterval(async () => {
-        try {
-          const r = await api.ytAuthPoll()
-          if (r.status === 'connected' || r.connected) { clearInterval(pollRef.current); setBusy(''); refreshAuth() }
-          else if (r.status === 'error') { clearInterval(pollRef.current); setBusy(''); setError(r.error || 'Auth failed') }
-        } catch { /* keep polling */ }
-      }, 2000)
-    } catch (e) { setBusy(''); setError(e.message) }
-  }
-
-  const disconnect = async () => { await api.ytDisconnect().catch(() => {}); refreshAuth() }
 
   const genDescription = async () => {
     setBusy('desc'); setError('')
@@ -160,7 +143,9 @@ export default function Publish({ initialWorkDir, go }) {
     setBusy('upload'); setError(''); setStatus('Starting upload…')
     let pollTimer = null
     try {
-      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy, include_thumbnail: includeThumbnail })
+      // Send the channel shown in the header so the upload matches the UI even
+      // when the prefill couldn't resolve one and we fell back to the first.
+      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy, include_thumbnail: includeThumbnail, channel: chan?.id || '' })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -171,7 +156,7 @@ export default function Publish({ initialWorkDir, go }) {
               setYoutubeVideoId(s.video_id || '')
               setConfirming(false)
               setReuploading(false)
-              refreshAuth()
+              refreshChannels()
               resolve()
             } else if (s.status === 'error') {
               reject(new Error(s.error || 'Upload failed'))
@@ -189,19 +174,29 @@ export default function Publish({ initialWorkDir, go }) {
     }
   }
 
-  const canUpload = auth.connected && workDir && title.trim() && finalUrl
+  // The channel this upload goes to — prefilled from the film's style, overridable.
+  const chan = channels.find((c) => c.id === channel) || channels[0]
+  const canUpload = !!chan?.connected && workDir && title.trim() && finalUrl
 
   return (
     <div className="bento">
       <Card span={8} padLg className="reveal reveal-d1">
         <div className="row center between row--wrap gap-16">
           <span className="row center gap-10"><span className="label-sm">Publish a finished film</span>{go && <Button variant="ghost" icon="film" disabled={!workDir} onClick={() => go('editfilm', { workDir })}>Edit</Button>}</span>
-          {auth.connected
-            ? <span className="row center gap-10"><span className="muted" style={{ fontSize: 12.5 }}>{auth.channel_name || 'Connected'}</span><Button variant="ghost" icon="link-slash" onClick={disconnect}>Disconnect</Button></span>
-            : <Button variant="primary" icon="youtube" disabled={busy === 'auth'} onClick={connect}>{busy === 'auth' ? 'Waiting for Google…' : 'Connect YouTube'}</Button>}
+          {channels.length > 0 && (
+            <span className="row center gap-10">
+              <span className="muted" style={{ fontSize: 12.5 }}>Publish to</span>
+              <select className="select" value={chan?.id || ''} onChange={(e) => setChannel(e.target.value)} style={{ maxWidth: 220 }}>
+                {channels.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+              </select>
+              {chan?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
+            </span>
+          )}
         </div>
 
-        {!auth.connected && <Banner tone="warn">{auth.error || 'Connect your YouTube channel to publish. Set the client secrets path in Settings if you haven\'t.'}</Banner>}
+        {!chan?.connected && <Banner tone="warn">{channels.length === 0
+          ? 'No YouTube channels connected — add one in Settings → YouTube.'
+          : (chan?.error || 'This channel is not connected — reconnect it in Settings → YouTube.')}</Banner>}
         <Banner tone="danger">{error}</Banner>
         {status && <Banner tone="ok">{status}</Banner>}
 
@@ -240,8 +235,8 @@ export default function Publish({ initialWorkDir, go }) {
             <div className="row gap-10 center row--wrap">
               <span className="muted" style={{ fontSize: 13 }}>
                 {reuploading
-                  ? <>Re-upload "{title}" as a <strong>new</strong> {privacy} video? The existing one stays on your channel.</>
-                  : <>Upload "{title}" as <strong>{privacy}</strong>?</>}
+                  ? <>Re-upload "{title}" as a <strong>new</strong> {privacy} video on <strong>{chan?.name || chan?.id || 'the channel'}</strong>? The existing one stays on your channel.</>
+                  : <>Upload "{title}" as <strong>{privacy}</strong> to <strong>{chan?.name || chan?.id || 'the channel'}</strong>?</>}
               </span>
               <Button variant="primary" icon="youtube" disabled={busy === 'upload'} onClick={upload}>{busy === 'upload' ? 'Uploading…' : (reuploading ? 'Confirm re-upload' : 'Confirm upload')}</Button>
               <Button variant="ghost" onClick={() => { setConfirming(false); setReuploading(false) }}>Cancel</Button>

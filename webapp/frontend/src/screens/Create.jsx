@@ -93,11 +93,11 @@ export default function Create({ seed, meta, onGenerated }) {
   useEffect(() => {
     if (!videoTitle.trim() && !direction.trim()) { setReach(null); return }
     const t = setTimeout(() => {
-      api.engagementPredict({ title: videoTitle, description: direction, is_short: resolution.startsWith('Portrait') })
+      api.engagementPredict({ title: videoTitle, description: direction, is_short: resolution.startsWith('Portrait'), style_name: styleName })
         .then(setReach).catch(() => setReach(null))
     }, 600)
     return () => clearTimeout(t)
-  }, [videoTitle, direction, resolution])
+  }, [videoTitle, direction, resolution, styleName])
 
   const generate = async () => {
     setBusy(true); setError('')
