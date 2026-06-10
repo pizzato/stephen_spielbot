@@ -224,6 +224,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         style, resolution, voice: job.voice || '', voice_robotic: job.voice_robotic,
         music_desc: job.music_desc || '',
         queue_item_id: job.queue_item_id || '',
+        style_name: job.style_name || '',
       })
       setJob({ ...job, scenes, style })
       if (r.started) onGenerate(job.work_dir)
