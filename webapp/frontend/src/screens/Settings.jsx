@@ -231,7 +231,8 @@ export default function Settings({ meta, setMeta }) {
     if (k === 'name' && c.default_style === cur.name) next.default_style = v
     return next
   })
-  const nameTaken = (n) => styles.some((s) => s.name === n)
+  // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
+  const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
     const name = newName.trim()
     if (!name || nameTaken(name)) return
@@ -264,8 +265,8 @@ export default function Settings({ meta, setMeta }) {
   const save = async () => {
     setError(''); setStatus('')
     const names = (cfg.styles || []).map((s) => (s.name || '').trim())
-    if (names.some((n) => !n) || new Set(names).size !== names.length) {
-      setError('Each style needs a unique, non-empty name.')
+    if (names.some((n) => !n || n === '(none)') || new Set(names).size !== names.length) {
+      setError('Each style needs a unique, non-empty name — and “(none)” is reserved.')
       return
     }
     setBusy(true)

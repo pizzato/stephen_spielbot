@@ -17,56 +17,57 @@ const PIPELINE = [
   ['film', 'Cut', 'FFmpeg muxes the final film'],
 ]
 
+// Reserved style_name for "no style" (must match app.NO_STYLE): the narrator
+// and visual fields unlock for experimentation, no extra script instructions
+// are appended, and render quality + audio mix fall back to the default style.
+const NO_STYLE = '(none)'
+
 export default function Create({ seed, meta, onGenerated }) {
   const voiceChoices = useMemo(() => (
     meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
   ), [meta.voices])
 
-  // Style profiles (issue #66): the picked style drives every prefill below
-  // (scenes, voice, robotic, resolution, visual style) and rides along with
-  // the job so the render uses that style's quality + audio mix too.
+  // Style profiles (issue #66): the picked style OWNS the narrator voice,
+  // robotic toggle and visual style (those inputs are locked to it), prefills
+  // scenes/resolution, and rides along with the job so the render uses its
+  // quality + audio mix too. `profile == null` means "No style" — the locked
+  // fields open up, keeping their last values as a starting point.
   const styleList = meta.config?.styles || []
   const [styleName, setStyleName] = useState(seed?.styleName || '')
-  const profile = useMemo(() => (
-    styleList.find((s) => s.name === styleName)
-    || styleList.find((s) => s.name === meta.config?.default_style)
-    || styleList[0] || {}
-  ), [styleList, styleName, meta.config?.default_style])
-
-  const configuredVoice = profile.voice || voiceChoices[0] || 'Default (F5-TTS)'
+  const profile = useMemo(() => {
+    if (styleName === NO_STYLE) return null
+    return styleList.find((s) => s.name === styleName)
+      || styleList.find((s) => s.name === meta.config?.default_style)
+      || styleList[0] || null
+  }, [styleList, styleName, meta.config?.default_style])
+  const locked = !!profile
 
   const [videoTitle, setVideoTitle] = useState(seed?.title || '')
   const [direction, setDirection] = useState(seed?.description || '')
-  const [scenes, setScenes] = useState(seed?.scenes || profile.n_scenes || 12)
-  const [voice, setVoice] = useState(configuredVoice)
-  const [voiceTouched, setVoiceTouched] = useState(false)
-  const [robotic, setRobotic] = useState(!!profile.voice_robotic)
-  const [roboticTouched, setRoboticTouched] = useState(false)
-  const [resolution, setResolution] = useState(profile.resolution || meta.default_resolution || '')
-  const [style, setStyle] = useState(profile.visual_style || '')
+  const [scenes, setScenes] = useState(seed?.scenes || profile?.n_scenes || 12)
+  const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
+  const [robotic, setRobotic] = useState(!!profile?.voice_robotic)
+  const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
+  const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
-  // Picking a style re-applies its prefills (clears any manual voice tweaks).
-  const pickStyle = (name) => {
-    setStyleName(name)
-    setVoiceTouched(false)
-    setRoboticTouched(false)
-  }
-
+  // An active style keeps narrator + visuals synced to it (the inputs are
+  // disabled, so this is the only writer). Switching to "No style" stops the
+  // syncing and leaves the fields editable where they are.
   useEffect(() => {
-    if (!voiceTouched) setVoice(configuredVoice)
-  }, [configuredVoice, voiceTouched])
+    if (!profile) return
+    setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
+    setRobotic(!!profile.voice_robotic)
+    setStyle(profile.visual_style || '')
+  }, [profile, voiceChoices])
 
+  // In No-style mode, keep a manually chosen voice valid if the voice list changes.
   useEffect(() => {
-    if (!voiceChoices.includes(voice)) setVoice(configuredVoice)
-  }, [configuredVoice, voice, voiceChoices])
-
-  useEffect(() => {
-    if (!roboticTouched) setRobotic(!!profile.voice_robotic)
-  }, [profile.voice_robotic, roboticTouched])
+    if (!locked && !voiceChoices.includes(voice)) setVoice(voiceChoices[0] || 'Default (F5-TTS)')
+  }, [locked, voice, voiceChoices])
 
   useEffect(() => {
     if (!seed) return
@@ -78,17 +79,13 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [seed])
 
   useEffect(() => {
-    if (!seed?.scenes && profile.n_scenes) setScenes(profile.n_scenes)
-  }, [profile.n_scenes, seed?.scenes])
+    if (!seed?.scenes && profile?.n_scenes) setScenes(profile.n_scenes)
+  }, [profile?.n_scenes, seed?.scenes])
 
   useEffect(() => {
-    if (seed?.resolution) return
+    if (seed?.resolution || !profile) return
     setResolution(profile.resolution || meta.default_resolution || '')
-  }, [profile.resolution, meta.default_resolution, seed?.resolution])
-
-  useEffect(() => {
-    setStyle(profile.visual_style || '')
-  }, [profile.visual_style])
+  }, [profile, profile?.resolution, meta.default_resolution, seed?.resolution])
 
   // Estimate the idea's 3-day reach (debounced). Silently no-ops when no model
   // has been built — the card simply doesn't render. A portrait resolution means
@@ -115,9 +112,9 @@ export default function Create({ seed, meta, onGenerated }) {
         voice_robotic: robotic,
         resolution,
         queue_item_id: seed?.queueItemId || '',
-        style_name: profile.name || '',
+        style_name: profile ? (profile.name || '') : NO_STYLE,
       })
-      onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile.name || '' })
+      onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -142,13 +139,16 @@ export default function Create({ seed, meta, onGenerated }) {
           <div className="stack gap-22">
             {styleList.length > 0 && (
               <Field label="Style"
-                hint={profile.description || 'Script, render and audio settings for this film — manage styles in Settings.'}>
-                <select className="select" value={profile.name || ''} onChange={(e) => pickStyle(e.target.value)} style={{ maxWidth: 320 }}>
+                hint={profile
+                  ? (profile.description || 'Sets the narrator and visuals below, plus render quality and audio mix — manage styles in Settings.')
+                  : 'Experiment freely — narrator and visuals are yours; render quality and audio mix come from the default style.'}>
+                <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => setStyleName(e.target.value)} style={{ maxWidth: 320 }}>
                   {styleList.map((s) => (
                     <option key={s.name} value={s.name}>
                       {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
                     </option>
                   ))}
+                  <option value={NO_STYLE}>No style — experiment</option>
                 </select>
               </Field>
             )}
@@ -174,17 +174,19 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </div>
 
-            <Field label="Visual style" hint="Applied to every scene's image prompt.">
+            <Field label="Visual style"
+              hint={locked ? 'Set by the style — pick “No style” to experiment.' : "Applied to every scene's image prompt."}>
               <input className="input" placeholder="Cinematic 35mm, golden hour, painterly lighting"
-                value={style} onChange={(e) => setStyle(e.target.value)} />
+                value={style} disabled={locked} onChange={(e) => setStyle(e.target.value)} />
             </Field>
 
-            <Field label="Narrator voice">
-              <select className="select" value={voice} onChange={(e) => { setVoiceTouched(true); setVoice(e.target.value) }}>
+            <Field label="Narrator voice"
+              hint={locked ? 'Set by the style — pick “No style” to experiment.' : undefined}>
+              <select className="select" value={voice} disabled={locked} onChange={(e) => setVoice(e.target.value)}>
                 {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
               <div className="mt-8">
-                <Check checked={robotic} onChange={(v) => { setRoboticTouched(true); setRobotic(v) }}
+                <Check checked={robotic} disabled={locked} onChange={setRobotic}
                   label="Make it robotic — a synthetic monotone so it isn't mistaken for a human" />
               </div>
             </Field>

@@ -113,10 +113,10 @@ export function ResolutionPicker({ value, onChange, meta = {} }) {
   )
 }
 
-export function Check({ checked, onChange, label }) {
+export function Check({ checked, onChange, label, disabled }) {
   return (
-    <label className="check">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange?.(e.target.checked)} />
+    <label className="check" style={disabled ? { opacity: 0.55, cursor: 'default' } : undefined}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange?.(e.target.checked)} />
       <span>{label}</span>
     </label>
   )
