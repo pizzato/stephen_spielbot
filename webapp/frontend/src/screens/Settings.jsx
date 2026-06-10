@@ -462,6 +462,9 @@ export default function Settings({ meta, setMeta }) {
               <Field label="Extra script instructions" hint="Appended to every topic.">
                 <textarea className="textarea" rows={8} value={st.extra_instructions || ''} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
               </Field>
+              <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
+                <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
+              </Field>
               <Check checked={!!st.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
                 label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
               <Field label={`Robotic level — ${Math.round((st.voice_robotic_amount ?? 0.35) * 100)}%`}

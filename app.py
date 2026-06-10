@@ -194,6 +194,7 @@ STYLE_FIELD_TO_FLAT = {
     # Script & content
     "visual_style":         "default_visual_style",
     "extra_instructions":   "script_extra_instructions",
+    "description_suffix":   "description_suffix",
     "voice":                "default_voice",
     "voice_robotic":        "default_voice_robotic",
     "voice_robotic_amount": "default_voice_robotic_amount",
@@ -242,7 +243,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         styles = [_style_from_flat(cfg, BLANK_STYLE_NAME if fresh else LEGACY_STYLE_NAME)]
 
     # NO_STYLE is pre-seeded as taken so no real style can claim the sentinel.
-    normalized, seen = [], {NO_STYLE}
+    normalized, seen, missing = [], {NO_STYLE}, []
     for s in styles:
         base = str(s.get("name")).strip()
         name, n = base, 2
@@ -250,14 +251,31 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
             name, n = f"{base} {n}", n + 1
         seen.add(name)
         row = {"name": name, "description": str(s.get("description") or "")}
+        absent = set()
         for field, flat in STYLE_FIELD_TO_FLAT.items():
-            row[field] = s.get(field, DEFAULT_CFG.get(flat))
+            if field in s:
+                row[field] = s[field]
+            else:
+                row[field] = DEFAULT_CFG.get(flat)
+                absent.add(field)
         normalized.append(row)
+        missing.append(absent)
 
     cfg["styles"] = normalized
     if cfg.get("default_style") not in {s["name"] for s in normalized}:
         cfg["default_style"] = normalized[0]["name"]
-    default = next(s for s in normalized if s["name"] == cfg["default_style"])
+    default_idx = next(i for i, s in enumerate(normalized) if s["name"] == cfg["default_style"])
+    # A field that became per-style AFTER this config migrated (e.g.
+    # description_suffix) has no value on any style yet. The flat key still
+    # holds its real value and, by the mirror invariant, the flat keys ARE the
+    # default style's settings — so the default style inherits it. Other
+    # styles keep the built-in blank: leaking e.g. the Spielbot suffix into
+    # every style was exactly the bug being fixed.
+    for field in missing[default_idx]:
+        flat = STYLE_FIELD_TO_FLAT[field]
+        if flat in cfg:
+            normalized[default_idx][field] = cfg[flat]
+    default = normalized[default_idx]
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         cfg[flat] = default[field]
     return cfg
@@ -287,7 +305,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     if target:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
-        out.update(visual_style="", extra_instructions="", voice="", voice_robotic=False)
+        out.update(visual_style="", extra_instructions="", description_suffix="",
+                   voice="", voice_robotic=False)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out

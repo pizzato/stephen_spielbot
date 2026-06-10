@@ -423,6 +423,15 @@ def script_generate(body: GenerateScriptBody) -> dict:
     finally:
         store.close()
 
+    # Write the YouTube description alongside the fresh script (issue #66
+    # follow-up): a daemon thread caches description.txt so the Cover and
+    # Publish screens find it ready — no manual "Generate" click needed.
+    threading.Thread(
+        target=_describe_in_background,
+        args=(str(work_dir), display_title),
+        daemon=True,
+    ).start()
+
     result = {
         "job_id": job_id,
         "work_dir": str(work_dir),
@@ -1802,6 +1811,27 @@ def _generate_and_cache_description(work_dir: str, title: str = "") -> str:
     return desc
 
 
+def _work_dir_style_name(wd: Path | None) -> str:
+    """The style profile a job belongs to: job_config.json (stamped at render
+    time) → durable job config (stamped at script time) → '' (default style)."""
+    if wd is None:
+        return ""
+    name = str(_film_job_config(wd).get("style_name") or "")
+    if name:
+        return name
+    try:
+        store = DurableStore.default()
+        try:
+            row = store.get_job(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        if row:
+            return json.loads(_row_to_dict(row).get("config_json") or "{}").get("style_name", "")
+    except Exception:
+        pass
+    return ""
+
+
 def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
     cfg = gapp.load_config()
     wd = Path(work_dir) if work_dir else None
@@ -1823,10 +1853,24 @@ def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
         raise HTTPException(503, f"Description generation failed: {str(e).splitlines()[0][:200]}")
     if isinstance(desc, (tuple, list)):
         desc = desc[0]
-    suffix = cfg.get("description_suffix", "").strip()
+    # The suffix belongs to the JOB's style profile (issue #66) — the global
+    # flat key is just the default style's mirror, and appending it to every
+    # video leaked e.g. the Spielbot sign-off into other styles' descriptions.
+    ss = gapp.style_settings(cfg, _work_dir_style_name(wd))
+    suffix = (ss.get("description_suffix") or "").strip()
     if suffix and suffix not in str(desc):
         desc = f"{desc}\n\n{suffix}"
     return str(desc)
+
+
+def _describe_in_background(work_dir: str, title: str) -> None:
+    """Daemon-thread target: write description.txt for a fresh script so the
+    Cover/Publish screens find it pre-filled (no manual Generate click)."""
+    try:
+        with _track_op("Generating description", title):
+            _generate_and_cache_description(work_dir, title)
+    except Exception:
+        gapp.logger.warning("Background description generation failed for %s", work_dir, exc_info=True)
 
 
 class CoverBody(BaseModel):
@@ -3278,7 +3322,8 @@ def _auto_post_done() -> list[str]:
             gapp._write_job_meta(p, _auto_post_triggered=True)
         try:
             title = jc.get("video_title") or _video_title_for(p)
-            description = _generate_youtube_description(str(p), title)
+            # The description was cached at script time; only generate if missing.
+            description = _cached_description(p) or _generate_and_cache_description(str(p), title)
             res = yt_post(PostBody(
                 work_dir=str(p), title=title,
                 description=description, category=cfg.get("youtube_post_category", "22"),

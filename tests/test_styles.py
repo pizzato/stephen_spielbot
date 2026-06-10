@@ -363,6 +363,67 @@ class QueueItemStyleTests(TempConfigCase):
         self.assertEqual(parked["gen_resolution"], "Landscape HD (1024×576)")
 
 
+class DescriptionSuffixTests(TempConfigCase):
+    """description_suffix is per-style: each video's description gets ITS
+    style's suffix, and a config migrated before the field existed hands the
+    flat value to the default style only."""
+
+    def _seed(self, style_name_on_job: str):
+        self.write_config({
+            "styles": [
+                _style("A", description_suffix="SPIELBOT SIGNOFF"),
+                _style("B", description_suffix="KIDS SIGNOFF"),
+            ],
+            "default_style": "A",
+        })
+        wd = self.output_dir / "suffix-job-20260610-121212"
+        wd.mkdir()
+        (wd / "job_config.json").write_text(json.dumps({"style_name": style_name_on_job}))
+        return wd
+
+    def test_description_uses_the_jobs_style_suffix(self):
+        wd = self._seed("B")
+        with mock.patch.object(backend.llm, "generate_youtube_description", return_value="BODY"):
+            desc = backend._generate_youtube_description(str(wd), "Kids film")
+        self.assertIn("KIDS SIGNOFF", desc)
+        self.assertNotIn("SPIELBOT SIGNOFF", desc)
+
+    def test_no_style_job_gets_no_suffix(self):
+        wd = self._seed(app.NO_STYLE)
+        with mock.patch.object(backend.llm, "generate_youtube_description", return_value="BODY"):
+            desc = backend._generate_youtube_description(str(wd), "Experiment")
+        self.assertEqual(desc, "BODY")
+
+    def test_late_added_style_field_backfills_default_style_only(self):
+        # A config that migrated BEFORE description_suffix became per-style:
+        # styles carry no suffix field, the flat key still holds the value.
+        styles = [_style("A"), _style("B")]
+        for s in styles:
+            s.pop("description_suffix", None)
+        self.write_config({
+            "styles": styles,
+            "default_style": "A",
+            "description_suffix": "SPIELBOT SIGNOFF",
+        })
+        cfg = app.load_config()
+        by_name = {s["name"]: s for s in cfg["styles"]}
+        self.assertEqual(by_name["A"]["description_suffix"], "SPIELBOT SIGNOFF")
+        self.assertEqual(by_name["B"]["description_suffix"], "")
+        self.assertEqual(cfg["description_suffix"], "SPIELBOT SIGNOFF")  # mirror intact
+
+    def test_script_generate_spawns_background_description(self):
+        self.write_config({"styles": [_style("A")], "default_style": "A"})
+        scenes = [backend.Scene(id=1, title="One", image_prompt="i", video_prompt="v",
+                                narration="n")]
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(scenes, "calm piano", "A visual")), \
+             mock.patch.object(backend.threading, "Thread") as Thread:
+            backend.script_generate(backend.GenerateScriptBody(
+                video_title="Threaded", topic="Threaded", n_scenes=1))
+        targets = [c.kwargs.get("target") for c in Thread.call_args_list]
+        self.assertIn(backend._describe_in_background, targets)
+
+
 class StyleAwareIdeasTests(TempConfigCase):
     """AI ideas belong to a style profile: generation is steered by it, ideas
     are stamped with it, and the cache keeps one set per style."""
