@@ -274,8 +274,11 @@ function ChannelsCard({ onConfigChanged, onError }) {
   )
 }
 
-export default function Settings({ meta, setMeta }) {
+export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [cfg, setCfg] = useState(meta.config || {})
+  // True when `cfg` holds Save-required edits not yet persisted. Voice and
+  // channel ops auto-save server-side, so they deliberately don't set this.
+  const [dirty, setDirty] = useState(false)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -287,7 +290,28 @@ export default function Settings({ meta, setMeta }) {
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
 
-  useEffect(() => { setCfg(meta.config || {}) }, [meta.config])
+  // A fresh server config (initial load, Save, voice/channel op) replaces the
+  // working copy and clears the unsaved flag.
+  useEffect(() => { setCfg(meta.config || {}); setDirty(false) }, [meta.config])
+
+  // Stage a Save-required edit and flag it as unsaved (see `dirty`).
+  const editCfg = (updater) => { setDirty(true); setCfg(updater) }
+
+  // Warn before leaving with unsaved edits — for in-app navigation (App's `go`
+  // consults this guard) and browser reload/close (beforeunload). Voice and
+  // channel ops auto-save, so `dirty` stays false and they never prompt.
+  useEffect(() => {
+    if (!leaveGuardRef) return
+    leaveGuardRef.current = () => !dirty ||
+      window.confirm('You have unsaved settings changes. Leave without saving?')
+    return () => { leaveGuardRef.current = null }
+  }, [dirty, leaveGuardRef])
+  useEffect(() => {
+    if (!dirty) return
+    const warn = (e) => { e.preventDefault(); e.returnValue = '' }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [dirty])
 
   // Poll live cluster status (read-only). Start/stop is via `make start`/`stop`.
   useEffect(() => {
@@ -298,7 +322,7 @@ export default function Settings({ meta, setMeta }) {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
-  const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
+  const set = (k, v) => editCfg((c) => ({ ...c, [k]: v }))
 
   // ── Style profiles (issue #66) ──
   // Each style bundles the script/content, render-quality and audio-mix
@@ -309,7 +333,7 @@ export default function Settings({ meta, setMeta }) {
     if (styleIdx >= styles.length && styles.length) setStyleIdx(styles.length - 1)
   }, [styles.length, styleIdx])
 
-  const setStyleField = (k, v) => setCfg((c) => {
+  const setStyleField = (k, v) => editCfg((c) => {
     const list = c.styles || []
     const cur = list[styleIdx]
     if (!cur) return c
@@ -324,14 +348,14 @@ export default function Settings({ meta, setMeta }) {
     const name = newName.trim()
     if (!name || nameTaken(name)) return
     // A new style starts from the currently selected one — tweak from there.
-    setCfg((c) => ({ ...c, styles: [...(c.styles || []), { ...st, name, description: newDesc.trim() }] }))
+    editCfg((c) => ({ ...c, styles: [...(c.styles || []), { ...st, name, description: newDesc.trim() }] }))
     setStyleIdx(styles.length)
     setNewOpen(false); setNewName(''); setNewDesc('')
   }
   const deleteStyle = () => {
     if (styles.length <= 1) return
     if (!window.confirm(`Delete style “${st.name}”? Videos already rendered keep their settings.`)) return
-    setCfg((c) => {
+    editCfg((c) => {
       const list = (c.styles || []).filter((_, i) => i !== styleIdx)
       const next = { ...c, styles: list }
       if (c.default_style === st.name) next.default_style = list[0]?.name || ''
@@ -339,11 +363,11 @@ export default function Settings({ meta, setMeta }) {
     })
     setStyleIdx(0)
   }
-  const makeDefault = () => setCfg((c) => ({ ...c, default_style: st.name }))
+  const makeDefault = () => editCfg((c) => ({ ...c, default_style: st.name }))
 
   // Master toggle: derived from the per-step flags, and ticking it sets them all.
   const fullyAutomated = AUTO_FLAGS.every((f) => cfg[f])
-  const setFullyAutomated = (v) => setCfg((c) => {
+  const setFullyAutomated = (v) => editCfg((c) => {
     const next = { ...c, youtube_fully_automated: v }
     AUTO_FLAGS.forEach((f) => { next[f] = v })
     return next

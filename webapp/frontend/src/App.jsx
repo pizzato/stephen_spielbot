@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Sidebar } from './components.jsx'
 import { api } from './api.js'
 import { parseHash, buildHash, nameOf, pathOf } from './nav.js'
@@ -25,6 +25,9 @@ export default function App() {
   const [job, setJob] = useState(null)            // {job_id, work_dir, title, style, music_desc, scenes, voice, resolution}
   const [meta, setMeta] = useState({ config: {}, voices: [], resolutions: [], default_resolution: '', videos_dir: '' })
   const [badges, setBadges] = useState({})
+  // A screen can register a guard here to veto navigating away — Settings uses it
+  // to warn about unsaved edits. Returns false to cancel the navigation.
+  const leaveGuardRef = useRef(null)
 
   useEffect(() => {
     api.getConfig().then(setMeta).catch(() => {})
@@ -61,6 +64,14 @@ export default function App() {
   }, [refreshBadges])
 
   const go = useCallback((id, payload) => {
+    // Video-scoped pages carry the work_dir basename in the URL. Resolve the
+    // destination first so an active screen can veto a *real* navigation (a
+    // changed URL) before we run any side effects below.
+    const wd = payload?.workDir ?? payload?.publishWorkDir ?? ''
+    const hash = buildHash(id, { name: wd ? nameOf(wd) : undefined })
+    const sameUrl = window.location.hash === hash
+    if (!sameUrl && leaveGuardRef.current && !leaveGuardRef.current()) return
+
     if (payload?.topic != null) setTopic(payload.topic)
     // Carry an idea's title/description/scene-count into the Create form.
     // queueItemId links the resulting script back to an existing queue slot so
@@ -76,10 +87,7 @@ export default function App() {
     })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
     if (id === 'library') api.markSeen('films').then(refreshBadges).catch(() => {})
-    // Video-scoped pages carry the work_dir basename in the URL.
-    const wd = payload?.workDir ?? payload?.publishWorkDir ?? ''
-    const hash = buildHash(id, { name: wd ? nameOf(wd) : undefined })
-    if (window.location.hash === hash) {
+    if (sameUrl) {
       // Same URL → no hashchange fires; refresh + scroll manually.
       setNav(parseHash(hash))
       window.scrollTo({ top: 0 })
@@ -205,7 +213,7 @@ export default function App() {
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />
       case 'engagement': return <Engagement meta={meta} go={go} />
-      case 'settings': return <Settings meta={meta} setMeta={setMeta} />
+      case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} />
       default: return <Home go={go} />
     }
   })()
