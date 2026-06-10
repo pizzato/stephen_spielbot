@@ -86,7 +86,9 @@ export default function Queue({ go, onEditScript, meta = {} }) {
         <Field label="Prompt / direction" hint="What the video should cover — used to draft the script.">
           <textarea className="textarea" rows={3} value={draft.video_prompt} onChange={(e) => setDraft((d) => ({ ...d, video_prompt: e.target.value }))} />
         </Field>
-        <div className="row center gap-16 row--wrap">
+        {/* Top-aligned so fields with hints don't push the others off their
+            labels (the old `center` row left Scenes/Style misaligned). */}
+        <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
           <Field label="Scenes">
             <input className="input" type="number" min={6} max={50} style={{ width: 110 }} value={draft.suggested_scene_count}
               onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
@@ -102,15 +104,14 @@ export default function Queue({ go, onEditScript, meta = {} }) {
           <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
             <ResolutionPicker value={draft.gen_resolution} onChange={(r) => setDraft((d) => ({ ...d, gen_resolution: r }))} meta={meta} />
           </Field>
-          <div className="grow" />
-          <div className="row gap-10 row--wrap">
-            <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
-            <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
-            <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
-              onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '', gen_style_name: draft.gen_style_name || '' })}>
-              {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
-            </Button>
-          </div>
+        </div>
+        <div className="row gap-10 row--wrap" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
+          <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
+          <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
+            onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '', gen_style_name: draft.gen_style_name || '' })}>
+            {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
+          </Button>
         </div>
       </div>
     </div>
@@ -122,6 +123,10 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     const scenes = it.suggested_scene_count
     const isPending = it.status === 'pending'
     const editing = editId === it.id
+    // The style this item renders with: its own, else (while still pending)
+    // the default style — which is what the render will resolve.
+    const renderStyle = it.gen_style_name || (isPending ? meta.config?.default_style : '')
+    const styleLabel = renderStyle === '(none)' ? 'No style' : renderStyle
     return (
       <Fragment key={it.id || idx}>
         <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
@@ -133,7 +138,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
             <div className="row center gap-10 mt-8" style={{ flexWrap: 'wrap' }}>
               {it.source && <Chip tone="info">{it.source}</Chip>}
-              {it.gen_style_name && <Chip tone="accent">{it.gen_style_name}</Chip>}
+              {styleLabel && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {styleLabel}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
               {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}

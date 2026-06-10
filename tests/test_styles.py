@@ -363,5 +363,75 @@ class QueueItemStyleTests(TempConfigCase):
         self.assertEqual(parked["gen_resolution"], "Landscape HD (1024×576)")
 
 
+class StyleAwareIdeasTests(TempConfigCase):
+    """AI ideas belong to a style profile: generation is steered by it, ideas
+    are stamped with it, and the cache keeps one set per style."""
+
+    def _two_styles(self):
+        self.write_config({
+            "styles": [_style("A"), _style("B", description="Bedtime tales for kids")],
+            "default_style": "A",
+        })
+
+    def test_style_suggestion_context_lines(self):
+        from pipeline.llm import style_suggestion_context
+        ctx = style_suggestion_context({"name": "Kids", "description": "Bedtime tales",
+                                        "visual_style": "Soft pastel"})
+        self.assertIn('"Kids" style', ctx)
+        self.assertIn("Bedtime tales", ctx)
+        self.assertIn("Soft pastel", ctx)
+        self.assertEqual(style_suggestion_context(None), "")
+        self.assertEqual(style_suggestion_context({"name": "(none)"}), "")
+
+    def test_generation_is_steered_and_stamped_per_style(self):
+        self._two_styles()
+        raw = [{"title": "Sleepy Dragon", "reason": "fits", "interestingness": 0.8}]
+        saved = {}
+        cached = [{"id": "old", "title": "Old A idea", "style_name": "A", "used": False}]
+        with mock.patch.object(backend, "generate_video_suggestions", return_value=raw) as gen, \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=list(cached)), \
+             mock.patch.object(backend.yt, "save_suggestions", side_effect=lambda v: saved.setdefault("v", v)):
+            out = backend.youtube_suggestions(guidance="", refresh=False, style_name="B")
+        # Cache held only style-A ideas, so a request for B generates fresh ones…
+        self.assertFalse(out["cached"])
+        self.assertEqual(out["style_name"], "B")
+        self.assertEqual(gen.call_args.kwargs["style"]["name"], "B")
+        self.assertEqual([s["style_name"] for s in out["suggestions"]], ["B"])
+        # …and the save merges: A's cached set survives alongside B's new one.
+        styles_in_cache = {s.get("style_name") for s in saved["v"]}
+        self.assertEqual(styles_in_cache, {"A", "B"})
+
+    def test_cached_ideas_are_filtered_by_style(self):
+        self._two_styles()
+        cached = [
+            {"id": "a1", "title": "A idea", "style_name": "A", "used": False},
+            {"id": "b1", "title": "B idea", "style_name": "B", "used": False},
+            {"id": "l1", "title": "Legacy idea", "used": False},  # pre-#66 → default style
+        ]
+        with mock.patch.object(backend.yt, "load_suggestions", return_value=cached):
+            out_a = backend.youtube_suggestions(guidance="", refresh=False, style_name="A")
+            out_b = backend.youtube_suggestions(guidance="", refresh=False, style_name="B")
+        self.assertTrue(out_a["cached"] and out_b["cached"])
+        self.assertEqual({s["title"] for s in out_a["suggestions"]}, {"A idea", "Legacy idea"})
+        self.assertEqual({s["title"] for s in out_b["suggestions"]}, {"B idea"})
+
+    def test_auto_pick_carries_idea_style_onto_queue_item(self):
+        self._two_styles()
+        suggestion = {"id": "s1", "title": "Sleepy Dragon", "reason": "fits",
+                      "interestingness": 0.8, "style_name": "B", "used": False}
+        entry = {"id": "q9"}
+        updates = {}
+        with mock.patch.object(app.yt, "load_suggestions", return_value=[dict(suggestion)]), \
+             mock.patch.object(app.yt, "save_suggestions"), \
+             mock.patch.object(app.yt, "add_to_queue", return_value=dict(entry)), \
+             mock.patch.object(app.yt, "update_queue_item",
+                               side_effect=lambda i, **kw: updates.setdefault(i, {}).update(kw)), \
+             mock.patch.object(app, "generate_video_prompt", return_value=""):
+            item = app._auto_pick_suggestion(app.load_config())
+        self.assertEqual(item["gen_style_name"], "B")
+        self.assertEqual(updates["q9"]["gen_style_name"], "B")
+
+
 if __name__ == "__main__":
     unittest.main()

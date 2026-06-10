@@ -1313,10 +1313,12 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
     unused = [s for s in suggestions if not s.get("used")]
 
     if not unused:
-        # Ask the LLM for a fresh batch of 5
+        # Ask the LLM for a fresh batch of 5, steered by the default style —
+        # automation invents ideas for the channel's default persona.
         logger.info("No unused suggestions — generating a new batch")
+        ss = style_settings(cfg)
         existing_titles = _channel_video_titles(cfg)
-        new_data = generate_video_suggestions(existing_titles, cfg)
+        new_data = generate_video_suggestions(existing_titles, cfg, style=ss)
         if not new_data:
             logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
             return None
@@ -1326,6 +1328,7 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
                 "title": s["title"],
                 "reason": s["reason"],
                 "interestingness": s["interestingness"],
+                "style_name": ss["name"],
                 "created_at": time.time(),
                 "used": False,
             }
@@ -1364,6 +1367,13 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
     if not queue_item:
         logger.warning("_auto_pick_suggestion: add_to_queue returned empty for %r", suggestion["title"])
         return None
+
+    # The idea's style profile rides onto the queue item so the render uses it
+    # (legacy un-stamped ideas resolve to the default style downstream).
+    style_name = str(suggestion.get("style_name") or "")
+    if style_name:
+        yt.update_queue_item(queue_item["id"], gen_style_name=style_name)
+        queue_item["gen_style_name"] = style_name
 
     # Generate directorial brief synchronously (we're already in a background context)
     try:
