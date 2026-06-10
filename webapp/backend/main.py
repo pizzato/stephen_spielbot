@@ -2517,57 +2517,69 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
     ss = gapp.style_settings(cfg, style_name)
     n = max(6, int(item.get("suggested_scene_count") or ss.get("n_scenes") or 6))
 
-    if item.get("script_ready") and item.get("work_dir") and item.get("video_job_id"):
-        job_id = item["video_job_id"]
-        wd = item["work_dir"]
-        # Blank voice/resolution fall through to start_generation, which
-        # resolves them from the job's stamped style profile (then the default).
-        start_generation(GenerateBody(
-            job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
-            voice=item.get("gen_voice") or "",
-            voice_robotic=item.get("gen_voice_robotic"),
-            resolution=item.get("gen_resolution") or "",
-            music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
-            style=item.get("gen_style") or _job_meta_field(job_id, "style"),
-            style_name=style_name))
-        # start_generation wrote queue_item_id="" (the item is already "creating",
-        # not "pending", so its title-match misses). Stamp the reverse link now so
-        # _auto_post_done recognises this as a queue-driven job and posts it.
-        _link_queue_item_to_work_dir(item, Path(wd))
-        yt.update_queue_item(item["id"], status="creating")
-        return {"job_id": job_id, "work_dir": wd, "title": title}
+    # The claim above flipped the item to "creating". If the work below fails, flip it
+    # to "failed" so it doesn't sit forever showing "Rendering" — and so automation,
+    # which only picks "pending" items, won't loop retrying a poison item. Re-raise so
+    # the manual queue_start path still surfaces the error to the caller.
+    try:
+        if item.get("script_ready") and item.get("work_dir") and item.get("video_job_id"):
+            job_id = item["video_job_id"]
+            wd = item["work_dir"]
+            # Blank voice/resolution fall through to start_generation, which
+            # resolves them from the job's stamped style profile (then the default).
+            start_generation(GenerateBody(
+                job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
+                voice=item.get("gen_voice") or "",
+                voice_robotic=item.get("gen_voice_robotic"),
+                resolution=item.get("gen_resolution") or "",
+                music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
+                style=item.get("gen_style") or _job_meta_field(job_id, "style"),
+                style_name=style_name))
+            # start_generation wrote queue_item_id="" (the item is already "creating",
+            # not "pending", so its title-match misses). Stamp the reverse link now so
+            # _auto_post_done recognises this as a queue-driven job and posts it.
+            _link_queue_item_to_work_dir(item, Path(wd))
+            yt.update_queue_item(item["id"], status="creating")
+            return {"job_id": job_id, "work_dir": wd, "title": title}
 
-    topic = item.get("video_prompt") or title
-    resolution = item.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
-    gen = script_generate(GenerateScriptBody(
-        video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-        style_name=style_name))
-    if not auto_render:
-        # Review gate on: the script is generated but NOT approved. Park the item
-        # back as a "Script ready" pending slot for the human to review ("Edit
-        # script") and start ("Render now"), or for automation to render once
-        # youtube_auto_approve_script is turned on. Same shape as an approved
-        # queue_from_job item, so the Queue UI and render path need no changes.
-        yt.update_queue_item(
-            item["id"], status="pending", script_ready=True,
-            video_job_id=gen["job_id"], work_dir=gen["work_dir"],
-            gen_style=gen.get("style", ""), gen_resolution=resolution,
-            gen_voice=ss.get("voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
-            gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
-        return {"job_id": gen["job_id"], "work_dir": gen["work_dir"],
-                "title": title, "prepared": True}
-    start_generation(GenerateBody(
-        job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
-        n_scenes=n, voice=ss.get("voice", ""),
-        voice_robotic=item.get("gen_voice_robotic"),
-        resolution=resolution,
-        music_desc=gen.get("music_desc", ""), style=gen.get("style", ""),
-        style_name=gen.get("style_name", "")))
-    # See above: re-link the work dir to this queue item so auto-post finds it.
-    _link_queue_item_to_work_dir(item, Path(gen["work_dir"]))
-    yt.update_queue_item(item["id"], status="creating",
-                         video_job_id=gen["job_id"], work_dir=gen["work_dir"])
-    return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
+        topic = item.get("video_prompt") or title
+        resolution = item.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+        gen = script_generate(GenerateScriptBody(
+            video_title=title, topic=topic, n_scenes=n, resolution=resolution,
+            style_name=style_name))
+        if not auto_render:
+            # Review gate on: the script is generated but NOT approved. Park the item
+            # back as a "Script ready" pending slot for the human to review ("Edit
+            # script") and start ("Render now"), or for automation to render once
+            # youtube_auto_approve_script is turned on. Same shape as an approved
+            # queue_from_job item, so the Queue UI and render path need no changes.
+            yt.update_queue_item(
+                item["id"], status="pending", script_ready=True,
+                video_job_id=gen["job_id"], work_dir=gen["work_dir"],
+                gen_style=gen.get("style", ""), gen_resolution=resolution,
+                gen_voice=ss.get("voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
+                gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
+            return {"job_id": gen["job_id"], "work_dir": gen["work_dir"],
+                    "title": title, "prepared": True}
+        start_generation(GenerateBody(
+            job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
+            n_scenes=n, voice=ss.get("voice", ""),
+            voice_robotic=item.get("gen_voice_robotic"),
+            resolution=resolution,
+            music_desc=gen.get("music_desc", ""), style=gen.get("style", ""),
+            style_name=gen.get("style_name", "")))
+        # See above: re-link the work dir to this queue item so auto-post finds it.
+        _link_queue_item_to_work_dir(item, Path(gen["work_dir"]))
+        yt.update_queue_item(item["id"], status="creating",
+                             video_job_id=gen["job_id"], work_dir=gen["work_dir"])
+        return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
+    except Exception:
+        if item_id:
+            try:
+                yt.update_queue_item(item_id, status="failed")
+            except Exception:
+                pass
+        raise
 
 
 @api.post("/api/queue/start")
