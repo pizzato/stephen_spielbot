@@ -2348,11 +2348,15 @@ def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
     return default
 
 
-def _start_queue_item(item: dict) -> dict:
+def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
     """Launch the render for a queue item. If the item already has an approved
     script (script_ready + work_dir + video_job_id) we render it directly;
     otherwise we generate the script first. Reuses script_generate +
-    start_generation."""
+    start_generation.
+
+    When auto_render is False, a freshly generated script is parked as a "Script
+    ready" pending item for review instead of being rendered — this is the
+    youtube_auto_approve_script gate used by automation. Manual starts pass True."""
     cfg = gapp.load_config()
     # Claim the item BEFORE the slow script generation. _best_pending_queue_item
     # — used by this backend's automation AND the classic Gradio app (a separate
@@ -2394,6 +2398,20 @@ def _start_queue_item(item: dict) -> dict:
     gen = script_generate(GenerateScriptBody(
         video_title=title, topic=topic, n_scenes=n, resolution=resolution,
         visual_style=cfg.get("default_visual_style") or None))
+    if not auto_render:
+        # Review gate on: the script is generated but NOT approved. Park the item
+        # back as a "Script ready" pending slot for the human to review ("Edit
+        # script") and start ("Render now"), or for automation to render once
+        # youtube_auto_approve_script is turned on. Same shape as an approved
+        # queue_from_job item, so the Queue UI and render path need no changes.
+        yt.update_queue_item(
+            item["id"], status="pending", script_ready=True,
+            video_job_id=gen["job_id"], work_dir=gen["work_dir"],
+            gen_style=gen.get("style", ""), gen_resolution=resolution,
+            gen_voice=cfg.get("default_voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
+            gen_music=gen.get("music_desc", ""))
+        return {"job_id": gen["job_id"], "work_dir": gen["work_dir"],
+                "title": title, "prepared": True}
     start_generation(GenerateBody(
         job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
         n_scenes=n, voice=cfg.get("default_voice", ""),
@@ -3113,19 +3131,30 @@ def delete_film(body: JobActionBody) -> dict:
 def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
-    item = gapp._best_pending_queue_item()
-    if not item:
-        # Nothing queued manually — fall back to AI ideas. _auto_pick_suggestion
-        # picks the best unused idea, marks it used (so it's closed and never
-        # re-picked), and generates a fresh batch when none remain.
-        try:
-            item = gapp._auto_pick_suggestion(gapp.load_config())
-        except Exception:
-            item = None
+    cfg = gapp.load_config()
+    auto_render = bool(cfg.get("youtube_auto_approve_script"))
+    if auto_render:
+        # Approve-and-render: take the best pending request and render it (generating
+        # the script first if needed); fall back to an AI idea to keep the pipeline fed.
+        item = gapp._best_pending_queue_item()
+        if not item:
+            # Nothing queued manually — fall back to AI ideas. _auto_pick_suggestion
+            # picks the best unused idea, marks it used (so it's closed and never
+            # re-picked), and generates a fresh batch when none remain.
+            try:
+                item = gapp._auto_pick_suggestion(cfg)
+            except Exception:
+                item = None
+    else:
+        # Review gate on: prepare the next queued request that has no script yet and
+        # park it as "Script ready" for review. Don't invent new ideas here — that
+        # would pile up un-reviewed scripts the user never asked for.
+        item = next((q for q in yt.load_queue()
+                     if q.get("status") == "pending" and not q.get("script_ready")), None)
     if not item:
         return None
     try:
-        return _start_queue_item(item)
+        return _start_queue_item(item, auto_render=auto_render)
     except Exception:
         return None
 

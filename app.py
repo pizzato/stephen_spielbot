@@ -168,8 +168,8 @@ DEFAULT_CFG = {
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
-    "youtube_auto_start_job": False,           # auto-launch best pending job after approval
-    "youtube_auto_approve_script": False,      # skip script review, go straight to video gen
+    "youtube_auto_start_job": False,           # auto-prepare best pending request: generate its script, park as "Script ready"
+    "youtube_auto_approve_script": False,      # render auto-prepared scripts without review (only acts when auto_start_job is on)
     "youtube_auto_post": False,               # auto-publish when video generation completes
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     "youtube_post_privacy": "private",
