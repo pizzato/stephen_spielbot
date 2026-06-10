@@ -71,6 +71,7 @@ export default function App() {
       description: payload?.description ?? '',
       scenes: payload?.scenes ?? null,
       resolution: payload?.resolution ?? '',
+      styleName: payload?.styleName ?? '',
       queueItemId: payload?.queueItemId ?? null,
     })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
@@ -107,7 +108,7 @@ export default function App() {
   // Create → Script: a fresh script was generated. If the user opted to
   // auto-approve, launch generation immediately and jump to the render screen.
   const onScriptGenerated = useCallback(async (data, choices) => {
-    const nextJob = { ...data, voice: choices.voice, voice_robotic: choices.voice_robotic, resolution: choices.resolution, queue_item_id: choices.queueItemId || '' }
+    const nextJob = { ...data, voice: choices.voice, voice_robotic: choices.voice_robotic, resolution: choices.resolution, style_name: data.style_name || choices.styleName || '', queue_item_id: choices.queueItemId || '' }
     setJob(nextJob)
     if (choices.autoApprove) {
       if (data.auto_approved) {
@@ -127,6 +128,7 @@ export default function App() {
           voice: choices.voice || '', voice_robotic: choices.voice_robotic,
           music_desc: nextJob.music_desc || '',
           queue_item_id: choices.queueItemId || '',
+          style_name: nextJob.style_name || '',
         })
         if (r.started) go('progress', { workDir: nextJob.work_dir })
         else go('queue')
@@ -169,6 +171,7 @@ export default function App() {
         voice_robotic: item.gen_voice_robotic ?? loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
         resolution: item.gen_resolution || loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
         style: item.gen_style || loaded.style || '',
+        style_name: item.gen_style_name || loaded.style_name || '',
         queue_item_id: item.id,
       })
       go('script', { workDir: item.work_dir })
@@ -179,6 +182,7 @@ export default function App() {
       description: item.video_prompt || item.comment_text || '',
       scenes: item.suggested_scene_count || null,
       resolution: item.gen_resolution || '',
+      styleName: item.gen_style_name || '',
       queueItemId: item.id,
     })
   }, [go, meta])

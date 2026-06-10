@@ -136,7 +136,7 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
         <span className="muted" style={{ fontSize: 11.5 }}>changes save immediately</span>
       </div>
       <div className="field__hint" style={{ marginTop: 6 }}>
-        Reference clips (15–30s of clear speech) F5-TTS clones for narration. Pick the default voice under <strong>Script &amp; content</strong>.
+        Reference clips (15–30s of clear speech) F5-TTS clones for narration. Pick each style's narrator voice under <strong>Styles</strong>.
       </div>
 
       <div className="stack gap-10 mt-16">
@@ -183,8 +183,7 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
 
 const TABS = [
   { id: 'infra', label: 'Infrastructure' },
-  { id: 'content', label: 'Script & content' },
-  { id: 'render', label: 'Render' },
+  { id: 'styles', label: 'Styles' },
   { id: 'automation', label: 'Automation' },
 ]
 
@@ -196,6 +195,10 @@ export default function Settings({ meta, setMeta }) {
   const [vbusy, setVbusy] = useState(false)   // a voice operation is in flight
   const [workers, setWorkers] = useState(null)
   const [tab, setTab] = useState('infra')
+  const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
+  const [newOpen, setNewOpen] = useState(false)
+  const [newName, setNewName] = useState('')
+  const [newDesc, setNewDesc] = useState('')
 
   useEffect(() => { setCfg(meta.config || {}) }, [meta.config])
 
@@ -210,6 +213,47 @@ export default function Settings({ meta, setMeta }) {
 
   const set = (k, v) => setCfg((c) => ({ ...c, [k]: v }))
 
+  // ── Style profiles (issue #66) ──
+  // Each style bundles the script/content, render-quality and audio-mix
+  // settings; the backend mirrors the default style onto the legacy flat keys.
+  const styles = cfg.styles || []
+  const st = styles[Math.min(styleIdx, Math.max(0, styles.length - 1))] || {}
+  useEffect(() => {
+    if (styleIdx >= styles.length && styles.length) setStyleIdx(styles.length - 1)
+  }, [styles.length, styleIdx])
+
+  const setStyleField = (k, v) => setCfg((c) => {
+    const list = c.styles || []
+    const cur = list[styleIdx]
+    if (!cur) return c
+    const next = { ...c, styles: list.map((s, i) => (i === styleIdx ? { ...s, [k]: v } : s)) }
+    // Renaming the default style keeps it the default.
+    if (k === 'name' && c.default_style === cur.name) next.default_style = v
+    return next
+  })
+  // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
+  const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
+  const addStyle = () => {
+    const name = newName.trim()
+    if (!name || nameTaken(name)) return
+    // A new style starts from the currently selected one — tweak from there.
+    setCfg((c) => ({ ...c, styles: [...(c.styles || []), { ...st, name, description: newDesc.trim() }] }))
+    setStyleIdx(styles.length)
+    setNewOpen(false); setNewName(''); setNewDesc('')
+  }
+  const deleteStyle = () => {
+    if (styles.length <= 1) return
+    if (!window.confirm(`Delete style “${st.name}”? Videos already rendered keep their settings.`)) return
+    setCfg((c) => {
+      const list = (c.styles || []).filter((_, i) => i !== styleIdx)
+      const next = { ...c, styles: list }
+      if (c.default_style === st.name) next.default_style = list[0]?.name || ''
+      return next
+    })
+    setStyleIdx(0)
+  }
+  const makeDefault = () => setCfg((c) => ({ ...c, default_style: st.name }))
+
   // Master toggle: derived from the per-step flags, and ticking it sets them all.
   const fullyAutomated = AUTO_FLAGS.every((f) => cfg[f])
   const setFullyAutomated = (v) => setCfg((c) => {
@@ -219,7 +263,13 @@ export default function Settings({ meta, setMeta }) {
   })
 
   const save = async () => {
-    setBusy(true); setError(''); setStatus('')
+    setError(''); setStatus('')
+    const names = (cfg.styles || []).map((s) => (s.name || '').trim())
+    if (names.some((n) => !n || n === '(none)') || new Set(names).size !== names.length) {
+      setError('Each style needs a unique, non-empty name — and “(none)” is reserved.')
+      return
+    }
+    setBusy(true)
     try {
       const out = { ...cfg }
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
@@ -235,11 +285,21 @@ export default function Settings({ meta, setMeta }) {
   // Voice ops persist immediately (each writes a file), separate from the Save
   // button. Merge the returned voice fields into the working copy so unsaved
   // edits to other fields survive; refresh meta so other screens see the change.
+  // A rename/delete also rewrites the voice referenced by each saved style, so
+  // sync that one field into the staged styles without clobbering other edits.
   const voiceOp = async (run) => {
     setError(''); setStatus(''); setVbusy(true)
     try {
       const r = await run()
-      setCfg((c) => ({ ...c, voices: r.config.voices, default_voice: r.config.default_voice }))
+      setCfg((c) => ({
+        ...c,
+        voices: r.config.voices,
+        default_voice: r.config.default_voice,
+        styles: (c.styles || []).map((s) => {
+          const srv = (r.config.styles || []).find((x) => x.name === s.name)
+          return srv ? { ...s, voice: srv.voice } : s
+        }),
+      }))
       setMeta((m) => ({ ...m, config: r.config, voices: r.voices }))
     } catch (e) { setError(e.message); throw e } finally { setVbusy(false) }
   }
@@ -327,72 +387,123 @@ export default function Settings({ meta, setMeta }) {
 
           {/* ── Voices ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
-
-          {/* ── Robotic voice & test ── */}
-          <Card span={12} className="reveal reveal-d2">
-            <span className="label-sm">Robotic voice</span>
-            <div className="stack gap-22 mt-16">
-              <Check checked={!!cfg.default_voice_robotic} onChange={(v) => set('default_voice_robotic', v)}
-                label="Robotic voice by default — synthetic monotone so it isn't mistaken for a human" />
-              <Field label={`Robotic level — ${Math.round((cfg.default_voice_robotic_amount ?? 0.35) * 100)}%`}
-                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice by default” is on.">
-                <input className="slider" type="range" min={0} max={1} step={0.05}
-                  value={cfg.default_voice_robotic_amount ?? 0.35}
-                  onChange={(e) => set('default_voice_robotic_amount', +e.target.value)} />
-              </Field>
-              <VoiceTester voices={meta.voices} defaultVoice={cfg.default_voice}
-                roboticAmount={cfg.default_voice_robotic_amount} onError={setError} />
-            </div>
-          </Card>
         </>)}
 
-        {tab === 'content' && (
-          /* ── Script & content defaults ── */
+        {tab === 'styles' && (<>
+          {/* ── Style profiles (issue #66) ── */}
           <Card span={12} className="reveal reveal-d1">
-            <span className="label-sm">Script & content defaults</span>
-            <div className="stack gap-22 mt-16">
-              <div className="row gap-22 row--wrap">
-                <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={cfg.default_n_scenes ?? ''} onChange={(e) => set('default_n_scenes', +e.target.value)} /></Field></div>
-                <div className="grow"><Field label="Default voice"><select className="select" value={cfg.default_voice || ''} onChange={(e) => set('default_voice', e.target.value)}>
-                  <option value="">(F5-TTS default)</option>
-                  {(meta.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
-                </select></Field></div>
+            <div className="row center between">
+              <span className="label-sm">Styles</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>Each style bundles script, render and audio-mix settings — pick one per video.</span>
+            </div>
+            <div className="row gap-6 row--wrap mt-16">
+              {styles.map((s, i) => (
+                <Button key={s.name || i} variant={i === styleIdx ? 'primary' : 'ghost'}
+                  icon={cfg.default_style === s.name ? 'star' : undefined}
+                  onClick={() => setStyleIdx(i)}>{s.name || '(unnamed)'}</Button>
+              ))}
+              <Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button>
+            </div>
+            {newOpen && (
+              <div className="row center gap-10 row--wrap mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+                <input className="input" placeholder="Style name" value={newName}
+                  onChange={(e) => setNewName(e.target.value)} style={{ maxWidth: 220 }} />
+                <div className="grow">
+                  <input className="input" placeholder="Short description — what it looks and sounds like"
+                    value={newDesc} onChange={(e) => setNewDesc(e.target.value)} />
+                </div>
+                <Button variant="primary" icon="plus" disabled={!newName.trim() || nameTaken(newName.trim())}
+                  onClick={addStyle}>Create</Button>
               </div>
-              <Field label="Default visual style"><input className="input" value={cfg.default_visual_style || ''} onChange={(e) => set('default_visual_style', e.target.value)} /></Field>
-              <Field label="Extra script instructions" hint="Appended to every topic.">
-                <textarea className="textarea" rows={8} value={cfg.script_extra_instructions || ''} onChange={(e) => set('script_extra_instructions', e.target.value)} />
+            )}
+            {newOpen && nameTaken(newName.trim()) && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6, color: 'var(--warn)' }}>A style with that name already exists.</div>
+            )}
+            <div className="field__hint" style={{ marginTop: 10 }}>
+              A new style starts as a copy of the selected one. Remember to <strong>Save settings</strong> after editing.
+            </div>
+          </Card>
+
+          {/* ── Identity ── */}
+          <Card span={12} className="reveal reveal-d1">
+            <div className="row center between">
+              <span className="label-sm">Style — {st.name}</span>
+              <div className="row gap-10 row--wrap">
+                {cfg.default_style === st.name
+                  ? <Chip tone="ok" dot>default style</Chip>
+                  : <Button variant="ghost" icon="star" onClick={makeDefault}>Use as default</Button>}
+                <Button variant="danger" icon="trash" disabled={styles.length <= 1} onClick={deleteStyle}>Delete</Button>
+              </div>
+            </div>
+            <div className="stack gap-22 mt-16">
+              <Field label="Name">
+                <input className="input" value={st.name || ''} onChange={(e) => setStyleField('name', e.target.value)} style={{ maxWidth: 320 }} />
+              </Field>
+              <Field label="Description" hint="What this style is for — shown when choosing a style for a video.">
+                <textarea className="textarea" rows={2} value={st.description || ''} onChange={(e) => setStyleField('description', e.target.value)} />
               </Field>
             </div>
           </Card>
-        )}
 
-        {tab === 'render' && (<>
+          {/* ── Script & content ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">Script & content</span>
+            <div className="stack gap-22 mt-16">
+              <div className="row gap-22 row--wrap">
+                <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={st.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} /></Field></div>
+                <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
+                  <option value="">(F5-TTS default)</option>
+                  {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
+                </select></Field></div>
+              </div>
+              <Field label="Visual style" hint="Applied to every scene's image prompt.">
+                <input className="input" value={st.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
+              </Field>
+              <Field label="Extra script instructions" hint="Appended to every topic.">
+                <textarea className="textarea" rows={8} value={st.extra_instructions || ''} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
+              </Field>
+              <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
+                <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
+              </Field>
+              <Check checked={!!st.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
+                label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
+              <Field label={`Robotic level — ${Math.round((st.voice_robotic_amount ?? 0.35) * 100)}%`}
+                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice” is on.">
+                <input className="slider" type="range" min={0} max={1} step={0.05}
+                  value={st.voice_robotic_amount ?? 0.35}
+                  onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
+              </Field>
+              <VoiceTester key={st.name} voices={meta.voices} defaultVoice={st.voice}
+                roboticAmount={st.voice_robotic_amount} onError={setError} />
+            </div>
+          </Card>
+
           {/* ── Render quality ── */}
-          <Card span={6} className="reveal reveal-d1">
+          <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Render quality</span>
             <div className="stack gap-22 mt-16">
               <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
-                <ResolutionPicker value={cfg.resolution || ''} onChange={(r) => set('resolution', r)} meta={meta} />
+                <ResolutionPicker value={st.resolution || ''} onChange={(r) => setStyleField('resolution', r)} meta={meta} />
               </Field>
               <div className="row gap-22 row--wrap">
                 <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">
-                  <input className="input" type="number" value={cfg.first_pass_steps ?? ''} onChange={(e) => set('first_pass_steps', +e.target.value)} /></Field></div>
+                  <input className="input" type="number" value={st.first_pass_steps ?? ''} onChange={(e) => setStyleField('first_pass_steps', +e.target.value)} /></Field></div>
                 <div className="grow"><Field label="Second-pass steps">
-                  <input className="input" type="number" value={cfg.second_pass_steps ?? ''} onChange={(e) => set('second_pass_steps', +e.target.value)} /></Field></div>
+                  <input className="input" type="number" value={st.second_pass_steps ?? ''} onChange={(e) => setStyleField('second_pass_steps', +e.target.value)} /></Field></div>
               </div>
-              <Field label={`LoRA strength — ${cfg.lora_strength ?? 0}`}>
-                <input className="slider" type="range" min={0} max={1} step={0.05} value={cfg.lora_strength ?? 0} onChange={(e) => set('lora_strength', +e.target.value)} />
+              <Field label={`LoRA strength — ${st.lora_strength ?? 0}`}>
+                <input className="slider" type="range" min={0} max={1} step={0.05} value={st.lora_strength ?? 0} onChange={(e) => setStyleField('lora_strength', +e.target.value)} />
               </Field>
             </div>
           </Card>
 
           {/* ── Narrator & audio ── */}
-          <Card span={6} className="reveal reveal-d1">
+          <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Narrator & audio</span>
             <div className="stack gap-22 mt-16">
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
-                <Field key={k} label={`${label} — ${cfg[k] ?? 0}%`}>
-                  <input className="slider" type="range" min={0} max={max} value={cfg[k] ?? 0} onChange={(e) => set(k, +e.target.value)} />
+                <Field key={k} label={`${label} — ${st[k] ?? 0}%`}>
+                  <input className="slider" type="range" min={0} max={max} value={st[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />
                 </Field>
               ))}
             </div>

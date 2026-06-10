@@ -289,7 +289,7 @@ def voices_test(body: VoiceTest) -> dict:
     ref = Path(ref_str).expanduser() if ref_str else None
 
     amount = (body.robotic_amount if body.robotic_amount is not None
-              else float(cfg.get("default_voice_robotic_amount", 0.35)))
+              else float(gapp.style_settings(cfg).get("voice_robotic_amount", 0.35)))
     robotic = bool(body.robotic)
 
     # Content-addressed cache key: a given (voice, robotic level, text, source
@@ -372,6 +372,7 @@ class GenerateScriptBody(BaseModel):
     voice_robotic: bool = False
     resolution: str = ""
     queue_item_id: str = ""
+    style_name: str = ""
 
 
 @api.post("/api/script/generate")
@@ -383,11 +384,14 @@ def script_generate(body: GenerateScriptBody) -> dict:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
 
     cfg = gapp.load_config()
-    extra = cfg.get("script_extra_instructions", "").strip()
+    # Style profile (issue #66): drives extra instructions + visual style here,
+    # and is stamped on the job so the render step uses the same profile.
+    ss = gapp.style_settings(cfg, body.style_name)
+    extra = (ss.get("extra_instructions") or "").strip()
     if extra:
         topic = f"{topic}\n\n{extra}"
 
-    style_hint = body.visual_style or cfg.get("default_visual_style", "") or None
+    style_hint = body.visual_style or ss.get("visual_style", "") or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
@@ -400,8 +404,16 @@ def script_generate(body: GenerateScriptBody) -> dict:
     display_title = (body.video_title or "").strip() or topic
     work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
+    # Bake the visual style prefix into each image_prompt so it's visible in the
+    # scene editor and consistent even if the style profile is later renamed/edited.
+    # The render step guards against re-adding a prefix that's already present.
+    combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
     scenes_list = [
-        {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+        {"id": s.id, "title": s.title,
+         "image_prompt": (f"{combined_style}. {s.image_prompt}"
+                          if combined_style and s.image_prompt
+                          and not s.image_prompt.startswith(combined_style)
+                          else s.image_prompt),
          "video_prompt": s.video_prompt, "narration": s.narration}
         for s in scenes
     ]
@@ -412,12 +424,21 @@ def script_generate(body: GenerateScriptBody) -> dict:
         store.create_or_update_job(
             job_id, work_dir, display_title,
             config={"title": display_title, "video_title": (body.video_title or "").strip(),
-                    "topic": topic, "phase": "script_review"},
+                    "topic": topic, "phase": "script_review", "style_name": ss["name"]},
             metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
         )
         store.upsert_scenes(job_id, scenes_list)
     finally:
         store.close()
+
+    # Write the YouTube description alongside the fresh script (issue #66
+    # follow-up): a daemon thread caches description.txt so the Cover and
+    # Publish screens find it ready — no manual "Generate" click needed.
+    threading.Thread(
+        target=_describe_in_background,
+        args=(str(work_dir), display_title),
+        daemon=True,
+    ).start()
 
     result = {
         "job_id": job_id,
@@ -425,6 +446,7 @@ def script_generate(body: GenerateScriptBody) -> dict:
         "title": display_title,
         "video_title": (body.video_title or "").strip(),
         "style": style,
+        "style_name": ss["name"],
         "music_desc": music_desc,
         "scenes": [_scene_to_json(s) for s in scenes_list],
     }
@@ -440,11 +462,12 @@ def script_generate(body: GenerateScriptBody) -> dict:
             video_title=(body.video_title or display_title).strip(),
             n_scenes=len(scenes_list),
             style=style,
-            resolution=body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
-            voice=body.voice or cfg.get("default_voice", ""),
+            resolution=body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
+            voice=body.voice or ss.get("voice", ""),
             voice_robotic=body.voice_robotic,
             music_desc=music_desc,
             queue_item_id=body.queue_item_id,
+            style_name=ss["name"],
         ))
         result.update({
             "auto_approved": bool(body.auto_approve),
@@ -477,6 +500,7 @@ def load_script(work_dir: str = Query("")) -> dict:
     video_title = fallback_title
     style = ""
     music_desc = ""
+    style_name = ""
 
     store = DurableStore.default()
     try:
@@ -488,9 +512,11 @@ def load_script(work_dir: str = Query("")) -> dict:
             video_title = cfg.get("video_title") or d.get("title") or fallback_title
             style = meta.get("style", "")
             music_desc = meta.get("music_desc", "")
+            style_name = cfg.get("style_name", "")
         store.create_or_update_job(
             job_id, wd, video_title,
-            config={"video_title": video_title, "phase": "script_review"},
+            config={"video_title": video_title, "phase": "script_review",
+                    "style_name": style_name},
             metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
         )
         store.upsert_scenes(job_id, scenes_list)
@@ -511,16 +537,18 @@ def load_script(work_dir: str = Query("")) -> dict:
         store.close()
 
     cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, style_name)
     return {
         "job_id": job_id,
         "work_dir": str(wd),
         "title": video_title,
         "video_title": video_title,
         "style": style,
+        "style_name": ss["name"],
         "music_desc": music_desc,
-        "voice": cfg.get("default_voice", ""),
-        "voice_robotic": bool(cfg.get("default_voice_robotic", False)),
-        "resolution": cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        "voice": ss.get("voice", ""),
+        "voice_robotic": bool(ss.get("voice_robotic", False)),
+        "resolution": ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
         "scenes": [_scene_to_json(r) for r in rows],
     }
 
@@ -681,7 +709,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         raise HTTPException(400, f"Unknown field: {field}")
     cfg = gapp.load_config()
 
-    video_title, topic, style, outline = "", "", "", ""
+    video_title, topic, style, style_name, outline = "", "", "", "", ""
     try:
         store = DurableStore.default()
         try:
@@ -696,6 +724,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
             video_title = jc.get("video_title") or d.get("title") or ""
             topic = jc.get("topic") or ""
             style = jm.get("style") or ""
+            style_name = jc.get("style_name", "")
         outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
     except Exception:
         pass
@@ -716,6 +745,11 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     except Exception as e:
         raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
 
+    # For image_prompt, bake the visual style prefix so the editor shows what renders.
+    if field == "image_prompt" and style_name:
+        prefix = gapp._compose_visual_style(style, cfg, style_name)
+        text = _apply_style_prefix(prefix, text)
+
     # Persist the regenerated field together with the user's current values.
     fields = {"title": body.title, "narration": body.narration,
               "image_prompt": body.image_prompt, "video_prompt": body.video_prompt}
@@ -726,6 +760,14 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     except Exception:
         pass  # the client also persists on blur — never lose the regenerated text
     return {"field": field, "value": text}
+
+
+def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
+    """Prepend combined_style to image_prompt, skipping if already present."""
+    ip = (image_prompt or "").strip()
+    if combined_style and ip and not ip.startswith(combined_style):
+        return f"{combined_style}. {ip}"
+    return ip or image_prompt
 
 
 # ── approve & generate (launches the background pipeline) ─────────────────────
@@ -741,6 +783,7 @@ class GenerateBody(BaseModel):
     resolution: str = ""
     music_desc: str = ""
     style: str = ""
+    style_name: str = ""
 
 
 @api.post("/api/jobs/generate")
@@ -756,23 +799,35 @@ def start_generation(body: GenerateBody) -> dict:
     store = DurableStore.default()
     try:
         scene_rows = store.scene_rows(job_id)
+        job_row = store.get_job(job_id)
     finally:
         store.close()
     if not scene_rows:
         raise HTTPException(400, "No scene data available. Generate the script again.")
 
     cfg = gapp.load_config()
+    # Style profile: explicit request → stamped on the job at script time →
+    # default style. Its settings fill anything the request leaves blank and
+    # supply the render quality + audio mix for this job.
+    style_name = (body.style_name or "").strip()
+    if not style_name and job_row is not None:
+        try:
+            style_name = json.loads(_row_to_dict(job_row).get("config_json") or "{}").get("style_name", "")
+        except Exception:
+            style_name = ""
+    ss = gapp.style_settings(cfg, style_name)
+
     voice_name = body.voice
     if not voice_name or voice_name == gapp.F5TTS_DEFAULT_OPTION:
-        voice_name = cfg.get("default_voice", voice_name)
+        voice_name = ss.get("voice") or voice_name
     voice_ref = gapp.voice_path_for(voice_name)
     voice_robotic = (body.voice_robotic if body.voice_robotic is not None
-                     else bool(cfg.get("default_voice_robotic", False)))
-    resolution = body.resolution or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+                     else bool(ss.get("voice_robotic", False)))
+    resolution = body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
     vid_width, vid_height = gapp._RESOLUTIONS.get(resolution, (832, 480))
 
     style_clean = body.style.strip().rstrip(".") if body.style and body.style.strip() else ""
-    combined_style = gapp._compose_visual_style(body.style, cfg)
+    combined_style = gapp._compose_visual_style(body.style, cfg, style_name)
 
     n = int(body.n_scenes) if body.n_scenes else len(scene_rows)
     title = body.title or body.video_title
@@ -780,8 +835,7 @@ def start_generation(body: GenerateBody) -> dict:
         Scene(
             id=int(row["id"]),
             title=row.get("title") or f"Scene {int(row['id'])}",
-            image_prompt=(f"{combined_style}. {row.get('image_prompt') or title}"
-                          if combined_style else (row.get("image_prompt") or title)),
+            image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
         )
@@ -797,7 +851,19 @@ def start_generation(body: GenerateBody) -> dict:
         "resolution": resolution, "max_clip_secs": 0,
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         "voice_robotic": voice_robotic,
-        "voice_robotic_amount": cfg.get("default_voice_robotic_amount", 0.35),
+        "voice_robotic_amount": ss.get("voice_robotic_amount", 0.35),
+        # Per-style render quality + audio mix (issue #66): the resumable
+        # worker reads these flat keys from job_config.json, so resolving them
+        # here is what makes the chosen style drive the render and the mix.
+        "style_name": ss["name"],
+        "lora_strength": ss.get("lora_strength"),
+        "first_pass_cfg": ss.get("first_pass_cfg"),
+        "first_pass_steps": ss.get("first_pass_steps"),
+        "second_pass_cfg": ss.get("second_pass_cfg"),
+        "second_pass_steps": ss.get("second_pass_steps"),
+        "music_vol": ss.get("music_vol"),
+        "voice_vol": ss.get("voice_vol"),
+        "ambient_vol": ss.get("ambient_vol"),
         "music_desc": body.music_desc or "", "title": title,
         "video_title": (body.video_title or "").strip(), "style": style_clean,
     })
@@ -1228,9 +1294,11 @@ def youtube_comments() -> dict:
     return {"comments": []}
 
 
-def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6) -> list[dict]:
+def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6,
+                        style: dict | None = None) -> list[dict]:
     """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
-    the 90s'). Uses the configured LLM backend via _llm_complete."""
+    the 90s') and, optionally, a style profile. Uses the configured LLM
+    backend via _llm_complete."""
     import re
     avoid = "; ".join(previous)
     system = ("You are a content strategist for an educational/documentary YouTube channel. "
@@ -1238,6 +1306,7 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     user = (
         f'Generate {n} specific, compelling video ideas guided by this theme: "{guidance}".\n'
         f"Each must be a concrete documentary topic that clearly fits the theme.\n"
+        + llm.style_suggestion_context(style)
         + (f"Avoid duplicating these existing titles: {avoid}\n" if avoid else "")
         + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
         '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
@@ -1313,29 +1382,45 @@ def _normalize_suggestions(raw: list) -> list[dict]:
             "suggested_scene_count": max(6, min(50, int(sc or 12))),
             "interestingness": float(it.get("interestingness", it.get("interest", 0.7)) or 0.7),
             "source": it.get("source", "ai"),
+            "style_name": str(it.get("style_name") or ""),
             "used": used,
             "dismissed": bool(it.get("dismissed")),
         })
     return out
 
 
+def _idea_style_key(idea: dict, default_name: str) -> str:
+    """Which style an idea belongs to — legacy ideas (no stamp) count as the
+    default style's."""
+    return str(idea.get("style_name") or "") or default_name
+
+
 @api.get("/api/youtube/suggestions")
-def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False)) -> dict:
-    """Return AI video ideas. Without guidance or refresh, returns the last
-    cached set (no LLM call) so reopening the tab is instant; only generates when
-    the cache is empty, the user asks (refresh), or a guidance theme is given."""
+def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
+                        style_name: str = Query("")) -> dict:
+    """Return AI video ideas for a style profile (issue #66) — ideas belong to
+    the style they were generated for, since a children-story channel needs
+    different topics than a documentary one. Without guidance or refresh,
+    returns the cached set for that style (no LLM call); only generates when
+    that style's cache is empty, the user asks (refresh), or a guidance theme
+    is given."""
     cfg = gapp.load_config()
     g = guidance.strip()
+    ss = gapp.style_settings(cfg, style_name)
+    default_name = cfg.get("default_style", "")
+    target = ss["name"] or default_name
 
     if not g and not refresh:
         try:
             cached = yt.load_suggestions()
         except Exception:
             cached = []
-        if cached:
-            return {"suggestions": _visible_suggestions(cached), "cached": True}
+        cached_for_style = [s for s in _visible_suggestions(cached)
+                            if _idea_style_key(s, default_name) == target]
+        if cached_for_style:
+            return {"suggestions": cached_for_style, "cached": True, "style_name": target}
 
-    with _track_op("Generating suggestions", g):
+    with _track_op("Generating suggestions", g or target):
         try:
             # Channel titles (YouTube API + posted queue) come first; supplement with
             # any local completed jobs not yet published to the channel.
@@ -1349,20 +1434,27 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False))
             previous = []
         try:
             if g:
-                ideas = _guided_suggestions(g, previous, cfg)
+                ideas = _guided_suggestions(g, previous, cfg, style=ss)
             else:
-                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg))
+                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg, style=ss))
         except Exception as e:
             raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
     try:
         ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
+                  "style_name": target,
                   "created_at": time.time(), "used": False, "dismissed": False}
                  for idea in ideas]
-        yt.save_suggestions(ideas)  # cache the last generated set
+        # Cache per style: replace this style's set, keep the other styles'.
+        try:
+            others = [s for s in yt.load_suggestions()
+                      if _idea_style_key(s, default_name) != target]
+        except Exception:
+            others = []
+        yt.save_suggestions(others + ideas)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(ideas), "cached": False}
+    return {"suggestions": _visible_suggestions(ideas), "cached": False, "style_name": target}
 
 
 class SuggestionDismissBody(BaseModel):
@@ -1740,6 +1832,27 @@ def _generate_and_cache_description(work_dir: str, title: str = "") -> str:
     return desc
 
 
+def _work_dir_style_name(wd: Path | None) -> str:
+    """The style profile a job belongs to: job_config.json (stamped at render
+    time) → durable job config (stamped at script time) → '' (default style)."""
+    if wd is None:
+        return ""
+    name = str(_film_job_config(wd).get("style_name") or "")
+    if name:
+        return name
+    try:
+        store = DurableStore.default()
+        try:
+            row = store.get_job(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        if row:
+            return json.loads(_row_to_dict(row).get("config_json") or "{}").get("style_name", "")
+    except Exception:
+        pass
+    return ""
+
+
 def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
     cfg = gapp.load_config()
     wd = Path(work_dir) if work_dir else None
@@ -1761,10 +1874,24 @@ def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
         raise HTTPException(503, f"Description generation failed: {str(e).splitlines()[0][:200]}")
     if isinstance(desc, (tuple, list)):
         desc = desc[0]
-    suffix = cfg.get("description_suffix", "").strip()
+    # The suffix belongs to the JOB's style profile (issue #66) — the global
+    # flat key is just the default style's mirror, and appending it to every
+    # video leaked e.g. the Spielbot sign-off into other styles' descriptions.
+    ss = gapp.style_settings(cfg, _work_dir_style_name(wd))
+    suffix = (ss.get("description_suffix") or "").strip()
     if suffix and suffix not in str(desc):
         desc = f"{desc}\n\n{suffix}"
     return str(desc)
+
+
+def _describe_in_background(work_dir: str, title: str) -> None:
+    """Daemon-thread target: write description.txt for a fresh script so the
+    Cover/Publish screens find it pre-filled (no manual Generate click)."""
+    try:
+        with _track_op("Generating description", title):
+            _generate_and_cache_description(work_dir, title)
+    except Exception:
+        gapp.logger.warning("Background description generation failed for %s", work_dir, exc_info=True)
 
 
 class CoverBody(BaseModel):
@@ -2276,6 +2403,7 @@ class QueueAddBody(BaseModel):
     n_scenes: int = 0
     prompt: str = ""
     resolution: str = ""
+    style_name: str = ""
 
 
 @api.post("/api/queue/add")
@@ -2283,7 +2411,9 @@ def queue_add(body: QueueAddBody) -> dict:
     title = body.title.strip()
     if not title:
         raise HTTPException(400, "Title is required.")
-    n = max(6, min(50, body.n_scenes or gapp.load_config().get("default_n_scenes", 6)))
+    cfg = gapp.load_config()
+    n = max(6, min(50, body.n_scenes
+                   or gapp.style_settings(cfg, body.style_name).get("n_scenes") or 6))
     comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
                "suggested_scene_count": n}
     entry = yt.add_to_queue(comment, title, source="manual")
@@ -2293,6 +2423,8 @@ def queue_add(body: QueueAddBody) -> dict:
             updates["video_prompt"] = body.prompt.strip()
         if body.resolution.strip():
             updates["gen_resolution"] = body.resolution.strip()
+        if body.style_name.strip():
+            updates["gen_style_name"] = body.style_name.strip()
         if updates:
             yt.update_queue_item(entry["id"], **updates)
     return {"ok": bool(entry), "queue": yt.load_queue()}
@@ -2304,6 +2436,7 @@ class QueueUpdateBody(BaseModel):
     video_prompt: str | None = None
     suggested_scene_count: int | None = None
     gen_resolution: str | None = None
+    gen_style_name: str | None = None
 
 
 @api.post("/api/queue/update")
@@ -2329,6 +2462,8 @@ def queue_update(body: QueueUpdateBody) -> dict:
         updates["suggested_scene_count"] = max(6, min(50, int(body.suggested_scene_count)))
     if body.gen_resolution is not None:
         updates["gen_resolution"] = body.gen_resolution.strip()
+    if body.gen_style_name is not None:
+        updates["gen_style_name"] = body.gen_style_name.strip()
     if updates:
         yt.update_queue_item(body.id, **updates)
     return {"ok": True, "queue": yt.load_queue()}
@@ -2374,7 +2509,13 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
             raise HTTPException(409, f"Queue item is already {cur.get('status')}.")
         yt.update_queue_item(item_id, status="creating")
     title = item.get("final_title", "")
-    n = max(6, int(item.get("suggested_scene_count") or cfg.get("default_n_scenes", 6)))
+    # The item's style profile (or the default style) supplies every setting
+    # the queue item doesn't carry itself. An empty style_name is passed
+    # through so start_generation can still prefer the name stamped on the job
+    # at script time.
+    style_name = (item.get("gen_style_name") or "").strip()
+    ss = gapp.style_settings(cfg, style_name)
+    n = max(6, int(item.get("suggested_scene_count") or ss.get("n_scenes") or 6))
 
     # The claim above flipped the item to "creating". If the work below fails, flip it
     # to "failed" so it doesn't sit forever showing "Rendering" — and so automation,
@@ -2384,13 +2525,16 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
         if item.get("script_ready") and item.get("work_dir") and item.get("video_job_id"):
             job_id = item["video_job_id"]
             wd = item["work_dir"]
+            # Blank voice/resolution fall through to start_generation, which
+            # resolves them from the job's stamped style profile (then the default).
             start_generation(GenerateBody(
                 job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
-                voice=item.get("gen_voice") or cfg.get("default_voice", ""),
+                voice=item.get("gen_voice") or "",
                 voice_robotic=item.get("gen_voice_robotic"),
-                resolution=item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+                resolution=item.get("gen_resolution") or "",
                 music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
-                style=item.get("gen_style") or _job_meta_field(job_id, "style")))
+                style=item.get("gen_style") or _job_meta_field(job_id, "style"),
+                style_name=style_name))
             # start_generation wrote queue_item_id="" (the item is already "creating",
             # not "pending", so its title-match misses). Stamp the reverse link now so
             # _auto_post_done recognises this as a queue-driven job and posts it.
@@ -2399,10 +2543,10 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
             return {"job_id": job_id, "work_dir": wd, "title": title}
 
         topic = item.get("video_prompt") or title
-        resolution = item.get("gen_resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        resolution = item.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
         gen = script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-            visual_style=cfg.get("default_visual_style") or None))
+            style_name=style_name))
         if not auto_render:
             # Review gate on: the script is generated but NOT approved. Park the item
             # back as a "Script ready" pending slot for the human to review ("Edit
@@ -2413,16 +2557,17 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
                 item["id"], status="pending", script_ready=True,
                 video_job_id=gen["job_id"], work_dir=gen["work_dir"],
                 gen_style=gen.get("style", ""), gen_resolution=resolution,
-                gen_voice=cfg.get("default_voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
-                gen_music=gen.get("music_desc", ""))
+                gen_voice=ss.get("voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
+                gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
             return {"job_id": gen["job_id"], "work_dir": gen["work_dir"],
                     "title": title, "prepared": True}
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
-            n_scenes=n, voice=cfg.get("default_voice", ""),
+            n_scenes=n, voice=ss.get("voice", ""),
             voice_robotic=item.get("gen_voice_robotic"),
             resolution=resolution,
-            music_desc=gen.get("music_desc", ""), style=gen.get("style", "")))
+            music_desc=gen.get("music_desc", ""), style=gen.get("style", ""),
+            style_name=gen.get("style_name", "")))
         # See above: re-link the work dir to this queue item so auto-post finds it.
         _link_queue_item_to_work_dir(item, Path(gen["work_dir"]))
         yt.update_queue_item(item["id"], status="creating",
@@ -2458,6 +2603,7 @@ class FromJobBody(BaseModel):
     voice_robotic: bool | None = None
     music_desc: str = ""
     queue_item_id: str = ""
+    style_name: str = ""
 
 
 @api.post("/api/queue/from-job")
@@ -2489,6 +2635,7 @@ def queue_from_job(body: FromJobBody) -> dict:
         video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
         gen_style=body.style, gen_resolution=body.resolution,
         gen_voice=body.voice, gen_voice_robotic=body.voice_robotic, gen_music=body.music_desc,
+        gen_style_name=body.style_name,
     )
 
     # In-place update of an existing pending slot — keep its queue position.
@@ -3208,7 +3355,8 @@ def _auto_post_done() -> list[str]:
             gapp._write_job_meta(p, _auto_post_triggered=True)
         try:
             title = jc.get("video_title") or _video_title_for(p)
-            description = _generate_youtube_description(str(p), title)
+            # The description was cached at script time; only generate if missing.
+            description = _cached_description(p) or _generate_and_cache_description(str(p), title)
             res = yt_post(PostBody(
                 work_dir=str(p), title=title,
                 description=description, category=cfg.get("youtube_post_category", "22"),

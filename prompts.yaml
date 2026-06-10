@@ -237,7 +237,7 @@ video_suggestions:
     Output only the raw JSON array, no other text.
   user: |
     Recommend 5 video topics that would make great new additions to my documentary YouTube channel.
-
+    ${style_context}
     Previous videos I have already made:
     ${titles_list}
 

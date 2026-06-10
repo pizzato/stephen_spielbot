@@ -237,6 +237,7 @@ body {
 }
 .input::placeholder, .textarea::placeholder { color: var(--ink-4); }
 .input:focus, .textarea:focus, .select:focus { border-color: var(--accent); box-shadow: 0 0 0 4px var(--accent-soft); }
+.input:disabled, .textarea:disabled, .select:disabled { opacity: .55; cursor: not-allowed; background: var(--paper-2); }
 .textarea { resize: vertical; min-height: 84px; }
 .input--xl { font-size: 22px; font-weight: 600; padding: 16px 18px; letter-spacing: -0.01em; }
 
