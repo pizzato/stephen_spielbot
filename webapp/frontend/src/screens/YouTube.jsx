@@ -47,7 +47,7 @@ function StatCard({ label, value, sub, span = 3, delay = 1 }) {
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
 
-let _analyticsCache = null
+let _analyticsCache = {}   // per-channel cache (issue #22): {channelKey: data}
 
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
 
@@ -59,13 +59,27 @@ export default function YouTube({ go, initial }) {
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
   const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
+  const [channels, setChannels] = useState(null)  // connected channels (issue #22); null = loading
+  const [channel, setChannel] = useState('')      // channel key the analytics view shows
   const [analytics, setAnalytics] = useState(null)
   const [loadingAnalytics, setLoadingAnalytics] = useState(false)
 
   const refreshBadges = () => api.getBadges().then(setBadges).catch(() => {})
   const refreshComments = () => api.getComments().then((d) => { setComments(d.comments || []); refreshBadges() }).catch((e) => setError(e.message))
 
-  useEffect(() => { refreshComments(); refreshBadges() }, [])
+  useEffect(() => {
+    refreshComments(); refreshBadges()
+    api.ytChannels().then((r) => {
+      const list = r.channels || []
+      setChannels(list)
+      setChannel((c) => c || list[0]?.id || '')
+    }).catch(() => setChannels([]))
+  }, [])
+
+  const channelName = (key) => {
+    const c = (channels || []).find((x) => x.id === key)
+    return c ? (c.name || c.id) : ''
+  }
 
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
   // Opening Publish marks the ready-to-publish videos as seen (mailbox-style),
@@ -104,16 +118,16 @@ export default function YouTube({ go, initial }) {
 
   const pending = (c) => c.is_request && !['approved', 'rejected'].includes(c.status)
 
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = async (ch = channel) => {
     setLoadingAnalytics(true); setError('')
-    try { const d = await api.ytAnalytics(); _analyticsCache = d; setAnalytics(d) }
+    try { const d = await api.ytAnalytics(ch); _analyticsCache[ch] = d; setAnalytics(d) }
     catch (e) { setAnalytics({ channel: {}, videos: [], error: e.message }) } finally { setLoadingAnalytics(false) }
   }
   useEffect(() => {
-    if (view !== 'analytics') return
-    if (_analyticsCache && !analytics) { setAnalytics(_analyticsCache); return }
-    if (!analytics && !loadingAnalytics) fetchAnalytics()
-  }, [view])
+    if (view !== 'analytics' || channels === null) return   // wait for the channel list
+    if (_analyticsCache[channel]) { setAnalytics(_analyticsCache[channel]); return }
+    if (!loadingAnalytics) fetchAnalytics()
+  }, [view, channel, channels])
 
   return (
     <div>
@@ -123,7 +137,13 @@ export default function YouTube({ go, initial }) {
           <h1 className="display-md reveal reveal-d1">Comments &amp; publishing</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
-          <Chip tone="ok" dot>@StephenSpielbot</Chip>
+          {(channels || []).length > 1 ? (
+            <select className="select" value={channel} onChange={(e) => setChannel(e.target.value)} style={{ maxWidth: 220 }}>
+              {(channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+            </select>
+          ) : (
+            <Chip tone="ok" dot>{channelName(channel) || '@StephenSpielbot'}</Chip>
+          )}
         </div>
       </div>
 
@@ -152,7 +172,10 @@ export default function YouTube({ go, initial }) {
           {comments.map((c, i) => (
             <Card key={c.comment_id || i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
-                <span style={{ fontWeight: 700 }}>{c.commenter || 'viewer'}</span>
+                <span className="row center gap-10">
+                  <span style={{ fontWeight: 700 }}>{c.commenter || 'viewer'}</span>
+                  {(channels || []).length > 1 && channelName(c.channel) && <Chip tone="neutral">{channelName(c.channel)}</Chip>}
+                </span>
                 {c.is_request ? <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> Request</Chip> : <Chip tone="neutral">Not a request</Chip>}
               </div>
               <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text}</p>
