@@ -1242,6 +1242,16 @@ def _reconcile_queue() -> list[dict]:
             except Exception:
                 wd = ""
         if not wd:
+            # "creating" with no work dir yet means script generation is in
+            # flight — normal for a couple of minutes. If it stays that way the
+            # server died mid-generation and the claim will never resolve; fail
+            # it so it stops counting as a running job.
+            ts = it.get("updated_at") or it.get("created_at") or 0
+            if it.get("status") == "creating" and time.time() - ts > 1800:
+                it["status"] = "failed"
+                it["error"] = "Script generation was interrupted."
+                it["updated_at"] = time.time()
+                changed = True
             continue
 
         p = Path(wd)
@@ -1257,16 +1267,30 @@ def _reconcile_queue() -> list[dict]:
             if it.get("status") != "done":
                 it["status"] = "done"
                 changed = True
-        elif it.get("status") in ("creating", "running") and not is_active:
-            posted = posted_by_title.get(title_key)
+        elif it.get("status") in ("creating", "running"):
+            posted = posted_by_title.get(title_key) if not is_active else None
             if posted:
                 it["status"] = "posted"
                 it["youtube_video_id"] = posted.get("youtube_video_id")
                 it["youtube_url"] = posted.get("youtube_url")
                 changed = True
-            elif meta.get("status") == "running" and not gapp._process_running(meta.get("pid")):
+            elif meta.get("status") == "error":
+                # The render recorded a fatal error — surface it on the queue
+                # item. This must apply to the active (latest) work dir too:
+                # leaving the item "creating" makes _is_job_running treat it as
+                # a live job and blocks automation from starting the next one.
+                it["status"] = "failed"
+                it["error"] = str(meta.get("error") or "Render failed.")[:300]
+                it["updated_at"] = time.time()
+                changed = True
+            elif (meta.get("status") == "running"
+                    and not gapp._process_running(meta.get("pid"))
+                    # Grace period: right around (re)launch job.json can briefly
+                    # hold the previous attempt's dead pid.
+                    and time.time() - (meta.get("updated_at") or 0) > 120):
                 it["status"] = "failed"
                 it["error"] = "Render process is no longer running."
+                it["updated_at"] = time.time()
                 changed = True
     queue = sorted(queue, key=_queue_lifecycle_sort_key)
     if changed:
@@ -2714,10 +2738,10 @@ def _start_queue_item(item: dict) -> dict:
         yt.update_queue_item(item["id"], status="creating",
                              video_job_id=gen["job_id"], work_dir=gen["work_dir"])
         return {"job_id": gen["job_id"], "work_dir": gen["work_dir"], "title": title}
-    except Exception:
+    except Exception as exc:
         if item_id:
             try:
-                yt.update_queue_item(item_id, status="failed")
+                yt.update_queue_item(item_id, status="failed", error=str(exc)[:300])
             except Exception:
                 pass
         raise
@@ -3468,6 +3492,33 @@ def _ordered_pending(cfg: dict) -> list[dict]:
     return pending
 
 
+_MAX_AUTO_RETRIES = 3
+
+
+def _retryable_failed(cfg: dict) -> dict | None:
+    """Next failed queue item automation should retry. Only consulted when no
+    pending item is startable, so retries never delay fresh work. Renders are
+    resumable (finished scenes are skipped), so a retry is usually cheap. Each
+    attempt stamps retry_count before launching; after _MAX_AUTO_RETRIES the
+    item stays failed for a human to look at — a deterministic failure would
+    otherwise retry forever."""
+    failed = [q for q in yt.load_queue()
+              if q.get("status") == "failed"
+              and int(q.get("retry_count") or 0) < _MAX_AUTO_RETRIES]
+    if not cfg.get("youtube_auto_approve_script"):
+        # Review gate on: only retry items whose script a human already saw —
+        # the same rule fresh starts follow.
+        failed = [q for q in failed if q.get("script_ready")
+                  and q.get("work_dir") and q.get("video_job_id")]
+    if not failed:
+        return None
+    failed.sort(key=lambda q: q.get("updated_at") or q.get("created_at") or 0)
+    item = {**failed[0]}  # fresh copy
+    item["retry_count"] = int(item.get("retry_count") or 0) + 1
+    yt.update_queue_item(item["id"], retry_count=item["retry_count"])
+    return item
+
+
 def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
@@ -3477,15 +3528,6 @@ def _auto_start_best() -> dict | None:
         # Auto-approve on: take the next pending item and render it end-to-end,
         # writing the script first when the item doesn't have one.
         item = {**pending[0]} if pending else None  # fresh copy
-        if not item and cfg.get("youtube_auto_ai_ideas"):
-            # Queue empty — opt-in fallback: invent an AI idea to keep the channel
-            # fed. _auto_pick_suggestion picks the best unused idea, marks it used
-            # (so it's closed and never re-picked), and generates a fresh batch
-            # when none remain.
-            try:
-                item = gapp._auto_pick_suggestion(cfg)
-            except Exception:
-                item = None
     else:
         # Review gate on: only render the next item whose script is already
         # written (added from the Script screen or via the queue's Edit-script
@@ -3495,6 +3537,18 @@ def _auto_start_best() -> dict | None:
         item = next((q for q in pending
                      if q.get("script_ready")
                      and q.get("work_dir") and q.get("video_job_id")), None)
+    if not item:
+        # Nothing fresh to start — retry a failed item before inventing new work.
+        item = _retryable_failed(cfg)
+    if not item and cfg.get("youtube_auto_approve_script") and cfg.get("youtube_auto_ai_ideas"):
+        # Queue idle — opt-in fallback: invent an AI idea to keep the channel
+        # fed. _auto_pick_suggestion picks the best unused idea, marks it used
+        # (so it's closed and never re-picked), and generates a fresh batch
+        # when none remain.
+        try:
+            item = gapp._auto_pick_suggestion(cfg)
+        except Exception:
+            item = None
     if not item:
         return None
     try:
@@ -3601,6 +3655,14 @@ def _automation_tick() -> dict:
         # flag is off, so the behaviour can't contradict what's ticked.
         out: dict = {}
         with _track_op("Automation tick"):
+            # Self-heal queue rows first (e.g. fail items whose render errored)
+            # so the steps below see real state. Without this, reconciliation
+            # only ran on browser polls — overnight, a failed render left its
+            # item "creating" forever and blocked every later start.
+            try:
+                _reconcile_queue()
+            except Exception:
+                pass
             if cfg.get("youtube_auto_fetch_evaluate"):
                 try:
                     out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))

@@ -659,6 +659,10 @@ def update_queue_item(item_id: str, **updates) -> bool:
     for entry in queue:
         if entry.get("id") == item_id:
             entry.update(updates)
+            # Staleness checks (_is_job_running, _reconcile_queue) and the
+            # lifecycle sort all read updated_at — keep it honest on every write.
+            if "updated_at" not in updates:
+                entry["updated_at"] = time.time()
             save_queue(queue)
             return True
     return False

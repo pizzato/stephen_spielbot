@@ -401,8 +401,20 @@ def _is_job_running() -> bool:
         for q in yt.load_queue():
             if q.get("status") == "creating":
                 ts = q.get("updated_at") or q.get("created_at") or time.time()
-                if ts > cutoff:
-                    return True
+                if ts <= cutoff:
+                    continue
+                # An item whose render already errored/finished is stale queue
+                # bookkeeping, not a running job — counting it would block
+                # automation from starting the next item for up to 24 h.
+                wd = q.get("work_dir")
+                if wd:
+                    try:
+                        job_meta = json.loads((Path(wd) / "job.json").read_text())
+                        if job_meta.get("status") in ("error", "cancelled", "paused", "done"):
+                            continue
+                    except Exception:
+                        pass
+                return True
     except Exception:
         pass
     try:
