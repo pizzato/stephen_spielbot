@@ -32,6 +32,19 @@ DEFAULT_WIDTH  = 832
 DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
 DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
+LTX_MAX_FRAMES = 1000              # LTXVEmptyLatentAudio rejects frames_number > 1000 (~40 s)
+
+
+def _frame_count(length: int, duration_seconds: float | None) -> int:
+    """Frames for a clip request, clamped to what the LTX graph accepts.
+    A clip cut short by the clamp is still usable: the muxer freeze-pads the
+    last frame to cover the rest of the narration."""
+    if duration_seconds is not None:
+        length = max(1, int(duration_seconds * LTX_FPS) + 1)
+    if length > LTX_MAX_FRAMES:
+        logger.warning("[comfy] clamping %d frames to LTX max %d", length, LTX_MAX_FRAMES)
+        length = LTX_MAX_FRAMES
+    return length
 
 
 def ltx_dimensions(width: int, height: int) -> tuple[int, int]:
@@ -514,8 +527,7 @@ def generate_video_clip(
     comfy_url: str = COMFYUI_URL,
 ) -> Path:
     """Generate a video clip using LTX 2.3 T2V and save to output_path."""
-    if duration_seconds is not None:
-        length = max(1, int(duration_seconds * LTX_FPS) + 1)
+    length = _frame_count(length, duration_seconds)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -575,8 +587,7 @@ def generate_video_continuation(
     comfy_url: str = COMFYUI_URL,
 ) -> Path:
     """Continue a video clip from its last frame using LTX 2.3 I2V."""
-    if duration_seconds is not None:
-        length = max(1, int(duration_seconds * LTX_FPS) + 1)
+    length = _frame_count(length, duration_seconds)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
