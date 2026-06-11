@@ -19,6 +19,7 @@ over — exactly the "build it once, then predict" behaviour requested.
 
 from __future__ import annotations
 
+import json
 import time
 from typing import Any
 
@@ -101,6 +102,43 @@ def humanize_eta(seconds: float) -> str:
     hours = int(minutes // 60)
     rem = int(round(minutes % 60))
     return f"~{hours}h {rem}m" if rem else f"~{hours}h"
+
+
+# The standard task plan ensure_generation_plan() creates for a job (see
+# DurableStore.ensure_generation_plan) — used to predict a render that hasn't
+# been planned yet, e.g. a waiting queue item.
+_PLAN_PER_SCENE = (
+    "scene.image.generate",
+    "scene.narration.generate",
+    "scene.video.generate",
+    "scene.video.mux",
+)
+_PLAN_PER_JOB = ("music.generate", "video.finalize")
+
+
+def estimate_planned_job(
+    n_scenes: int,
+    vid_width: int,
+    vid_height: int,
+    table: dict[str, dict[str, Any]],
+    cfg: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Predict wall-clock for a job that has no orchestrator tasks yet.
+
+    Synthesizes the standard plan (per scene: image, narration, video, mux;
+    plus one music and one finalize) at the given output resolution and runs
+    it through :func:`estimate_eta`."""
+    payload_json = json.dumps({"vid_width": vid_width, "vid_height": vid_height})
+    tasks = [
+        {"kind": kind, "status": "queued", "payload_json": payload_json}
+        for kind in _PLAN_PER_SCENE
+        for _ in range(max(1, int(n_scenes)))
+    ]
+    tasks += [
+        {"kind": kind, "status": "queued", "payload_json": payload_json}
+        for kind in _PLAN_PER_JOB
+    ]
+    return estimate_eta(tasks, table, cfg)
 
 
 def estimate_eta(

@@ -8,6 +8,23 @@ const STATUS_CHIP = {
   posted: ['ok', 'Posted'], failed: ['danger', 'Failed'], cancelled: ['neutral', 'Cancelled'],
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
+function fmtNum(n) {
+  if (n == null) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return String(n)
+}
+
+// View sorts for the waiting queue. "Queue order" is the real render order
+// (what automation/Start next consume); the rest are read-only views over it.
+const SORT_OPTIONS = [
+  { value: 'queue', label: 'Queue order' },
+  { value: 'newest', label: 'Newest' },
+  { value: 'oldest', label: 'Oldest' },
+  { value: 'interest', label: 'Interestingness' },
+  { value: 'views', label: 'Predicted views' },
+  { value: 'fastest', label: 'Fastest render' },
+]
 
 export default function Queue({ go, onEditScript, meta = {} }) {
   const [items, setItems] = useState([])
@@ -18,7 +35,16 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [loaded, setLoaded] = useState(false)
   const [editId, setEditId] = useState('')         // pending item open for inline edit
   const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '', gen_style_name: '' })
+  const [sortBy, setSortBy] = useState('queue')
+  // id -> predicted 3-day views (null = model unavailable, undefined = not fetched yet)
+  const [views, setViews] = useState({})
   const styleList = meta.config?.styles || []
+
+  // Resolution the item would render at — its own, else its style's, else the default.
+  const effectiveResolution = (it) => {
+    const st = styleList.find((s) => s.name === (it.gen_style_name || meta.config?.default_style))
+    return it.gen_resolution || st?.resolution || meta.config?.resolution || meta.default_resolution || ''
+  }
 
   const refresh = () => Promise.all([
     api.getQueue(),
@@ -29,6 +55,23 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     setLoaded(true)
   }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { refresh() }, [])
+
+  // Predicted reach per waiting item (same engagement model as the Ideas tab).
+  // Renders nothing until a model is built; null marks "asked, unavailable".
+  useEffect(() => {
+    const missing = items.filter((i) => i.status === 'pending' && i.id && views[i.id] === undefined)
+    if (!missing.length) return
+    let live = true
+    Promise.all(missing.map((it) =>
+      api.engagementPredict({
+        title: it.final_title || it.title || '',
+        description: it.video_prompt || it.comment_text || '',
+        is_short: effectiveResolution(it).startsWith('Portrait'),
+        style_name: it.gen_style_name || '',
+      }).then((r) => [it.id, r?.available ? r.predicted_views : null]).catch(() => [it.id, null])
+    )).then((pairs) => { if (live) setViews((v) => ({ ...v, ...Object.fromEntries(pairs) })) })
+    return () => { live = false }
+  }, [items])
 
   const run = async (key, fn, after) => {
     setBusy(key); setError(''); setStatus('')
@@ -64,6 +107,14 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   }
 
   const pendingItems = items.filter((i) => i.status === 'pending')
+  const SORT_FNS = {
+    newest: (a, b) => (b.created_at || 0) - (a.created_at || 0),
+    oldest: (a, b) => (a.created_at || 0) - (b.created_at || 0),
+    interest: (a, b) => (b.interestingness ?? -1) - (a.interestingness ?? -1),
+    views: (a, b) => (views[b.id] ?? -1) - (views[a.id] ?? -1),
+    fastest: (a, b) => (a.est_seconds ?? Number.MAX_SAFE_INTEGER) - (b.est_seconds ?? Number.MAX_SAFE_INTEGER),
+  }
+  const sortedPending = SORT_FNS[sortBy] ? [...pendingItems].sort(SORT_FNS[sortBy]) : pendingItems
   const renderingItems = items.filter((i) => ['creating', 'running'].includes(i.status))
   const readyItems = items.filter((i) => ['done', 'upload_pending'].includes(i.status))
   const historyItems = items.filter((i) => ['posted', 'cancelled', 'failed'].includes(i.status))
@@ -117,7 +168,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     </div>
   )
 
-  const queueRow = (it, idx, sectionItems, { dim = false } = {}) => {
+  const queueRow = (it, idx, sectionItems, { dim = false, noMove = false } = {}) => {
     const [tone, label] = STATUS_CHIP[it.status] || ['neutral', it.status]
     const titleText = it.final_title || it.title || '(untitled)'
     const scenes = it.suggested_scene_count
@@ -130,9 +181,9 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     return (
       <Fragment key={it.id || idx}>
         <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
-          <div className="stack" style={{ gap: 2 }}>
-            <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
-            <button className="qmove" disabled={!isPending || !!busy} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
+          <div className="stack" style={{ gap: 2 }} title={noMove ? 'Switch sort to Queue order to reorder' : undefined}>
+            <button className="qmove" disabled={!isPending || !!busy || noMove} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
+            <button className="qmove" disabled={!isPending || !!busy || noMove} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
           </div>
           <div className="grow">
             <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{titleText}</div>
@@ -140,7 +191,9 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               {it.source && <Chip tone="info">{it.source}</Chip>}
               {styleLabel && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {styleLabel}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
+              {views[it.id] != null && <span title="Predicted 3-day views"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(views[it.id])}</Chip></span>}
               {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
+              {it.est_text && <span className="muted" style={{ fontSize: 12.5 }} title={it.est_confidence === 'rough' ? 'Estimated render time (rough — little timing data for this setup yet)' : 'Estimated render time, from your past renders'}><Icon name="clock" style={{ fontSize: 11 }} /> {it.est_text}</span>}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
             </div>
           </div>
@@ -162,15 +215,31 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     )
   }
 
-  const section = (title, hint, sectionItems, empty, opts = {}) => (
-    <Card span={12} className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
-      <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
-        <span className="label-sm">{title}</span>
-        {hint ? <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>{hint}</span> : null}
-      </div>
-      {loaded && sectionItems.length === 0 && <div className="muted" style={{ fontSize: 13, padding: '18px 22px' }}>{empty}</div>}
-      {sectionItems.map((it, idx) => queueRow(it, idx, sectionItems, opts))}
-    </Card>
+  const section = (title, hint, sectionItems, empty, opts = {}) => {
+    const { extra, ...rowOpts } = opts
+    return (
+      <Card span={12} className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
+        <div className="row center between gap-10 row--wrap" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+          <div>
+            <span className="label-sm">{title}</span>
+            {hint ? <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>{hint}</span> : null}
+          </div>
+          {extra || null}
+        </div>
+        {loaded && sectionItems.length === 0 && <div className="muted" style={{ fontSize: 13, padding: '18px 22px' }}>{empty}</div>}
+        {sectionItems.map((it, idx) => queueRow(it, idx, sectionItems, rowOpts))}
+      </Card>
+    )
+  }
+
+  const sortControl = (
+    <label className="row center" style={{ gap: 8 }}>
+      <span className="muted" style={{ fontSize: 12.5 }}><Icon name="arrow-down-wide-short" /> Sort</span>
+      <select className="select" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}
+        value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    </label>
   )
 
   return (
@@ -226,7 +295,12 @@ export default function Queue({ go, onEditScript, meta = {} }) {
           </Card>
         )}
 
-        {section('Up next', 'Only waiting items. Comment requests rank above ideas. Reorder with the arrows.', pendingItems, 'The queue is empty. Approve a comment request (YouTube tab) or add one manually.')}
+        {section('Up next',
+          sortBy === 'queue'
+            ? 'Only waiting items. Comment requests rank above ideas. Reorder with the arrows.'
+            : 'Sorted view — renders still start in queue order. Switch back to reorder.',
+          sortedPending, 'The queue is empty. Approve a comment request (YouTube tab) or add one manually.',
+          { extra: sortControl, noMove: sortBy !== 'queue' })}
         {readyItems.length > 0 && section('Ready to publish', 'Finished videos waiting for YouTube upload.', readyItems, '', {})}
         {historyItems.length > 0 && section('History', 'Already posted or no longer active.', historyItems, '', { dim: true })}
       </div>
