@@ -5,6 +5,7 @@ render end-to-end, opt-in AI-idea fallback) and review-gate (only render items
 whose script is already written; never generate scripts) — plus the
 youtube_auto_ai_ideas seeding for configs saved before the toggle existed.
 """
+import contextlib
 import os
 import tempfile
 import unittest
@@ -116,10 +117,10 @@ class AutoStartApproveModeTests(TempConfigCase):
 
     def test_starts_next_pending_item_even_without_script(self):
         self._config(ai_ideas=False)
-        item = _scriptless_item("q1", "Write me")
+        queue = [_scriptless_item("q1", "Write me")]
         started = []
         with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
-             mock.patch.object(backend.gapp, "_best_pending_queue_item", return_value=item), \
+             mock.patch.object(backend.yt, "load_queue", return_value=queue), \
              mock.patch.object(backend, "_start_queue_item",
                                side_effect=lambda it: started.append(it) or {"ok": True}):
             out = backend._auto_start_best()
@@ -129,7 +130,7 @@ class AutoStartApproveModeTests(TempConfigCase):
     def test_empty_queue_without_ai_ideas_does_nothing(self):
         self._config(ai_ideas=False)
         with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
-             mock.patch.object(backend.gapp, "_best_pending_queue_item", return_value=None), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[]), \
              mock.patch.object(backend.gapp, "_auto_pick_suggestion") as pick, \
              mock.patch.object(backend, "_start_queue_item") as start:
             out = backend._auto_start_best()
@@ -142,13 +143,108 @@ class AutoStartApproveModeTests(TempConfigCase):
         idea = _scriptless_item("idea1", "Invented")
         started = []
         with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
-             mock.patch.object(backend.gapp, "_best_pending_queue_item", return_value=None), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[]), \
              mock.patch.object(backend.gapp, "_auto_pick_suggestion", return_value=idea), \
              mock.patch.object(backend, "_start_queue_item",
                                side_effect=lambda it: started.append(it) or {"ok": True}):
             out = backend._auto_start_best()
         self.assertEqual(out, {"ok": True})
         self.assertEqual([i["id"] for i in started], ["idea1"])
+
+
+class QueueSortOrderTests(TempConfigCase):
+    """queue_sort_order (the Queue page sort) drives which pending item starts
+    next — the persisted sort IS the consumption order, not just a view."""
+
+    def _config(self, sort_order, approve=True):
+        self.write_config({"youtube_auto_start_job": True,
+                           "youtube_auto_approve_script": approve,
+                           "youtube_auto_ai_ideas": False,
+                           "queue_sort_order": sort_order})
+
+    def _started_id(self, queue, extra=()):
+        started = []
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.object(
+                backend.gapp, "_is_job_running", return_value=False))
+            stack.enter_context(mock.patch.object(
+                backend.yt, "load_queue", return_value=queue))
+            stack.enter_context(mock.patch.object(
+                backend, "_start_queue_item",
+                side_effect=lambda it: started.append(it) or {"ok": True}))
+            for target, attr, kw in extra:
+                stack.enter_context(mock.patch.object(target, attr, **kw))
+            backend._auto_start_best()
+        return started[0]["id"] if started else None
+
+    def test_default_queue_order_keeps_file_order(self):
+        self._config("queue")
+        a = dict(_scriptless_item("q1", "First"), created_at=100)
+        b = dict(_scriptless_item("q2", "Second"), created_at=200)
+        self.assertEqual(self._started_id([a, b]), "q1")
+
+    def test_newest_starts_most_recent(self):
+        self._config("newest")
+        a = dict(_scriptless_item("q1", "Old"), created_at=100)
+        b = dict(_scriptless_item("q2", "New"), created_at=200)
+        self.assertEqual(self._started_id([a, b]), "q2")
+
+    def test_oldest_starts_least_recent(self):
+        self._config("oldest")
+        a = dict(_scriptless_item("q1", "New"), created_at=200)
+        b = dict(_scriptless_item("q2", "Old"), created_at=100)
+        self.assertEqual(self._started_id([a, b]), "q2")
+
+    def test_interest_starts_highest_missing_ranks_last(self):
+        self._config("interest")
+        a = _scriptless_item("q1", "No score")              # missing → -1
+        b = dict(_scriptless_item("q2", "Mild"), interestingness=0.4)
+        c = dict(_scriptless_item("q3", "Hot"), interestingness=0.9)
+        self.assertEqual(self._started_id([a, b, c]), "q3")
+
+    def test_views_starts_highest_prediction(self):
+        self._config("views")
+        a = _scriptless_item("q1", "Few views")
+        b = _scriptless_item("q2", "Many views")
+        preds = {"Few views": {"available": True, "predicted_views": 10},
+                 "Many views": {"available": True, "predicted_views": 5000}}
+        extra = [(backend.eng, "predict",
+                  {"side_effect": lambda title, *args, **kw: preds[title]})]
+        self.assertEqual(self._started_id([a, b], extra=extra), "q2")
+
+    def test_views_without_model_keeps_queue_order(self):
+        self._config("views")
+        a = _scriptless_item("q1", "First")
+        b = _scriptless_item("q2", "Second")
+        extra = [(backend.eng, "predict", {"return_value": {"available": False}})]
+        self.assertEqual(self._started_id([a, b], extra=extra), "q1")
+
+    def test_fastest_starts_smallest_estimate(self):
+        self._config("fastest")
+        a = _scriptless_item("q1", "Slow")
+        b = _scriptless_item("q2", "Quick")
+        est = {"q1": 3600, "q2": 60}
+
+        def stamp(pending):
+            for it in pending:
+                it["est_seconds"] = est[it["id"]]
+        extra = [(backend, "_attach_render_estimates", {"side_effect": stamp})]
+        self.assertEqual(self._started_id([a, b], extra=extra), "q2")
+
+    def test_unknown_sort_value_falls_back_to_file_order(self):
+        self._config("bogus")
+        a = dict(_scriptless_item("q1", "First"), created_at=100)
+        b = dict(_scriptless_item("q2", "Second"), created_at=200)
+        self.assertEqual(self._started_id([a, b]), "q1")
+
+    def test_review_mode_picks_first_ready_item_in_sorted_order(self):
+        # Sort says q3 (newest) first, but it has no script; the newest READY
+        # item (q2) must start — never the file-order one (q1).
+        self._config("newest", approve=False)
+        a = dict(_ready_item("q1", "Old ready"), created_at=100)
+        b = dict(_ready_item("q2", "New ready"), created_at=200)
+        c = dict(_scriptless_item("q3", "Newest no script"), created_at=300)
+        self.assertEqual(self._started_id([a, b, c]), "q2")
 
 
 class AiIdeasSeedingTests(TempConfigCase):
