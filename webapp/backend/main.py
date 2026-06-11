@@ -265,6 +265,7 @@ class VoiceTest(BaseModel):
     voice: str = ""
     robotic: bool = False
     robotic_amount: float | None = None
+    speed: float | None = None
     text: str = ""
 
 
@@ -291,18 +292,20 @@ def voices_test(body: VoiceTest) -> dict:
     amount = (body.robotic_amount if body.robotic_amount is not None
               else float(gapp.style_settings(cfg).get("voice_robotic_amount", 0.35)))
     robotic = bool(body.robotic)
+    speed = (body.speed if body.speed is not None
+             else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
 
-    # Content-addressed cache key: a given (voice, robotic level, text, source
-    # clip) always maps to the same file, so F5-TTS never re-runs for a setup
-    # we've already rendered. Folding in the clip's mtime+size means replacing a
-    # voice's reference audio busts its cached sample.
+    # Content-addressed cache key: a given (voice, robotic level, speed, text,
+    # source clip) always maps to the same file, so F5-TTS never re-runs for a
+    # setup we've already rendered. Folding in the clip's mtime+size means
+    # replacing a voice's reference audio busts its cached sample.
     try:
         st = (ref or DEFAULT_REF).stat()
         ref_stamp = f"{st.st_mtime_ns}:{st.st_size}"
     except OSError:
         ref_stamp = ""
     key = hashlib.md5(
-        f"{voice}|{robotic}|{round(amount, 3)}|{text}|{ref_stamp}".encode()
+        f"{voice}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
     ).hexdigest()[:16]
     out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
@@ -313,7 +316,7 @@ def voices_test(body: VoiceTest) -> dict:
         try:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
-                                   robotic=robotic, robotic_amount=amount)
+                                   robotic=robotic, robotic_amount=amount, speed=speed)
         except Exception as e:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
@@ -852,6 +855,7 @@ def start_generation(body: GenerateBody) -> dict:
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         "voice_robotic": voice_robotic,
         "voice_robotic_amount": ss.get("voice_robotic_amount", 0.35),
+        "voice_speed": ss.get("voice_speed", 1.0),
         # Per-style render quality + audio mix (issue #66): the resumable
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
@@ -3075,11 +3079,12 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
         voice_robotic = bool(jc.get("voice_robotic", False))
         voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
+        voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
         tts_hosts = cfg.get("tts_workers") or []
         tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
         _film_tasks[task_id] = {"status": "running", "step": "narration"}
-        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount)
+        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed)
 
         # Re-mux narration with the existing scene video
         video_path = wd / f"scene_{sid:02d}_video.mp4"
