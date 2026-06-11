@@ -180,6 +180,10 @@ DEFAULT_CFG = {
     "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
     "youtube_auto_post": False,               # auto-publish when video generation completes
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
+    # Queue page sort — persisted so it survives page reloads, and authoritative:
+    # automation/"Start next render" consume pending items in this order.
+    # One of: queue | newest | oldest | interest | views | fastest.
+    "queue_sort_order": "queue",
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
     "description_suffix": "",
@@ -424,16 +428,6 @@ def _is_job_running() -> bool:
     except Exception:
         pass
     return False
-
-
-def _best_pending_queue_item() -> dict | None:
-    """Return the first pending queue item (respecting queue order)."""
-    try:
-        queue = yt.load_queue()
-        first = next((q for q in queue if q.get("status") == "pending"), None)
-        return {**first} if first else None  # fresh copy
-    except Exception:
-        return None
 
 
 # ── Config helpers ───────────────────────────────────────────────────────────
