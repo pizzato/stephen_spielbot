@@ -15,8 +15,10 @@ function fmtNum(n) {
   return String(n)
 }
 
-// View sorts for the waiting queue. "Queue order" is the real render order
-// (what automation/Start next consume); the rest are read-only views over it.
+// Sorts for the waiting queue. The picked sort is saved to config
+// (queue_sort_order) and is the real consumption order: automation and
+// "Start next render" start the item at the top of this view. "Queue order"
+// is the manual order (reorder with the arrows).
 const SORT_OPTIONS = [
   { value: 'queue', label: 'Queue order' },
   { value: 'newest', label: 'Newest' },
@@ -25,6 +27,7 @@ const SORT_OPTIONS = [
   { value: 'views', label: 'Predicted views' },
   { value: 'fastest', label: 'Fastest render' },
 ]
+const validSort = (v) => (SORT_OPTIONS.some((o) => o.value === v) ? v : 'queue')
 
 export default function Queue({ go, onEditScript, meta = {} }) {
   const [items, setItems] = useState([])
@@ -35,7 +38,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [loaded, setLoaded] = useState(false)
   const [editId, setEditId] = useState('')         // pending item open for inline edit
   const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '', gen_style_name: '' })
-  const [sortBy, setSortBy] = useState('queue')
+  const [sortBy, setSortBy] = useState(() => validSort(meta.config?.queue_sort_order))
   // id -> predicted 3-day views (null = model unavailable, undefined = not fetched yet)
   const [views, setViews] = useState({})
   const styleList = meta.config?.styles || []
@@ -55,6 +58,20 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     setLoaded(true)
   }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { refresh() }, [])
+
+  // The saved sort is authoritative; `meta` can be stale (App fetches config
+  // once, before any change made on this page), so re-read it on mount.
+  useEffect(() => {
+    api.getConfig().then((m) => {
+      const v = m?.config?.queue_sort_order
+      if (v) setSortBy(validSort(v))
+    }).catch(() => {})
+  }, [])
+
+  const changeSort = (v) => {
+    setSortBy(v)
+    api.saveConfig({ queue_sort_order: v }).catch((e) => setError(e.message))
+  }
 
   // Predicted reach per waiting item (same engagement model as the Ideas tab).
   // Renders nothing until a model is built; null marks "asked, unavailable".
@@ -236,7 +253,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     <label className="row center" style={{ gap: 8 }}>
       <span className="muted" style={{ fontSize: 12.5 }}><Icon name="arrow-down-wide-short" /> Sort</span>
       <select className="select" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}
-        value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
+        value={sortBy} onChange={(e) => changeSort(e.target.value)}>
         {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     </label>
@@ -298,7 +315,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
         {section('Up next',
           sortBy === 'queue'
             ? 'Only waiting items. Comment requests rank above ideas. Reorder with the arrows.'
-            : 'Sorted view — renders still start in queue order. Switch back to reorder.',
+            : 'The next render starts from the top of this order. Switch to Queue order to reorder by hand.',
           sortedPending, 'The queue is empty. Approve a comment request (YouTube tab) or add one manually.',
           { extra: sortControl, noMove: sortBy !== 'queue' })}
         {readyItems.length > 0 && section('Ready to publish', 'Finished videos waiting for YouTube upload.', readyItems, '', {})}

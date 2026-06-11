@@ -2649,12 +2649,11 @@ def _start_queue_item(item: dict) -> dict:
     otherwise we generate the script first. Reuses script_generate +
     start_generation."""
     cfg = gapp.load_config()
-    # Claim the item BEFORE the slow script generation. _best_pending_queue_item
-    # — used by this backend's automation AND the classic Gradio app (a separate
-    # process sharing the same queue file) — only returns status=="pending"
+    # Claim the item BEFORE the slow script generation. Automation
+    # (_auto_start_best via _ordered_pending) only picks status=="pending"
     # items, so flipping the status away from pending now is the claim that stops
-    # a concurrent tick or the other app from starting the same item and creating
-    # a duplicate work folder. Without it, the item stays "pending" for the whole
+    # a concurrent tick from starting the same item and creating a duplicate
+    # work folder. Without it, the item stays "pending" for the whole
     # ~45s script_generate, which is exactly the window that produced two folders.
     item_id = item.get("id")
     if item_id:
@@ -3430,14 +3429,54 @@ def delete_film(body: JobActionBody) -> dict:
 
 # ── Automation (Gap 2): on-demand step endpoints + opt-in background loop ──────
 
+def _predicted_views_for_item(it: dict, cfg: dict) -> float:
+    """Predicted 3-day views for a pending item — same model and inputs as the
+    Queue page's per-item badges. -1 when the model is unavailable."""
+    try:
+        style_name = (it.get("gen_style_name") or "").strip()
+        ss = gapp.style_settings(cfg, style_name)
+        res = it.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+        r = eng.predict(it.get("final_title") or it.get("title") or "",
+                        it.get("video_prompt") or it.get("comment_text") or "",
+                        str(res).startswith("Portrait"),
+                        channel=_engagement_channel("", style_name))
+        if r.get("available"):
+            return float(r.get("predicted_views") or 0)
+    except Exception:
+        pass
+    return -1.0
+
+
+def _ordered_pending(cfg: dict) -> list[dict]:
+    """Pending queue items in consumption order: the sort picked on the Queue
+    page (queue_sort_order). The top of that view is the next video to start.
+    "queue" (default) and unknown values keep the manual file order; sorts are
+    stable, so ties fall back to it too."""
+    pending = [q for q in yt.load_queue() if q.get("status") == "pending"]
+    mode = cfg.get("queue_sort_order") or "queue"
+    if mode == "newest":
+        pending.sort(key=lambda q: -(q.get("created_at") or 0))
+    elif mode == "oldest":
+        pending.sort(key=lambda q: q.get("created_at") or 0)
+    elif mode == "interest":
+        pending.sort(key=lambda q: -(q["interestingness"] if q.get("interestingness") is not None else -1.0))
+    elif mode == "views":
+        pending.sort(key=lambda q: -_predicted_views_for_item(q, cfg))
+    elif mode == "fastest":
+        _attach_render_estimates(pending)
+        pending.sort(key=lambda q: q.get("est_seconds", float("inf")))
+    return pending
+
+
 def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
     cfg = gapp.load_config()
+    pending = _ordered_pending(cfg)
     if cfg.get("youtube_auto_approve_script"):
         # Auto-approve on: take the next pending item and render it end-to-end,
         # writing the script first when the item doesn't have one.
-        item = gapp._best_pending_queue_item()
+        item = {**pending[0]} if pending else None  # fresh copy
         if not item and cfg.get("youtube_auto_ai_ideas"):
             # Queue empty — opt-in fallback: invent an AI idea to keep the channel
             # fed. _auto_pick_suggestion picks the best unused idea, marks it used
@@ -3453,8 +3492,8 @@ def _auto_start_best() -> dict | None:
         # flow — i.e. a human has seen it). Never generate scripts here: an
         # unreviewed script must not render itself, so script-less items wait
         # for the user.
-        item = next((q for q in yt.load_queue()
-                     if q.get("status") == "pending" and q.get("script_ready")
+        item = next((q for q in pending
+                     if q.get("script_ready")
                      and q.get("work_dir") and q.get("video_job_id")), None)
     if not item:
         return None
