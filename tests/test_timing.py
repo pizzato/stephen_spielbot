@@ -10,7 +10,7 @@ from pipeline.orchestrator import (
     task_id,
     timing_signature,
 )
-from pipeline.timing import estimate_eta, humanize_eta
+from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta
 
 
 def _task(kind, status="queued", started_at=None, **payload):
@@ -167,6 +167,37 @@ class EstimateEtaTests(unittest.TestCase):
 
     def test_no_trackable_tasks_returns_none(self):
         self.assertIsNone(estimate_eta([_task("story.ready")], self.table, self.cfg))
+
+
+class EstimatePlannedJobTests(unittest.TestCase):
+    def setUp(self):
+        self.table = {
+            "image|1920x1080": {"kind": "image", "avg_seconds": 50.0, "sample_count": 5},
+            "video|1920x1080": {"kind": "video", "avg_seconds": 100.0, "sample_count": 5},
+            "narration": {"kind": "narration", "avg_seconds": 10.0, "sample_count": 5},
+            "music": {"kind": "music", "avg_seconds": 40.0, "sample_count": 5},
+            "mux": {"kind": "mux", "avg_seconds": 2.0, "sample_count": 5},
+            "finalize|1920x1080": {"kind": "finalize", "avg_seconds": 30.0, "sample_count": 2},
+        }
+        self.cfg = {"comfy_workers": ["a", "b"], "tts_workers": ["x"]}  # 2 comfy, 1 tts
+
+    def test_synthesizes_full_plan(self):
+        # comfy: (4*50 + 4*100 + 40)/2 = 320 ; tts: 4*10/1 = 40
+        # wall = max(320, 40) + mux 2 + finalize 30 = 352
+        eta = estimate_planned_job(4, 1920, 1080, self.table, self.cfg)
+        self.assertEqual(eta["total_seconds"], 352)
+        self.assertEqual(eta["eta_seconds"], 352)  # nothing started yet
+        self.assertEqual(eta["confidence"], "learned")
+
+    def test_scales_with_scene_count(self):
+        small = estimate_planned_job(6, 1920, 1080, self.table, self.cfg)
+        large = estimate_planned_job(20, 1920, 1080, self.table, self.cfg)
+        self.assertGreater(large["total_seconds"], small["total_seconds"])
+
+    def test_unmeasured_resolution_is_rough(self):
+        eta = estimate_planned_job(4, 832, 480, self.table, self.cfg)
+        self.assertEqual(eta["confidence"], "rough")
+        self.assertGreater(eta["total_seconds"], 0)
 
 
 class HumanizeTests(unittest.TestCase):

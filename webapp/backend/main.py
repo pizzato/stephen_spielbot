@@ -41,7 +41,7 @@ import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
-from pipeline.timing import estimate_eta  # noqa: E402
+from pipeline.timing import estimate_eta, estimate_planned_job  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -1274,10 +1274,46 @@ def _reconcile_queue() -> list[dict]:
     return queue
 
 
+def _attach_render_estimates(queue: list[dict]) -> None:
+    """Stamp pending items with a rough render-duration estimate (est_seconds /
+    est_text / est_confidence — response-only, never saved). Mirrors how
+    _start_queue_item resolves scene count and resolution, then predicts from
+    the learned per-task timing table — the same model as the live render ETA."""
+    pending = [it for it in queue if it.get("status") == "pending"]
+    if not pending:
+        return
+    try:
+        from pipeline.comfyui import ltx_dimensions
+        cfg = gapp.load_config()
+        store = DurableStore.default()
+        try:
+            table = store.timing_table()
+        finally:
+            store.close()
+    except Exception:
+        return
+    for it in pending:
+        try:
+            ss = gapp.style_settings(cfg, (it.get("gen_style_name") or "").strip())
+            n = max(6, int(it.get("suggested_scene_count") or ss.get("n_scenes") or 6))
+            res = it.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+            w, h = gapp._RESOLUTIONS.get(res, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
+            w, h = ltx_dimensions(w, h)
+            eta = estimate_planned_job(n, w, h, table, cfg)
+        except Exception:
+            continue
+        if eta:
+            it["est_seconds"] = eta["total_seconds"]
+            it["est_text"] = eta["total_text"]
+            it["est_confidence"] = eta["confidence"]
+
+
 @api.get("/api/queue")
 def get_queue() -> dict:
     try:
-        return {"queue": _reconcile_queue()}
+        queue = _reconcile_queue()
+        _attach_render_estimates(queue)
+        return {"queue": queue}
     except Exception:
         return {"queue": []}
 
