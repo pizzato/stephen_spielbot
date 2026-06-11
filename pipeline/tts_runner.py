@@ -4,7 +4,7 @@
 Invoked via SSH by tts_worker.py using the f5tts Python interpreter:
   ssh <host> ~/f5tts-env/bin/python .../tts_runner.py
 
-Stdin JSON: {"text": "...", "ref_audio_b64": "<base64>" | null}
+Stdin JSON: {"text": "...", "ref_audio_b64": "<base64>" | null, "speed": 1.0}
 Stdout: raw WAV bytes on success
 Stderr: error message on failure
 """
@@ -25,6 +25,7 @@ def main() -> None:
     data     = json.loads(sys.stdin.buffer.read())
     text     = data["text"]
     ref_b64  = data.get("ref_audio_b64")
+    speed    = float(data.get("speed") or 1.0)
 
     with tempfile.TemporaryDirectory() as tmp:
         out = Path(tmp) / "out.wav"
@@ -43,7 +44,7 @@ def main() -> None:
                 "--ref_text",    "",
                 "--gen_text",    text,
                 "--output_file", str(out),
-                "--speed",       "1.0",
+                "--speed",       str(speed),
             ],
             capture_output=True,
             text=True,

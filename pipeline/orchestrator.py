@@ -485,6 +485,7 @@ class DurableStore:
             "voice_ref": config.get("voice_ref"),
             "voice_robotic": config.get("voice_robotic"),
             "voice_robotic_amount": config.get("voice_robotic_amount"),
+            "voice_speed": config.get("voice_speed"),
         }
         resource_classes = config.get("resource_classes", {}) or {}
 

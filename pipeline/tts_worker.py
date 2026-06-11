@@ -99,7 +99,7 @@ def _robotize_wav(path: Path, amount: float | None = None) -> None:
         raise RuntimeError(f"Robotic voice effect failed:\n{e.stderr}")
 
 
-def _f5_local(text: str, ref: Path, output_path: Path) -> None:
+def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0) -> None:
     try:
         result = subprocess.run(
             [
@@ -109,7 +109,7 @@ def _f5_local(text: str, ref: Path, output_path: Path) -> None:
                 "--ref_text",    "",
                 "--gen_text",    text,
                 "--output_file", str(output_path),
-                "--speed",       "1.0",
+                "--speed",       str(speed),
             ],
             capture_output=True,
             text=True,
@@ -121,10 +121,11 @@ def _f5_local(text: str, ref: Path, output_path: Path) -> None:
         raise RuntimeError(f"F5-TTS failed:\n{result.stderr}")
 
 
-def _f5_remote(text: str, ref: Path, output_path: Path, host: str) -> None:
+def _f5_remote(text: str, ref: Path, output_path: Path, host: str, speed: float = 1.0) -> None:
     payload = json.dumps({
         "text": text,
         "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
+        "speed": speed,
     }).encode()
 
     # Sync latest tts_runner.py to the deployed location on the remote
@@ -158,22 +159,27 @@ def generate_narration(
     host: str = "localhost",
     robotic: bool = False,
     robotic_amount: float | None = None,
+    speed: float | None = None,
 ) -> Path:
     """Generate narration audio, running F5-TTS on host (localhost or remote).
 
     When robotic is set, post-process the result into a robotic monotone so the
     voice is not mistaken for a human (issue #52). The effect runs locally on
     the produced WAV, so remote TTS hosts need no extra tooling.
+
+    speed is F5-TTS's speaking pace (1.0 natural, lower slower); clamped to a
+    range the model handles gracefully.
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
         raise RuntimeError(f"TTS reference audio not found: {ref}")
 
+    speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
     logger.info("TTS on %s%s: %r", host, " (robotic)" if robotic else "", text[:60])
     if host in ("localhost", "127.0.0.1"):
-        _f5_local(text, ref, output_path)
+        _f5_local(text, ref, output_path, speed)
     else:
-        _f5_remote(text, ref, output_path, host)
+        _f5_remote(text, ref, output_path, host, speed)
     if robotic:
         _robotize_wav(output_path, robotic_amount)
     return output_path

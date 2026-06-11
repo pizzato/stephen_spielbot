@@ -70,13 +70,13 @@ function PlayButton({ src }) {
   )
 }
 
-// Audition the style's narrator voice at the current robotic level. F5-TTS
-// runs on the backend (a few seconds for one sentence), so show a
-// "Generating…" state while waiting. Reads the live, unsaved narrator-voice
-// and robotic-level fields so you can dial them in by ear before saving.
-// Deliberately no voice picker of its own: a second dropdown here looked like
-// the style's voice setting but silently saved nothing.
-function VoiceTester({ voice, roboticAmount, onError }) {
+// Audition the style's narrator voice at the current robotic level and speed.
+// F5-TTS runs on the backend (a few seconds for one sentence), so show a
+// "Generating…" state while waiting. Reads the live, unsaved narrator-voice,
+// robotic-level and voice-speed fields so you can dial them in by ear before
+// saving. Deliberately no voice picker of its own: a second dropdown here
+// looked like the style's voice setting but silently saved nothing.
+function VoiceTester({ voice, roboticAmount, speed, onError }) {
   const [busy, setBusy] = useState(false)
   const audioRef = useRef(null)
 
@@ -84,16 +84,20 @@ function VoiceTester({ voice, roboticAmount, onError }) {
     onError(''); setBusy(true)
     try {
       const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount })
+      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1 })
       const a = audioRef.current
-      if (a) { a.src = r.url; a.load(); await a.play() }
+      // Don't await play(): after a long first generation Chrome may block
+      // autoplay (the click's activation window expired), and a blocked play()
+      // can hang forever, wedging the button in "Generating…". The sample is
+      // cached now — pressing Play again is instant.
+      if (a) { a.src = r.url; a.load(); a.play().catch((e) => { if (e.name !== 'NotAllowedError') onError(e.message) }) }
     } catch (e) { onError(e.message) } finally { setBusy(false) }
   }
 
   const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level (cached after the first time).`}>
+      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level and voice speed (cached after the first time).`}>
       <div className="row center gap-10 row--wrap">
         <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
         <audio ref={audioRef} hidden />
@@ -588,13 +592,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">Script & content</span>
             <div className="stack gap-22 mt-16">
-              <div className="row gap-22 row--wrap">
-                <div className="grow"><Field label="Default scenes"><input className="input" type="number" value={st.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} /></Field></div>
-                <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
-                  <option value="">(F5-TTS default)</option>
-                  {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
-                </select></Field></div>
-              </div>
+              <Field label="Default scenes">
+                <input className="input" type="number" value={st.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} style={{ maxWidth: 160 }} />
+              </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={st.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
               </Field>
@@ -604,15 +604,32 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
                 <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
               </Field>
-              <Check checked={!!st.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
-                label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
-              <Field label={`Robotic level — ${Math.round((st.voice_robotic_amount ?? 0.35) * 100)}%`}
-                hint="How strong the robotic effect is — 0% is natural, higher is more synthetic. The test below plays at this level; renders use it when “Robotic voice” is on.">
-                <input className="slider" type="range" min={0} max={1} step={0.05}
-                  value={st.voice_robotic_amount ?? 0.35}
-                  onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
-              </Field>
-              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} onError={setError} />
+              {/* Narration — narrator beside the robotic toggle, the dial-in sliders and test right below */}
+              <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
+                <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
+                  <option value="">(F5-TTS default)</option>
+                  {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
+                </select></Field></div>
+                <div className="grow" style={{ paddingBottom: 12 }}>
+                  <Check checked={!!st.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
+                    label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
+                </div>
+              </div>
+              <div className="row gap-22 row--wrap">
+                <div className="grow"><Field label={`Voice speed — ×${(st.voice_speed ?? 1).toFixed(2)}`}
+                  hint="Narration pace — ×1.00 is natural, lower is slower, higher is faster.">
+                  <input className="slider" type="range" min={0.5} max={1.5} step={0.05}
+                    value={st.voice_speed ?? 1}
+                    onChange={(e) => setStyleField('voice_speed', +e.target.value)} />
+                </Field></div>
+                <div className="grow"><Field label={`Robotic level — ${Math.round((st.voice_robotic_amount ?? 0.35) * 100)}%`}
+                  hint="0% is natural, higher is more synthetic — used when “Robotic voice” is on.">
+                  <input className="slider" type="range" min={0} max={1} step={0.05}
+                    value={st.voice_robotic_amount ?? 0.35}
+                    onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
+                </Field></div>
+              </div>
+              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} onError={setError} />
             </div>
           </Card>
 

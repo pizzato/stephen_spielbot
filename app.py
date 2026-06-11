@@ -161,6 +161,7 @@ DEFAULT_CFG = {
     "default_voice": "",
     "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
+    "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 20,
     "default_visual_style": "",
     "script_extra_instructions": "",
@@ -204,6 +205,7 @@ STYLE_FIELD_TO_FLAT = {
     "voice":                "default_voice",
     "voice_robotic":        "default_voice_robotic",
     "voice_robotic_amount": "default_voice_robotic_amount",
+    "voice_speed":          "default_voice_speed",
     "n_scenes":             "default_n_scenes",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
     "channel":              "youtube_channel",
@@ -343,7 +345,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     to call with non-normalized dicts too.
 
     ``name == NO_STYLE`` is the experiment mode: the content-shaped fields
-    (visual style, extra instructions, voice, robotic) come back blank so
+    (visual style, extra instructions, voice, robotic, speed) come back blank so
     nothing is imposed on the video, while render quality and the audio mix
     keep the default style's values."""
     out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
@@ -360,7 +362,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
         out.update(visual_style="", extra_instructions="", description_suffix="",
-                   voice="", voice_robotic=False)
+                   voice="", voice_robotic=False, voice_speed=1.0)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out

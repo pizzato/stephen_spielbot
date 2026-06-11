@@ -264,7 +264,7 @@ class StartGenerationStyleTests(TempConfigCase):
                 _style("B", music_vol=42, voice_vol=142, ambient_vol=3,
                        lora_strength=0.9, first_pass_steps=20, second_pass_steps=9,
                        resolution="Landscape HD (1024×576)", voice_robotic=True,
-                       voice_robotic_amount=0.8),
+                       voice_robotic_amount=0.8, voice_speed=0.85),
             ],
             "default_style": "A",
         })
@@ -300,6 +300,7 @@ class StartGenerationStyleTests(TempConfigCase):
         self.assertEqual(jc["resolution"], "Landscape HD (1024×576)")
         self.assertTrue(jc["voice_robotic"])
         self.assertEqual(jc["voice_robotic_amount"], 0.8)
+        self.assertEqual(jc["voice_speed"], 0.85)
         self.assertNotIn("styles", jc)  # the snapshot stores resolved values only
 
     def test_explicit_style_name_overrides_stored_one(self):
@@ -325,6 +326,7 @@ class StartGenerationStyleTests(TempConfigCase):
         self.assertEqual(jc["music_vol"], 11)        # default style A's mix
         self.assertEqual(jc["default_voice"], "")    # no voice imposed → F5 default
         self.assertFalse(jc["voice_robotic"])
+        self.assertEqual(jc["voice_speed"], 1.0)     # natural pace, not style A's
 
 
 class QueueItemStyleTests(TempConfigCase):
