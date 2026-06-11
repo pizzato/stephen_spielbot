@@ -330,7 +330,7 @@ class StartGenerationStyleTests(TempConfigCase):
 
 
 class QueueItemStyleTests(TempConfigCase):
-    def test_prepared_queue_item_uses_its_style_profile(self):
+    def test_queue_item_render_uses_its_style_profile(self):
         self.write_config({
             "styles": [
                 _style("A"),
@@ -350,19 +350,22 @@ class QueueItemStyleTests(TempConfigCase):
         with mock.patch.object(backend, "generate_script",
                                return_value=(scenes, "calm piano", "B-vision")) as gen, \
              mock.patch.object(backend.yt, "load_queue", return_value=[dict(item)]), \
-             mock.patch.object(backend.yt, "update_queue_item", side_effect=fake_update):
-            out = backend._start_queue_item(dict(item), auto_render=False)
+             mock.patch.object(backend.yt, "update_queue_item", side_effect=fake_update), \
+             mock.patch.object(backend.gapp, "_launch_generation_job") as launch:
+            out = backend._start_queue_item(dict(item))
 
-        self.assertTrue(out.get("prepared"))
         # The LLM prompt carried style B's extra instructions and visual style.
         topic_arg, _n, style_hint = gen.call_args[0][:3]
         self.assertIn("Speak like B.", topic_arg)
         self.assertEqual(style_hint, "B-vision")
-        # The parked slot remembers the profile and its voice for the render.
-        parked = updates["q1"]
-        self.assertEqual(parked["gen_style_name"], "B")
-        self.assertEqual(parked["gen_voice"], "B-voice")
-        self.assertEqual(parked["gen_resolution"], "Landscape HD (1024×576)")
+        # The render launched straight away and its job_config carries the
+        # profile: style B's name, voice and resolution drive the worker.
+        launch.assert_called_once()
+        self.assertEqual(updates["q1"]["status"], "creating")
+        jc = json.loads((Path(out["work_dir"]) / "job_config.json").read_text())
+        self.assertEqual(jc["style_name"], "B")
+        self.assertEqual(jc["default_voice"], "B-voice")
+        self.assertEqual(jc["resolution"], "Landscape HD (1024×576)")
 
 
 class DescriptionSuffixTests(TempConfigCase):

@@ -2643,15 +2643,11 @@ def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
     return default
 
 
-def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
-    """Launch the render for a queue item. If the item already has an approved
+def _start_queue_item(item: dict) -> dict:
+    """Launch the render for a queue item. If the item already has a ready
     script (script_ready + work_dir + video_job_id) we render it directly;
     otherwise we generate the script first. Reuses script_generate +
-    start_generation.
-
-    When auto_render is False, a freshly generated script is parked as a "Script
-    ready" pending item for review instead of being rendered — this is the
-    youtube_auto_approve_script gate used by automation. Manual starts pass True."""
+    start_generation."""
     cfg = gapp.load_config()
     # Claim the item BEFORE the slow script generation. _best_pending_queue_item
     # — used by this backend's automation AND the classic Gradio app (a separate
@@ -2707,20 +2703,6 @@ def _start_queue_item(item: dict, auto_render: bool = True) -> dict:
         gen = script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
             style_name=style_name))
-        if not auto_render:
-            # Review gate on: the script is generated but NOT approved. Park the item
-            # back as a "Script ready" pending slot for the human to review ("Edit
-            # script") and start ("Render now"), or for automation to render once
-            # youtube_auto_approve_script is turned on. Same shape as an approved
-            # queue_from_job item, so the Queue UI and render path need no changes.
-            yt.update_queue_item(
-                item["id"], status="pending", script_ready=True,
-                video_job_id=gen["job_id"], work_dir=gen["work_dir"],
-                gen_style=gen.get("style", ""), gen_resolution=resolution,
-                gen_voice=ss.get("voice", ""), gen_voice_robotic=item.get("gen_voice_robotic"),
-                gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
-            return {"job_id": gen["job_id"], "work_dir": gen["work_dir"],
-                    "title": title, "prepared": True}
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=n, voice=ss.get("voice", ""),
@@ -3452,29 +3434,32 @@ def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
     cfg = gapp.load_config()
-    auto_render = bool(cfg.get("youtube_auto_approve_script"))
-    if auto_render:
-        # Approve-and-render: take the best pending request and render it (generating
-        # the script first if needed); fall back to an AI idea to keep the pipeline fed.
+    if cfg.get("youtube_auto_approve_script"):
+        # Auto-approve on: take the next pending item and render it end-to-end,
+        # writing the script first when the item doesn't have one.
         item = gapp._best_pending_queue_item()
-        if not item:
-            # Nothing queued manually — fall back to AI ideas. _auto_pick_suggestion
-            # picks the best unused idea, marks it used (so it's closed and never
-            # re-picked), and generates a fresh batch when none remain.
+        if not item and cfg.get("youtube_auto_ai_ideas"):
+            # Queue empty — opt-in fallback: invent an AI idea to keep the channel
+            # fed. _auto_pick_suggestion picks the best unused idea, marks it used
+            # (so it's closed and never re-picked), and generates a fresh batch
+            # when none remain.
             try:
                 item = gapp._auto_pick_suggestion(cfg)
             except Exception:
                 item = None
     else:
-        # Review gate on: prepare the next queued request that has no script yet and
-        # park it as "Script ready" for review. Don't invent new ideas here — that
-        # would pile up un-reviewed scripts the user never asked for.
+        # Review gate on: only render the next item whose script is already
+        # written (added from the Script screen or via the queue's Edit-script
+        # flow — i.e. a human has seen it). Never generate scripts here: an
+        # unreviewed script must not render itself, so script-less items wait
+        # for the user.
         item = next((q for q in yt.load_queue()
-                     if q.get("status") == "pending" and not q.get("script_ready")), None)
+                     if q.get("status") == "pending" and q.get("script_ready")
+                     and q.get("work_dir") and q.get("video_job_id")), None)
     if not item:
         return None
     try:
-        return _start_queue_item(item, auto_render=auto_render)
+        return _start_queue_item(item)
     except Exception:
         return None
 
@@ -3564,22 +3549,31 @@ def _ensure_descriptions() -> int:
 
 
 def _automation_tick() -> dict:
-    cfg = gapp.load_config()
-    # Each step is gated solely by its own toggle. "Fully automated mode" is just
-    # the UI shorthand for "all of these on" — it never forces a step whose own
-    # flag is off, so the behaviour can't contradict what's ticked.
-    out: dict = {}
-    with _track_op("Automation tick"):
-        if cfg.get("youtube_auto_fetch_evaluate"):
-            try:
-                out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
-            except Exception as e:
-                out["fetch_error"] = str(e)[:120]
-        if cfg.get("youtube_auto_start_job"):
-            out["started"] = _auto_start_best()
-        if cfg.get("youtube_auto_post"):
-            out["posted"] = _auto_post_done()
-    return out
+    # One tick at a time: the scheduled loop, the render-finished trigger and the
+    # manual endpoint can all fire one, and a tick can block for minutes on an
+    # upload. The per-item claims inside each step make overlap survivable, but
+    # there's no point stacking ticks — skip instead.
+    if not _tick_lock.acquire(blocking=False):
+        return {"skipped": "tick already running"}
+    try:
+        cfg = gapp.load_config()
+        # Each step is gated solely by its own toggle. "Fully automated mode" is just
+        # the UI shorthand for "all of these on" — it never forces a step whose own
+        # flag is off, so the behaviour can't contradict what's ticked.
+        out: dict = {}
+        with _track_op("Automation tick"):
+            if cfg.get("youtube_auto_fetch_evaluate"):
+                try:
+                    out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
+                except Exception as e:
+                    out["fetch_error"] = str(e)[:120]
+            if cfg.get("youtube_auto_start_job"):
+                out["started"] = _auto_start_best()
+            if cfg.get("youtube_auto_post"):
+                out["posted"] = _auto_post_done()
+        return out
+    finally:
+        _tick_lock.release()
 
 
 @api.post("/api/automation/fetch")
@@ -3607,23 +3601,41 @@ def automation_tick_endpoint() -> dict:
 
 # Opt-in background loop: runs a tick periodically. Each step is gated by its own
 # config toggle, so with all toggles off (the default) this is a no-op heartbeat.
+# The loop wakes often only to watch for a render finishing, so the next queue
+# item chains within seconds instead of waiting out the full interval — still ONE
+# engine, just an event-driven nudge on top of the scheduled cadence.
 import threading  # noqa: E402
 
-_AUTOMATION_INTERVAL = 180  # seconds
+_AUTOMATION_INTERVAL = 180  # seconds between full scheduled ticks
+_COMPLETION_POLL = 15       # seconds between cheap "did the render finish?" checks
+_tick_lock = threading.Lock()
 _automation_started = False
 
 
 def _automation_loop():
+    last_full = 0.0
+    was_running = False
     while True:
-        time.sleep(_AUTOMATION_INTERVAL)
-        # Always cache descriptions for completed jobs — independent of automation flags
-        # and browser connections.
+        time.sleep(_COMPLETION_POLL)
         try:
-            if not any(t.name == "ensure_descriptions" for t in threading.enumerate()):
-                threading.Thread(target=_ensure_descriptions, daemon=True,
-                                 name="ensure_descriptions").start()
+            running = gapp._is_job_running()
         except Exception:
-            pass
+            running = was_running
+        render_finished = was_running and not running
+        was_running = running
+        due = time.time() - last_full >= _AUTOMATION_INTERVAL
+        if not (due or render_finished):
+            continue
+        if due:
+            last_full = time.time()
+            # Always cache descriptions for completed jobs — independent of
+            # automation flags and browser connections.
+            try:
+                if not any(t.name == "ensure_descriptions" for t in threading.enumerate()):
+                    threading.Thread(target=_ensure_descriptions, daemon=True,
+                                     name="ensure_descriptions").start()
+            except Exception:
+                pass
         try:
             cfg = gapp.load_config()
             if any(cfg.get(k) for k in (
