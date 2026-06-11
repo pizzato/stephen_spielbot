@@ -264,7 +264,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               <div><div style={{ fontWeight: 600 }}>Manual controls</div><div className="muted" style={{ fontSize: 12.5 }}>Do it now. Hands-free automation is configured in Settings → YouTube automation.</div></div>
             </div>
             <div className="row gap-10 row--wrap">
-              <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('start', api.autoStart, (r) => setStatus(r.started ? `Started: ${r.started.title}` : 'Nothing to start — a render may be running, or the queue is empty.'))}>{busy === 'start' ? 'Starting…' : 'Start next render'}</Button>
+              <Button variant="primary" icon="play" disabled={!!busy} onClick={() => run('start', api.autoStart, (r) => setStatus(r.started ? `Started: ${r.started.title}` : 'Nothing to start — a render may be running, or no queued item is ready to start.'))}>{busy === 'start' ? 'Starting…' : 'Start next render'}</Button>
               <Button variant="ghost" icon="youtube" disabled={!!busy} onClick={() => run('post', api.autoPost, (r) => setStatus(`Posted ${r.posted.length} video(s).`))}>{busy === 'post' ? 'Posting…' : 'Post finished'}</Button>
             </div>
           </div>
