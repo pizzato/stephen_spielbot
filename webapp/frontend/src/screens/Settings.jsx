@@ -13,6 +13,7 @@ const AUTO_FLAGS = [
   'youtube_auto_approve_comments',
   'youtube_auto_start_job',
   'youtube_auto_approve_script',
+  'youtube_auto_ai_ideas',
   'youtube_auto_post',
 ]
 
@@ -686,8 +687,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every step below" />
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
-              <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-prepare the highest-interest request (generate its script)" />
-              <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve generated scripts — render without review" />
+              <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
+              <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
+              <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
               <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
               <Field label="Default privacy">
                 <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />

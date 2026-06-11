@@ -175,8 +175,9 @@ DEFAULT_CFG = {
     "youtube_channel": "",   # flat mirror of the DEFAULT style's channel key
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
-    "youtube_auto_start_job": False,           # auto-prepare best pending request: generate its script, park as "Script ready"
-    "youtube_auto_approve_script": False,      # render auto-prepared scripts without review (only acts when auto_start_job is on)
+    "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
+    "youtube_auto_approve_script": False,      # let auto-start also WRITE missing scripts and render them without review
+    "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
     "youtube_auto_post": False,               # auto-publish when video generation completes
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     "youtube_post_privacy": "private",
@@ -447,6 +448,11 @@ def load_config() -> dict:
         data = yaml.safe_load(CONFIG_FILE.read_text()) or {}
         if isinstance(data, dict):
             cfg.update(data)
+    # youtube_auto_ai_ideas was split out of youtube_auto_approve_script (which
+    # used to imply it): seed it from the old toggle for configs saved before the
+    # split, so existing fully-automated setups keep inventing ideas.
+    if isinstance(data, dict) and "youtube_auto_ai_ideas" not in data:
+        cfg["youtube_auto_ai_ideas"] = bool(cfg.get("youtube_auto_approve_script"))
     # A config that predates styles but already carries customized content
     # settings becomes the "Stephen Spielbot" style; anything else (no file, or
     # an install-seeded file with only worker lists) starts with a blank
