@@ -10,18 +10,19 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 import pipeline.engagement as eng
 
 
-class _FrozenDate(datetime.date):
-    # build_dataset's recency cutoff comes from date.today(); pin it so fixture
-    # rows keep a stable distance from the cutoff regardless of the wall clock.
+class _FrozenDateTime(datetime.datetime):
+    # build_dataset's recency cutoff comes from datetime.now(timezone.utc); pin
+    # it so fixture rows keep a stable distance from the cutoff regardless of
+    # the wall clock. Inherited classmethods (fromisoformat, ...) still work.
     @classmethod
-    def today(cls):
-        return cls(2024, 3, 20)
+    def now(cls, tz=None):
+        return cls(2024, 3, 20, 12, 0, tzinfo=tz)
 
 
 class BuildDatasetTests(unittest.TestCase):
     def _build(self, rows):
         with mock.patch.object(eng.yt, "fetch_training_rows", return_value=rows), \
-                mock.patch("datetime.date", _FrozenDate):
+                mock.patch("datetime.datetime", _FrozenDateTime):
             return eng.build_dataset("/tmp/secrets.json")
 
     def test_filters_and_sums_first_three_days(self):
