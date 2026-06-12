@@ -218,7 +218,9 @@ def build_dataset(client_secrets_path: str, channel: str = "") -> tuple[list[dic
     cfg = _load_cfg()
     lag = int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS))
     short_max = int(cfg.get("engagement_short_max_seconds", _DEFAULT_SHORT_MAX_SECONDS))
-    cutoff = datetime.date.today() - datetime.timedelta(days=lag)
+    # UTC date to match the published_at timestamps below — local date.today()
+    # would shift the recency boundary by a day on machines ahead of/behind UTC.
+    cutoff = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=lag)
     rows = yt.fetch_training_rows(client_secrets_path, channel=channel)
     dataset: list[dict] = []
     dropped = 0
