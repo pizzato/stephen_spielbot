@@ -1009,6 +1009,8 @@ def delete_job(body: JobActionBody) -> dict:
         gapp.on_cancel_active_job(work_dir)
     except Exception:
         pass
+    # A scene re-render (films editor) may also be writing into this dir.
+    _cancel_film_tasks(wd)
     for item in yt.load_queue():
         if item.get("work_dir") == work_dir:
             yt.remove_queue_item(item["id"])
@@ -2847,6 +2849,53 @@ _film_tasks: dict = {}
 # _film_tasks[tid] wholesale), so it survives long enough to map a running task
 # back to its film when the edit page reloads.
 _film_task_meta: dict = {}
+# Task ids whose film was deleted while they ran. Re-render workers are
+# in-process daemon threads — there is no pid to SIGTERM (unlike PR #76's
+# resume_generation.py) — so deletion flags them here and they abort at the
+# next checkpoint instead of feeding ComfyUI/TTS more work for a dead film.
+_film_cancelled_tids: set = set()
+
+
+class _FilmTaskCancelled(Exception):
+    """Raised inside a re-render worker when its film was deleted mid-task."""
+
+
+def _film_checkpoint(task_id: str) -> None:
+    if task_id in _film_cancelled_tids:
+        raise _FilmTaskCancelled()
+
+
+def _finish_film_task_error(task_id: str, e: Exception) -> None:
+    """Record a worker failure — as "cancelled" when the film was deleted
+    mid-task (the in-flight step then fails on the vanished dir, which is not
+    a real error), as "error" otherwise."""
+    if task_id in _film_cancelled_tids:
+        _film_tasks[task_id] = {"status": "cancelled"}
+    else:
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+
+
+def _cancel_film_tasks(work_dir: Path) -> int:
+    """Flag every running re-render task for *work_dir* so its thread stops.
+
+    Cooperative: a step already in flight on a remote worker still runs to
+    completion there, but the thread aborts at the next checkpoint (or when
+    the vanished dir fails its write) rather than starting the next step.
+    Returns the number of tasks flagged."""
+    targets = {str(work_dir)}
+    try:
+        targets.add(str(work_dir.resolve()))
+    except OSError:
+        pass
+    n = 0
+    for tid, meta in list(_film_task_meta.items()):
+        if meta.get("work_dir") not in targets:
+            continue
+        if (_film_tasks.get(tid) or {}).get("status") != "running":
+            continue
+        _film_cancelled_tids.add(tid)
+        n += 1
+    return n
 
 
 def _film_scene_files(work_dir: Path, sid: int) -> dict:
@@ -3123,6 +3172,7 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     cfg = gapp.load_config()
 
     try:
+        _film_checkpoint(task_id)
         narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
@@ -3144,12 +3194,13 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
             else None
         )
         if actual_video:
+            _film_checkpoint(task_id)
             _film_tasks[task_id]["step"] = "mux"
             mux_video_audio(actual_video, narration_path, final_path)
 
         _film_tasks[task_id] = {"status": "done"}
     except Exception as e:
-        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+        _finish_film_task_error(task_id, e)
 
 
 def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
@@ -3171,6 +3222,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     preview = wd / f"scene_{sid:02d}_preview.png"
 
     try:
+        _film_checkpoint(task_id)
         image_prompt = (row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
         if style_clean and image_prompt and not image_prompt.startswith(style_clean):
@@ -3184,6 +3236,9 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _film_tasks[task_id] = {"status": "running", "step": "image"}
         url = pool.acquire()
         try:
+            # acquire() can block a long time behind a busy GPU — re-check
+            # before submitting work the film may no longer exist to receive.
+            _film_checkpoint(task_id)
             generate_scene_image(
                 image_prompt or row.get("title") or f"Scene {sid}",
                 first_frame,
@@ -3206,7 +3261,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         preview_url = f"/api/file?path={preview}&t={preview_mtime}" if preview.exists() else ""
         _film_tasks[task_id] = {"status": "done", "preview_url": preview_url}
     except Exception as e:
-        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+        _finish_film_task_error(task_id, e)
 
 
 def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
@@ -3241,6 +3296,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     final_path = wd / f"scene_{sid:02d}_final.mp4"
 
     try:
+        _film_checkpoint(task_id)
         image_prompt = (row.get("image_prompt") or "").strip()
         video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
@@ -3272,6 +3328,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
             _film_tasks[task_id] = {"status": "running", "step": "image"}
             url = pool.acquire()
             try:
+                _film_checkpoint(task_id)
                 generate_scene_image(
                     image_prompt or row.get("title") or f"Scene {sid}",
                     first_frame,
@@ -3303,6 +3360,9 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         )
         url = pool.acquire()
         try:
+            # acquire() can block a long time behind a busy GPU — re-check
+            # before submitting work the film may no longer exist to receive.
+            _film_checkpoint(task_id)
             scene_video, _ = gen_scene_video(
                 scene, wd, nar_dur, vid_w, vid_h,
                 float(jc.get("max_clip_secs", 12.0)),
@@ -3324,12 +3384,13 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         finally:
             pool.release(url)
 
+        _film_checkpoint(task_id)
         _film_tasks[task_id]["step"] = "mux"
         mux_video_audio(scene_video, narration_path, final_path)
 
         _film_tasks[task_id] = {"status": "done"}
     except Exception as e:
-        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+        _finish_film_task_error(task_id, e)
 
 
 def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict) -> None:
@@ -3342,9 +3403,15 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
     try:
         target(tid, wd, sid, jc, row)
     finally:
+        _film_cancelled_tids.discard(tid)
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
-        name = f"Re-render failed — scene {sid}" if status == "error" else f"Re-rendered scene {sid}"
+        if status == "error":
+            name = f"Re-render failed — scene {sid}"
+        elif status == "cancelled":
+            name = f"Re-render cancelled — scene {sid}"
+        else:
+            name = f"Re-rendered scene {sid}"
         with _op_lock:
             _activity_log.insert(0, {
                 "name": name, "detail": component,
@@ -3450,6 +3517,10 @@ def delete_film(body: JobActionBody) -> dict:
     # Only allow deleting a direct child of the videos directory.
     if not body.work_dir or wd_res == out or wd_res.parent != out:
         raise HTTPException(400, "Refusing to delete outside the videos directory.")
+    # Stop running scene re-renders before their files vanish — same bug class
+    # as the orphaned resume_generation.py in /api/jobs/delete (PR #76), but
+    # these are in-process threads, so they are flagged rather than SIGTERMed.
+    _cancel_film_tasks(wd)
     import shutil
     if wd.exists():
         shutil.rmtree(wd, ignore_errors=True)
