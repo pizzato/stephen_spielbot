@@ -838,16 +838,43 @@ def on_retry_failed_tasks(active_job_dir: str):
     return f"Requeued {count} failed/lost task(s)."
 
 
+def _terminate_job_process(work_dir: Path) -> bool:
+    """SIGTERM the generation subprocess recorded in work_dir's job.json.
+
+    Returns True when a running process was signalled."""
+    try:
+        meta = _read_json(_job_meta_path(work_dir))
+    except Exception:
+        meta = {}
+    pid = meta.get("pid")
+    if pid and _process_running(pid):
+        try:
+            os.kill(int(pid), 15)  # SIGTERM
+            return True
+        except OSError as exc:
+            logger.warning("Could not signal pid %d: %s", pid, exc)
+    return False
+
+
 def on_cancel_active_job(active_job_dir: str):
     job = _active_job_row(active_job_dir)
     if not job:
         return "No durable job available."
+    work_dir = Path(job["work_dir"])
+    killed = _terminate_job_process(work_dir)
     store = DurableStore.default()
     try:
         count = store.cancel_job(job["id"])
     finally:
         store.close()
-    return f"Cancelled {count} pending/running task(s)."
+    if work_dir.exists():
+        # Without this, the dir still reads status "running": _is_job_running
+        # would count it as live for 24 h and _reconcile_queue would flip its
+        # queue item to "failed", auto-retrying a render cancelled on purpose.
+        _write_job_meta(work_dir, status="cancelled", pid=None)
+    return f"Cancelled {count} pending/running task(s)." + (
+        " Render process terminated." if killed else ""
+    )
 
 
 def on_pause_active_job(active_job_dir: str) -> str:
@@ -855,18 +882,7 @@ def on_pause_active_job(active_job_dir: str) -> str:
     work_dir = _preferred_work_dir(active_job_dir)
     if not work_dir:
         return "No active job found."
-    try:
-        meta = _read_json(_job_meta_path(work_dir))
-    except Exception:
-        meta = {}
-    pid = meta.get("pid")
-    killed = False
-    if pid and _process_running(pid):
-        try:
-            os.kill(int(pid), 15)  # SIGTERM
-            killed = True
-        except OSError as exc:
-            logger.warning("Could not signal pid %d: %s", pid, exc)
+    killed = _terminate_job_process(work_dir)
     job = _active_job_row(active_job_dir)
     if job:
         store = DurableStore.default()
