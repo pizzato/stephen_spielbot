@@ -987,15 +987,8 @@ def cancel_job(body: JobActionBody) -> dict:
 
 @api.post("/api/jobs/delete")
 def delete_job(body: JobActionBody) -> dict:
-    """Cancel an active render, remove any queue entry pointing to it, then delete its files."""
+    """Stop an active render (kill its process), remove any queue entry pointing to it, then delete its files."""
     work_dir = body.work_dir
-    try:
-        gapp.on_cancel_active_job(work_dir)
-    except Exception:
-        pass
-    for item in yt.load_queue():
-        if item.get("work_dir") == work_dir:
-            yt.remove_queue_item(item["id"])
     wd = Path(work_dir)
     out = gapp.OUTPUT_DIR.resolve()
     try:
@@ -1004,6 +997,21 @@ def delete_job(body: JobActionBody) -> dict:
         raise HTTPException(400, "Invalid path.")
     if not work_dir or wd_res == out or wd_res.parent != out:
         raise HTTPException(400, "Refusing to delete outside the videos directory.")
+    # Kill the render subprocess before its files vanish. on_cancel_active_job
+    # alone only cancels DurableStore tasks — and no-ops entirely when the job
+    # has no durable row yet — leaving resume_generation.py running as an
+    # orphan that burns ComfyUI worker time on output nobody will see.
+    try:
+        gapp._terminate_job_process(wd)
+    except Exception:
+        pass
+    try:
+        gapp.on_cancel_active_job(work_dir)
+    except Exception:
+        pass
+    for item in yt.load_queue():
+        if item.get("work_dir") == work_dir:
+            yt.remove_queue_item(item["id"])
     import shutil
     if wd.exists():
         shutil.rmtree(wd, ignore_errors=True)
