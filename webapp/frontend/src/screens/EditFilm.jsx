@@ -49,7 +49,9 @@ function SceneCard({
     pollRef.current = setInterval(async () => {
       try {
         const r = await api.filmTaskStatus(tid)
-        if (r.status === 'done') {
+        // 'cancelled' = the film was deleted out from under the task; stop
+        // polling without the error banner an actual failure gets.
+        if (r.status === 'done' || r.status === 'cancelled') {
           clearInterval(pollRef.current)
           pollRef.current = null
           setTaskId(null)
