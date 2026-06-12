@@ -10,14 +10,18 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 import pipeline.engagement as eng
 
 
-def _recent_iso(days_ago: int) -> str:
-    dt = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=days_ago)
-    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+class _FrozenDate(datetime.date):
+    # build_dataset's recency cutoff comes from date.today(); pin it so fixture
+    # rows keep a stable distance from the cutoff regardless of the wall clock.
+    @classmethod
+    def today(cls):
+        return cls(2024, 3, 20)
 
 
 class BuildDatasetTests(unittest.TestCase):
     def _build(self, rows):
-        with mock.patch.object(eng.yt, "fetch_training_rows", return_value=rows):
+        with mock.patch.object(eng.yt, "fetch_training_rows", return_value=rows), \
+                mock.patch("datetime.date", _FrozenDate):
             return eng.build_dataset("/tmp/secrets.json")
 
     def test_filters_and_sums_first_three_days(self):
@@ -33,9 +37,9 @@ class BuildDatasetTests(unittest.TestCase):
                 "published_at": "2024-03-15T10:00:00Z", "privacy": "private",
                 "day_views": {"2024-03-15": 999},
             },
-            {  # dropped: too recent (no full 3-day window yet)
+            {  # dropped: too recent (after the 2024-03-17 cutoff = frozen today - 3)
                 "video_id": "new", "title": "fresh", "description": "",
-                "published_at": _recent_iso(2), "privacy": "public",
+                "published_at": "2024-03-18T10:00:00Z", "privacy": "public",
                 "day_views": {},
             },
         ]
