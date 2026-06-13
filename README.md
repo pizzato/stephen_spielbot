@@ -91,6 +91,29 @@ ui_workers:            # ComfyUI endpoints for cover-image regeneration
 
 Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
+### Containerized workers (alternative to SSH install)
+
+Instead of the SSH + Miniconda + rsync bootstrap, you can run each machine's GPU
+workers (ComfyUI + F5-TTS) as containers — a new machine joins the fleet with one
+`docker compose up`. Models are mounted from the host, so images stay small. See
+[`docker/README.md`](docker/README.md). In short, on each worker machine:
+
+```bash
+cd docker && cp .env.example .env   # set MODELS_DIR
+bash ../scripts/worker_container.sh fetch-models   # one-time: ~33 GB
+make worker-up                      # build + start ComfyUI (:8188) + F5-TTS (:8189)
+```
+
+Then point the controller at it — containerized TTS uses an **`http://` URL**:
+
+```yaml
+comfy_workers: [ http://s1:8188 ]
+tts_workers:   [ http://s1:8189 ]   # http:// → containerized F5-TTS over HTTP
+```
+
+Bare-hostname `tts_workers` still use SSH, so SSH-installed and containerized
+hosts can coexist during a migration.
+
 ## Configuration
 
 All settings live in the single YAML file `~/.config/video-generator/config.yaml`

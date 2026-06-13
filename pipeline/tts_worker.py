@@ -6,6 +6,8 @@ import logging
 import os
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 logger = logging.getLogger("video_gen")
@@ -152,6 +154,36 @@ def _f5_remote(text: str, ref: Path, output_path: Path, host: str, speed: float 
     output_path.write_bytes(proc.stdout)
 
 
+def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1.0) -> None:
+    """POST narration to a containerized F5-TTS HTTP worker (pipeline/tts_server.py).
+
+    Same payload as the SSH transport, but over HTTP so the TTS worker can run as
+    a container with no SSH access. The request hits <url>/tts and the WAV bytes
+    come back in the response body. A default reference is sent as null so the
+    server uses its own bundled narrator, matching _f5_remote.
+    """
+    payload = json.dumps({
+        "text": text,
+        "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
+        "speed": speed,
+    }).encode()
+
+    req = urllib.request.Request(
+        url.rstrip("/") + "/tts",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_TTS_TIMEOUT) as resp:
+            output_path.write_bytes(resp.read())
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode(errors="replace")
+        raise RuntimeError(f"Remote F5-TTS failed on {url} ({exc.code}):\n{detail}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Remote F5-TTS unreachable at {url}: {exc.reason}")
+
+
 def generate_narration(
     text: str,
     output_path: Path,
@@ -161,7 +193,12 @@ def generate_narration(
     robotic_amount: float | None = None,
     speed: float | None = None,
 ) -> Path:
-    """Generate narration audio, running F5-TTS on host (localhost or remote).
+    """Generate narration audio, running F5-TTS on host.
+
+    host selects the transport:
+      * "localhost" / "127.0.0.1" — run F5-TTS locally
+      * "http://…" / "https://…"  — POST to a containerized F5-TTS worker (issue #12)
+      * anything else             — SSH to a bare host (legacy distributed path)
 
     When robotic is set, post-process the result into a robotic monotone so the
     voice is not mistaken for a human (issue #52). The effect runs locally on
@@ -178,6 +215,8 @@ def generate_narration(
     logger.info("TTS on %s%s: %r", host, " (robotic)" if robotic else "", text[:60])
     if host in ("localhost", "127.0.0.1"):
         _f5_local(text, ref, output_path, speed)
+    elif host.startswith(("http://", "https://")):
+        _f5_http(text, ref, output_path, host, speed)
     else:
         _f5_remote(text, ref, output_path, host, speed)
     if robotic:
