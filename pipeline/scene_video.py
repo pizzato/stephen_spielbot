@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from pipeline.assembler import extract_audio, _get_duration
@@ -29,8 +30,14 @@ def generate_scene_video(
     comfy_url: str,
     scene_first_frame: Path | None = None,
     flux_cfg: dict | None = None,
+    on_first_frame: Callable[[Path], None] | None = None,
 ) -> tuple[Path, Path | None]:
-    """Generate one video clip for the full scene using FLUX first frame plus LTX I2V."""
+    """Generate one video clip for the full scene using FLUX first frame plus LTX I2V.
+
+    ``on_first_frame`` (if given) is invoked with the first-frame path the
+    instant FLUX finishes — before the much longer I2V step — so callers can
+    mark a separate image task done without conflating it with the video.
+    """
 
     if scene_first_frame is None or not scene_first_frame.exists():
         fx = flux_cfg or {}
@@ -49,6 +56,8 @@ def generate_scene_video(
             comfy_url=comfy_url,
         )
         scene_first_frame = first_frame_path
+        if on_first_frame is not None:
+            on_first_frame(scene_first_frame)
 
     request_dur = max(narration_dur, 0.5) + CLIP_BUFFER_SECS
     raw = work_dir / f"scene_{scene.id:02d}_clip_01.mp4"
