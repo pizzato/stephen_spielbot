@@ -575,6 +575,20 @@ def main(work_dir: Path) -> None:
             except Exception:
                 logger.debug("Could not persist preview for scene %d", scene.id, exc_info=True)
 
+        # The first frame (fast FLUX) and the video (slow LTX) are produced in one
+        # _generate_scene_video call, but tracked as two tasks. Complete the image
+        # task the instant FLUX lands rather than after the video — otherwise its
+        # measured duration ≈ the video's and the ETA learns image≈video.
+        image_done = [False]
+
+        def _finish_image(frame: Path) -> None:
+            if image_done[0]:
+                return
+            image_done[0] = True
+            store.complete_task(image_task, result={"path": str(frame)})
+            store.record_artifact(durable_job_id, image_task, "image", frame)
+            _persist_first_frame(frame)
+
         if existing.exists() and existing.stat().st_size > 10_000:
             logger.info("Scene %d video exists (%d KB), skipping", scene.id, existing.stat().st_size // 1024)
             if first_frame_path.exists():
@@ -639,10 +653,12 @@ def main(work_dir: Path) -> None:
                         "second_pass_steps": second_pass_steps,
                     },
                 )
+                image_done[0] = False
                 if scene_first_frame and scene_first_frame.exists():
                     store.complete_task(image_task, result={"path": str(scene_first_frame), "skipped": True})
                     store.record_artifact(durable_job_id, image_task, "image", scene_first_frame)
                     _persist_first_frame(scene_first_frame)
+                    image_done[0] = True
                 else:
                     store.start_task(
                         image_task,
@@ -666,12 +682,8 @@ def main(work_dir: Path) -> None:
                         comfy_url=url,
                         scene_first_frame=scene_first_frame,
                         flux_cfg=flux_cfg,
+                        on_first_frame=_finish_image,
                     )
-                    produced_first_frame = scene_first_frame or first_frame_path
-                    if produced_first_frame and produced_first_frame.exists():
-                        store.complete_task(image_task, result={"path": str(produced_first_frame)})
-                        store.record_artifact(durable_job_id, image_task, "image", produced_first_frame)
-                        _persist_first_frame(produced_first_frame)
                     store.record_artifact(
                         durable_job_id,
                         video_task,
@@ -693,9 +705,10 @@ def main(work_dir: Path) -> None:
                     )
                 return scene.id, sf, sa
             except Exception as e:
-                if first_frame_path.exists():
-                    store.complete_task(image_task, result={"path": str(first_frame_path)})
-                    store.record_artifact(durable_job_id, image_task, "image", first_frame_path)
+                if image_done[0]:
+                    pass  # first frame already finished; only the video failed
+                elif first_frame_path.exists():
+                    _finish_image(first_frame_path)
                 else:
                     store.fail_task(image_task, e, retryable=True)
                 last_err = e
