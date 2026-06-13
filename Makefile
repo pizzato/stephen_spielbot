@@ -6,6 +6,8 @@ W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
         start stop restart restart-server status worker-agent ui-worker help \
+        worker-build worker-up worker-down worker-restart worker-status \
+        worker-logs worker-fetch-models \
         web-install web-build web web-dev \
         launchd-install launchd-uninstall \
         lint lint-fix lint-web ensure-ruff
@@ -87,6 +89,38 @@ worker-agent:
 ui-worker:
 	@bash $(SCRIPTS)/ui_worker.sh "$${ACT:-start}"
 
+# ── Containerized workers (docker/) — run these ON a worker machine ──
+# Deploy a GPU worker (ComfyUI + F5-TTS) as containers. See docker/README.md.
+# First run: cp docker/.env.example docker/.env and set MODELS_DIR.
+
+## Build the ComfyUI + F5-TTS worker images on this machine.
+worker-build:
+	@bash $(SCRIPTS)/worker_container.sh build
+
+## Build (if needed) and start the containerized workers in the background.
+worker-up:
+	@bash $(SCRIPTS)/worker_container.sh up
+
+## Stop and remove the containerized workers.
+worker-down:
+	@bash $(SCRIPTS)/worker_container.sh down
+
+## Restart the containerized workers (down + up).
+worker-restart:
+	@bash $(SCRIPTS)/worker_container.sh restart
+
+## Show container + health status of the containerized workers.
+worker-status:
+	@bash $(SCRIPTS)/worker_container.sh status
+
+## Tail logs from the containerized workers (Ctrl-C to stop).
+worker-logs:
+	@bash $(SCRIPTS)/worker_container.sh logs
+
+## Download the ~33 GB of models into MODELS_DIR (from docker/.env).
+worker-fetch-models:
+	@bash $(SCRIPTS)/worker_container.sh fetch-models
+
 # ── Web UI (React + FastAPI) — the app's only front-end ──
 FRONTEND := webapp/frontend
 WEB_PORT := 8001
@@ -154,6 +188,14 @@ help:
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local|ui ENDPOINT=...)"
 	@echo "  ui-worker       Start/stop UI worker(s) for cover regen (ACT=start|stop|status,"
 	@echo "                  endpoints from config.yaml ui_workers — started by 'make start' too)"
+	@echo ""
+	@echo "Containerized workers (run ON a worker machine — see docker/README.md):"
+	@echo "  worker-up       Build + start the ComfyUI + F5-TTS containers"
+	@echo "  worker-down     Stop and remove the worker containers"
+	@echo "  worker-restart  Restart the worker containers"
+	@echo "  worker-status   Container + health status        worker-logs  Tail logs"
+	@echo "  worker-build    Build the worker images          worker-fetch-models  Download models"
+	@echo "                  First run: cp docker/.env.example docker/.env and set MODELS_DIR"
 	@echo ""
 	@echo "Web UI (React + FastAPI):"
 	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"
