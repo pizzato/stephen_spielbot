@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -51,6 +51,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
@@ -98,6 +99,16 @@ export default function Create({ seed, meta, onGenerated }) {
     }, 600)
     return () => clearTimeout(t)
   }, [videoTitle, direction, resolution, styleName])
+
+  // Improve the title or direction in place via the LLM (issue #88).
+  const improve = async (field) => {
+    setImproving(field); setError('')
+    try {
+      const r = await api.improveBrief(field, videoTitle, direction, profile ? (profile.name || '') : NO_STYLE)
+      if (field === 'title') setVideoTitle(r.value)
+      else setDirection(r.value)
+    } catch (e) { setError(e.message) } finally { setImproving('') }
+  }
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -152,11 +163,12 @@ export default function Create({ seed, meta, onGenerated }) {
                 </select>
               </Field>
             )}
-            <Field label="Title">
+            <Field label={<RegenLabel busy={improving === 'title'} disabled={busy} onRegen={() => improve('title')}>Title</RegenLabel>}>
               <input className="input input--xl" placeholder="The rise and fall of the Roman Empire"
                 value={videoTitle} onChange={(e) => setVideoTitle(e.target.value)} />
             </Field>
-            <Field label="Direction" hint="Optional — steer the angle, tone, or what to emphasise.">
+            <Field label={<RegenLabel busy={improving === 'direction'} disabled={busy} onRegen={() => improve('direction')}>Direction</RegenLabel>}
+              hint="Optional — steer the angle, tone, or what to emphasise.">
               <textarea className="textarea" rows={3} placeholder="Focus on the economic decline, the military overreach, and the slow rise of Christianity."
                 value={direction} onChange={(e) => setDirection(e.target.value)} />
             </Field>

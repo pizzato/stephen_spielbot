@@ -28,6 +28,21 @@ export function Card({ span, rowSpan, well, padLg, link, onClick, href, classNam
   return <div className={cls} onClick={onClick} style={style}>{children}</div>
 }
 
+// A field label with an inline "Re-generate" button on the right (issue #88).
+// `busy` disables the button and swaps in `busyLabel`; `onRegen` runs the LLM
+// regeneration. Pass it as the `label` of a <Field>.
+export function RegenLabel({ children, busy, disabled, onRegen, icon, label = 'Re-generate', busyLabel = 'Writing…' }) {
+  return (
+    <span className="row center between">
+      <span className="row center gap-10">{icon ? <Icon name={icon} style={{ color: 'var(--ink-3)', width: 16 }} /> : null}{children}</span>
+      <button type="button" className="btn btn--quiet" style={{ padding: '3px 9px', fontSize: 11 }}
+        disabled={busy || disabled} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRegen() }}>
+        <Icon name="rotate" /> {busy ? busyLabel : label}
+      </button>
+    </span>
+  )
+}
+
 export function Field({ label, hint, children }) {
   return (
     <div className="field">

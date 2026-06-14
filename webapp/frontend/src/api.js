@@ -45,6 +45,9 @@ export const api = {
   testVoice: (body) => req('POST', '/voices/test', body),
 
   generateScript: (body) => req('POST', '/script/generate', body),
+  // Improve the Create brief's title or direction in place (issue #88).
+  improveBrief: (field, title, direction, styleName) =>
+    req('POST', '/create/improve', { field, title, direction, style_name: styleName || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
@@ -91,6 +94,8 @@ export const api = {
   approveComment: (commentId, finalTitle) => req('POST', '/youtube/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
   rejectComment: (commentId) => req('POST', '/youtube/comments/reject', { comment_id: commentId }),
   replyComment: (commentId, text) => req('POST', '/youtube/comments/reply', { comment_id: commentId, text }),
+  // LLM-draft a reply to any comment (issue #88): manual composer + draft regenerate.
+  draftCommentReply: (commentId) => req('POST', '/youtube/comments/draft-reply', { comment_id: commentId }),
   // community engagement drafts (issue #84)
   sendCommunityReply: (commentId, text) => req('POST', '/youtube/comments/community/send', { comment_id: commentId, text }),
   dismissCommunityReply: (commentId) => req('POST', '/youtube/comments/community/dismiss', { comment_id: commentId }),
@@ -121,6 +126,7 @@ export const api = {
   ytPostOptions: () => req('GET', '/youtube/post/options'),
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
+  ytPostTitle: (workDir, title) => req('POST', '/youtube/post/title', { work_dir: workDir, title: title || '' }),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
