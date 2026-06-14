@@ -29,6 +29,7 @@ def _style(name, **overrides):
         "description": f"{name} look",
         "visual_style": f"{name} visual",
         "extra_instructions": f"{name} instructions",
+        "title_style": f"{name} title style",
         "voice": f"{name}-voice",
         "voice_robotic": False,
         "voice_robotic_amount": 0.2,
@@ -198,6 +199,7 @@ class StyleSettingsTests(TempConfigCase):
         # nothing content-shaped is imposed…
         self.assertEqual(ss["visual_style"], "")
         self.assertEqual(ss["extra_instructions"], "")
+        self.assertEqual(ss["title_style"], "")
         self.assertEqual(ss["voice"], "")
         self.assertFalse(ss["voice_robotic"])
         # …but render quality + audio mix still come from the default style
@@ -442,12 +444,40 @@ class StyleAwareIdeasTests(TempConfigCase):
     def test_style_suggestion_context_lines(self):
         from pipeline.llm import style_suggestion_context
         ctx = style_suggestion_context({"name": "Kids", "description": "Bedtime tales",
-                                        "visual_style": "Soft pastel"})
+                                        "visual_style": "Soft pastel",
+                                        "title_style": "pose a question"})
         self.assertIn('"Kids" style', ctx)
         self.assertIn("Bedtime tales", ctx)
         self.assertIn("Soft pastel", ctx)
+        self.assertIn("pose a question", ctx)
         self.assertEqual(style_suggestion_context(None), "")
         self.assertEqual(style_suggestion_context({"name": "(none)"}), "")
+
+    def test_title_style_steers_even_without_other_context(self):
+        # A profile whose ONLY distinctive field is title_style still yields a
+        # steering line — title wording is independent of topic suitability.
+        from pipeline.llm import style_suggestion_context
+        ctx = style_suggestion_context({"name": "(none)", "title_style": "short and punchy"})
+        self.assertIn("short and punchy", ctx)
+        self.assertNotIn("must suit", ctx)   # no topic-suitability line without descriptors
+
+    def test_title_style_backfills_default_style_only(self):
+        # A config migrated BEFORE title_style became per-style: styles carry no
+        # title_style field, the flat key still holds the value. Only the default
+        # style inherits it; others get the built-in blank (no cross-style leak).
+        styles = [_style("A"), _style("B")]
+        for s in styles:
+            s.pop("title_style", None)
+        self.write_config({
+            "styles": styles,
+            "default_style": "A",
+            "title_style": "pose an intriguing question",
+        })
+        cfg = app.load_config()
+        by_name = {s["name"]: s for s in cfg["styles"]}
+        self.assertEqual(by_name["A"]["title_style"], "pose an intriguing question")
+        self.assertEqual(by_name["B"]["title_style"], "")
+        self.assertEqual(cfg["title_style"], "pose an intriguing question")  # mirror intact
 
     def test_generation_is_steered_and_stamped_per_style(self):
         self._two_styles()
