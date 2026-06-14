@@ -134,7 +134,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setYtBusy('cover'); setError('')
     let pollTimer = null
     try {
-      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: coverTitle || job.title || '' })
+      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: coverTitle || job.title || '', resolution })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
