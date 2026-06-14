@@ -377,7 +377,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <div className="col-4 stack gap-16">
             <Card className="reveal reveal-d2">
               <span className="label-sm">Cover image</span>
-              <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '16/9' }}>
+              <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect }}>
                 {coverUrl
                   ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                   : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
