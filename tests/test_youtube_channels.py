@@ -42,7 +42,8 @@ class EnsureChannelsTests(unittest.TestCase):
         self.assertEqual(cfg["youtube_channels"],
                          [{"id": "default", "name": "", "channel_id": "",
                            "engagement_prompt": "", "auto_respond": False,
-                           "video_category": ""}])
+                           "video_category": "", "language": "en",
+                           "upload_captions": True}])
 
     def test_no_seed_without_legacy_token(self):
         cfg = {"youtube_channels": []}
@@ -61,7 +62,17 @@ class EnsureChannelsTests(unittest.TestCase):
         self.assertEqual(cfg["youtube_channels"],
                          [{"id": "UC1", "name": "One", "channel_id": "UC1",
                            "engagement_prompt": "", "auto_respond": False,
-                           "video_category": ""}])
+                           "video_category": "", "language": "en",
+                           "upload_captions": True}])
+
+    def test_preserves_explicit_language_and_caption_toggle(self):
+        cfg = {"youtube_channels": [
+            {"id": "UC1", "language": "es", "upload_captions": False},
+        ]}
+        gapp._ensure_channels(cfg)
+        entry = cfg["youtube_channels"][0]
+        self.assertEqual(entry["language"], "es")
+        self.assertFalse(entry["upload_captions"])
 
     def test_clears_dangling_style_refs(self):
         cfg = {
@@ -168,6 +179,38 @@ class UploadRoutingTests(unittest.TestCase):
                        "privacy": "private", "channel": "UC9"}, wd, final, None)
         self.assertEqual(up.call_args.kwargs.get("channel"), "UC9")
         self.assertEqual(backend._upload_tasks["t1"]["status"], "done")
+
+    def test_upload_prefs_default_to_english_with_captions(self):
+        cfg = {"youtube_channels": [{"id": "UC1"}]}
+        self.assertEqual(backend._upload_prefs_for_channel(cfg, "UC1"), ("en", True))
+        # An unknown channel key also falls back to the defaults.
+        self.assertEqual(backend._upload_prefs_for_channel(cfg, "GONE"), ("en", True))
+
+    def test_upload_prefs_reflect_channel_config(self):
+        cfg = {"youtube_channels": [
+            {"id": "UC1", "language": "pt", "upload_captions": False}]}
+        self.assertEqual(backend._upload_prefs_for_channel(cfg, "UC1"), ("pt", False))
+
+    def test_upload_task_honors_language_and_skips_disabled_captions(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-"))
+        final = wd / "final.mp4"
+        final.write_bytes(b"\0" * 20_000)
+        cfg = {"youtube_channels": [
+            {"id": "UC9", "language": "fr", "upload_captions": False}]}
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"), \
+             mock.patch.object(backend.yt, "upload_video",
+                               return_value={"video_id": "v1", "url": "u", "error": ""}) as up, \
+             mock.patch.object(backend.gapp, "_write_job_meta"), \
+             mock.patch.object(backend, "_post_completion_reply",
+                               return_value={"attempted": False}):
+            backend._run_upload_task(
+                "t2", {"title": "T", "description": "", "category": "22",
+                       "privacy": "private", "channel": "UC9"}, wd, final, None)
+        kw = up.call_args.kwargs
+        self.assertEqual(kw.get("default_language"), "fr")
+        self.assertEqual(kw.get("default_audio_language"), "fr")
+        self.assertIsNone(kw.get("captions_path"))
 
     def test_completion_reply_uses_the_comments_channel(self):
         item = {"id": "q1", "comment_id": "c1", "channel": "UC2"}

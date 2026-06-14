@@ -328,13 +328,18 @@ def _ensure_channels(cfg: dict) -> dict:
             # Default YouTube category id for this channel's uploads (empty =
             # fall back to the global youtube_post_category).
             "video_category": str(c.get("video_category") or ""),
+            # Spoken/metadata language for this channel's uploads (BCP-47), and
+            # whether to attach a script-based caption track. Default: English,
+            # captions on (absent key → on, so existing channels keep captions).
+            "language": str(c.get("language") or "").strip() or "en",
+            "upload_captions": bool(c.get("upload_captions", True)),
         })
     if not channels and yt._token_path().exists():
         # Pre-#22 setups have one token at the legacy path — surface it as the
         # "default" channel so styles can reference it without re-connecting.
         channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": "",
                      "engagement_prompt": "", "auto_respond": False,
-                     "video_category": ""}]
+                     "video_category": "", "language": "en", "upload_captions": True}]
         seen = {yt.DEFAULT_CHANNEL_KEY}
     cfg["youtube_channels"] = channels
     for s in (cfg.get("styles") or []):

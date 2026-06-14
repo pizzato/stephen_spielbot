@@ -1945,6 +1945,16 @@ def _category_for_channel(cfg: dict, channel_key: str) -> str:
     return cfg.get("youtube_post_category", "22")
 
 
+def _upload_prefs_for_channel(cfg: dict, channel_key: str) -> tuple[str, bool]:
+    """(language, attach_captions) for a channel's uploads. Defaults: English,
+    captions on — including for channels predating these fields."""
+    entry = next((c for c in (cfg.get("youtube_channels") or [])
+                  if c.get("id") == channel_key), None) or {}
+    language = str(entry.get("language") or "").strip() or "en"
+    attach_captions = bool(entry.get("upload_captions", True))
+    return language, attach_captions
+
+
 @api.get("/api/youtube/channels")
 def yt_channels() -> dict:
     """Configured channels with live connection status, for Settings/Publish.
@@ -2059,13 +2069,16 @@ class ChannelSettingsBody(BaseModel):
     engagement_prompt: str = ""
     auto_respond: bool = False
     video_category: str = ""
+    language: str = "en"
+    upload_captions: bool = True
 
 
 @api.post("/api/youtube/channels/settings")
 def yt_channel_settings(body: ChannelSettingsBody) -> dict:
     """Save a channel's per-channel settings: the default YouTube category for its
-    uploads, plus the community-engagement config (issue #84) — the persona/guidance
-    used to draft replies to non-request comments, and whether approved drafts post
+    uploads, the upload language and whether to attach a script-based caption track,
+    plus the community-engagement config (issue #84) — the persona/guidance used to
+    draft replies to non-request comments, and whether approved drafts post
     immediately or wait for review. Auto-saves, like connect/disconnect."""
     cfg = gapp.load_config()
     entry = next((c for c in (cfg.get("youtube_channels") or []) if c.get("id") == body.id), None)
@@ -2074,6 +2087,8 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
     entry["engagement_prompt"] = body.engagement_prompt.strip()
     entry["auto_respond"] = bool(body.auto_respond)
     entry["video_category"] = body.video_category.strip()
+    entry["language"] = body.language.strip() or "en"
+    entry["upload_captions"] = bool(body.upload_captions)
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -2576,6 +2591,19 @@ _upload_tasks: dict = {}
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
+        channel = body_dict.get("channel", "")
+        language, attach_captions = _upload_prefs_for_channel(gapp.load_config(), channel)
+        # Build a subtitle track from the known script so YouTube shows accurate
+        # captions instead of relying on speech recognition. Best-effort, and
+        # only when the channel has captions enabled.
+        caption_file = None
+        if attach_captions:
+            try:
+                from pipeline import captions as _captions
+                _srt = _captions.build_srt(wd)
+                caption_file = str(_srt) if _srt else None
+            except Exception:
+                caption_file = None
         # Track around the actual upload (the slow part) so it shows as
         # in-progress in the Activity panel and lands in the recent log.
         with _track_op("Uploading to YouTube", body_dict["title"]):
@@ -2588,7 +2616,9 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
                 privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
                 thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
-                channel=body_dict.get("channel", ""),
+                channel=channel,
+                captions_path=caption_file, captions=caption_file,
+                default_language=language, default_audio_language=language,
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
