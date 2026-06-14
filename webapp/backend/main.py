@@ -3053,13 +3053,24 @@ def queue_from_job(body: FromJobBody) -> dict:
     )
 
     # In-place update of an existing pending slot — keep its queue position.
+    # Prefer the explicit queue_item_id; otherwise fall back to a pending row
+    # that already points at this job/work_dir, so a second approve of the same
+    # script fills that slot instead of appending a duplicate. Both rows would
+    # share one work_dir, and a Library delete removes every row matching it —
+    # which is why a duplicate also made deleting one wipe both.
+    queue = yt.load_queue()
     existing = None
     if body.queue_item_id:
-        existing = next((q for q in yt.load_queue() if q.get("id") == body.queue_item_id), None)
+        existing = next((q for q in queue if q.get("id") == body.queue_item_id), None)
+    if existing is None:
+        existing = next((q for q in queue
+                         if q.get("status") == "pending"
+                         and ((body.job_id and q.get("video_job_id") == body.job_id)
+                              or (body.work_dir and q.get("work_dir") == body.work_dir))), None)
     if existing is not None and existing.get("status") == "pending":
-        yt.update_queue_item(body.queue_item_id, final_title=title,
+        yt.update_queue_item(existing["id"], final_title=title,
                              suggested_scene_count=n, **script_fields)
-        return {"ok": True, "queue_item_id": body.queue_item_id,
+        return {"ok": True, "queue_item_id": existing["id"],
                 "started": None, "updated_in_place": True}
 
     entry = yt.add_to_queue({"comment_id": "", "text": "", "commenter": "you",
