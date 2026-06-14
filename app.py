@@ -54,6 +54,7 @@ from pipeline.comfyui import (
 )
 from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
+from pipeline import ui_activity
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -153,10 +154,12 @@ DEFAULT_CFG = {
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
     # tts_workers:   hostnames for F5-TTS narration.
-    # ui_workers:    ComfyUI URLs the lightweight "ui" worker renders covers on.
     "comfy_workers": [],
     "tts_workers":   [],
-    "ui_workers":    [],
+    # UI worker reservation (issue #98): while the web UI is actively used, the
+    # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
+    # render pool once the UI has been idle this many seconds.
+    "ui_idle_timeout_seconds": 300,
     # Generation defaults
     "default_voice": "",
     "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
@@ -458,8 +461,8 @@ def _is_job_running() -> bool:
 
 def load_config() -> dict:
     """Load the single YAML config. Saved values are authoritative — worker
-    lists (comfy_workers/tts_workers/ui_workers) live here and are edited from
-    the Settings screen."""
+    lists (comfy_workers/tts_workers) live here and are edited from the Settings
+    screen."""
     cfg = DEFAULT_CFG.copy()
     data = {}
     if CONFIG_FILE.exists():
@@ -1022,6 +1025,9 @@ _IMG_GEN_OUT_COUNT = 3
 def _preview_worker_urls() -> list[str]:
     cfg = load_config()
     all_workers = cfg.get("comfy_workers", [])
+    # Generating a preview means the UI is in use — keep a worker reserved for it
+    # (issue #98) so the render leaves one idle for this and the next preview.
+    ui_activity.mark_active()
     try:
         # Prefer idle workers so previews don't queue behind a video render on a
         # busy worker; falls back to all reachable workers if every one is busy.

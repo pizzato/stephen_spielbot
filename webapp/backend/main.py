@@ -41,7 +41,8 @@ import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
-from pipeline.timing import estimate_eta, estimate_planned_job  # noqa: E402
+from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
+from pipeline import ui_activity  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -323,14 +324,62 @@ def voices_test(body: VoiceTest) -> dict:
     return {"ok": True, "url": f"/api/file?path={out}&t={int(out.stat().st_mtime)}", "cached": cached}
 
 
+def _next_worker_free_eta(cfg: dict) -> float | None:
+    """Seconds until the running render frees its next ComfyUI worker, or None."""
+    store = DurableStore.default()
+    try:
+        recent = store.recent_jobs(limit=1)
+        if not recent:
+            return None
+        job = _row_to_dict(recent[0])
+        tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+        return next_worker_free_seconds(tasks, store.timing_table())
+    except Exception:
+        return None
+    finally:
+        store.close()
+
+
+def _ui_worker_status(cfg: dict) -> dict:
+    """Live state of the dynamic UI-worker reservation (issue #98).
+
+    Reports whether the UI is being actively used, whether a worker is free for
+    it right now (during a render the reserved worker reads as idle), and — when
+    every worker is busy — an ETA until one frees, from the running render."""
+    from pipeline.worker_pool import queue_depth
+    timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+    comfy = cfg.get("comfy_workers") or []
+    out = {
+        "active": ui_activity.is_active(timeout),
+        "idle_timeout_seconds": int(timeout),
+        "idle_seconds": int(max(0.0, ui_activity.idle_seconds())),
+        "n_workers": len(comfy),
+        "available": False,      # a worker is idle and ready for the UI right now
+        "eta_seconds": None,     # else, estimated seconds until one frees
+        "eta_text": "",
+    }
+    if not out["active"] or not comfy:
+        return out
+    # A worker with an empty queue is free for the UI (the reserved one, or any
+    # idle worker when no render is running).
+    if any(queue_depth(u, timeout=2) == 0 for u in comfy):
+        out["available"] = True
+        return out
+    eta = _next_worker_free_eta(cfg)
+    if eta is not None:
+        out["eta_seconds"] = int(eta)
+        out["eta_text"] = humanize_eta(eta)
+    return out
+
+
 @api.get("/api/workers/status")
 def workers_status() -> dict:
     """Live, read-only health of the configured workers.
 
-    comfy/ui endpoints are HTTP-probed (ComfyUI /system_stats); tts is listed
-    (reachability needs SSH, not probed here). ui_worker_running reports whether
-    a local `worker_agent --kind ui` daemon is up. Never raises — an
-    unreachable host is reported as up:false.
+    comfy endpoints are HTTP-probed (ComfyUI /system_stats); tts is listed
+    (reachability needs SSH, not probed here). `ui` carries the dynamic UI-worker
+    reservation state (issue #98). Never raises — an unreachable host is reported
+    as up:false.
     """
     from pipeline.worker_pool import check_alive
     cfg = gapp.load_config()
@@ -345,22 +394,25 @@ def workers_status() -> dict:
             out.append({"endpoint": u, "up": up})
         return out
 
-    ui_running = False
-    try:
-        import subprocess
-        ui_running = subprocess.run(
-            ["pgrep", "-f", "worker_agent.py --kind ui"],
-            capture_output=True,
-        ).returncode == 0
-    except Exception:
-        ui_running = False
-
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
         "tts": [{"host": h} for h in cfg.get("tts_workers", [])],
-        "ui": probe(cfg.get("ui_workers", [])),
-        "ui_worker_running": ui_running,
+        "ui": _ui_worker_status(cfg),
     }
+
+
+@api.get("/api/ui/worker")
+def ui_worker_status() -> dict:
+    """Lightweight poll for the UI-worker reservation indicator (issue #98)."""
+    return _ui_worker_status(gapp.load_config())
+
+
+@api.post("/api/ui/heartbeat")
+def ui_heartbeat() -> dict:
+    """The frontend pings this while the user is actively interacting with the
+    UI, so the render holds one worker idle for cover/preview jobs (issue #98)."""
+    ui_activity.mark_active()
+    return {"ok": True, "ui": _ui_worker_status(gapp.load_config())}
 
 
 # ── script generation ────────────────────────────────────────────────────────
@@ -2245,28 +2297,23 @@ class CoverBody(BaseModel):
 
 
 def _best_cover_comfy_url() -> str:
-    """Pick the fastest available ComfyUI endpoint for cover generation.
+    """Pick the best ComfyUI endpoint for cover generation (issue #98).
 
-    When a render job is active the render workers are busy, so we use the
-    dedicated UI worker (MPS/local) to avoid competing with them.
-    When the cluster is idle we use the first live render worker instead —
-    those have CUDA and are significantly faster.
-    """
+    Generating a cover means the UI is in use, so we stamp activity — the render
+    holds one worker idle for us (see WorkerPool reservation) — and route to a
+    free worker. During a render that idle worker is the reserved one; when the
+    cluster is idle any worker works. Falls back to the least-busy worker."""
     from pipeline.worker_pool import idle_workers
     cfg = gapp.load_config()
-    ui_url = (cfg.get("ui_workers") or ["http://localhost:8188"])[0]
-
-    if gapp._is_job_running():
-        return ui_url  # render in progress — keep cover work off the render cluster
-
-    # Cluster idle — pick a least-busy render worker, fall back to UI worker
+    ui_activity.mark_active()
+    comfy = cfg.get("comfy_workers") or []
     try:
-        candidates = idle_workers(cfg.get("comfy_workers") or [], timeout=2)
+        candidates = idle_workers(comfy, timeout=2)
         if candidates:
             return candidates[0]
     except Exception:
         pass
-    return ui_url
+    return comfy[0] if comfy else "http://localhost:8188"
 
 
 def _track_durable_task(tid: str, name: str, detail: str, poll: float = 1.5) -> None:
@@ -2318,10 +2365,10 @@ def yt_cover(body: CoverBody) -> dict:
                 "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
                 "flux_steps": cfg.get("flux_steps", 4),
-                "flux_model": cfg.get("ui_flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-                "flux_clip_t5": cfg.get("ui_flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-                "flux_clip_l": cfg.get("ui_flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
-                "flux_vae": cfg.get("ui_flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                "flux_model": cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+                "flux_clip_t5": cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+                "flux_clip_l": cfg.get("flux_clip_l", "clip_l.safetensors"),
+                "flux_vae": cfg.get("flux_vae", "ae.safetensors"),
             },
             priority=10,
             max_attempts=3,
