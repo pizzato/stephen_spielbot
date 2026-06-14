@@ -24,18 +24,12 @@ function shortHost(url) {
 
 // Compact inline status row shown under each worker textarea. With `load`, each
 // server shows its render load (issue #98): green=idle (free for the UI; during a
-// render this is the reserved worker), amber=busy rendering, red=down.
-function WorkerStatus({ items, probed = true, load = false, extra }) {
+// render this is the reserved worker), amber=busy rendering, red=down. Without it
+// (TTS, which has no queue), each worker shows plain reachability: green=up,
+// red=down.
+function WorkerStatus({ items, load = false, extra }) {
   if (!items) return <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Checking…</div>
   if (!items.length) return null
-  if (!probed) {
-    return (
-      <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
-        {items.map((w) => <Chip key={w.host} tone="neutral">{w.host}</Chip>)}
-        <span className="muted" style={{ fontSize: 11 }}>not probed</span>
-      </div>
-    )
-  }
   if (load) {
     return (
       <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
@@ -47,12 +41,11 @@ function WorkerStatus({ items, probed = true, load = false, extra }) {
       </div>
     )
   }
-  const down = items.filter((w) => !w.up)
   return (
     <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
-      {down.length === 0
-        ? <Chip tone="ok" dot>all up</Chip>
-        : down.map((w) => <Chip key={w.endpoint} tone="danger" dot>{shortHost(w.endpoint)} down</Chip>)}
+      {items.map((w) => (
+        <Chip key={w.endpoint} tone={w.up ? 'ok' : 'danger'} dot>{shortHost(w.endpoint)} {w.up ? 'up' : 'down'}</Chip>
+      ))}
       {extra}
     </div>
   )
@@ -584,7 +577,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               </Field>
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
-                <WorkerStatus items={workers?.tts} probed={false} />
+                <WorkerStatus items={workers?.tts} />
               </Field>
               <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">
                 <input className="input" type="number" min={1} step={1}

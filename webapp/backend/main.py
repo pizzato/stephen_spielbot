@@ -380,11 +380,13 @@ def workers_status() -> dict:
 
     comfy endpoints are HTTP-probed via ComfyUI /queue, which gives both
     reachability and load (idle vs busy) — during a render the idle worker is the
-    one held for the UI. tts is listed (reachability needs SSH, not probed here).
-    `ui` carries the dynamic UI-worker reservation state (issue #98). Never raises
-    — an unreachable host is reported as up:false.
+    one held for the UI. tts endpoints are HTTP-probed via /health for reachability
+    (F5-TTS has no queue, so there is no idle/busy). `ui` carries the dynamic
+    UI-worker reservation state (issue #98). Never raises — an unreachable host is
+    reported as up:false.
     """
     from pipeline.worker_pool import queue_depth
+    from pipeline.tts_worker import worker_alive as tts_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -397,7 +399,7 @@ def workers_status() -> dict:
 
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
-        "tts": [{"host": h} for h in cfg.get("tts_workers", [])],
+        "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
@@ -2219,6 +2221,54 @@ def yt_post_title(body: DescribeBody) -> dict:
     except Exception as e:
         raise HTTPException(503, f"Title generation failed: {str(e).splitlines()[0][:200]}")
     return {"title": text[:100]}
+
+
+class CoverSaveBody(BaseModel):
+    work_dir: str = ""
+    title: str = ""
+    description: str = ""
+    queue_item_id: str = ""
+
+
+@api.post("/api/youtube/post/save")
+def yt_post_save(body: CoverSaveBody) -> dict:
+    """Persist the Cover tab's edited title + description so they survive a reload
+    and flow into render/publish. The title goes to the durable job record (read
+    back by _video_title_for, the publish prefill and load_script);
+    the description is written verbatim to description.txt. A still-pending linked
+    queue item keeps its title in sync so the Queue reflects the edit too."""
+    wd = Path(body.work_dir) if body.work_dir else None
+    if wd is None or not wd.exists():
+        raise HTTPException(404, "No script found.")
+    title = (body.title or "").strip()
+    if title:
+        job_id = job_id_from_work_dir(wd)
+        store = DurableStore.default()
+        try:
+            # Merge into the existing config/metadata — create_or_update_job
+            # overwrites both on conflict, so re-pass them to avoid clobbering
+            # phase/style_name/scene_count.
+            d = _row_to_dict(store.get_job(job_id))
+            cfg = json.loads(d.get("config_json") or "{}")
+            meta = json.loads(d.get("metadata_json") or "{}")
+            cfg["video_title"] = title
+            store.create_or_update_job(
+                job_id, wd, title, config=cfg, metadata=meta,
+                status=d.get("status") or "pending",
+            )
+        finally:
+            store.close()
+    try:
+        _description_path(wd).write_text(body.description or "")
+    except Exception as e:
+        raise HTTPException(500, f"Could not save description: {str(e).splitlines()[0][:200]}")
+    # Keep a still-pending linked queue item's title in sync (issue #43).
+    qid = (body.queue_item_id or "").strip() or _film_job_config(wd).get("queue_item_id", "")
+    if qid and title:
+        item = _queue_item_by_id(qid)
+        if item and item.get("status") == "pending":
+            yt.update_queue_item(qid, final_title=title)
+    return {"ok": True, "title": title}
 
 
 def _description_path(wd: Path) -> Path:

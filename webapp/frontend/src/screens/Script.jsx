@@ -20,6 +20,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [description, setDescription] = useState('')
   const [coverUrl, setCoverUrl] = useState('')
   const [ytBusy, setYtBusy] = useState('')
+  const [coverMsg, setCoverMsg] = useState('')
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -40,6 +41,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCoverTitle(job?.title || '')
     setDescription('')
     setCoverUrl('')
+    setCoverMsg('')
     if (job?.job_id) setView('cover')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
@@ -123,11 +125,24 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   const genDescription = async () => {
-    setYtBusy('desc'); setError('')
+    setYtBusy('desc'); setError(''); setCoverMsg('')
     try {
       const r = await api.ytDescribe({ work_dir: job.work_dir, title: coverTitle || job.title || '' })
       setDescription(r.description || '')
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  // Persist the edited title + description back to the script so they survive a
+  // reload and feed render/publish; also updates the in-memory job so Approve
+  // (which sends job.title) renders with the edited title.
+  const saveCover = async () => {
+    setBusy('savecover'); setError(''); setCoverMsg('')
+    try {
+      const title = coverTitle.trim()
+      await api.ytPostSave({ work_dir: job.work_dir, title, description, queue_item_id: job.queue_item_id || '' })
+      setJob({ ...job, title, video_title: title })
+      setCoverMsg('Title and description saved.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
   const regenCover = async () => {
@@ -267,6 +282,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           )}
           {view === 'cover' && job && (
             <>
+              <Button variant="primary" icon="floppy-disk" disabled={busy === 'savecover' || !coverTitle.trim()} onClick={saveCover}>
+                {busy === 'savecover' ? 'Saving…' : 'Save'}
+              </Button>
               <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
               {confirmDelScript ? (
                 <>
@@ -291,6 +309,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {job?.queue_item_id && view === 'scenes' && <Banner tone="info">Editing a queued request — “Save to queue slot” keeps its position and lets it render straight from this script.</Banner>}
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
+      {view === 'cover' && coverMsg && <Banner tone="ok">{coverMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
@@ -353,7 +372,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
               <Field label={<RegenLabel busy={ytBusy === 'title'} disabled={!job.work_dir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
-                <input className="input" value={coverTitle} maxLength={100} onChange={(e) => setCoverTitle(e.target.value)} />
+                <input className="input" value={coverTitle} maxLength={100} onChange={(e) => { setCoverTitle(e.target.value); setCoverMsg('') }} />
               </Field>
               <Field label="Resolution">
                 <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
@@ -373,7 +392,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 </span>
               }>
                 <textarea className="textarea" rows={8} value={description}
-                  onChange={(e) => setDescription(e.target.value)}
+                  onChange={(e) => { setDescription(e.target.value); setCoverMsg('') }}
                   placeholder="Written automatically when the script is generated — click Generate to rewrite it." />
               </Field>
             </div>
@@ -394,7 +413,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Card well className="reveal reveal-d3">
               <div className="row center gap-10">
                 <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
-                <span className="muted" style={{ fontSize: 12.5 }}>Description and cover are saved to the script folder and reused when publishing.</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>Click <strong>Save</strong> to keep the title and description; the cover image is saved when generated. All are reused when publishing.</span>
               </div>
             </Card>
           </div>
