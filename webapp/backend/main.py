@@ -77,11 +77,13 @@ def _worker_in_config(w: dict, cfg: dict) -> bool:
     """True if a registered worker still matches the live config.
 
     The durable `workers` table is an append-only registry keyed by
-    (kind, endpoint); it is never reconciled against config. When a host is
-    reassigned — e.g. a UI worker moved back into the render pool — the old
-    registration lingers, so the same endpoint shows up under two kinds. Filter
-    to the currently-configured pools so the render page reflects reality.
-    Internal `local` workers (e.g. the assembler) are never in config — keep them.
+    (kind, endpoint); it is never reconciled against config. So an endpoint
+    dropped from config — or the cover agent (kind="ui"), which registers on a
+    render endpoint but is not a render worker (issue #98 removed the dedicated
+    ui_workers pool) — would otherwise linger on the render page. Filter to the
+    currently-configured pools; there is no ui_workers pool, so ui registrations
+    are always dropped. Internal `local` workers (e.g. the assembler) are never
+    in config — keep them.
     """
     if w.get("kind") == "local":
         return True
