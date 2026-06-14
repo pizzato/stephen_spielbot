@@ -166,6 +166,7 @@ DEFAULT_CFG = {
     "default_visual_style": "",
     "script_extra_instructions": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
+    "cover_phrase_style": "",         # how the punchy cover/thumbnail phrase is picked from the title
     # YouTube integration
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
     # Connected channels (issue #22): [{id, name, channel_id}] where `id` is the
@@ -208,6 +209,7 @@ STYLE_FIELD_TO_FLAT = {
     "visual_style":         "default_visual_style",
     "extra_instructions":   "script_extra_instructions",
     "title_style":          "title_style",
+    "cover_phrase_style":   "cover_phrase_style",
     "description_suffix":   "description_suffix",
     "voice":                "default_voice",
     "voice_robotic":        "default_voice_robotic",
@@ -369,7 +371,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
         out.update(visual_style="", extra_instructions="", description_suffix="",
-                   title_style="", voice="", voice_robotic=False, voice_speed=1.0)
+                   title_style="", cover_phrase_style="", voice="", voice_robotic=False,
+                   voice_speed=1.0)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out

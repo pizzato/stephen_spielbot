@@ -34,7 +34,7 @@ from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import Scene
+from pipeline.llm import Scene, generate_cover_phrase as _gen_cover_phrase
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_scene_image, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
@@ -57,7 +57,6 @@ from app import _RESOLUTIONS, _DEFAULT_RESOLUTION
 from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
     cover_dimensions as _cover_dimensions,
-    shorten_title_for_cover as _shorten_title,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -528,7 +527,8 @@ def main(work_dir: Path) -> None:
         try:
             _cover_url = worker_pool.acquire()
             generate_scene_image(
-                _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
+                _cover_prompt(_gen_cover_phrase(video_title, cfg.get("cover_phrase_style", "")),
+                              style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
                 height=cover_h,
