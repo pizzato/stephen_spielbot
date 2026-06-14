@@ -378,22 +378,21 @@ def _ui_worker_status(cfg: dict) -> dict:
 def workers_status() -> dict:
     """Live, read-only health of the configured workers.
 
-    comfy endpoints are HTTP-probed (ComfyUI /system_stats); tts is listed
-    (reachability needs SSH, not probed here). `ui` carries the dynamic UI-worker
-    reservation state (issue #98). Never raises — an unreachable host is reported
-    as up:false.
+    comfy endpoints are HTTP-probed via ComfyUI /queue, which gives both
+    reachability and load (idle vs busy) — during a render the idle worker is the
+    one held for the UI. tts is listed (reachability needs SSH, not probed here).
+    `ui` carries the dynamic UI-worker reservation state (issue #98). Never raises
+    — an unreachable host is reported as up:false.
     """
-    from pipeline.worker_pool import check_alive
+    from pipeline.worker_pool import queue_depth
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
+        # queue_depth: <0 unreachable, 0 idle (free for the UI), >0 busy rendering.
         out = []
         for u in urls or []:
-            try:
-                up = check_alive(u, timeout=3)
-            except Exception:
-                up = False
-            out.append({"endpoint": u, "up": up})
+            depth = queue_depth(u, timeout=3)
+            out.append({"endpoint": u, "up": depth >= 0, "busy": depth > 0})
         return out
 
     return {
