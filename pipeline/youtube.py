@@ -32,6 +32,7 @@ _AUTH_CACHE_TTL = 60.0  # seconds before re-checking with the API
 _CONFIG_DIR = Path.home() / ".config" / "video-generator"
 _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
+ANALYTICS_CACHE_PATH = _CONFIG_DIR / "youtube_analytics.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
 
@@ -647,6 +648,23 @@ def load_comments_cache() -> list[dict]:
 def save_comments_cache(comments: list[dict]) -> None:
     COMMENTS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     COMMENTS_CACHE_PATH.write_text(json.dumps(comments, indent=2))
+
+
+# ── Analytics cache ───────────────────────────────────────────────────────────
+# Persisted per channel key (issue #22) so the dashboard loads instantly across
+# server restarts; a manual refresh re-fetches from YouTube and overwrites the
+# channel's entry. Mirrors the comments cache above.
+
+def load_analytics_cache() -> dict[str, dict]:
+    try:
+        return json.loads(ANALYTICS_CACHE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def save_analytics_cache(cache: dict[str, dict]) -> None:
+    ANALYTICS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ANALYTICS_CACHE_PATH.write_text(json.dumps(cache, indent=2))
 
 
 def get_pending_requests(cache: list[dict] | None = None) -> list[dict]:
