@@ -170,15 +170,16 @@ export default function YouTube({ go, initial }) {
 
   const pending = (c) => c.is_request && !['approved', 'rejected'].includes(c.status)
 
-  const fetchAnalytics = async (ch = channel) => {
+  const fetchAnalytics = async (refresh = false) => {
+    const ch = channel
     setLoadingAnalytics(true); setError('')
-    try { const d = await api.ytAnalytics(ch); _analyticsCache[ch] = d; setAnalytics(d) }
+    try { const d = await api.ytAnalytics(ch, refresh); _analyticsCache[ch] = d; setAnalytics(d) }
     catch (e) { setAnalytics({ channel: {}, videos: [], error: e.message }) } finally { setLoadingAnalytics(false) }
   }
   useEffect(() => {
     if (view !== 'analytics' || channels === null) return   // wait for the channel list
     if (_analyticsCache[channel]) { setAnalytics(_analyticsCache[channel]); return }
-    if (!loadingAnalytics) fetchAnalytics()
+    if (!loadingAnalytics) fetchAnalytics(false)   // cache-first: serve the persisted snapshot fast
   }, [view, channel, channels])
 
   return (
@@ -331,7 +332,7 @@ export default function YouTube({ go, initial }) {
               <StatCard label="Total views" value={fmtNum(ch.view_count)} delay={2} />
               <StatCard label="Watch time" value={fmtWatchTime(ch.watch_time_minutes)} delay={3} />
               <StatCard label="Videos" value={fmtNum(ch.video_count)}
-                sub={<Button variant="ghost" icon="rotate" style={{ marginTop: 8 }} disabled={loadingAnalytics} onClick={fetchAnalytics}>Refresh</Button>}
+                sub={<Button variant="ghost" icon="rotate" style={{ marginTop: 8 }} disabled={loadingAnalytics} onClick={() => fetchAnalytics(true)}>Refresh</Button>}
                 delay={4} />
 
               {/* Row 2 — engagement */}
