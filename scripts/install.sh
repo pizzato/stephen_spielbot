@@ -12,25 +12,6 @@ source "$REPO_ROOT/scripts/_config.sh"
 
 banner() { echo ""; echo "=== $* ==="; }
 
-_find_conda() {
-    for p in \
-        "$HOME/miniconda3/bin/conda" \
-        "$HOME/miniforge3/bin/conda" \
-        "$HOME/anaconda3/bin/conda" \
-        "$HOME/opt/miniconda3/bin/conda" \
-        "$HOME/opt/miniforge3/bin/conda" \
-        "$HOME/opt/anaconda3/bin/conda" \
-        "/opt/conda/bin/conda" \
-        "/usr/local/bin/conda"; do
-        [[ -x "$p" ]] && echo "$p" && return 0
-    done
-    # Fall back to PATH (works when conda shell function is active)
-    local c
-    c="$(command -v conda 2>/dev/null || true)"
-    [[ -x "$c" ]] && echo "$c" && return 0
-    return 1
-}
-
 # ── 1. Local Python venv + dependencies ───────────────────────────────────────
 
 banner "Setting up local Python environment"
@@ -69,42 +50,10 @@ else
     "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
 fi
 
-# Re-evaluate hosts now that a config may have just been written.
-# ── 2. Local F5-TTS environment ───────────────────────────────────────────────
+# F5-TTS runs in the worker containers, so the controller needs no local F5-TTS
+# environment (the workers handle narration over HTTP).
 
-banner "Checking local F5-TTS environment"
-F5_ENV="${F5TTS_PYTHON:-}"
-
-# If not overridden, search for the conda-managed f5tts env
-if [[ -z "$F5_ENV" ]]; then
-    CONDA="$(_find_conda || true)"
-    if [[ -n "$CONDA" ]]; then
-        CONDA_BASE="$(dirname "$(dirname "$CONDA")")"
-        F5_ENV="$CONDA_BASE/envs/f5tts/bin/python"
-    fi
-fi
-
-if [[ -n "$F5_ENV" ]] && [[ -x "$F5_ENV" ]] && "$F5_ENV" -c "import f5_tts" 2>/dev/null; then
-    echo "[f5tts] already installed at $F5_ENV"
-else
-    CONDA="${CONDA:-$(_find_conda || true)}"
-    if [[ -z "$CONDA" ]]; then
-        echo "[f5tts] WARNING: conda not found — skipping F5-TTS install."
-        echo "  Install Miniconda/Miniforge first to enable local TTS:"
-        echo "  https://github.com/conda-forge/miniforge"
-        echo "  Then re-run 'make install'."
-    else
-        CONDA_BASE="$(dirname "$(dirname "$CONDA")")"
-        echo "[f5tts] installing into conda env f5tts (conda: $CONDA) ..."
-        "$CONDA" create -n f5tts python=3.10 -y
-        # Install cmake + llvmlite via conda to avoid compilation issues
-        "$CONDA" install -n f5tts -c conda-forge cmake llvmlite numba -y --quiet
-        "$CONDA_BASE/envs/f5tts/bin/pip" install --quiet f5-tts
-        echo "[f5tts] installed"
-    fi
-fi
-
-# ── 3. Download models ────────────────────────────────────────────────────────
+# ── 2. Download models ────────────────────────────────────────────────────────
 # Strategy:
 #   • Local ComfyUI present  → download directly here
 #   • Remote workers only    → download once on MODEL_SOURCE, others rsync from it
