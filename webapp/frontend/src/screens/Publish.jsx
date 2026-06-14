@@ -62,8 +62,19 @@ export default function Publish({ initialWorkDir, go }) {
   const [reuploading, setReuploading] = useState(false)
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [youtubeVideoId, setYoutubeVideoId] = useState('')
+  const [uiWorker, setUiWorker] = useState(null)   // cover-worker reservation (issue #98)
 
   const refreshChannels = () => api.ytChannels().then((r) => setChannels(r.channels || [])).catch(() => {})
+
+  // Poll the UI-worker reservation so we can tell the user, next to the cover
+  // button, when a render worker will be free for a regenerate (issue #98).
+  useEffect(() => {
+    let alive = true
+    const tick = () => api.uiWorker().then((u) => { if (alive) setUiWorker(u) }).catch(() => {})
+    tick()
+    const t = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
 
   useEffect(() => {
     api.ytPostOptions().then((o) => {
@@ -282,7 +293,16 @@ export default function Publish({ initialWorkDir, go }) {
               label="Upload thumbnail to YouTube" />
           </div>
           <Button variant="ghost" block icon="rotate-right" disabled={busy === 'cover' || !workDir} onClick={regenCover}>
-            {busy === 'cover' ? 'Queued — waiting for UI worker…' : 'Regenerate cover'}</Button>
+            {busy === 'cover'
+              ? (uiWorker?.active && !uiWorker.available && uiWorker.eta_text
+                  ? `Queued — worker free in ${uiWorker.eta_text}…`
+                  : 'Generating cover…')
+              : 'Regenerate cover'}</Button>
+          {busy !== 'cover' && uiWorker?.active && !uiWorker.available && uiWorker.eta_text && (
+            <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+              Render busy — a worker will be free for covers in {uiWorker.eta_text}.
+            </div>
+          )}
           {youtubeUrl && (
             <Button variant="ghost" block icon="image" disabled={busy === 'thumb' || !coverUrl} onClick={updateThumbnail}>
               {busy === 'thumb' ? 'Updating…' : 'Update thumbnail on YouTube'}</Button>

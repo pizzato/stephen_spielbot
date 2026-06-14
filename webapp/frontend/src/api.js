@@ -37,6 +37,11 @@ export const api = {
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
 
+  // UI-worker reservation (issue #98): heartbeat marks "the UI is in use" so the
+  // render holds a worker idle for covers/previews; uiWorker polls that state.
+  uiHeartbeat: () => req('POST', '/ui/heartbeat'),
+  uiWorker: () => req('GET', '/ui/worker'),
+
   // voices (reference clips F5-TTS clones). `data` is a base64 / data-URL string.
   addVoice: (name, filename, data) => req('POST', '/voices/add', { name, filename, data }),
   updateVoice: (name, fields) => req('POST', '/voices/update', { name, ...fields }),
