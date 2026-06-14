@@ -355,9 +355,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <Field label={<RegenLabel busy={ytBusy === 'title'} disabled={!job.work_dir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
                 <input className="input" value={coverTitle} maxLength={100} onChange={(e) => setCoverTitle(e.target.value)} />
               </Field>
-              <Field label="Visual style — applied to every scene" hint="Re-draft the script to change the style — it applies to every scene.">
-                <input className="input" value={style} disabled readOnly />
-              </Field>
               <Field label="Resolution">
                 <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
               </Field>
