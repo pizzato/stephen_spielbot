@@ -2522,7 +2522,7 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
     errors: list[str] = []
     fetched_any = False
     cache = yt.load_comments_cache()
-    existing = {c.get("comment_id") for c in cache}
+    by_id = {c.get("comment_id"): c for c in cache}
     for ch in channels:
         try:
             fetched = yt.fetch_channel_comments(secrets, channel=ch)
@@ -2531,14 +2531,23 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
             errors.append(f"{ch or 'default'}: {str(e).splitlines()[0][:120]}")
             continue
         for fc in fetched:
-            if fc.get("comment_id") not in existing:
-                cache.insert(0, {**fc, "channel": ch, "evaluated": False, "is_request": False,
-                                 "suggested_title": "", "confidence": 0.0,
-                                 "interestingness": 0.0, "reason": "", "status": "new",
-                                 "engagement_status": "", "engagement_draft": "",
-                                 "engagement_reason": ""})
-                existing.add(fc.get("comment_id"))
+            cur = by_id.get(fc.get("comment_id"))
+            if cur is None:
+                entry = {**fc, "channel": ch, "evaluated": False, "is_request": False,
+                         "suggested_title": "", "confidence": 0.0,
+                         "interestingness": 0.0, "reason": "", "status": "new",
+                         "engagement_status": "", "engagement_draft": "",
+                         "engagement_reason": "", "engagement_anchor": ""}
+                cache.insert(0, entry)
+                by_id[fc.get("comment_id")] = entry
                 new_count += 1
+            else:
+                # Refresh thread state so replies that arrived after the first fetch —
+                # including a viewer replying to our reply — are captured. The
+                # engagement pass below then re-opens the thread if a viewer spoke last.
+                cur["replies"] = fc.get("replies", cur.get("replies", []))
+                cur["total_reply_count"] = fc.get("total_reply_count", cur.get("total_reply_count", 0))
+                cur["like_count"] = fc.get("like_count", cur.get("like_count", 0))
     yt.save_comments_cache(cache)
     if not fetched_any:
         raise HTTPException(503, f"Fetch failed: {errors[0] if errors else 'no channels configured'}")
@@ -2578,18 +2587,28 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
     chan_cfg = {c.get("id", ""): c for c in (cfg.get("youtube_channels") or [])}
     drafted = sent = 0
     for c in cache:
-        if c.get("is_request") or c.get("engagement_status"):
+        if c.get("is_request"):
             continue
         entry = chan_cfg.get(c.get("channel", ""), {})
         guidance = str(entry.get("engagement_prompt") or "").strip()
         if not guidance:
             continue
-        thread = "\n".join(
-            f"{r.get('commenter', 'viewer')}: {r.get('text', '')}"
-            for r in (c.get("replies") or [])
-        )
-        r = llm.generate_community_reply(c.get("text", ""), c.get("commenter", ""),
-                                         thread, guidance, cfg)
+        st = yt.thread_anchor(c)
+        # Nothing to answer if the channel spoke last, or there's no viewer message.
+        if st["last_is_owner"] or not st["anchor_id"]:
+            continue
+        # Run-once per viewer message: a brand-new reply (new anchor) re-opens the
+        # thread, but we never re-draft the same message twice (issue #84).
+        # Legacy records carry a status but no anchor — the old one-shot pass only
+        # ever acted on the top-level comment, so seed the anchor there. This keeps
+        # already-skipped/dismissed backlog from being resurrected (only a genuinely
+        # new viewer reply, with a different anchor id, re-opens the thread).
+        prior_anchor = c.get("engagement_anchor") or (c.get("comment_id", "") if c.get("engagement_status") else "")
+        if prior_anchor == st["anchor_id"] and c.get("engagement_status"):
+            continue
+        r = llm.generate_community_reply(st["anchor_text"], st["anchor_author"],
+                                         st["thread_text"], guidance, cfg)
+        c["engagement_anchor"] = st["anchor_id"]
         c["engagement_reason"] = r.get("reason", "")
         if not (r.get("should_reply") and r.get("reply")):
             c["engagement_status"] = "skip"
