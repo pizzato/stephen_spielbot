@@ -74,8 +74,9 @@ make status    # check health of the app and all workers
 
 Workers are configured in the single config file (see below) — there is no
 separate `cluster.conf`. List your render workers under `comfy_workers` (and the
-matching `tts_workers` hosts); `make install` will SSH into each host and install
-ComfyUI + F5-TTS automatically. The local machine is always included.
+matching `tts_workers` hosts); `make install` will SSH into each host and deploy
+ComfyUI + F5-TTS automatically (as containers by default — see below). The local
+machine is always included.
 
 ```yaml
 # ~/.config/video-generator/config.yaml
@@ -91,28 +92,38 @@ ui_workers:            # ComfyUI endpoints for cover-image regeneration
 
 Workers must be reachable via SSH without a password (use `ssh-copy-id`).
 
-### Containerized workers (alternative to SSH install)
+### Containerized workers (default)
 
-Instead of the SSH + Miniconda + rsync bootstrap, you can run each machine's GPU
-workers (ComfyUI + F5-TTS) as containers — a new machine joins the fleet with one
-`docker compose up`. Models are mounted from the host, so images stay small. See
-[`docker/README.md`](docker/README.md). In short, on each worker machine:
+`make install` deploys each remote render worker (ComfyUI + F5-TTS) as **Docker
+containers**, driven over SSH from the controller: it rsyncs the build context,
+mounts the host's existing models, stops the native ComfyUI, runs
+`docker compose up -d --build`, and rewrites `tts_workers` to the
+`http://host:8189` container URLs. Each worker needs Docker + the NVIDIA
+Container Toolkit. See [`docker/README.md`](docker/README.md).
 
 ```bash
-cd docker && cp .env.example .env   # set MODELS_DIR
-bash ../scripts/worker_container.sh fetch-models   # one-time: ~33 GB
-make worker-up                      # build + start ComfyUI (:8188) + F5-TTS (:8189)
+make install WORKERS="s1 s2 s3"               # container deploy (default)
+DEPLOY=ssh make install WORKERS="s1 s2 s3"    # legacy Miniconda/venv install
 ```
 
-Then point the controller at it — containerized TTS uses an **`http://` URL**:
+Deploy or re-deploy a single host from the controller:
+
+```bash
+bash scripts/install_worker_container.sh s1
+```
+
+Containerized TTS is reached over an **`http://` URL**; bare-hostname
+`tts_workers` still route over SSH, so containerized and SSH-installed hosts can
+coexist during a migration:
 
 ```yaml
 comfy_workers: [ http://s1:8188 ]
 tts_workers:   [ http://s1:8189 ]   # http:// → containerized F5-TTS over HTTP
 ```
 
-Bare-hostname `tts_workers` still use SSH, so SSH-installed and containerized
-hosts can coexist during a migration.
+> Note: `make start/stop/status` still target the **native** install. Containers
+> self-start via compose `restart: unless-stopped`; manage them with `make
+> worker-*` on the host (or `docker compose`).
 
 ## Configuration
 
