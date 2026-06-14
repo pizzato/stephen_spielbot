@@ -22,8 +22,10 @@ function shortHost(url) {
   try { return new URL(url).hostname } catch { return url }
 }
 
-// Compact inline status row shown under each worker textarea
-function WorkerStatus({ items, probed = true, extra }) {
+// Compact inline status row shown under each worker textarea. With `load`, each
+// server shows its render load (issue #98): green=idle (free for the UI; during a
+// render this is the reserved worker), amber=busy rendering, red=down.
+function WorkerStatus({ items, probed = true, load = false, extra }) {
   if (!items) return <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Checking…</div>
   if (!items.length) return null
   if (!probed) {
@@ -31,6 +33,17 @@ function WorkerStatus({ items, probed = true, extra }) {
       <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
         {items.map((w) => <Chip key={w.host} tone="neutral">{w.host}</Chip>)}
         <span className="muted" style={{ fontSize: 11 }}>not probed</span>
+      </div>
+    )
+  }
+  if (load) {
+    return (
+      <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
+        {items.map((w) => {
+          const [tone, label] = !w.up ? ['danger', 'down'] : w.busy ? ['warn', 'busy'] : ['ok', 'idle']
+          return <Chip key={w.endpoint} tone={tone} dot>{shortHost(w.endpoint)} {label}</Chip>
+        })}
+        {extra}
       </div>
     )
   }
@@ -43,6 +56,18 @@ function WorkerStatus({ items, probed = true, extra }) {
       {extra}
     </div>
   )
+}
+
+// Live state of the dynamic UI-worker reservation (issue #98): whether the UI is
+// in use, whether a worker is free for it, or an ETA until one frees.
+function UiWorkerStatus({ ui }) {
+  if (!ui) return <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Checking…</div>
+  let chip
+  if (!ui.active) chip = <Chip tone="neutral" dot>UI idle — no worker reserved</Chip>
+  else if (ui.available) chip = <Chip tone="ok" dot>worker ready for UI</Chip>
+  else if (ui.eta_text) chip = <Chip tone="warn" dot>worker free in {ui.eta_text}</Chip>
+  else chip = <Chip tone="warn" dot>waiting for a worker</Chip>
+  return <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>{chip}</div>
 }
 
 // Read a File into a data-URL string (base64) so it can ride in a JSON body.
@@ -450,7 +475,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
-      out.ui_workers = fromLines(toLines(cfg.ui_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
       dirtyRef.current = false   // saved — let the sync effect adopt r.config
@@ -538,20 +562,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
             </div>
             <div className="stack gap-22 mt-16">
-              <Field label="ComfyUI workers" hint="One URL per line.">
+              <Field label="ComfyUI workers" hint="One URL per line. idle = free for the UI (the reserved worker during a render); busy = rendering.">
                 <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
-                <WorkerStatus items={workers?.comfy} />
+                <WorkerStatus items={workers?.comfy} load />
               </Field>
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
                 <WorkerStatus items={workers?.tts} probed={false} />
               </Field>
-              <Field label="UI workers" hint="ComfyUI URLs for cover-image regeneration. One per line.">
-                <textarea className="textarea" rows={2} value={toLines(cfg.ui_workers)} onChange={(e) => set('ui_workers', e.target.value)} />
-                <WorkerStatus items={workers?.ui}
-                  extra={workers && (workers.ui_worker_running
-                    ? <Chip tone="ok" dot>worker running</Chip>
-                    : <Chip tone="warn" dot>worker not running</Chip>)} />
+              <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">
+                <input className="input" type="number" min={1} step={1}
+                  value={Math.max(1, Math.round((cfg.ui_idle_timeout_seconds ?? 300) / 60))}
+                  onChange={(e) => set('ui_idle_timeout_seconds', Math.max(1, +e.target.value || 1) * 60)} />
+                <UiWorkerStatus ui={workers?.ui} />
               </Field>
             </div>
           </Card>

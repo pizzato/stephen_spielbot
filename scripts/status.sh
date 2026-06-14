@@ -50,11 +50,11 @@ else
 fi
 
 echo ""
-echo "UI worker(s):"
+echo "Cover agent:"
 if pgrep -f "worker_agent.py --kind ui" &>/dev/null; then
     echo "  ✓ Running  (PID $(pgrep -f 'worker_agent.py --kind ui' | tr '\n' ' '))"
 else
-    echo "  ✗ Not running (cover regeneration will queue without a ui worker)"
+    echo "  ✗ Not running (cover regeneration will queue without it)"
 fi
 
 # ── Durable orchestration ─────────────────────────────────────────────────────

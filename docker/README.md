@@ -62,12 +62,13 @@ SSH:
 comfy_workers:            # you set these
   - http://s1:8188
   - http://s2:8188
-ui_workers:               # set by install — cover-image regen reuses the ComfyUI container
-  - http://s1:8188
 tts_workers:              # set by install — http:// selects the HTTP transport
   - http://s1:8189
   - http://s2:8189
 ```
+
+Cover/preview regen has no dedicated worker: while the UI is in use the backend
+keeps one render worker idle for it (issue #98), so no `ui_workers` list.
 
 A bare hostname in `tts_workers` is rejected — workers are HTTP containers, so
 the value must be an `http://host:8189` URL.

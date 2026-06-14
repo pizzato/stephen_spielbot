@@ -141,6 +141,32 @@ def estimate_planned_job(
     return estimate_eta(tasks, table, cfg)
 
 
+def next_worker_free_seconds(
+    tasks: list[dict[str, Any]],
+    table: dict[str, dict[str, Any]],
+    now: float | None = None,
+) -> float | None:
+    """Seconds until the next ComfyUI worker finishes its current task.
+
+    Used to tell the UI "a worker will be available in ~X" (issue #98) when every
+    render worker is busy. Looks only at running comfy-pool tasks (image/video/
+    music), takes each one's learned remaining time, and returns the soonest.
+    None when nothing comfy-pool is running (no basis to estimate)."""
+    now = now if now is not None else time.time()
+    remaining: list[float] = []
+    for t in tasks:
+        kind = t.get("kind", "")
+        label = TIMING_KIND_LABELS.get(kind)
+        if _POOL.get(label) != "comfy":
+            continue
+        if t.get("status") in _RUNNING_STATUSES and t.get("started_at"):
+            est, _ = _estimate_one(table, kind, json_loads(t.get("payload_json")))
+            remaining.append(max(0.0, est - (now - float(t["started_at"]))))
+    if not remaining:
+        return None
+    return round(min(remaining))
+
+
 def estimate_eta(
     tasks: list[dict[str, Any]],
     table: dict[str, dict[str, Any]],

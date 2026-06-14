@@ -74,28 +74,36 @@ class AppProgressTests(unittest.TestCase):
 
 class WorkerConfigFilterTests(unittest.TestCase):
     """``/api/progress`` lists workers from the durable store's global registry,
-    which is append-only and keyed by (kind, endpoint). When a host is reassigned
-    — e.g. moved from the UI pool back into the render pool — the old registration
-    lingers, so the same endpoint would show up under two kinds. ``_worker_in_config``
-    filters the registry down to the live config so the render page reflects reality.
+    which is append-only and keyed by (kind, endpoint). ``_worker_in_config``
+    filters it down to the live config so the render page reflects reality: it
+    drops endpoints no longer configured, and the cover agent (``kind="ui"``),
+    which is not a render worker — issue #98 removed the dedicated ui_workers
+    pool, so a ui registration sits on a render endpoint but never counts as one.
     """
 
     cfg = {
         "comfy_workers": ["http://s1:8188", "http://s3:8188"],
         "tts_workers": ["s1", "s3"],
-        "ui_workers": ["http://localhost:8188"],
     }
 
-    def test_stale_reassigned_worker_is_hidden(self):
+    def test_cover_agent_registration_is_hidden_but_its_endpoint_is_kept(self):
         from webapp.backend.main import _worker_in_config
 
-        # s3 used to be a UI worker; that registration is now stale.
+        # The cover agent registers kind="ui" at a render endpoint (comfy[0]); the
+        # ui registration is hidden, but that endpoint as a comfy worker is kept.
         self.assertFalse(
-            _worker_in_config({"kind": "ui", "endpoint": "http://s3:8188"}, self.cfg)
+            _worker_in_config({"kind": "ui", "endpoint": "http://s1:8188"}, self.cfg)
         )
-        # s3 as a render worker is current config — kept.
         self.assertTrue(
-            _worker_in_config({"kind": "comfy", "endpoint": "http://s3:8188"}, self.cfg)
+            _worker_in_config({"kind": "comfy", "endpoint": "http://s1:8188"}, self.cfg)
+        )
+
+    def test_unconfigured_endpoint_is_hidden(self):
+        from webapp.backend.main import _worker_in_config
+
+        # s2 is no longer in comfy_workers — its stale registration is dropped.
+        self.assertFalse(
+            _worker_in_config({"kind": "comfy", "endpoint": "http://s2:8188"}, self.cfg)
         )
 
     def test_configured_workers_are_kept(self):
@@ -103,8 +111,8 @@ class WorkerConfigFilterTests(unittest.TestCase):
 
         for kind, endpoint in [
             ("comfy", "http://s1:8188"),
+            ("comfy", "http://s3:8188"),
             ("tts", "s3"),
-            ("ui", "http://localhost:8188"),
         ]:
             self.assertTrue(
                 _worker_in_config({"kind": kind, "endpoint": endpoint}, self.cfg),

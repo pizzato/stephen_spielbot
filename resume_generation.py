@@ -50,6 +50,7 @@ from pipeline.orchestrator import (
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
+from pipeline import ui_activity
 # Resolution name → (w, h) map. Import the canonical table from app rather than
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
@@ -342,7 +343,14 @@ def main(work_dir: Path) -> None:
     store.recover_incomplete_tasks(durable_job_id)
     store.update_job(durable_job_id, status=JOB_RUNNING, progress_pct=0, progress_message="starting")
 
-    worker_pool = WorkerPool(worker_urls)
+    # While the web UI is actively used, hold one worker idle for it (issue #98)
+    # so cover/preview jobs don't queue behind this render. The idle window is the
+    # configured timeout; reads the shared activity file the backend stamps.
+    _ui_idle_timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+    worker_pool = WorkerPool(
+        worker_urls,
+        reserve_check=lambda: ui_activity.is_active(_ui_idle_timeout),
+    )
     status_file = work_dir / "progress.json"
 
     # Work dir name → derive slug and stamp for final output path

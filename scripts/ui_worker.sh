@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Start/stop local "ui" worker agents — one per endpoint in config.yaml (ui_workers).
+# Start/stop the controller-side cover agent (cover-image regeneration).
 #
-# A ui worker leases lightweight interface tasks (cover-image regeneration) from
-# the durable orchestrator and renders them against a ComfyUI endpoint, so those
-# tasks don't wait behind the heavy render workers.
-#
-# The worker PROCESS runs on this machine (it reads the local orchestrator DB);
-# the ComfyUI endpoints (config.yaml ui_workers) may be local or remote.
+# It leases lightweight interface tasks (ui.cover.generate) from the durable
+# orchestrator and renders them against a ComfyUI endpoint chosen per task — the
+# backend keeps one render worker idle while the UI is in use (issue #98), so
+# covers don't wait behind the heavy render. The dedicated "ui worker" pool was
+# removed; this single agent's --endpoint is only a fallback (covers carry their
+# own comfy_url). The PROCESS runs on this machine (it reads the local DB).
 #
 # Usage:
 #   bash scripts/ui_worker.sh start
@@ -24,8 +24,6 @@ LOG_DIR="$HOME/.local/share/video-generator/logs"
 # shellcheck source=scripts/_config.sh
 source "$REPO_ROOT/scripts/_config.sh"
 
-endpoints() { ui_endpoints; }
-
 case "$ACTION" in
   start)
     if [[ ! -x "$PYTHON" ]]; then
@@ -33,23 +31,17 @@ case "$ACTION" in
         exit 1
     fi
     mkdir -p "$PID_DIR" "$LOG_DIR"
-    n=0
-    while IFS= read -r endpoint; do
-        n=$((n + 1))
-        pid_file="$PID_DIR/ui_${n}.pid"
-        log_file="$LOG_DIR/ui_worker_${n}.log"
-        if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
-            echo "  [ui-worker $n] already running (PID $(cat "$pid_file"))  $endpoint"
-            continue
-        fi
+    endpoint="$(cover_endpoint)"
+    pid_file="$PID_DIR/ui_1.pid"
+    log_file="$LOG_DIR/ui_worker_1.log"
+    if [[ -f "$pid_file" ]] && kill -0 "$(cat "$pid_file")" 2>/dev/null; then
+        echo "  [cover-agent] already running (PID $(cat "$pid_file"))  $endpoint"
+    else
         cd "$REPO_ROOT"
         nohup "$PYTHON" worker_agent.py --kind ui --endpoint "$endpoint" \
             >>"$log_file" 2>&1 &
         echo $! > "$pid_file"
-        echo "  [ui-worker $n] started (PID $!)  $endpoint  (log: $log_file)"
-    done < <(endpoints)
-    if [[ "$n" -eq 0 ]]; then
-        echo "  [ui-worker] no ui_workers in config.yaml — cover regeneration will not run"
+        echo "  [cover-agent] started (PID $!)  fallback endpoint $endpoint  (log: $log_file)"
     fi
     ;;
 
