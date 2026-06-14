@@ -2526,6 +2526,14 @@ _upload_tasks: dict = {}
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
+        # Build a subtitle track from the known script so YouTube shows accurate
+        # captions instead of relying on speech recognition. Best-effort.
+        try:
+            from pipeline import captions as _captions
+            _srt = _captions.build_srt(wd)
+            caption_file = str(_srt) if _srt else None
+        except Exception:
+            caption_file = None
         # Track around the actual upload (the slow part) so it shows as
         # in-progress in the Activity panel and lands in the recent log.
         with _track_op("Uploading to YouTube", body_dict["title"]):
@@ -2539,6 +2547,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
                 thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
                 channel=body_dict.get("channel", ""),
+                captions_path=caption_file, captions=caption_file,
+                default_language="en", default_audio_language="en",
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
