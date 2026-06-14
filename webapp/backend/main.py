@@ -380,11 +380,13 @@ def workers_status() -> dict:
 
     comfy endpoints are HTTP-probed via ComfyUI /queue, which gives both
     reachability and load (idle vs busy) — during a render the idle worker is the
-    one held for the UI. tts is listed (reachability needs SSH, not probed here).
-    `ui` carries the dynamic UI-worker reservation state (issue #98). Never raises
-    — an unreachable host is reported as up:false.
+    one held for the UI. tts endpoints are HTTP-probed via /health for reachability
+    (F5-TTS has no queue, so there is no idle/busy). `ui` carries the dynamic
+    UI-worker reservation state (issue #98). Never raises — an unreachable host is
+    reported as up:false.
     """
     from pipeline.worker_pool import queue_depth
+    from pipeline.tts_worker import worker_alive as tts_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -397,7 +399,7 @@ def workers_status() -> dict:
 
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
-        "tts": [{"host": h} for h in cfg.get("tts_workers", [])],
+        "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
