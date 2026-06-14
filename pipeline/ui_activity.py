@@ -15,6 +15,7 @@ render subprocess can import it without pulling in the web app.
 from __future__ import annotations
 
 import json
+import os
 import time
 from pathlib import Path
 
@@ -33,7 +34,10 @@ def mark_active(now: float | None = None) -> None:
     ts = time.time() if now is None else now
     try:
         ACTIVITY_FILE.parent.mkdir(parents=True, exist_ok=True)
-        ACTIVITY_FILE.write_text(json.dumps({"last_activity": ts}))
+        # Write-then-rename so the render subprocess never reads a torn file.
+        tmp = ACTIVITY_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps({"last_activity": ts}))
+        os.replace(tmp, ACTIVITY_FILE)
     except Exception:
         pass
 

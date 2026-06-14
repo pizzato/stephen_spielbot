@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { Sidebar } from './components.jsx'
+import { Sidebar, Banner } from './components.jsx'
 import { api } from './api.js'
 import { parseHash, buildHash, nameOf, pathOf } from './nav.js'
 import Home from './screens/Home.jsx'
@@ -62,6 +62,40 @@ export default function App() {
     const t = setInterval(refreshBadges, 5000)
     return () => clearInterval(t)
   }, [refreshBadges])
+
+  // Heartbeat: tell the backend the UI is actively in use (issue #98) so the
+  // render holds one worker idle for cover/preview jobs. We ping only on real
+  // interaction (throttled, tab-visible) — an idle-but-open tab stops counting
+  // after the configured timeout and the worker rejoins the render pool.
+  useEffect(() => {
+    let last = 0
+    const ping = () => {
+      if (document.visibilityState !== 'visible') return
+      const now = Date.now()
+      if (now - last < 30000) return
+      last = now
+      api.uiHeartbeat().catch(() => {})
+    }
+    const events = ['pointerdown', 'keydown', 'wheel', 'touchstart']
+    events.forEach((e) => window.addEventListener(e, ping, { passive: true }))
+    document.addEventListener('visibilitychange', ping)
+    ping()  // opening the app counts as using it
+    return () => {
+      events.forEach((e) => window.removeEventListener(e, ping))
+      document.removeEventListener('visibilitychange', ping)
+    }
+  }, [])
+
+  // Poll the UI-worker reservation so the global banner can say when a worker
+  // will free up while the UI waits on a busy render (issue #98).
+  const [uiWorker, setUiWorker] = useState(null)
+  useEffect(() => {
+    let alive = true
+    const tick = () => api.uiWorker().then((u) => { if (alive) setUiWorker(u) }).catch(() => {})
+    tick()
+    const t = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(t) }
+  }, [])
 
   const go = useCallback((id, payload) => {
     // Video-scoped pages carry the work_dir basename in the URL. Resolve the
@@ -218,10 +252,19 @@ export default function App() {
     }
   })()
 
+  // Only surface the banner when we can name a wait time — i.e. the UI is in use
+  // but every render worker is busy and we have an ETA until one frees.
+  const uiWait = uiWorker?.active && !uiWorker.available && uiWorker.eta_text
+
   return (
     <div className="shell">
       <Sidebar route={route} go={go} badges={badges} />
-      <main className="main" key={route}>{screen}</main>
+      <main className="main" key={route}>
+        {uiWait && (
+          <Banner tone="info">A render worker for the UI will be free in {uiWorker.eta_text}.</Banner>
+        )}
+        {screen}
+      </main>
     </div>
   )
 }
