@@ -150,6 +150,8 @@ export const api = {
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
   ytPostTitle: (workDir, title) => req('POST', '/youtube/post/title', { work_dir: workDir, title: title || '' }),
+  // Persist edited cover title + description back to the script.
+  ytPostSave: (body) => req('POST', '/youtube/post/save', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),

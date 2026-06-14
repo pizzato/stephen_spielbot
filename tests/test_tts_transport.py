@@ -113,5 +113,44 @@ class HttpClientTests(unittest.TestCase):
         self.assertIsNone(body["ref_audio_b64"])
 
 
+class WorkerAliveTests(unittest.TestCase):
+    """worker_alive() backs the Settings infra health display. It mirrors the
+    transport routing: http(s) workers are probed at /health, localhost is assumed
+    up (no endpoint to probe), and a bare host is a config error reported down."""
+
+    def test_localhost_assumed_up(self):
+        self.assertTrue(tts_worker.worker_alive("localhost"))
+        self.assertTrue(tts_worker.worker_alive("127.0.0.1"))
+
+    def test_bare_host_reported_down(self):
+        self.assertFalse(tts_worker.worker_alive("s1"))
+
+    def test_http_probes_health_endpoint(self):
+        captured = {}
+
+        class FakeResp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(url, timeout=None):
+            captured["url"] = url
+            return FakeResp(b'{"status": "ok"}')
+
+        with mock.patch("urllib.request.urlopen", side_effect=fake_urlopen):
+            # Trailing slash on the URL must not double up before /health.
+            self.assertTrue(tts_worker.worker_alive("http://s1:8189/", timeout=2))
+        self.assertEqual(captured["url"], "http://s1:8189/health")
+
+    def test_http_unreachable_reported_down(self):
+        def boom(url, timeout=None):
+            raise OSError("connection refused")
+
+        with mock.patch("urllib.request.urlopen", side_effect=boom):
+            self.assertFalse(tts_worker.worker_alive("http://s1:8189"))
+
+
 if __name__ == "__main__":
     unittest.main()
