@@ -10,6 +10,7 @@ import json
 import os
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -118,6 +119,39 @@ class WorkerPoolReservationTests(unittest.TestCase):
         self.assertIsNotNone(_try_acquire(pool))
         self.assertIsNotNone(_try_acquire(pool))
         self.assertIsNone(pool.reserved_url)
+
+
+def _wait_until(pred, timeout=4.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if pred():
+            return True
+        time.sleep(0.05)
+    return pred()
+
+
+class ReservationIntegrationTests(unittest.TestCase):
+    """The seam resume_generation actually wires: a WorkerPool whose reserve_check
+    reads the shared activity file, driven by the background poller (not stopped)."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="spielbot-ui-int-")) / "ui_activity.json"
+        self._orig = ui_activity.ACTIVITY_FILE
+        ui_activity.ACTIVITY_FILE = self.tmp
+
+    def tearDown(self):
+        ui_activity.ACTIVITY_FILE = self._orig
+
+    def test_poller_reserves_on_activity_and_releases_on_idle(self):
+        pool = WorkerPool(["a", "b"], reserve_check=lambda: ui_activity.is_active(300))
+        try:
+            self.assertIsNone(pool.reserved_url)  # no activity yet
+            ui_activity.mark_active()             # UI used → poller reserves one
+            self.assertTrue(_wait_until(lambda: pool.reserved_url is not None))
+            ui_activity.mark_active(now=time.time() - 10_000)  # lapse the window
+            self.assertTrue(_wait_until(lambda: pool.reserved_url is None))
+        finally:
+            pool.shutdown()
 
 
 class NextWorkerFreeEtaTests(unittest.TestCase):
