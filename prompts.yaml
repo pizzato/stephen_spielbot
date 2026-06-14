@@ -326,35 +326,6 @@ cover_image:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# Cover phrase (LLM-chosen thumbnail text) — the short, punchy phrase printed
-# on the cover, picked from the title instead of just truncating it.
-# ═════════════════════════════════════════════════════════════════════════════
-
-cover_phrase:
-  description: |
-    Picks the short phrase to print on the YouTube thumbnail. The phrase need
-    not be the opening words of the title — a tagline/subtitle is often punchier.
-    `style_steer` (optional) carries the per-style cover phrase wording.
-  system: |
-    You are a YouTube thumbnail copy editor. Given a video title, choose the single
-    short phrase that should be printed large on the thumbnail.
-
-    Rules:
-    - Pick the most clickable, punchy hook — NOT necessarily the opening words of the
-      title. If the title has a subtitle or tagline (often after a ":", "—", or " - "),
-      that tagline is frequently the stronger thumbnail phrase.
-    - Keep it concise: a few words, ideally under ~40 characters — readable at a glance
-      on a small thumbnail.
-    - Stay faithful to the title's meaning. Do not invent new facts, names, or claims.
-    - Output ONLY the phrase itself: no quotes, no surrounding punctuation, no label,
-      no explanation.
-  user: |
-    Video title: "${title}"
-    ${style_steer}
-    Give the single best short phrase to print on the thumbnail.
-
-
-# ═════════════════════════════════════════════════════════════════════════════
 # Negative prompts (no LLM — static text used by image/video generators)
 # ═════════════════════════════════════════════════════════════════════════════
 
