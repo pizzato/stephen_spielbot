@@ -2295,6 +2295,7 @@ class CoverBody(BaseModel):
     work_dir: str = ""
     title: str = ""
     style: str = ""
+    resolution: str = ""
 
 
 def _best_cover_comfy_url() -> str:
@@ -2350,7 +2351,10 @@ def yt_cover(body: CoverBody) -> dict:
     job_id = job_id_from_work_dir(wd)
     title = body.title or _video_title_for(wd)
     cfg = gapp.load_config()
-    vid_width, vid_height = _film_dimensions(wd)
+    # Honour the resolution the UI currently shows (e.g. portrait) so the cover
+    # matches it. Falls back to the rendered film's saved dimensions when the
+    # caller doesn't pass one or the name is unknown.
+    vid_width, vid_height = gapp._RESOLUTIONS.get(body.resolution) or _film_dimensions(wd)
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
