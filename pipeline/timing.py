@@ -172,6 +172,7 @@ def estimate_eta(
     table: dict[str, dict[str, Any]],
     cfg: dict[str, Any],
     now: float | None = None,
+    reserved_comfy: int = 0,
 ) -> dict[str, Any] | None:
     """Predict render wall-clock from planned tasks + learned table + workers.
 
@@ -179,10 +180,19 @@ def estimate_eta(
     ``kind``, ``status``, ``started_at`` and ``payload_json``).  Returns a dict
     ready to drop into the /api/progress payload, or ``None`` when there is
     nothing trackable to estimate.
+
+    ``reserved_comfy`` is how many ComfyUI workers are currently held out of the
+    render — e.g. the one kept idle for the web UI while it is in use (issue #98).
+    They are subtracted from the comfy pool so the ETA reflects only the workers
+    actually rendering; since /api/progress recomputes this each poll, the ETA
+    tracks the count as the UI goes active/idle mid-render. The last worker is
+    never reservable, mirroring WorkerPool.
     """
     now = now if now is not None else time.time()
-    n_comfy = max(1, len(cfg.get("comfy_workers") or []))
+    n_comfy_total = max(1, len(cfg.get("comfy_workers") or []))
     n_tts = max(1, len(cfg.get("tts_workers") or []))
+    reserved = max(0, min(int(reserved_comfy), n_comfy_total - 1))
+    n_comfy = n_comfy_total - reserved
 
     # full = whole render (stable estimate); rem = work still outstanding.
     full = {"comfy": 0.0, "tts": 0.0}
@@ -253,6 +263,6 @@ def estimate_eta(
         "total_seconds": round(total_seconds),
         "total_text": humanize_eta(total_seconds),
         "confidence": "rough" if any_default else "learned",
-        "workers": {"comfy": n_comfy, "tts": n_tts},
+        "workers": {"comfy": n_comfy, "tts": n_tts, "comfy_reserved": reserved},
         "table": table_rows,
     }

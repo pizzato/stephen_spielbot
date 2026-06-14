@@ -72,13 +72,12 @@ class AppProgressTests(unittest.TestCase):
                 )
 
 
-class WorkerConfigFilterTests(unittest.TestCase):
-    """``/api/progress`` lists workers from the durable store's global registry,
-    which is append-only and keyed by (kind, endpoint). ``_worker_in_config``
-    filters it down to the live config so the render page reflects reality: it
-    drops endpoints no longer configured, and the cover agent (``kind="ui"``),
-    which is not a render worker — issue #98 removed the dedicated ui_workers
-    pool, so a ui registration sits on a render endpoint but never counts as one.
+class WorkerActivityTests(unittest.TestCase):
+    """``/api/progress`` builds its worker list from the configured render fleet
+    and each in-flight task's ``lease_owner`` (= ``worker_id(kind, endpoint)``),
+    so the render page shows what every ComfyUI/TTS worker is actually rendering
+    rather than a flat "online" badge. The cover agent's ``kind="ui"`` lease never
+    maps onto a render worker (issue #98 removed the dedicated ui_workers pool).
     """
 
     cfg = {
@@ -86,46 +85,62 @@ class WorkerConfigFilterTests(unittest.TestCase):
         "tts_workers": ["s1", "s3"],
     }
 
-    def test_cover_agent_registration_is_hidden_but_its_endpoint_is_kept(self):
-        from webapp.backend.main import _worker_in_config
+    def _activity(self, tasks, reserved=0):
+        from webapp.backend.main import _worker_activity
 
-        # The cover agent registers kind="ui" at a render endpoint (comfy[0]); the
-        # ui registration is hidden, but that endpoint as a comfy worker is kept.
-        self.assertFalse(
-            _worker_in_config({"kind": "ui", "endpoint": "http://s1:8188"}, self.cfg)
+        return {(w["kind"], w["endpoint"]): w for w in _worker_activity(self.cfg, tasks, reserved)}
+
+    def test_lists_exactly_the_configured_fleet_idle(self):
+        out = self._activity([])
+        self.assertEqual(
+            set(out),
+            {("comfy", "http://s1:8188"), ("comfy", "http://s3:8188"),
+             ("tts", "s1"), ("tts", "s3")},
         )
-        self.assertTrue(
-            _worker_in_config({"kind": "comfy", "endpoint": "http://s1:8188"}, self.cfg)
-        )
+        self.assertTrue(all(w["state"] == "idle" and w["job"] == "" for w in out.values()))
 
-    def test_unconfigured_endpoint_is_hidden(self):
-        from webapp.backend.main import _worker_in_config
+    def test_running_task_shows_its_job_on_the_leased_worker(self):
+        from pipeline.orchestrator import worker_id
 
-        # s2 is no longer in comfy_workers — its stale registration is dropped.
-        self.assertFalse(
-            _worker_in_config({"kind": "comfy", "endpoint": "http://s2:8188"}, self.cfg)
-        )
+        tasks = [{"status": "running", "name": "Scene 3 video",
+                  "lease_owner": worker_id("comfy", "http://s1:8188")}]
+        out = self._activity(tasks)
+        self.assertEqual(out[("comfy", "http://s1:8188")]["state"], "working")
+        self.assertEqual(out[("comfy", "http://s1:8188")]["job"], "Scene 3 video")
+        self.assertEqual(out[("comfy", "http://s3:8188")]["state"], "idle")
 
-    def test_configured_workers_are_kept(self):
-        from webapp.backend.main import _worker_in_config
+    def test_tts_task_maps_to_its_tts_endpoint(self):
+        from pipeline.orchestrator import worker_id
 
-        for kind, endpoint in [
-            ("comfy", "http://s1:8188"),
-            ("comfy", "http://s3:8188"),
-            ("tts", "s3"),
-        ]:
-            self.assertTrue(
-                _worker_in_config({"kind": kind, "endpoint": endpoint}, self.cfg),
-                f"{kind} {endpoint} should be kept",
-            )
+        tasks = [{"status": "running", "name": "Scene 1 narration",
+                  "lease_owner": worker_id("tts", "s3")}]
+        out = self._activity(tasks)
+        self.assertEqual(out[("tts", "s3")]["job"], "Scene 1 narration")
+        self.assertEqual(out[("tts", "s1")]["state"], "idle")
 
-    def test_internal_local_workers_always_kept(self):
-        """Internal workers (e.g. the assembler) are never in config — keep them."""
-        from webapp.backend.main import _worker_in_config
+    def test_one_idle_comfy_worker_is_flagged_reserved_during_a_render(self):
+        from pipeline.orchestrator import worker_id
 
-        self.assertTrue(
-            _worker_in_config({"kind": "local", "endpoint": "assembler"}, self.cfg)
-        )
+        tasks = [{"status": "running", "name": "Scene 3 video",
+                  "lease_owner": worker_id("comfy", "http://s1:8188")}]
+        out = self._activity(tasks, reserved=1)
+        self.assertEqual(out[("comfy", "http://s1:8188")]["state"], "working")
+        self.assertEqual(out[("comfy", "http://s3:8188")]["state"], "reserved")
+
+    def test_no_reservation_label_when_nothing_is_rendering(self):
+        # reserved=1 but no comfy task running — don't mislabel an all-idle fleet.
+        out = self._activity([], reserved=1)
+        self.assertTrue(all(w["state"] != "reserved" for w in out.values()))
+
+    def test_ui_kind_lease_owner_never_maps_to_a_render_worker(self):
+        from pipeline.orchestrator import worker_id
+
+        # The cover agent leases as kind="ui" on a render endpoint; its job must
+        # not surface on that comfy worker.
+        tasks = [{"status": "running", "name": "cover",
+                  "lease_owner": worker_id("ui", "http://s1:8188")}]
+        out = self._activity(tasks)
+        self.assertEqual(out[("comfy", "http://s1:8188")]["state"], "idle")
 
 
 if __name__ == "__main__":

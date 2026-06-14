@@ -40,7 +40,7 @@ import pipeline.youtube as yt  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
-from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id  # noqa: E402
+from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
 
@@ -73,21 +73,52 @@ def _row_to_dict(row) -> dict:
     return {k: row[k] for k in row.keys()}
 
 
-def _worker_in_config(w: dict, cfg: dict) -> bool:
-    """True if a registered worker still matches the live config.
+_WORKER_RUNNING_STATUSES = ("running", "leased")
 
-    The durable `workers` table is an append-only registry keyed by
-    (kind, endpoint); it is never reconciled against config. So an endpoint
-    dropped from config — or the cover agent (kind="ui"), which registers on a
-    render endpoint but is not a render worker (issue #98 removed the dedicated
-    ui_workers pool) — would otherwise linger on the render page. Filter to the
-    currently-configured pools; there is no ui_workers pool, so ui registrations
-    are always dropped. Internal `local` workers (e.g. the assembler) are never
-    in config — keep them.
+
+def _worker_activity(cfg: dict, tasks: list[dict], reserved_comfy: int = 0) -> list[dict]:
+    """Live view of the configured render fleet: what each ComfyUI/TTS worker is
+    doing right now.
+
+    Sourced from the configured pools (not the append-only durable registry, which
+    accumulates stale endpoints and the cover agent's kind="ui" rows — issue #98
+    removed the dedicated ui_workers pool). Each in-flight task records the worker
+    it leased via ``lease_owner`` (= ``worker_id(kind, endpoint)``), so we map that
+    back to an endpoint to show the actual job ("Scene 3 video") instead of a flat
+    "online" badge. One idle ComfyUI worker is flagged ``reserved`` while it is held
+    for the UI — its reservation lives in the render subprocess's WorkerPool, not
+    the store, but during a running render the lone idle comfy worker is that one.
     """
-    if w.get("kind") == "local":
-        return True
-    return w.get("endpoint") in (cfg.get(f"{w.get('kind')}_workers") or [])
+    ep_by_wid: dict[str, str] = {}
+    fleet: list[tuple[str, str]] = []
+    for ep in cfg.get("comfy_workers") or []:
+        ep_by_wid[worker_id("comfy", ep)] = ep
+        fleet.append(("comfy", ep))
+    for ep in cfg.get("tts_workers") or []:
+        ep_by_wid[worker_id("tts", ep)] = ep
+        fleet.append(("tts", ep))
+
+    job_by_ep: dict[str, str] = {}
+    for t in tasks:
+        if t.get("status") in _WORKER_RUNNING_STATUSES:
+            ep = ep_by_wid.get(t.get("lease_owner") or "")
+            if ep:
+                job_by_ep[ep] = t.get("name") or ""
+
+    workers = [
+        {"kind": kind, "endpoint": ep, "job": job_by_ep.get(ep, ""),
+         "state": "working" if job_by_ep.get(ep) else "idle"}
+        for kind, ep in fleet
+    ]
+
+    # Flag one idle comfy worker as held for the UI, but only while a render is
+    # actually using the others — otherwise an all-idle fleet would mislabel one.
+    if reserved_comfy > 0 and any(w["kind"] == "comfy" and w["state"] == "working" for w in workers):
+        for w in workers:
+            if w["kind"] == "comfy" and w["state"] == "idle":
+                w["state"] = "reserved"
+                break
+    return workers
 
 
 def _safe_under(path: Path, *roots: Path) -> bool:
@@ -1079,11 +1110,16 @@ def progress(work_dir: str = Query("")) -> dict:
             counts = summary.get("counts", {})
             tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
             cfg = gapp.load_config()
-            workers = [w for w in (_row_to_dict(r) for r in store.worker_rows())
-                       if _worker_in_config(w, cfg)]
+            # One comfy worker is held for the UI while it is in use, but only when
+            # there are ≥2 (the last is never reserved) — mirrors WorkerPool. This
+            # is recomputed every poll, so the worker list and ETA track the UI
+            # going active/idle mid-render.
+            timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+            reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+            workers = _worker_activity(cfg, tasks, reserved)
             if not done:
                 try:
-                    eta = estimate_eta(tasks, store.timing_table(), cfg)
+                    eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=reserved)
                 except Exception:
                     eta = None
     except Exception:
