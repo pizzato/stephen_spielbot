@@ -29,6 +29,7 @@ def _style(name, **overrides):
         "description": f"{name} look",
         "visual_style": f"{name} visual",
         "extra_instructions": f"{name} instructions",
+        "title_style": f"{name} title style",
         "voice": f"{name}-voice",
         "voice_robotic": False,
         "voice_robotic_amount": 0.2,
@@ -198,6 +199,7 @@ class StyleSettingsTests(TempConfigCase):
         # nothing content-shaped is imposed…
         self.assertEqual(ss["visual_style"], "")
         self.assertEqual(ss["extra_instructions"], "")
+        self.assertEqual(ss["title_style"], "")
         self.assertEqual(ss["voice"], "")
         self.assertFalse(ss["voice_robotic"])
         # …but render quality + audio mix still come from the default style
@@ -423,7 +425,7 @@ class DescriptionSuffixTests(TempConfigCase):
         with mock.patch.object(backend, "generate_script",
                                return_value=(scenes, "calm piano", "A visual")), \
              mock.patch.object(backend.threading, "Thread") as Thread:
-            backend.script_generate(backend.GenerateScriptBody(
+            backend._do_script_generate(backend.GenerateScriptBody(
                 video_title="Threaded", topic="Threaded", n_scenes=1))
         targets = [c.kwargs.get("target") for c in Thread.call_args_list]
         self.assertIn(backend._describe_in_background, targets)
@@ -442,12 +444,40 @@ class StyleAwareIdeasTests(TempConfigCase):
     def test_style_suggestion_context_lines(self):
         from pipeline.llm import style_suggestion_context
         ctx = style_suggestion_context({"name": "Kids", "description": "Bedtime tales",
-                                        "visual_style": "Soft pastel"})
+                                        "visual_style": "Soft pastel",
+                                        "title_style": "pose a question"})
         self.assertIn('"Kids" style', ctx)
         self.assertIn("Bedtime tales", ctx)
         self.assertIn("Soft pastel", ctx)
+        self.assertIn("pose a question", ctx)
         self.assertEqual(style_suggestion_context(None), "")
         self.assertEqual(style_suggestion_context({"name": "(none)"}), "")
+
+    def test_title_style_steers_even_without_other_context(self):
+        # A profile whose ONLY distinctive field is title_style still yields a
+        # steering line — title wording is independent of topic suitability.
+        from pipeline.llm import style_suggestion_context
+        ctx = style_suggestion_context({"name": "(none)", "title_style": "short and punchy"})
+        self.assertIn("short and punchy", ctx)
+        self.assertNotIn("must suit", ctx)   # no topic-suitability line without descriptors
+
+    def test_title_style_backfills_default_style_only(self):
+        # A config migrated BEFORE title_style became per-style: styles carry no
+        # title_style field, the flat key still holds the value. Only the default
+        # style inherits it; others get the built-in blank (no cross-style leak).
+        styles = [_style("A"), _style("B")]
+        for s in styles:
+            s.pop("title_style", None)
+        self.write_config({
+            "styles": styles,
+            "default_style": "A",
+            "title_style": "pose an intriguing question",
+        })
+        cfg = app.load_config()
+        by_name = {s["name"]: s for s in cfg["styles"]}
+        self.assertEqual(by_name["A"]["title_style"], "pose an intriguing question")
+        self.assertEqual(by_name["B"]["title_style"], "")
+        self.assertEqual(cfg["title_style"], "pose an intriguing question")  # mirror intact
 
     def test_generation_is_steered_and_stamped_per_style(self):
         self._two_styles()
@@ -497,6 +527,45 @@ class StyleAwareIdeasTests(TempConfigCase):
             item = app._auto_pick_suggestion(app.load_config())
         self.assertEqual(item["gen_style_name"], "B")
         self.assertEqual(updates["q9"]["gen_style_name"], "B")
+
+
+class ScriptGenerateTaskTests(unittest.TestCase):
+    """The /api/script/generate endpoint kicks the (slow, multi-call) generation
+    off in a background thread and returns a task id to poll — so a blip on the
+    long connection no longer shows up as a NetworkError. The work itself lives in
+    _do_script_generate, which the endpoint and server-side automation share."""
+
+    def _poll(self, task_id):
+        import time
+        for _ in range(200):
+            st = backend.script_generate_status(task_id=task_id)
+            if st["status"] != "running":
+                return st
+            time.sleep(0.01)
+        self.fail("task never left 'running'")
+
+    def test_kickoff_returns_task_id_then_polls_to_done(self):
+        result = {"job_id": "job_x", "work_dir": "/tmp/x", "scenes": [{"id": 1}], "style_name": "A"}
+        with mock.patch.object(backend, "_do_script_generate", return_value=result):
+            kicked = backend.script_generate(backend.GenerateScriptBody(video_title="T", n_scenes=1))
+            self.assertIn("task_id", kicked)
+            st = self._poll(kicked["task_id"])
+        self.assertEqual(st["status"], "done")
+        self.assertEqual(st["job_id"], "job_x")
+        self.assertEqual(st["scenes"], [{"id": 1}])
+
+    def test_failure_surfaces_a_clean_one_line_error(self):
+        with mock.patch.object(backend, "_do_script_generate",
+                               side_effect=RuntimeError("boom line1\nline2")):
+            tid = backend.script_generate(backend.GenerateScriptBody(video_title="T"))["task_id"]
+            st = self._poll(tid)
+        self.assertEqual(st["status"], "error")
+        self.assertEqual(st["error"], "boom line1")
+
+    def test_unknown_task_is_404(self):
+        with self.assertRaises(backend.HTTPException) as cm:
+            backend.script_generate_status(task_id="does-not-exist")
+        self.assertEqual(cm.exception.status_code, 404)
 
 
 if __name__ == "__main__":

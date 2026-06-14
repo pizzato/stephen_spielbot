@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, RegenLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 function SceneCard({
@@ -13,6 +13,7 @@ function SceneCard({
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
   const [busy, setBusy] = useState('')
+  const [fieldBusy, setFieldBusy] = useState('')   // which text field is regenerating (issue #88)
   const [taskId, setTaskId] = useState(null)
   const [taskStatus, setTaskStatus] = useState(null)
   const [error, setError] = useState('')
@@ -34,6 +35,16 @@ function SceneCard({
     } catch (e) {
       setError(e.message)
     }
+  }
+
+  // Regenerate one text field with the LLM, keeping the other edits as context (issue #88).
+  const setters = { title: setTitle, narration: setNarration, image_prompt: setImagePrompt, video_prompt: setVideoPrompt }
+  const regenField = async (field) => {
+    setFieldBusy(field); setError('')
+    try {
+      const r = await api.regenField(jobId, scene.id, field, { title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      setters[field](r.value)
+    } catch (e) { setError(e.message) } finally { setFieldBusy('') }
   }
 
   const saveAndClose = async () => {
@@ -242,16 +253,16 @@ function SceneCard({
               </>
             ) : (
               <div className="stack gap-14">
-                <Field label="Title">
+                <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={() => regenField('title')}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <Field label="Narration">
+                <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={() => regenField('narration')} icon="microphone-lines">Narration</RegenLabel>}>
                   <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
                 </Field>
-                <Field label="Image prompt" hint="FLUX — static frame">
+                <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={() => regenField('image_prompt')} icon="image">Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
-                <Field label="Video prompt" hint="LTX — motion & camera">
+                <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={() => regenField('video_prompt')} icon="film">Video prompt</RegenLabel>} hint="LTX — motion & camera">
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
               </div>
