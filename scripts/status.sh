@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Show health of the web app and every ComfyUI worker.
-# Worker hosts come from config.yaml (comfy_workers).
+# Show health of the web app and every containerized worker.
+# Worker hosts come from config.yaml (comfy_workers). Workers run as Docker
+# containers (ComfyUI :8188 + F5-TTS :8189), managed over SSH.
 # Usage: bash scripts/status.sh
 
 PID_FILE="/tmp/stephen_spielbot.pid"
@@ -10,15 +11,12 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=scripts/_config.sh
 source "$REPO_ROOT/scripts/_config.sh"
 
-check_comfyui() {
+check_health() {
     local label="$1" url="$2"
-    if curl -sf "${url}/system_stats" &>/dev/null; then
-        local nodes
-        nodes=$(curl -sf "${url}/object_info" 2>/dev/null | python3 -c \
-            'import sys,json; d=json.load(sys.stdin); print(len(d))' 2>/dev/null || echo "?")
-        echo "  ✓ ComfyUI ${label} — UP  (${nodes} nodes)  ${url}"
+    if curl -sf -m 5 "$url" &>/dev/null; then
+        echo "    ✓ ${label} — UP    ${url%/*}"
     else
-        echo "  ✗ ComfyUI ${label} — DOWN  ${url}"
+        echo "    ✗ ${label} — DOWN  ${url%/*}"
         ALL_OK=false
     fi
 }
@@ -93,24 +91,17 @@ else
     echo "  - No orchestration DB yet ($DB)"
 fi
 
-# ── ComfyUI workers ────────────────────────────────────────────────────────────
+# ── Worker containers ──────────────────────────────────────────────────────────
 
 echo ""
-echo "ComfyUI workers:"
+echo "Worker containers:"
 for host in $(remote_hosts); do
-    check_comfyui "$host" "http://${host}:8188"
-done
-
-echo ""
-echo "UI ComfyUI worker(s):"
-_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
-for url in $(ui_endpoints); do
-    host=$(echo "$url" | sed -E 's#^https?://##; s#[:/].*$##')
-    if [[ "$_COMFY_HOSTS" == *" $host "* ]]; then
-        echo "  (shared with render worker $host)"
-    else
-        check_comfyui "ui:$host" "$url"
-    fi
+    echo "  ${host}:"
+    ssh -o ConnectTimeout=5 "$host" \
+        'cd ~/spielbot-worker/docker 2>/dev/null && docker compose ps --format "    {{.Service}}  {{.Status}}"' \
+        2>/dev/null || echo "    (no container stack — run: make install)"
+    check_health "ComfyUI ${host}" "http://${host}:8188/system_stats"
+    check_health "F5-TTS  ${host}" "http://${host}:8189/health"
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────
