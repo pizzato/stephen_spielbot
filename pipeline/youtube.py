@@ -276,7 +276,7 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
 
     channel_id = items[0]["id"]
     ct_resp = youtube.commentThreads().list(
-        part="snippet",
+        part="snippet,replies",
         allThreadsRelatedToChannelId=channel_id,
         maxResults=min(max_results, 100),
         order="time",
@@ -286,6 +286,13 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
     results = []
     for item in ct_resp.get("items", []):
         top_snippet = item["snippet"]["topLevelComment"]["snippet"]
+        # Up to 5 thread replies ride along in the same response (issue #84) and
+        # are used as context when drafting a community-engagement reply.
+        replies = [
+            {"commenter": r["snippet"].get("authorDisplayName", "Unknown"),
+             "text": r["snippet"].get("textOriginal", "")}
+            for r in item.get("replies", {}).get("comments", [])
+        ]
         results.append({
             "comment_id": item["id"],
             "video_id": item["snippet"].get("videoId", ""),
@@ -293,6 +300,7 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
             "text": top_snippet.get("textOriginal", ""),
             "published_at": top_snippet.get("publishedAt", ""),
             "like_count": int(top_snippet.get("likeCount", 0)),
+            "replies": replies,
         })
     return results
 
@@ -569,6 +577,13 @@ def get_pending_requests(cache: list[dict] | None = None) -> list[dict]:
         c for c in cache
         if c.get("is_request") and c.get("status") not in ("approved", "rejected")
     ]
+
+
+def get_pending_community_replies(cache: list[dict] | None = None) -> list[dict]:
+    """Return non-request comments with a drafted engagement reply awaiting approval (issue #84)."""
+    if cache is None:
+        cache = load_comments_cache()
+    return [c for c in cache if c.get("engagement_status") == "draft"]
 
 
 # ── Video request queue ───────────────────────────────────────────────────────

@@ -58,6 +58,7 @@ export default function YouTube({ go, initial }) {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
+  const [drafts, setDrafts] = useState({})      // per-comment edited engagement draft (issue #84)
   const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
   const [channels, setChannels] = useState(null)  // connected channels (issue #22); null = loading
   const [channel, setChannel] = useState('')      // channel key the analytics view shows
@@ -92,7 +93,7 @@ export default function YouTube({ go, initial }) {
       const r = await api.fetchComments()
       setComments(r.comments || [])
       refreshBadges()
-      setStatus(`Fetched ${r.new} new · ${r.auto_approved} auto-approved · ${r.thanked} thanked`)
+      setStatus(`Fetched ${r.new} new · ${r.auto_approved} auto-approved · ${r.thanked} thanked · ${r.community_drafted ?? 0} drafted · ${r.community_sent ?? 0} sent`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const approve = async (c) => {
@@ -113,6 +114,19 @@ export default function YouTube({ go, initial }) {
     if (!text) return
     setBusy('y' + c.comment_id); setError('')
     try { await api.replyComment(c.comment_id, text); setStatus('Reply posted.') }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  // Community engagement drafts (issue #84): send the (possibly edited) draft, or dismiss it.
+  const sendDraft = async (c) => {
+    const text = (drafts[c.comment_id] ?? c.engagement_draft ?? '').trim()
+    if (!text) return
+    setBusy('cs' + c.comment_id); setError('')
+    try { await api.sendCommunityReply(c.comment_id, text); setStatus('Reply sent.'); await refreshComments() }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const dismissDraft = async (c) => {
+    setBusy('cd' + c.comment_id); setError('')
+    try { await api.dismissCommunityReply(c.comment_id); await refreshComments(); setStatus('Draft dismissed.') }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -205,8 +219,26 @@ export default function YouTube({ go, initial }) {
                 </div>
               )}
               {!c.is_request && (
-                <div className="row gap-10 mt-16">
-                  <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
+                <div className="mt-16 stack gap-10">
+                  {c.engagement_status === 'draft' ? (
+                    <>
+                      {c.engagement_reason && <p className="muted" style={{ fontSize: 12.5, margin: 0, fontStyle: 'italic' }}>{c.engagement_reason}</p>}
+                      <Field label="Suggested reply">
+                        <textarea className="input" rows={3} value={drafts[c.comment_id] ?? c.engagement_draft ?? ''}
+                          onChange={(e) => setDrafts((d) => ({ ...d, [c.comment_id]: e.target.value }))} />
+                      </Field>
+                      <div className="row gap-10 row--wrap">
+                        <Button variant="primary" icon="reply" disabled={busy === 'cs' + c.comment_id} onClick={() => sendDraft(c)}>Send reply</Button>
+                        <Button variant="danger" icon="xmark" disabled={busy === 'cd' + c.comment_id} onClick={() => dismissDraft(c)}>Dismiss</Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="row center gap-10 row--wrap">
+                      {c.engagement_status === 'sent' && <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> replied</Chip>}
+                      {c.engagement_status === 'dismissed' && <Chip tone="neutral">dismissed</Chip>}
+                      <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
+                    </div>
+                  )}
                 </div>
               )}
             </Card>

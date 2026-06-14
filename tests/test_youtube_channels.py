@@ -40,7 +40,8 @@ class EnsureChannelsTests(unittest.TestCase):
         with mock.patch.object(Path, "exists", return_value=True):
             gapp._ensure_channels(cfg)
         self.assertEqual(cfg["youtube_channels"],
-                         [{"id": "default", "name": "", "channel_id": ""}])
+                         [{"id": "default", "name": "", "channel_id": "",
+                           "engagement_prompt": "", "auto_respond": False}])
 
     def test_no_seed_without_legacy_token(self):
         cfg = {"youtube_channels": []}
@@ -57,7 +58,8 @@ class EnsureChannelsTests(unittest.TestCase):
         ]}
         gapp._ensure_channels(cfg)
         self.assertEqual(cfg["youtube_channels"],
-                         [{"id": "UC1", "name": "One", "channel_id": "UC1"}])
+                         [{"id": "UC1", "name": "One", "channel_id": "UC1",
+                           "engagement_prompt": "", "auto_respond": False}])
 
     def test_clears_dangling_style_refs(self):
         cfg = {
