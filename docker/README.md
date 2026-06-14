@@ -25,11 +25,37 @@ mounted in, so images stay small and rebuild fast.
   docker run --rm --gpus all nvidia/cuda:13.0.1-base-ubuntu24.04 nvidia-smi
   ```
 
-## Deploy a worker machine
+## Deploy from the controller (default — `make install`)
+
+`make install` deploys containers to every host in `comfy_workers`, over SSH:
+
+```bash
+make install WORKERS="s1 s2 s3"               # seeds config + container deploy
+DEPLOY=ssh make install WORKERS="s1 s2 s3"    # legacy Miniconda/venv install instead
+```
+
+Per host it: preflights Docker + the NVIDIA toolkit; rsyncs the build context
+(no GitHub access needed on the worker — the repo is private); writes
+`docker/.env` with `MODELS_DIR=~/github/ComfyUI/models` (the host's existing
+models — **not** re-downloaded); **stops the native ComfyUI** so the container
+can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
+Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
+
+Re-deploy or add one host later (from the controller):
+
+```bash
+bash scripts/install_worker_container.sh s1
+```
+
+> The container **mounts** the host's models; it does not download them. On a
+> fresh worker with no models yet, populate `~/github/ComfyUI/models` first
+> (`bash scripts/download_models.sh ~/github/ComfyUI` on the host, or rsync from
+> a worker that has them).
+
+## Or deploy on the worker itself
 
 ```bash
 # On the worker machine:
-git clone https://github.com/pizzato/stephen_spielbot
 cd stephen_spielbot/docker
 cp .env.example .env
 #   edit .env → set MODELS_DIR (and, if needed, BASE_IMAGE / TORCH_INDEX_URL)

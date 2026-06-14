@@ -227,6 +227,10 @@ else
 fi
 
 # ── 4. Remote workers ──────────────────────────────────────────────────────────
+# DEPLOY=containers (default): deploy ComfyUI + F5-TTS as Docker containers over
+# SSH (issue #12) — needs Docker + the NVIDIA Container Toolkit on each worker.
+# DEPLOY=ssh: the legacy Miniconda/venv install.
+DEPLOY="${DEPLOY:-containers}"
 
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
@@ -237,10 +241,31 @@ if [[ -z "$HOSTS" ]]; then
 fi
 
 for host in $HOSTS; do
-    banner "Installing worker: $host"
-    bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
-    bash "$REPO_ROOT/scripts/install_f5tts_worker.sh"   "$host"
+    if [[ "$DEPLOY" == "containers" ]]; then
+        banner "Deploying container worker: $host"
+        bash "$REPO_ROOT/scripts/install_worker_container.sh" "$host"
+    else
+        banner "Installing worker (ssh): $host"
+        bash "$REPO_ROOT/scripts/install_comfyui_worker.sh" "$host" "$MODEL_SOURCE"
+        bash "$REPO_ROOT/scripts/install_f5tts_worker.sh"   "$host"
+    fi
 done
+
+# Containerized F5-TTS is reached over HTTP, so tts_workers must be http:// URLs
+# (bare hostnames route over SSH to a native install). Point them at the
+# containers we just deployed (comfy_workers are already http:// URLs).
+if [[ "$DEPLOY" == "containers" ]]; then
+    "$VENV/bin/python" - "$CONFIG_YAML" $HOSTS <<'PY'
+import sys, yaml
+path, hosts = sys.argv[1], sys.argv[2:]
+data = yaml.safe_load(open(path)) or {}
+data["tts_workers"] = [f"http://{h}:8189" for h in hosts]
+# Same dump options as app.save_config, so this matches an in-app settings save.
+with open(path, "w") as f:
+    yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+print("[config] tts_workers ->", data["tts_workers"])
+PY
+fi
 
 # ── 5. UI ComfyUI worker hosts ────────────────────────────────────────────────
 # Any host in ui_workers that is NOT already a render worker gets its own
@@ -258,4 +283,11 @@ for host in $(ui_hosts); do
 done
 
 echo ""
-echo "Installation complete. Run 'make start' to launch the cluster."
+if [[ "$DEPLOY" == "containers" ]]; then
+    echo "Installation complete. Containerized workers are up (compose 'restart: unless-stopped')."
+    echo "Run 'make start' to launch the web app. Manage each worker with 'make worker-*'"
+    echo "(on the host) or docker compose. Note: 'make stop/status W=<host>' target the"
+    echo "native install, not containers."
+else
+    echo "Installation complete. Run 'make start' to launch the cluster."
+fi
