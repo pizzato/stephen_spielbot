@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
@@ -114,6 +114,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   // ── Cover tab ─────────────────────────────────────────────────────────────────
+  const regenTitle = async () => {
+    setYtBusy('title'); setError('')
+    try {
+      const r = await api.ytPostTitle(job.work_dir, coverTitle || job.title || '')
+      setCoverTitle(r.title || '')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
   const genDescription = async () => {
     setYtBusy('desc'); setError('')
     try {
@@ -344,11 +352,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <div className="bento">
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
-              <Field label="Title">
-                <input className="input" value={coverTitle} onChange={(e) => setCoverTitle(e.target.value)} />
+              <Field label={<RegenLabel busy={ytBusy === 'title'} disabled={!job.work_dir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
+                <input className="input" value={coverTitle} maxLength={100} onChange={(e) => setCoverTitle(e.target.value)} />
               </Field>
-              <Field label="Visual style — applied to every scene">
-                <input className="input" value={style} onChange={(e) => setStyle(e.target.value)} />
+              <Field label="Visual style — applied to every scene" hint="Re-draft the script to change the style — it applies to every scene.">
+                <input className="input" value={style} disabled readOnly />
               </Field>
               <Field label="Resolution">
                 <ResolutionPicker value={resolution} onChange={setResolution} meta={meta} />
