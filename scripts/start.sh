@@ -48,11 +48,11 @@ else
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
-# ── 3. UI worker agent(s) (cover-image regeneration) ──────────────────────────
-# Controller-side daemons that lease cover tasks and render them against the
-# container ComfyUI endpoints in config.yaml (ui_workers).
+# ── 3. Cover agent (cover-image regeneration) ─────────────────────────────────
+# Controller-side daemon that leases cover tasks and renders them against a
+# render worker the backend keeps idle while the UI is in use (issue #98).
 
-echo "=== Starting UI worker(s) ==="
+echo "=== Starting cover agent ==="
 bash "$REPO_ROOT/scripts/ui_worker.sh" start
 
 echo ""

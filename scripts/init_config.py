@@ -2,9 +2,9 @@
 """Seed ~/.config/video-generator/config.yaml on first install.
 
 Never clobbers an existing config. Worker hostnames come from argv (space- or
-comma-separated); comfy/tts/ui worker lists are derived from them. With no
-hosts, writes a single-machine (localhost) config. Everything else is filled
-in at runtime from app.DEFAULT_CFG, so only the worker lists are seeded here.
+comma-separated); comfy/tts worker lists are derived from them. With no hosts,
+writes a single-machine (localhost) config. Everything else is filled in at
+runtime from app.DEFAULT_CFG, so only the worker lists are seeded here.
 """
 import sys
 from pathlib import Path
@@ -27,17 +27,14 @@ def main(argv: list[str]) -> int:
 
     comfy = [f"http://{h}:8188" for h in hosts]
     tts = list(hosts)
-    # UI cover worker renders on the first render host, or localhost if single-machine.
-    ui = comfy[:1] or ["http://localhost:8188"]
 
-    cfg = {"comfy_workers": comfy, "tts_workers": tts, "ui_workers": ui}
+    cfg = {"comfy_workers": comfy, "tts_workers": tts}
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
 
     print(f"[config] wrote {CONFIG}")
     print(f"  comfy_workers: {comfy or '(none — single machine, local ComfyUI)'}")
     print(f"  tts_workers:   {tts or '(none)'}")
-    print(f"  ui_workers:    {ui}")
     print("  Edit these any time in the Settings screen, or in the file above.")
     return 0
 

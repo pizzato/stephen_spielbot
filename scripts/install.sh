@@ -161,19 +161,19 @@ done
 
 # Point the config at the containers we just deployed:
 #   tts_workers → http://host:8189  (http:// selects the HTTP transport)
-#   ui_workers  → http://host:8188  (cover regen reuses the render ComfyUI)
 # comfy_workers are already http://host:8188 URLs, so they need no change.
+# Cover regen reuses a render worker the backend keeps idle while the UI is in
+# use (issue #98) — there is no separate ui_workers list anymore.
 "$VENV/bin/python" - "$CONFIG_YAML" $HOSTS <<'PY'
 import sys, yaml
 path, hosts = sys.argv[1], sys.argv[2:]
 data = yaml.safe_load(open(path)) or {}
 data["tts_workers"] = [f"http://{h}:8189" for h in hosts]
-data["ui_workers"] = [f"http://{h}:8188" for h in hosts]
+data.pop("ui_workers", None)  # removed concept (issue #98)
 # Same dump options as app.save_config, so this matches an in-app settings save.
 with open(path, "w") as f:
     yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 print("[config] tts_workers ->", data["tts_workers"])
-print("[config] ui_workers  ->", data["ui_workers"])
 PY
 
 echo ""

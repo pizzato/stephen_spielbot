@@ -79,8 +79,8 @@ make status    # check health of the app and all workers
 
 Workers are configured in the single config file (see below) — there is no
 separate `cluster.conf`. List your render workers under `comfy_workers`;
-`make install` deploys the containers over SSH and derives `tts_workers` and
-`ui_workers` from them automatically:
+`make install` deploys the containers over SSH and derives `tts_workers` from
+them automatically:
 
 ```yaml
 # ~/.config/video-generator/config.yaml
@@ -90,9 +90,12 @@ comfy_workers:           # you set these
 tts_workers:             # set by make install → containerized F5-TTS
   - http://s1:8189
   - http://s2:8189
-ui_workers:              # set by make install → container ComfyUI for cover regen
-  - http://s1:8188
 ```
+
+Cover/preview regeneration has no dedicated worker: while the web UI is in use
+the backend keeps one render worker idle for it, returning it to the render pool
+after the UI has been idle for `ui_idle_timeout_seconds` (default 5 min, set in
+**Settings**).
 
 Workers must be reachable via SSH without a password (`ssh-copy-id`) and have
 Docker + the NVIDIA Container Toolkit installed.
@@ -137,6 +140,7 @@ cluster status panel). Worker lists are part of this file:
 |---|---|
 | ComfyUI Workers | One URL per line — scenes are distributed across workers in parallel |
 | TTS Workers | Hostnames for parallel narration (need F5-TTS at `~/f5tts-env`) |
+| UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM Backend | `local` (vLLM) or `claude` (Anthropic API) |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
 | Resolution | 832×480 default; portrait and square presets available |

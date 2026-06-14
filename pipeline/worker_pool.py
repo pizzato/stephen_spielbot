@@ -5,6 +5,7 @@ from collections import deque
 import threading
 import urllib.request
 import urllib.error
+from typing import Callable, Optional
 
 logger = logging.getLogger("video_gen")
 
@@ -62,9 +63,22 @@ def idle_workers(urls: list[str], timeout: int = 5) -> list[str]:
 
 
 class WorkerPool:
-    """Per-URL semaphore pool. Each worker handles one job at a time."""
+    """Per-URL semaphore pool. Each worker handles one job at a time.
 
-    def __init__(self, urls: list[str]):
+    Optionally reserves one worker for the web UI (issue #98): while
+    ``reserve_check()`` returns True (the UI is being actively used), one worker
+    is held back — left idle — so cover/preview jobs the web backend submits land
+    on a free GPU instead of queueing behind this render. The held worker rejoins
+    the render pool as soon as ``reserve_check()`` goes False (UI idle). The last
+    worker is never reserved, so a single-worker render still makes progress.
+
+    The reservation crosses the process boundary purely through ``reserve_check``
+    (the render subprocess passes a closure that reads the shared UI-activity
+    file); the pool itself just leaves the worker idle, and the backend routes UI
+    work to whichever worker is idle.
+    """
+
+    def __init__(self, urls: list[str], reserve_check: Optional[Callable[[], bool]] = None):
         if not urls:
             raise ValueError("WorkerPool needs at least one URL")
         self._lock = threading.Lock()
@@ -72,11 +86,64 @@ class WorkerPool:
         self._waiters: deque[object] = deque()
         self._urls = list(urls)
         self._sems: dict[str, threading.Semaphore] = {u: threading.Semaphore(1) for u in self._urls}
+        self._reserve_check = reserve_check
+        self._reserved_url: Optional[str] = None   # held idle for the UI
+        self._closed = False
+        self._poller: Optional[threading.Thread] = None
+        if reserve_check is not None:
+            # A daemon poller keeps the reservation current even when no render
+            # thread is in acquire()/release(): it grabs a free worker once the
+            # UI becomes active, and returns the held one once the UI goes idle.
+            self._poller = threading.Thread(target=self._reserve_loop, name="ui-reserve", daemon=True)
+            self._poller.start()
 
     @property
     def urls(self) -> list[str]:
         with self._lock:
             return list(self._urls)
+
+    @property
+    def reserved_url(self) -> Optional[str]:
+        """The worker currently held idle for the UI, or None."""
+        with self._lock:
+            return self._reserved_url
+
+    def _want_reserve(self) -> bool:
+        """True if a worker should be held for the UI right now. Caller holds the
+        lock. Never reserve the last worker — the render must keep at least one."""
+        if self._reserve_check is None or len(self._urls) < 2:
+            return False
+        try:
+            return bool(self._reserve_check())
+        except Exception:
+            return False
+
+    def _refresh_reservation(self) -> None:
+        """Reconcile the held-for-UI worker with reserve_check(). Caller holds lock."""
+        if self._want_reserve():
+            if self._reserved_url is None:
+                # Hold an idle worker for the UI. If all are busy, a later
+                # release() claims the first one freed.
+                for url in self._urls:
+                    sem = self._sems.get(url)
+                    if sem and sem.acquire(blocking=False):
+                        self._reserved_url = url
+                        logger.debug("WorkerPool: reserved %s for UI", url)
+                        break
+        elif self._reserved_url is not None:
+            # UI idle — return the held worker to the render pool.
+            sem = self._sems.get(self._reserved_url)
+            if sem:
+                sem.release()
+            logger.debug("WorkerPool: released UI reservation on %s", self._reserved_url)
+            self._reserved_url = None
+            self._cond.notify_all()
+
+    def _reserve_loop(self) -> None:
+        with self._cond:
+            while not self._closed:
+                self._refresh_reservation()
+                self._cond.wait(timeout=2.0)
 
     def acquire(self) -> str:
         """Block until any worker is free, return its URL.
@@ -90,10 +157,13 @@ class WorkerPool:
                 while True:
                     if not self._urls:
                         raise RuntimeError("No healthy workers remaining in pool")
+                    self._refresh_reservation()
 
                     is_turn = self._waiters and self._waiters[0] is token
                     if is_turn:
                         for url in list(self._urls):
+                            if url == self._reserved_url:
+                                continue  # held idle for the UI
                             sem = self._sems.get(url)
                             if sem and sem.acquire(blocking=False):
                                 self._waiters.popleft()
@@ -112,6 +182,14 @@ class WorkerPool:
 
     def release(self, url: str) -> None:
         with self._cond:
+            # UI is active and nothing is held yet — keep this freed worker idle
+            # for the UI instead of returning it to the render pool. (It keeps the
+            # semaphore at 0; _refresh_reservation releases it once the UI idles.)
+            if self._reserved_url is None and url in self._sems and self._want_reserve():
+                self._reserved_url = url
+                logger.debug("WorkerPool: reserved freed %s for UI", url)
+                self._cond.notify_all()
+                return
             sem = self._sems.get(url)
             if sem:
                 logger.debug("WorkerPool: released %s", url)
@@ -126,8 +204,17 @@ class WorkerPool:
                 logger.warning("WorkerPool: %s failed, removing from pool", url)
                 self._urls = [u for u in self._urls if u != url]
                 del self._sems[url]
+                if self._reserved_url == url:
+                    self._reserved_url = None
                 self._cond.notify_all()
 
     def has_healthy(self) -> bool:
         with self._lock:
             return bool(self._urls)
+
+    def shutdown(self) -> None:
+        """Stop the reservation poller. For clean teardown in tests; the render
+        subprocess just exits and lets the daemon thread die."""
+        with self._cond:
+            self._closed = True
+            self._cond.notify_all()
