@@ -44,7 +44,19 @@ export const api = {
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.
   testVoice: (body) => req('POST', '/voices/test', body),
 
-  generateScript: (body) => req('POST', '/script/generate', body),
+  // Script generation is several Claude calls (tens of seconds). Holding one long
+  // POST open meant any blip on that connection surfaced as a "NetworkError" even
+  // though the script was created — so kick it off, then poll the status (short
+  // GETs, which req() already retries on transient failures) until it's ready.
+  generateScript: async (body) => {
+    const { task_id } = await req('POST', '/script/generate', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Script generation failed.')
+    }
+  },
   // Improve the Create brief's title or direction in place (issue #88).
   improveBrief: (field, title, direction, styleName) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '' }),

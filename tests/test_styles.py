@@ -425,7 +425,7 @@ class DescriptionSuffixTests(TempConfigCase):
         with mock.patch.object(backend, "generate_script",
                                return_value=(scenes, "calm piano", "A visual")), \
              mock.patch.object(backend.threading, "Thread") as Thread:
-            backend.script_generate(backend.GenerateScriptBody(
+            backend._do_script_generate(backend.GenerateScriptBody(
                 video_title="Threaded", topic="Threaded", n_scenes=1))
         targets = [c.kwargs.get("target") for c in Thread.call_args_list]
         self.assertIn(backend._describe_in_background, targets)
@@ -527,6 +527,45 @@ class StyleAwareIdeasTests(TempConfigCase):
             item = app._auto_pick_suggestion(app.load_config())
         self.assertEqual(item["gen_style_name"], "B")
         self.assertEqual(updates["q9"]["gen_style_name"], "B")
+
+
+class ScriptGenerateTaskTests(unittest.TestCase):
+    """The /api/script/generate endpoint kicks the (slow, multi-call) generation
+    off in a background thread and returns a task id to poll — so a blip on the
+    long connection no longer shows up as a NetworkError. The work itself lives in
+    _do_script_generate, which the endpoint and server-side automation share."""
+
+    def _poll(self, task_id):
+        import time
+        for _ in range(200):
+            st = backend.script_generate_status(task_id=task_id)
+            if st["status"] != "running":
+                return st
+            time.sleep(0.01)
+        self.fail("task never left 'running'")
+
+    def test_kickoff_returns_task_id_then_polls_to_done(self):
+        result = {"job_id": "job_x", "work_dir": "/tmp/x", "scenes": [{"id": 1}], "style_name": "A"}
+        with mock.patch.object(backend, "_do_script_generate", return_value=result):
+            kicked = backend.script_generate(backend.GenerateScriptBody(video_title="T", n_scenes=1))
+            self.assertIn("task_id", kicked)
+            st = self._poll(kicked["task_id"])
+        self.assertEqual(st["status"], "done")
+        self.assertEqual(st["job_id"], "job_x")
+        self.assertEqual(st["scenes"], [{"id": 1}])
+
+    def test_failure_surfaces_a_clean_one_line_error(self):
+        with mock.patch.object(backend, "_do_script_generate",
+                               side_effect=RuntimeError("boom line1\nline2")):
+            tid = backend.script_generate(backend.GenerateScriptBody(video_title="T"))["task_id"]
+            st = self._poll(tid)
+        self.assertEqual(st["status"], "error")
+        self.assertEqual(st["error"], "boom line1")
+
+    def test_unknown_task_is_404(self):
+        with self.assertRaises(backend.HTTPException) as cm:
+            backend.script_generate_status(task_id="does-not-exist")
+        self.assertEqual(cm.exception.status_code, 404)
 
 
 if __name__ == "__main__":

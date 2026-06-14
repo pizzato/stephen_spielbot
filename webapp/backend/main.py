@@ -378,10 +378,52 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
 
 
+# In-memory store for background script-generation tasks {task_id -> {status, ...}}.
+# Generation is several Claude calls (tens of seconds). Running it inline held the
+# browser's POST connection open the whole time, so any blip on that long-lived
+# connection surfaced as a "NetworkError" in the UI — even though the script was
+# actually created. We kick it off in a thread and let the client poll the status
+# (a sequence of short GETs, which already retry on transient failures), mirroring
+# the upload/cover/film tasks.
+_script_tasks: dict = {}
+
+
+def _run_script_task(task_id: str, body: "GenerateScriptBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_script_generate(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:  # surface a clean message to the client
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
 @api.post("/api/script/generate")
 def script_generate(body: GenerateScriptBody) -> dict:
+    """Kick off script generation in the background and return a task id to poll
+    (see _script_tasks for why it isn't run inline)."""
+    topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_script_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.get("/api/script/generate/status")
+def script_generate_status(task_id: str = Query(...)) -> dict:
+    task = _script_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Script task not found — it may have been lost on a restart; try again.")
+    if task.get("status") == "done":
+        return {**task["result"], "status": "done"}
+    return dict(task)
+
+
+def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
-    app.on_generate_script, minus the Gradio plumbing)."""
+    app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
+    it inside _run_script_task; tests call it directly."""
     topic = (body.topic or "").strip() or (body.video_title or "").strip()
     if not topic:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
@@ -2977,7 +3019,10 @@ def _start_queue_item(item: dict) -> dict:
 
         topic = item.get("video_prompt") or title
         resolution = item.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
-        gen = script_generate(GenerateScriptBody(
+        # Server-side automation: run generation inline (no browser connection to
+        # protect) and use the result directly — the HTTP endpoint is the polling
+        # wrapper around this same call.
+        gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
             style_name=style_name))
         start_generation(GenerateBody(
