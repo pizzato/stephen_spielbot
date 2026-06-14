@@ -7,6 +7,15 @@ const STATUS_TONE = {
   failed_retryable: 'warn', failed_terminal: 'danger', lost: 'warn', cancelled: 'neutral',
 }
 
+// What each render worker is doing right now (issue #98 — no dedicated ui workers).
+const WORKER_TONE = { working: 'ok', reserved: 'info', idle: 'neutral' }
+const WORKER_LABEL = { working: 'working', reserved: 'UI', idle: 'idle' }
+const workerLine = (w) =>
+  w.state === 'working' ? w.job : w.state === 'reserved' ? 'Reserved for the UI' : 'Idle'
+
+// Short display name from a worker URL or bare host (e.g. http://s1:8188 → s1).
+const shortHost = (url) => { try { return new URL(url).hostname } catch { return url } }
+
 export default function Progress({ workDir, job, go, onOpenScript }) {
   const [p, setP] = useState(null)
   const [error, setError] = useState('')
@@ -106,7 +115,7 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
                 <span className="muted" style={{ fontSize: 13 }}>remaining</span>
               </div>
               <div className="muted mono mt-8" style={{ fontSize: 11 }}>
-                full render {eta.total_text} · {eta.workers.comfy}× comfy · {eta.workers.tts}× tts
+                full render {eta.total_text} · {eta.workers.comfy}× comfy{eta.workers.comfy_reserved ? ` (+${eta.workers.comfy_reserved} held for UI)` : ''} · {eta.workers.tts}× tts
               </div>
               {eta.confidence === 'rough' && (
                 <div className="muted mt-8" style={{ fontSize: 11.5 }}>
@@ -131,11 +140,14 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
           <Card className="reveal reveal-d2">
             <span className="label-sm">Workers</span>
             <div className="stack gap-10 mt-16">
-              {(p?.workers || []).length === 0 && <div className="muted" style={{ fontSize: 13 }}>No workers registered.</div>}
+              {(p?.workers || []).length === 0 && <div className="muted" style={{ fontSize: 13 }}>No workers configured.</div>}
               {(p?.workers || []).map((w, i) => (
-                <div key={i} className="row center between">
-                  <span style={{ fontSize: 13 }}>{w.kind} · <span className="muted">{w.endpoint}</span></span>
-                  <Chip tone={w.status === 'online' ? 'ok' : 'neutral'} dot>{w.status}</Chip>
+                <div key={i} className="row center between gap-10">
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{workerLine(w)}</div>
+                    <div className="muted" style={{ fontSize: 11 }}>{shortHost(w.endpoint)} · {w.kind}</div>
+                  </div>
+                  <Chip tone={WORKER_TONE[w.state] || 'neutral'} dot>{WORKER_LABEL[w.state] || w.state}</Chip>
                 </div>
               ))}
             </div>
