@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip } from '../components.jsx'
+import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip, RegenLabel } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -108,6 +108,14 @@ export default function Publish({ initialWorkDir, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const regenTitle = async () => {
+    setBusy('title'); setError('')
+    try {
+      const r = await api.ytPostTitle(workDir, title)
+      setTitle(r.title || '')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   const regenCover = async () => {
     setBusy('cover'); setError('')
     let pollTimer = null
@@ -207,7 +215,7 @@ export default function Publish({ initialWorkDir, go }) {
               {opts.finished.map((f) => <option key={f.work_dir} value={f.work_dir}>{f.label}</option>)}
             </select>
           </Field>
-          <Field label="Title" hint="Max 100 characters.">
+          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
             <input className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
           </Field>
           <Field label={<span className="row center between"><span>Description</span><button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }} disabled={busy === 'desc' || !workDir} onClick={genDescription}><Icon name="wand-magic-sparkles" /> {busy === 'desc' ? 'Writing…' : 'Generate'}</button></span>}>
