@@ -211,6 +211,13 @@ const TABS = [
 // Connected YouTube channels (issue #22). Connecting runs the backend OAuth
 // flow (a Google window opens on the server machine); each channel's token is
 // stored separately, and styles pick which channel they publish to.
+// Languages offered for a channel's uploads (BCP-47 code → label).
+const LANGUAGES = {
+  en: 'English', es: 'Spanish', pt: 'Portuguese', fr: 'French', de: 'German',
+  it: 'Italian', nl: 'Dutch', ja: 'Japanese', ko: 'Korean', zh: 'Chinese',
+  hi: 'Hindi', ar: 'Arabic', ru: 'Russian',
+}
+
 function ChannelsCard({ onConfigChanged, onError }) {
   const [channels, setChannels] = useState(null)
   const [connecting, setConnecting] = useState(false)
@@ -271,7 +278,7 @@ function ChannelsCard({ onConfigChanged, onError }) {
   // immediately, like connect/disconnect.
   const toggleEng = (ch) => {
     if (expanded === ch.id) { setExpanded(''); return }
-    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond, video_category: ch.video_category || '' } }))
+    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond, video_category: ch.video_category || '', language: ch.language || 'en', upload_captions: ch.upload_captions !== false } }))
     setExpanded(ch.id)
   }
   const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
@@ -326,6 +333,15 @@ function ChannelsCard({ onConfigChanged, onError }) {
                     {Object.entries(categories).map(([name, id]) => <option key={id} value={id}>{name}</option>)}
                   </select>
                 </Field>
+                <Field label="Video language"
+                  hint="Declared as this channel's spoken and metadata language on every upload (used for subtitles and translations).">
+                  <select className="select" value={eng[ch.id]?.language || 'en'}
+                    onChange={(e) => setEngField(ch.id, 'language', e.target.value)}>
+                    {Object.entries(LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                  </select>
+                </Field>
+                <Check checked={eng[ch.id]?.upload_captions !== false} onChange={(v) => setEngField(ch.id, 'upload_captions', v)}
+                  label="Attach subtitles from the script — uploads an accurate caption track instead of relying on YouTube's auto-captions" />
                 <Field label="Community engagement prompt"
                   hint="How this channel replies to non-request comments — its persona and what to do. Leave empty to disable engagement for this channel.">
                   <textarea className="textarea" rows={5} value={eng[ch.id]?.engagement_prompt || ''}
