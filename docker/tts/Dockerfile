@@ -8,22 +8,28 @@
 # HF_HOME on first request; mount that as a volume so it persists across
 # container recreation (see docker/docker-compose.yml).
 
-ARG BASE_IMAGE=nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 FROM ${BASE_IMAGE}
 
 # PyTorch wheel index matching the base CUDA (see comfyui/Dockerfile for notes).
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 
+# PIP_BREAK_SYSTEM_PACKAGES: install into Ubuntu 24.04's "externally managed"
+# system env on purpose inside this container (PEP 668).
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONUNBUFFERED=1 \
     HF_HOME=/cache/huggingface
 
+# python3-dev provides libpython3.12.so.1.0, which torchcodec (pulled in by
+# f5-tts for audio decode) dlopen's at import — the plain python3 package ships
+# only the statically-linked interpreter, so without this F5-TTS fails at
+# inference with "libpython3.12.so.1.0: cannot open shared object file".
+# ffmpeg supplies the libav* libs torchcodec links against (FFmpeg 6 on 24.04).
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-pip ffmpeg libsndfile1 curl ca-certificates \
+        python3 python3-dev python3-pip ffmpeg libsndfile1 curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m pip install --upgrade pip
 
 # torch first (pinned to the GPU's CUDA), then f5-tts + the HTTP server deps.
 # Installing torch up front keeps f5-tts from pulling a mismatched build.

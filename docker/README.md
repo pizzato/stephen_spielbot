@@ -22,7 +22,7 @@ mounted in, so images stay small and rebuild fast.
 - NVIDIA driver + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
   (so containers can use the GPU). Verify with:
   ```bash
-  docker run --rm --gpus all nvidia/cuda:12.8.0-base-ubuntu22.04 nvidia-smi
+  docker run --rm --gpus all nvidia/cuda:13.0.1-base-ubuntu24.04 nvidia-smi
   ```
 
 ## Deploy a worker machine
@@ -72,16 +72,19 @@ containerized and SSH-installed TTS hosts can coexist during a migration.
 |---|---|---|
 | `MODELS_DIR` | — (required) | Host path to the ComfyUI `models/` dir, mounted into the ComfyUI container |
 | `COMFYUI_REF` | `master` | Pin ComfyUI to a tag/branch/commit for reproducible workers |
-| `BASE_IMAGE` | `nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04` | Multi-arch (amd64 + arm64/sbsa); builds on DGX Spark |
-| `TORCH_INDEX_URL` | `…/whl/cu128` | Match your GPU's CUDA — Blackwell/DGX Spark: cu128 or cu130; older: cu124 |
+| `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
+| `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
 
 ### GPU / arch notes
 
-The default base image is multi-arch, so the same compose file builds on x86 and
-on DGX Spark (Blackwell, arm64). The one thing that varies by GPU is the PyTorch
-build: set `TORCH_INDEX_URL` to the wheel index for your CUDA version. If a CUDA
-base-image tag is missing for your architecture, pick another from
+The defaults are verified on a DGX Spark (GB10 Blackwell, arm64, CUDA 13.0,
+driver 580) — the image builds and torch sees the GPU as `torch 2.11.0+cu130`.
+The base image is multi-arch, so the same compose file also builds on x86. The
+one thing that varies by GPU is the PyTorch build: set `TORCH_INDEX_URL` to the
+wheel index for your CUDA version (older GPUs: `cu124`/`cu128`, with a matching
+`nvidia/cuda:12.x-runtime-ubuntu24.04` base). If a CUDA base-image tag is missing
+for your architecture, pick another from
 [hub.docker.com/r/nvidia/cuda](https://hub.docker.com/r/nvidia/cuda/tags).
 
 ## Build once, run everywhere (optional)
@@ -101,4 +104,12 @@ docker compose push        # after setting `image:` to your registry path
 The SSH-based installer (`scripts/install_comfyui_worker.sh`,
 `scripts/install_f5tts_worker.sh`) still works and is untouched — containers are
 an alternative deployment path, not a replacement. A fleet can mix both while you
-migrate.
+migrate (some hosts SSH-installed, some containerized).
+
+> **Migrating a host: stop the native worker first.** The container ComfyUI and
+> the SSH-installed ComfyUI both want the GPU and the same models. Don't run both
+> on one machine — a containerized worker plus an already-loaded native render
+> can exhaust GPU memory and get a render OOM-killed. Before `worker-up` on a
+> host, stop its native worker: `make stop W=<host>` (ComfyUI) and ensure no
+> native F5-TTS is mid-job. The container then has the same GPU footprint the
+> native install had.

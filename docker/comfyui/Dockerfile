@@ -6,28 +6,30 @@
 # (see docker/docker-compose.yml). Listens on 0.0.0.0:8188, same as the
 # SSH-installed worker.
 
-# CUDA base image. Override BASE_IMAGE / TORCH_INDEX_URL for your GPU + arch:
-#   DGX Spark (Blackwell, arm64): cu128 (default) or cu130
-#   older NVIDIA GPUs:            TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
-# The image is multi-arch (amd64 + arm64/sbsa), so it builds on DGX Spark too.
-ARG BASE_IMAGE=nvidia/cuda:12.8.0-cudnn-runtime-ubuntu22.04
+# CUDA base image. The default targets DGX Spark (GB10 Blackwell, arm64, CUDA 13
+# — verified). Override BASE_IMAGE / TORCH_INDEX_URL for other GPUs + arch:
+#   older NVIDIA GPUs: BASE_IMAGE=nvidia/cuda:12.8.0-runtime-ubuntu24.04
+#                      TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
+# The image is multi-arch (amd64 + arm64/sbsa).
+ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 FROM ${BASE_IMAGE}
 
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
 ARG COMFYUI_REF=master
 # PyTorch wheel index matching the base CUDA. Leave empty if the base image
 # already ships torch (e.g. an NGC PyTorch base).
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 
+# PIP_BREAK_SYSTEM_PACKAGES: Ubuntu 24.04 marks the system env "externally
+# managed" (PEP 668); we install into it on purpose inside this container.
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git python3 python3-pip ffmpeg curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
-
-RUN python3 -m pip install --upgrade pip
 
 WORKDIR /opt
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
