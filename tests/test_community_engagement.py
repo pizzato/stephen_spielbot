@@ -46,6 +46,15 @@ class EngagementConfigTests(unittest.TestCase):
         self.assertEqual(e["engagement_prompt"], "")
         self.assertFalse(e["auto_respond"])
 
+    def test_ensure_channels_preserves_video_category(self):
+        cfg = {"youtube_channels": [{"id": "UC1", "video_category": "27"}]}
+        gapp._ensure_channels(cfg)
+        self.assertEqual(cfg["youtube_channels"][0]["video_category"], "27")
+        # Unset defaults to "" (fall back to the global category at upload time).
+        cfg2 = {"youtube_channels": [{"id": "UC2"}]}
+        gapp._ensure_channels(cfg2)
+        self.assertEqual(cfg2["youtube_channels"][0]["video_category"], "")
+
     def test_save_load_roundtrip(self):
         # Isolated config file — never write the process-wide CONFIG_FILE, or the
         # persisted channels leak into other suites' load_config() (channel resolution).
@@ -263,10 +272,33 @@ class ChannelSettingsEndpointTests(unittest.TestCase):
         self.assertTrue(cfg["youtube_channels"][0]["auto_respond"])
         save.assert_called_once()
 
+    def test_saves_video_category(self):
+        cfg = _cfg()
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend.gapp, "save_config") as save:
+            out = backend.yt_channel_settings(
+                backend.ChannelSettingsBody(id="UC1", video_category="27"))
+        self.assertTrue(out["ok"])
+        self.assertEqual(cfg["youtube_channels"][0]["video_category"], "27")
+        save.assert_called_once()
+
     def test_unknown_channel_404(self):
         with mock.patch.object(backend.gapp, "load_config", return_value={"youtube_channels": []}):
             with self.assertRaises(backend.HTTPException):
                 backend.yt_channel_settings(backend.ChannelSettingsBody(id="X"))
+
+
+class CategoryForChannelTests(unittest.TestCase):
+    def test_uses_channel_category_when_set(self):
+        cfg = {"youtube_channels": [{"id": "UC1", "video_category": "27"}]}
+        self.assertEqual(backend._category_for_channel(cfg, "UC1"), "27")
+
+    def test_falls_back_to_global_then_default(self):
+        cfg = {"youtube_channels": [{"id": "UC1", "video_category": ""}],
+               "youtube_post_category": "24"}
+        self.assertEqual(backend._category_for_channel(cfg, "UC1"), "24")
+        # No global set, unknown channel → hard default "22".
+        self.assertEqual(backend._category_for_channel({"youtube_channels": []}, "UC1"), "22")
 
 
 class CommunityActionEndpointTests(unittest.TestCase):
