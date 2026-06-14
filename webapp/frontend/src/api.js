@@ -44,7 +44,22 @@ export const api = {
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.
   testVoice: (body) => req('POST', '/voices/test', body),
 
-  generateScript: (body) => req('POST', '/script/generate', body),
+  // Script generation is several Claude calls (tens of seconds). Holding one long
+  // POST open meant any blip on that connection surfaced as a "NetworkError" even
+  // though the script was created — so kick it off, then poll the status (short
+  // GETs, which req() already retries on transient failures) until it's ready.
+  generateScript: async (body) => {
+    const { task_id } = await req('POST', '/script/generate', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Script generation failed.')
+    }
+  },
+  // Improve the Create brief's title or direction in place (issue #88).
+  improveBrief: (field, title, direction, styleName) =>
+    req('POST', '/create/improve', { field, title, direction, style_name: styleName || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
@@ -91,6 +106,11 @@ export const api = {
   approveComment: (commentId, finalTitle) => req('POST', '/youtube/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
   rejectComment: (commentId) => req('POST', '/youtube/comments/reject', { comment_id: commentId }),
   replyComment: (commentId, text) => req('POST', '/youtube/comments/reply', { comment_id: commentId, text }),
+  // LLM-draft a reply to any comment (issue #88): manual composer + draft regenerate.
+  draftCommentReply: (commentId) => req('POST', '/youtube/comments/draft-reply', { comment_id: commentId }),
+  // community engagement drafts (issue #84)
+  sendCommunityReply: (commentId, text) => req('POST', '/youtube/comments/community/send', { comment_id: commentId, text }),
+  dismissCommunityReply: (commentId) => req('POST', '/youtube/comments/community/dismiss', { comment_id: commentId }),
 
   // queue management
   queueMove: (id, direction) => req('POST', '/queue/move', { id, direction }),
@@ -108,15 +128,23 @@ export const api = {
   autoPost: () => req('POST', '/automation/post'),
   autoTick: () => req('POST', '/automation/tick'),
 
-  ytAnalytics: (channel) => req('GET', '/youtube/analytics' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
+  ytAnalytics: (channel, refresh) => {
+    const p = new URLSearchParams()
+    if (channel) p.set('channel', channel)
+    if (refresh) p.set('refresh', 'true')
+    const qs = p.toString()
+    return req('GET', '/youtube/analytics' + (qs ? `?${qs}` : ''))
+  },
   // multi-channel management (issue #22) — channels live in Settings → YouTube
   ytChannels: () => req('GET', '/youtube/channels'),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
   ytDisconnect: (channel) => req('POST', '/youtube/disconnect', { channel: channel || '' }),
+  ytChannelSettings: (id, fields) => req('POST', '/youtube/channels/settings', { id, ...fields }),
   ytPostOptions: () => req('GET', '/youtube/post/options'),
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
+  ytPostTitle: (workDir, title) => req('POST', '/youtube/post/title', { work_dir: workDir, title: title || '' }),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),

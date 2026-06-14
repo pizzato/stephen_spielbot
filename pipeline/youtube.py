@@ -32,6 +32,7 @@ _AUTH_CACHE_TTL = 60.0  # seconds before re-checking with the API
 _CONFIG_DIR = Path.home() / ".config" / "video-generator"
 _TOKEN_PATH = _CONFIG_DIR / "youtube_token.json"
 COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
+ANALYTICS_CACHE_PATH = _CONFIG_DIR / "youtube_analytics.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
 
@@ -261,6 +262,42 @@ def disconnect_youtube(channel: str = ""):
 
 # ── Comment fetching ──────────────────────────────────────────────────────────
 
+def _reply_dict(reply: dict, owner_channel_id: str) -> dict:
+    """Normalise a YouTube reply resource into the cached thread format.
+
+    ``is_owner`` flags replies authored by the channel itself, so re-engagement
+    never tries to answer our own messages (issue #84 thread continuation)."""
+    snip = reply.get("snippet", {})
+    author_id = (snip.get("authorChannelId") or {}).get("value", "")
+    return {
+        "reply_id": reply.get("id", ""),
+        "commenter": snip.get("authorDisplayName", "Unknown"),
+        "text": snip.get("textOriginal", ""),
+        "published_at": snip.get("publishedAt", ""),
+        "is_owner": bool(owner_channel_id) and author_id == owner_channel_id,
+    }
+
+
+def _thread_replies(youtube, parent_id: str) -> list[dict]:
+    """Fetch every reply under a top-level comment (paginated). Best-effort:
+    returns [] on error so the caller falls back to the inline replies."""
+    out: list[dict] = []
+    page = None
+    try:
+        for _ in range(10):  # ≤1000 replies; guards against runaway pagination
+            resp = youtube.comments().list(
+                part="snippet", parentId=parent_id, maxResults=100, pageToken=page,
+            ).execute()
+            out.extend(resp.get("items", []))
+            page = resp.get("nextPageToken")
+            if not page:
+                break
+    except Exception as exc:
+        logger.warning("thread replies fetch failed for %s: %s", parent_id, exc)
+        return []
+    return out
+
+
 def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, channel: str = "") -> list[dict]:
     """Fetch recent comment threads from the authenticated user's channel."""
     creds = _load_credentials(client_secrets_path, channel)
@@ -276,7 +313,7 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
 
     channel_id = items[0]["id"]
     ct_resp = youtube.commentThreads().list(
-        part="snippet",
+        part="snippet,replies",
         allThreadsRelatedToChannelId=channel_id,
         maxResults=min(max_results, 100),
         order="time",
@@ -286,6 +323,13 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
     results = []
     for item in ct_resp.get("items", []):
         top_snippet = item["snippet"]["topLevelComment"]["snippet"]
+        total = int(item["snippet"].get("totalReplyCount", 0))
+        inline = item.get("replies", {}).get("comments", [])
+        # commentThreads carries only up to 5 inline replies, so a viewer's reply
+        # to our reply goes missing on a busy thread — pull the full reply list via
+        # comments.list whenever the thread has more than what rode along.
+        reply_items = _thread_replies(youtube, item["id"]) if total > len(inline) else inline
+        replies = [_reply_dict(r, channel_id) for r in (reply_items or inline)]
         results.append({
             "comment_id": item["id"],
             "video_id": item["snippet"].get("videoId", ""),
@@ -293,8 +337,53 @@ def fetch_channel_comments(client_secrets_path: str, max_results: int = 50, chan
             "text": top_snippet.get("textOriginal", ""),
             "published_at": top_snippet.get("publishedAt", ""),
             "like_count": int(top_snippet.get("likeCount", 0)),
+            "total_reply_count": total,
+            "replies": replies,
         })
     return results
+
+
+def thread_anchor(comment: dict) -> dict:
+    """Summarise a comment thread for community engagement (issue #84 follow-up).
+
+    Walks the top-level comment plus its replies in time order and reports who
+    spoke last and the latest *viewer* message — the one we'd answer:
+      - ``last_is_owner``: the channel posted the most recent message (we already
+        had the last word → nothing to do).
+      - ``anchor_id`` / ``anchor_text`` / ``anchor_author``: the latest viewer message.
+      - ``thread_text``: the conversation BEFORE the anchor, labelled, as LLM context.
+    """
+    replies = comment.get("replies") or []
+    msgs = [{
+        "id": comment.get("comment_id", ""),
+        "author": comment.get("commenter", "viewer"),
+        "text": comment.get("text", ""),
+        "is_owner": False,            # top-level comments are always viewers'
+        "at": comment.get("published_at", ""),
+    }]
+    for i, r in enumerate(replies):
+        msgs.append({
+            "id": r.get("reply_id") or f"{comment.get('comment_id', '')}#{i}",
+            "author": r.get("commenter", "viewer"),
+            "text": r.get("text", ""),
+            "is_owner": bool(r.get("is_owner")),
+            "at": r.get("published_at", ""),
+        })
+    msgs.sort(key=lambda m: m["at"] or "")   # ISO-8601 timestamps sort lexically
+    last = msgs[-1]
+    viewer_msgs = [m for m in msgs if not m["is_owner"]]
+    anchor = viewer_msgs[-1] if viewer_msgs else None
+    thread_text = "\n".join(
+        f"{'Channel' if m['is_owner'] else m['author']}: {m['text']}"
+        for m in msgs if anchor is None or m["id"] != anchor["id"]
+    )
+    return {
+        "last_is_owner": bool(last["is_owner"]),
+        "anchor_id": (anchor or {}).get("id", ""),
+        "anchor_text": (anchor or {}).get("text", ""),
+        "anchor_author": (anchor or {}).get("author", "viewer"),
+        "thread_text": thread_text,
+    }
 
 
 # ── LLM evaluation ────────────────────────────────────────────────────────────
@@ -561,6 +650,23 @@ def save_comments_cache(comments: list[dict]) -> None:
     COMMENTS_CACHE_PATH.write_text(json.dumps(comments, indent=2))
 
 
+# ── Analytics cache ───────────────────────────────────────────────────────────
+# Persisted per channel key (issue #22) so the dashboard loads instantly across
+# server restarts; a manual refresh re-fetches from YouTube and overwrites the
+# channel's entry. Mirrors the comments cache above.
+
+def load_analytics_cache() -> dict[str, dict]:
+    try:
+        return json.loads(ANALYTICS_CACHE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def save_analytics_cache(cache: dict[str, dict]) -> None:
+    ANALYTICS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ANALYTICS_CACHE_PATH.write_text(json.dumps(cache, indent=2))
+
+
 def get_pending_requests(cache: list[dict] | None = None) -> list[dict]:
     """Return comments evaluated as video requests that haven't been approved/rejected."""
     if cache is None:
@@ -569,6 +675,13 @@ def get_pending_requests(cache: list[dict] | None = None) -> list[dict]:
         c for c in cache
         if c.get("is_request") and c.get("status") not in ("approved", "rejected")
     ]
+
+
+def get_pending_community_replies(cache: list[dict] | None = None) -> list[dict]:
+    """Return non-request comments with a drafted engagement reply awaiting approval (issue #84)."""
+    if cache is None:
+        cache = load_comments_cache()
+    return [c for c in cache if c.get("engagement_status") == "draft"]
 
 
 # ── Video request queue ───────────────────────────────────────────────────────

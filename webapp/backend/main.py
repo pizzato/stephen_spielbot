@@ -378,10 +378,52 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
 
 
+# In-memory store for background script-generation tasks {task_id -> {status, ...}}.
+# Generation is several Claude calls (tens of seconds). Running it inline held the
+# browser's POST connection open the whole time, so any blip on that long-lived
+# connection surfaced as a "NetworkError" in the UI — even though the script was
+# actually created. We kick it off in a thread and let the client poll the status
+# (a sequence of short GETs, which already retry on transient failures), mirroring
+# the upload/cover/film tasks.
+_script_tasks: dict = {}
+
+
+def _run_script_task(task_id: str, body: "GenerateScriptBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_script_generate(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:  # surface a clean message to the client
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
 @api.post("/api/script/generate")
 def script_generate(body: GenerateScriptBody) -> dict:
+    """Kick off script generation in the background and return a task id to poll
+    (see _script_tasks for why it isn't run inline)."""
+    topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_script_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.get("/api/script/generate/status")
+def script_generate_status(task_id: str = Query(...)) -> dict:
+    task = _script_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "Script task not found — it may have been lost on a restart; try again.")
+    if task.get("status") == "done":
+        return {**task["result"], "status": "done"}
+    return dict(task)
+
+
+def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
-    app.on_generate_script, minus the Gradio plumbing)."""
+    app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
+    it inside _run_script_task; tests call it directly."""
     topic = (body.topic or "").strip() or (body.video_title or "").strip()
     if not topic:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
@@ -771,6 +813,53 @@ def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
     if combined_style and ip and not ip.startswith(combined_style):
         return f"{combined_style}. {ip}"
     return ip or image_prompt
+
+
+class BriefImproveBody(BaseModel):
+    field: str = "title"           # "title" | "direction"
+    title: str = ""
+    direction: str = ""
+    style_name: str = ""
+
+
+@api.post("/api/create/improve")
+def create_improve(body: BriefImproveBody) -> dict:
+    """Improve the Create brief's title or direction in place (issue #88).
+
+    Standalone (no job yet): takes the current title + direction text and returns
+    a sharper version of the requested field. Honours the picked style's title
+    phrasing (issue #82) when improving the title."""
+    if body.field not in ("title", "direction"):
+        raise HTTPException(400, f"Unknown field: {body.field}")
+    cfg = gapp.load_config()
+    title = (body.title or "").strip()
+    direction = (body.direction or "").strip()
+    if body.field == "title":
+        title_style = gapp.style_settings(cfg, body.style_name).get("title_style", "") if body.style_name else ""
+        system = ("You write punchy, click-worthy YouTube video titles. "
+                  "Return ONLY the improved title — one line, no quotes, no label.")
+        user = (
+            f"Current title: {title or '(none yet)'}\n"
+            f"Direction / angle: {direction or '(none given)'}\n"
+            + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
+            + "\nImprove the title (or write a strong one if it's empty). "
+            "Keep it concise and true to the direction."
+        )
+    else:
+        system = ("You refine the creative-direction brief for a short, AI-generated video. "
+                  "Return ONLY the improved direction text — no preamble, no labels.")
+        user = (
+            f"Video title: {title or '(untitled)'}\n"
+            f"Current direction: {direction or '(none yet)'}\n"
+            "\nImprove and sharpen the direction: clarify the angle, tone, and what to "
+            "emphasise. Keep it to 1–3 sentences."
+        )
+    try:
+        with _track_op(f"Improving {body.field}", title or direction):
+            text = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Improve failed: {str(e).splitlines()[0][:200]}")
+    return {"value": text}
 
 
 # ── approve & generate (launches the background pipeline) ─────────────────────
@@ -1641,7 +1730,10 @@ def badges() -> dict:
     queue_pending = sum(1 for q in queue if q.get("status") == "pending")
 
     try:
-        attention = len(yt.get_pending_requests())
+        # Pending video requests + drafted community replies awaiting review (issue #84).
+        comment_cache = yt.load_comments_cache()
+        attention = (len(yt.get_pending_requests(comment_cache))
+                     + len(yt.get_pending_community_replies(comment_cache)))
     except Exception:
         attention = 0
 
@@ -1897,13 +1989,46 @@ def yt_disconnect(body: DisconnectBody | None = None) -> dict:
     return {"ok": True, "channels": chans}
 
 
+class ChannelSettingsBody(BaseModel):
+    id: str
+    engagement_prompt: str = ""
+    auto_respond: bool = False
+
+
+@api.post("/api/youtube/channels/settings")
+def yt_channel_settings(body: ChannelSettingsBody) -> dict:
+    """Save a channel's community-engagement config (issue #84): the persona/guidance
+    used to draft replies to non-request comments, and whether approved drafts post
+    immediately or wait for review. Auto-saves, like connect/disconnect."""
+    cfg = gapp.load_config()
+    entry = next((c for c in (cfg.get("youtube_channels") or []) if c.get("id") == body.id), None)
+    if entry is None:
+        raise HTTPException(404, "Channel not found.")
+    entry["engagement_prompt"] = body.engagement_prompt.strip()
+    entry["auto_respond"] = bool(body.auto_respond)
+    gapp.save_config(cfg)
+    return {"ok": True}
+
+
 @api.get("/api/youtube/analytics")
-def yt_analytics(channel: str = Query("")) -> dict:
+def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict:
+    # Cache-first, like comments: serve the persisted per-channel snapshot
+    # instantly (fast load across restarts); only hit YouTube on an explicit
+    # refresh or a cold cache, then save the fresh result back to disk.
+    key = channel or _channel_for_style("")
+    cache = yt.load_analytics_cache()
+    if not refresh and key in cache:
+        return cache[key]
     try:
-        return yt.fetch_channel_analytics(
-            _client_secrets_path(), channel=channel or _channel_for_style(""))
+        data = yt.fetch_channel_analytics(_client_secrets_path(), channel=key)
     except Exception as e:
+        if key in cache:
+            return cache[key]   # keep the stale snapshot if a refresh fails
         return {"channel": {}, "videos": [], "error": str(e)[:200]}
+    if data.get("channel"):     # only persist a real result, not a no-auth/error skeleton
+        cache[key] = data
+        yt.save_analytics_cache(cache)
+    return data
 
 
 @api.get("/api/youtube/post/options")
@@ -1979,6 +2104,37 @@ def yt_describe(body: DescribeBody) -> dict:
     with _track_op("Generating description", body.title):
         desc = _generate_and_cache_description(body.work_dir, body.title)
     return {"description": desc}
+
+
+@api.post("/api/youtube/post/title")
+def yt_post_title(body: DescribeBody) -> dict:
+    """Regenerate the YouTube title for a finished film (issue #88), steered by the
+    film's scene outline and its style's title phrasing (issue #82)."""
+    wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
+    if wd is None or not wd.exists():
+        raise HTTPException(404, "No film found.")
+    cfg = gapp.load_config()
+    current = (body.title or "").strip() or _video_title_for(wd)
+    try:
+        scenes = gapp._load_scenes_for_work_dir(wd)
+    except Exception:
+        scenes = []
+    outline = "; ".join((s.get("title") or "").strip() for s in scenes if (s.get("title") or "").strip())
+    title_style = gapp.style_settings(cfg, _work_dir_style_name(wd)).get("title_style", "")
+    system = ("You write punchy, click-worthy YouTube video titles. "
+              "Return ONLY the improved title — one line, no quotes, no label.")
+    user = (
+        f"Current title: {current or '(none)'}\n"
+        f"Scene outline: {outline or '(unavailable)'}\n"
+        + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
+        + "\nWrite a strong YouTube title for this film. Keep it under 100 characters."
+    )
+    try:
+        with _track_op("Regenerating title", current):
+            text = _llm_complete(system, user, cfg, max_tokens=120).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Title generation failed: {str(e).splitlines()[0][:200]}")
+    return {"title": text[:100]}
 
 
 def _description_path(wd: Path) -> Path:
@@ -2413,7 +2569,7 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
     errors: list[str] = []
     fetched_any = False
     cache = yt.load_comments_cache()
-    existing = {c.get("comment_id") for c in cache}
+    by_id = {c.get("comment_id"): c for c in cache}
     for ch in channels:
         try:
             fetched = yt.fetch_channel_comments(secrets, channel=ch)
@@ -2422,12 +2578,23 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
             errors.append(f"{ch or 'default'}: {str(e).splitlines()[0][:120]}")
             continue
         for fc in fetched:
-            if fc.get("comment_id") not in existing:
-                cache.insert(0, {**fc, "channel": ch, "evaluated": False, "is_request": False,
-                                 "suggested_title": "", "confidence": 0.0,
-                                 "interestingness": 0.0, "reason": "", "status": "new"})
-                existing.add(fc.get("comment_id"))
+            cur = by_id.get(fc.get("comment_id"))
+            if cur is None:
+                entry = {**fc, "channel": ch, "evaluated": False, "is_request": False,
+                         "suggested_title": "", "confidence": 0.0,
+                         "interestingness": 0.0, "reason": "", "status": "new",
+                         "engagement_status": "", "engagement_draft": "",
+                         "engagement_reason": "", "engagement_anchor": ""}
+                cache.insert(0, entry)
+                by_id[fc.get("comment_id")] = entry
                 new_count += 1
+            else:
+                # Refresh thread state so replies that arrived after the first fetch —
+                # including a viewer replying to our reply — are captured. The
+                # engagement pass below then re-opens the thread if a viewer spoke last.
+                cur["replies"] = fc.get("replies", cur.get("replies", []))
+                cur["total_reply_count"] = fc.get("total_reply_count", cur.get("total_reply_count", 0))
+                cur["like_count"] = fc.get("like_count", cur.get("like_count", 0))
     yt.save_comments_cache(cache)
     if not fetched_any:
         raise HTTPException(503, f"Fetch failed: {errors[0] if errors else 'no channels configured'}")
@@ -2458,8 +2625,55 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
                 except Exception:
                     pass
             approved += 1
+
+    # Community engagement (issue #84): for non-request comments, draft a reply per
+    # the comment's channel config and — if that channel auto-responds — post it now.
+    # Runs over the whole cache (not just new comments) so enabling a channel's
+    # engagement later picks up its backlog; the engagement_status stamp makes it
+    # run-once per comment. Channels with no guidance prompt stay untouched (status "").
+    chan_cfg = {c.get("id", ""): c for c in (cfg.get("youtube_channels") or [])}
+    drafted = sent = 0
+    for c in cache:
+        if c.get("is_request"):
+            continue
+        entry = chan_cfg.get(c.get("channel", ""), {})
+        guidance = str(entry.get("engagement_prompt") or "").strip()
+        if not guidance:
+            continue
+        st = yt.thread_anchor(c)
+        # Nothing to answer if the channel spoke last, or there's no viewer message.
+        if st["last_is_owner"] or not st["anchor_id"]:
+            continue
+        # Run-once per viewer message: a brand-new reply (new anchor) re-opens the
+        # thread, but we never re-draft the same message twice (issue #84).
+        # Legacy records carry a status but no anchor — the old one-shot pass only
+        # ever acted on the top-level comment, so seed the anchor there. This keeps
+        # already-skipped/dismissed backlog from being resurrected (only a genuinely
+        # new viewer reply, with a different anchor id, re-opens the thread).
+        prior_anchor = c.get("engagement_anchor") or (c.get("comment_id", "") if c.get("engagement_status") else "")
+        if prior_anchor == st["anchor_id"] and c.get("engagement_status"):
+            continue
+        r = llm.generate_community_reply(st["anchor_text"], st["anchor_author"],
+                                         st["thread_text"], guidance, cfg)
+        c["engagement_anchor"] = st["anchor_id"]
+        c["engagement_reason"] = r.get("reason", "")
+        if not (r.get("should_reply") and r.get("reply")):
+            c["engagement_status"] = "skip"
+            continue
+        c["engagement_draft"] = r["reply"]
+        if entry.get("auto_respond"):
+            rep = yt.reply_to_comment(secrets, c.get("comment_id", ""), r["reply"],
+                                      channel=c.get("channel", ""))
+            if rep.get("success"):
+                c["engagement_status"] = "sent"
+                sent += 1
+                continue
+        c["engagement_status"] = "draft"
+        drafted += 1
+
     yt.save_comments_cache(cache)
-    return {"new": new_count, "thanked": thanked, "auto_approved": approved}
+    return {"new": new_count, "thanked": thanked, "auto_approved": approved,
+            "community_drafted": drafted, "community_sent": sent}
 
 
 class FetchBody(BaseModel):
@@ -2526,6 +2740,78 @@ def youtube_reply(body: CommentActionBody) -> dict:
     if not res.get("success"):
         raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
     return {"ok": True}
+
+
+@api.post("/api/youtube/comments/community/send")
+def youtube_community_send(body: CommentActionBody) -> dict:
+    """Post a drafted community reply (optionally edited) as the comment's channel,
+    then mark it sent (issue #84). No-op unless the draft is still pending."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Reply text required.")
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this comment.")
+    res = yt.reply_to_comment(gapp.load_config().get("youtube_client_secrets", ""),
+                              body.comment_id, text, channel=c.get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    c["engagement_status"] = "sent"
+    c["engagement_draft"] = text
+    yt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/youtube/comments/community/dismiss")
+def youtube_community_dismiss(body: CommentActionBody) -> dict:
+    """Discard a pending community-reply draft (issue #84)."""
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this comment.")
+    c["engagement_status"] = "dismissed"
+    yt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/youtube/comments/draft-reply")
+def youtube_draft_reply(body: CommentActionBody) -> dict:
+    """Draft a reply to any comment with the LLM (issue #88) — powers both the
+    manual reply composer and the "regenerate" on a community-engagement draft.
+    Always returns a reply; honours the comment's channel engagement voice when
+    one is configured. Does not touch the cache — the client holds the draft until
+    it sends."""
+    c = next((x for x in yt.load_comments_cache()
+              if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    cfg = gapp.load_config()
+    chan_cfg = {ch.get("id", ""): ch for ch in (cfg.get("youtube_channels") or [])}
+    guidance = str(chan_cfg.get(c.get("channel", ""), {}).get("engagement_prompt") or "").strip()
+    thread = "\n".join(
+        f"{r.get('commenter', 'viewer')}: {r.get('text', '')}"
+        for r in (c.get("replies") or [])
+    )
+    system = ("You write short, friendly replies to YouTube comments as the channel owner. "
+              "Return ONLY the reply text — no preamble, no quotes, no labels.")
+    user = (
+        (f"Channel voice / guidance: {guidance}\n" if guidance else "Use a warm, friendly, on-brand tone.\n")
+        + f"Commenter: {c.get('commenter', 'viewer')}\n"
+        + f"Their comment: {c.get('text', '')}\n"
+        + (f"Earlier replies in this thread:\n{thread}\n" if thread else "")
+        + "\nWrite a concise reply (1–3 sentences)."
+    )
+    try:
+        with _track_op("Drafting reply", c.get("commenter", "")):
+            text = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Reply draft failed: {str(e).splitlines()[0][:200]}")
+    return {"reply": text}
 
 
 # ── Queue management ──────────────────────────────────────────────────────────
@@ -2733,7 +3019,10 @@ def _start_queue_item(item: dict) -> dict:
 
         topic = item.get("video_prompt") or title
         resolution = item.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
-        gen = script_generate(GenerateScriptBody(
+        # Server-side automation: run generation inline (no browser connection to
+        # protect) and use the result directly — the HTTP endpoint is the polling
+        # wrapper around this same call.
+        gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
             style_name=style_name))
         start_generation(GenerateBody(
@@ -2814,13 +3103,24 @@ def queue_from_job(body: FromJobBody) -> dict:
     )
 
     # In-place update of an existing pending slot — keep its queue position.
+    # Prefer the explicit queue_item_id; otherwise fall back to a pending row
+    # that already points at this job/work_dir, so a second approve of the same
+    # script fills that slot instead of appending a duplicate. Both rows would
+    # share one work_dir, and a Library delete removes every row matching it —
+    # which is why a duplicate also made deleting one wipe both.
+    queue = yt.load_queue()
     existing = None
     if body.queue_item_id:
-        existing = next((q for q in yt.load_queue() if q.get("id") == body.queue_item_id), None)
+        existing = next((q for q in queue if q.get("id") == body.queue_item_id), None)
+    if existing is None:
+        existing = next((q for q in queue
+                         if q.get("status") == "pending"
+                         and ((body.job_id and q.get("video_job_id") == body.job_id)
+                              or (body.work_dir and q.get("work_dir") == body.work_dir))), None)
     if existing is not None and existing.get("status") == "pending":
-        yt.update_queue_item(body.queue_item_id, final_title=title,
+        yt.update_queue_item(existing["id"], final_title=title,
                              suggested_scene_count=n, **script_fields)
-        return {"ok": True, "queue_item_id": body.queue_item_id,
+        return {"ok": True, "queue_item_id": existing["id"],
                 "started": None, "updated_in_place": True}
 
     entry = yt.add_to_queue({"comment_id": "", "text": "", "commenter": "you",

@@ -600,6 +600,72 @@ def generate_video_prompt(title: str, comment: str) -> str:  # noqa: ARG001
         return ""  # empty string — caller should show Create tab without a pre-filled prompt
 
 
+# ── Community comment reply (issue #84) ───────────────────────────────────────
+
+_COMMUNITY_SAFE_DEFAULT = {"should_reply": False, "reply": "", "reason": ""}
+
+
+def _parse_community_reply(text: str) -> dict:
+    try:
+        m = re.search(r"\{.*\}", text, re.DOTALL)
+        if m:
+            result = json.loads(m.group())
+            return {
+                "should_reply": bool(result.get("should_reply", False)),
+                "reply": str(result.get("reply", "")).strip(),
+                "reason": str(result.get("reason", "")).strip(),
+            }
+    except Exception:
+        pass
+    return {**_COMMUNITY_SAFE_DEFAULT, "reason": "Could not parse LLM response"}
+
+
+def generate_community_reply(comment_text: str, commenter: str, thread_text: str,
+                             guidance: str, cfg: dict) -> dict:
+    """Decide whether to reply to a non-request community comment and, if so, draft
+    a reply in the channel's voice. Returns {should_reply, reply, reason}; safe
+    default on any failure. Backend is chosen from cfg (claude | local) — both are
+    supported."""
+    sys_msg = _prompts.system("community_reply")
+    user_msg = _prompts.user(
+        "community_reply",
+        guidance=(guidance or "").strip() or "(no specific guidance — use a friendly, on-brand tone)",
+        commenter=(commenter or "viewer")[:100],
+        comment=(comment_text or "").strip()[:2000],
+        thread=(thread_text or "").strip() or "(no replies yet)",
+    )
+    backend = cfg.get("llm_backend", "local")
+    try:
+        if backend == "claude":
+            api_key = cfg.get("claude_api_key", "")
+            if not api_key:
+                raise RuntimeError("No Claude API key configured")
+            import anthropic, httpx
+            timeout = httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=30.0)
+            client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
+            text = _claude_call(
+                client,
+                cfg.get("claude_model", "claude-sonnet-4-6"),
+                sys_msg,
+                user_msg,
+                max_tokens=400,
+                label="community_reply",
+            )
+            return _parse_community_reply(text)
+        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
+        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
+        text = _local_llm(
+            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
+            max_tokens=400,
+            url=url,
+            model=model,
+        )
+        return _parse_community_reply(text)
+    except Exception as exc:
+        logger.warning("generate_community_reply failed: %s", exc)
+        return {**_COMMUNITY_SAFE_DEFAULT, "reason": f"Engagement error: {str(exc)[:120]}"}
+
+
 # ── Video topic suggestions ───────────────────────────────────────────────────
 
 def _parse_suggestions(text: str) -> list[dict]:
@@ -624,22 +690,29 @@ def _parse_suggestions(text: str) -> list[dict]:
 
 def style_suggestion_context(style: dict | None) -> str:
     """Render a style profile (issue #66) into prompt lines steering idea
-    generation. Empty when there's nothing distinctive to say."""
+    generation — including how titles should be worded (issue #82). Empty when
+    there's nothing distinctive to say."""
     if not style:
         return ""
     lines = []
     name = (style.get("name") or "").strip()
     description = (style.get("description") or "").strip()
     visual = (style.get("visual_style") or "").strip()
+    title_style = (style.get("title_style") or "").strip()
     if name and name != "(none)":
         lines.append(f'The new videos will be produced in the channel\'s "{name}" style.')
     if description:
         lines.append(f"That style is described as: {description}")
     if visual:
         lines.append(f"Its visuals look like: {visual}")
+    if lines:
+        lines.append("Every suggested topic must suit videos made in that style.")
+    # Title styling is independent of topic suitability — apply it even when the
+    # style has no descriptive context, so a title-style-only profile still steers.
+    if title_style:
+        lines.append(f"Word every video title to follow this style: {title_style}")
     if not lines:
         return ""
-    lines.append("Every suggested topic must suit videos made in that style.")
     return "\n" + "\n".join(lines) + "\n"
 
 
