@@ -624,22 +624,29 @@ def _parse_suggestions(text: str) -> list[dict]:
 
 def style_suggestion_context(style: dict | None) -> str:
     """Render a style profile (issue #66) into prompt lines steering idea
-    generation. Empty when there's nothing distinctive to say."""
+    generation — including how titles should be worded (issue #82). Empty when
+    there's nothing distinctive to say."""
     if not style:
         return ""
     lines = []
     name = (style.get("name") or "").strip()
     description = (style.get("description") or "").strip()
     visual = (style.get("visual_style") or "").strip()
+    title_style = (style.get("title_style") or "").strip()
     if name and name != "(none)":
         lines.append(f'The new videos will be produced in the channel\'s "{name}" style.')
     if description:
         lines.append(f"That style is described as: {description}")
     if visual:
         lines.append(f"Its visuals look like: {visual}")
+    if lines:
+        lines.append("Every suggested topic must suit videos made in that style.")
+    # Title styling is independent of topic suitability — apply it even when the
+    # style has no descriptive context, so a title-style-only profile still steers.
+    if title_style:
+        lines.append(f"Word every video title to follow this style: {title_style}")
     if not lines:
         return ""
-    lines.append("Every suggested topic must suit videos made in that style.")
     return "\n" + "\n".join(lines) + "\n"
 
 
