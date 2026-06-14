@@ -319,11 +319,17 @@ def _ensure_channels(cfg: dict) -> dict:
             "id": key,
             "name": str(c.get("name") or ""),
             "channel_id": str(c.get("channel_id") or ""),
+            # Community-comment engagement (issue #84): per-channel persona/guidance
+            # for replying to non-request comments (empty = engagement off), and
+            # whether approved drafts post immediately or wait for review.
+            "engagement_prompt": str(c.get("engagement_prompt") or ""),
+            "auto_respond": bool(c.get("auto_respond")),
         })
     if not channels and yt._token_path().exists():
         # Pre-#22 setups have one token at the legacy path — surface it as the
         # "default" channel so styles can reference it without re-connecting.
-        channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": ""}]
+        channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": "",
+                     "engagement_prompt": "", "auto_respond": False}]
         seen = {yt.DEFAULT_CHANNEL_KEY}
     cfg["youtube_channels"] = channels
     for s in (cfg.get("styles") or []):
