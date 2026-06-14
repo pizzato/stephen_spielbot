@@ -1,13 +1,11 @@
 SCRIPTS := scripts
 
-# Optional: scope start / stop / restart to a single worker.
-# Examples:  make stop W=s2   make restart W=s3   make start W=s1
+# Optional: scope start / stop / restart / status / logs to one worker's
+# containers. Examples:  make stop W=s2   make restart W=s3   make status W=s1
 W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
-        start stop restart restart-server status worker-agent ui-worker help \
-        worker-build worker-up worker-down worker-restart worker-status \
-        worker-logs worker-fetch-models \
+        start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev \
         launchd-install launchd-uninstall \
         lint lint-fix lint-web ensure-ruff
@@ -30,7 +28,7 @@ download-flux:
 download-flux-cluster:
 	@bash $(SCRIPTS)/download_flux_cluster.sh
 
-## Start ComfyUI on all workers + the web app.  Add W=<host> to start one worker only.
+## Start every worker's containers + the web app + UI worker(s).  Add W=<host> for one host.
 start:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh start "$(W)"; \
@@ -38,7 +36,7 @@ start:
 	    bash $(SCRIPTS)/start.sh; \
 	fi
 
-## Stop the web app and ComfyUI on all workers.  Add W=<host> to stop one worker only.
+## Stop the web app, UI worker(s), and every worker's containers.  Add W=<host> for one host.
 stop:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh stop "$(W)"; \
@@ -46,7 +44,7 @@ stop:
 	    bash $(SCRIPTS)/stop.sh; \
 	fi
 
-## Stop then start.  Add W=<host> to restart one worker only (app keeps running).
+## Stop then start.  Add W=<host> to restart one host's containers only (app keeps running).
 restart:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh restart "$(W)"; \
@@ -69,12 +67,20 @@ restart-server:
 	@bash $(SCRIPTS)/stop_server.sh
 	@bash $(SCRIPTS)/start_server.sh
 
-## Show health of the app and every worker.  Add W=<host> to check one worker only.
+## Show health of the app + every worker's containers.  Add W=<host> to check one host only.
 status:
 	@if [ -n "$(W)" ]; then \
 	    bash $(SCRIPTS)/worker.sh status "$(W)"; \
 	else \
 	    bash $(SCRIPTS)/status.sh; \
+	fi
+
+## Tail one host's worker container logs over SSH.  Requires W=<host>.
+logs:
+	@if [ -n "$(W)" ]; then \
+	    bash $(SCRIPTS)/worker.sh logs "$(W)"; \
+	else \
+	    echo "Usage: make logs W=<host>"; exit 1; \
 	fi
 
 ## Run one durable worker agent. Override KIND and ENDPOINT, e.g. make worker-agent KIND=comfy ENDPOINT=http://s1:8188
@@ -88,38 +94,6 @@ worker-agent:
 ## Usage: make ui-worker [ACT=start|stop|status]
 ui-worker:
 	@bash $(SCRIPTS)/ui_worker.sh "$${ACT:-start}"
-
-# ── Containerized workers (docker/) — run these ON a worker machine ──
-# Deploy a GPU worker (ComfyUI + F5-TTS) as containers. See docker/README.md.
-# First run: cp docker/.env.example docker/.env and set MODELS_DIR.
-
-## Build the ComfyUI + F5-TTS worker images on this machine.
-worker-build:
-	@bash $(SCRIPTS)/worker_container.sh build
-
-## Build (if needed) and start the containerized workers in the background.
-worker-up:
-	@bash $(SCRIPTS)/worker_container.sh up
-
-## Stop and remove the containerized workers.
-worker-down:
-	@bash $(SCRIPTS)/worker_container.sh down
-
-## Restart the containerized workers (down + up).
-worker-restart:
-	@bash $(SCRIPTS)/worker_container.sh restart
-
-## Show container + health status of the containerized workers.
-worker-status:
-	@bash $(SCRIPTS)/worker_container.sh status
-
-## Tail logs from the containerized workers (Ctrl-C to stop).
-worker-logs:
-	@bash $(SCRIPTS)/worker_container.sh logs
-
-## Download the ~33 GB of models into MODELS_DIR (from docker/.env).
-worker-fetch-models:
-	@bash $(SCRIPTS)/worker_container.sh fetch-models
 
 # ── Web UI (React + FastAPI) — the app's only front-end ──
 FRONTEND := webapp/frontend
@@ -171,31 +145,26 @@ help:
 	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo ""
-	@echo "  start           Start ComfyUI on all workers + the web app + UI worker(s)"
-	@echo "  stop            Stop the web app, UI worker(s), and ComfyUI on all workers"
+	@echo "  start           Start every worker's containers + the web app + UI worker(s)"
+	@echo "  stop            Stop the web app, UI worker(s), and every worker's containers"
 	@echo "  restart         Stop everything, then start everything"
 	@echo "  restart-server  Restart only the web app (workers keep running)"
-	@echo "  status          Check health of the app, UI worker(s), and every ComfyUI worker"
+	@echo "  status          Check health of the app, UI worker(s), and every worker container"
 	@echo "  launchd-install   Install web server as a macOS LaunchAgent (auto-start/restart)"
 	@echo "  launchd-uninstall Remove the LaunchAgent (reverts to manual nohup)"
 	@echo ""
-	@echo "  start/stop/restart/status all accept  W=<host>  to target one worker:"
-	@echo "    make stop    W=s2       # kill ComfyUI on s2"
-	@echo "    make start   W=s2       # start ComfyUI on s2 and wait for it"
-	@echo "    make restart W=s2       # stop + start ComfyUI on s2"
+	@echo "  start/stop/restart/status/logs accept  W=<host>  to target one host's containers:"
+	@echo "    make stop    W=s2       # stop s2's containers"
+	@echo "    make restart W=s2       # restart s2's containers"
 	@echo "    make status  W=s2       # check just s2"
+	@echo "    make logs    W=s2       # tail s2's container logs"
 	@echo ""
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local|ui ENDPOINT=...)"
 	@echo "  ui-worker       Start/stop UI worker(s) for cover regen (ACT=start|stop|status,"
 	@echo "                  endpoints from config.yaml ui_workers — started by 'make start' too)"
 	@echo ""
-	@echo "Containerized workers (run ON a worker machine — see docker/README.md):"
-	@echo "  worker-up       Build + start the ComfyUI + F5-TTS containers"
-	@echo "  worker-down     Stop and remove the worker containers"
-	@echo "  worker-restart  Restart the worker containers"
-	@echo "  worker-status   Container + health status        worker-logs  Tail logs"
-	@echo "  worker-build    Build the worker images          worker-fetch-models  Download models"
-	@echo "                  First run: cp docker/.env.example docker/.env and set MODELS_DIR"
+	@echo "Workers run as Docker containers (see docker/README.md). 'make install' builds +"
+	@echo "deploys them; start/stop/restart/status/logs manage them over SSH."
 	@echo ""
 	@echo "Web UI (React + FastAPI):"
 	@echo "  web-install     Install web deps (FastAPI backend + React frontend)"

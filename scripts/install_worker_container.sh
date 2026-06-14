@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # Deploy the containerized worker stack (ComfyUI + F5-TTS) to a remote host over
 # SSH (issue #12). The controller rsyncs the build context to the host and drives
-# `docker compose up -d --build` there — the container edition of
-# install_comfyui_worker.sh + install_f5tts_worker.sh.
+# `docker compose up -d --build` there. Called per host by `make install`.
 #
 # The host needs Docker + the NVIDIA Container Toolkit already installed; this
 # script checks for them but does NOT install Docker. Models are NOT copied —
 # the ComfyUI container mounts the host's existing ~/github/ComfyUI/models.
 #
 # Usage: bash scripts/install_worker_container.sh <host>
-# Env overrides (mostly for testing):
+# Env:
+#   MODEL_SOURCE   host to rsync models from if <host> has none (set by install.sh)
 #   COMFYUI_PORT (8188)  TTS_PORT (8189)  STOP_NATIVE (true)  MODELS_DIR (remote ~/github/ComfyUI/models)
+#   (the port/STOP_NATIVE overrides are mainly for non-disruptive testing)
 set -euo pipefail
 
 TARGET="${1:-}"
@@ -68,18 +69,37 @@ TTS_PORT=${TTS_PORT}
 ENV
 echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 
-# Non-fatal: the build works without models, but renders need them. The
-# container mounts the host's existing models (it does not download them).
-if ! ssh "$TARGET" "[ -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' ]" 2>/dev/null; then
-    echo "[deploy] WARNING: LTX models not found at $TARGET:$REMOTE_MODELS"
-    echo "         Populate them before rendering — e.g. run 'bash scripts/download_models.sh"
-    echo "         ~/github/ComfyUI' on $TARGET, or rsync them from a worker that has them."
+# The container mounts the host's existing models (it does not download them).
+# If they're missing and a MODEL_SOURCE host is given, rsync them over (host↔host
+# via SSH agent forwarding); otherwise warn — the build works, but renders need them.
+if ssh "$TARGET" "[ -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' ]" 2>/dev/null; then
+    echo "[deploy] models present on $TARGET"
+elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
+    echo "[deploy] models missing on $TARGET — rsyncing from $MODEL_SOURCE (this can take a while) ..."
+    for d in checkpoints diffusion_models loras latent_upscale_models text_encoders upscale_models vae unet clip; do
+        ssh -A "$TARGET" "mkdir -p '$REMOTE_MODELS/$d' && rsync -az --ignore-existing '${MODEL_SOURCE}:$REMOTE_MODELS/$d/' '$REMOTE_MODELS/$d/'" 2>/dev/null \
+            || echo "[deploy]   warning: rsync of $d may be incomplete"
+    done
+else
+    echo "[deploy] WARNING: LTX models not found at $TARGET:$REMOTE_MODELS and no MODEL_SOURCE to sync from."
+    echo "         Populate them before rendering: 'bash scripts/download_models.sh ~/github/ComfyUI' on $TARGET."
 fi
 
-# ── 4. Stop the native ComfyUI so the container can claim :$COMFYUI_PORT + GPU ─
+# ── 4. Stop any pre-existing native ComfyUI so the container can claim :8188 ───
+# One-time cutover from the old SSH/conda install — kills the native process on
+# :8188 (systemd or nohup), but never a docker-proxy (a container already there).
 if [[ "$STOP_NATIVE" == "true" ]]; then
-    echo "[deploy] stopping native ComfyUI on $TARGET (frees :8188 + GPU) ..."
-    bash "$REPO_ROOT/scripts/worker.sh" stop "$TARGET" || true
+    echo "[deploy] stopping any native ComfyUI on $TARGET (frees :8188 + GPU) ..."
+    ssh "$TARGET" bash <<'REMOTE' || true
+        if systemctl --user is-active comfyui-worker.service &>/dev/null; then
+            systemctl --user stop comfyui-worker.service && echo "  native ComfyUI stopped (systemd)"
+        fi
+        for pid in $(lsof -ti TCP:8188 -s TCP:LISTEN 2>/dev/null || true); do
+            if ps -p "$pid" -o comm= 2>/dev/null | grep -qiv docker; then
+                kill "$pid" 2>/dev/null && echo "  native ComfyUI stopped (PID $pid)"
+            fi
+        done
+REMOTE
 fi
 
 # ── 5. Build + start the containers on the host ───────────────────────────────

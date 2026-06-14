@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """HTTP F5-TTS server — the containerized TTS worker (issue #12).
 
-Wraps the same F5-TTS CLI invocation as ``tts_runner.py`` in a tiny HTTP
-service so the TTS worker can run as a container with no SSH access.
+Wraps the F5-TTS CLI in a tiny HTTP service so the TTS worker can run as a
+container with no SSH access.
 
 Endpoints:
   GET  /health            -> {"status": "ok"}
@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
 # We run inside the f5tts environment, so the current interpreter is the one
-# that can import f5_tts (same assumption as tts_runner.py).
+# that can import f5_tts.
 F5TTS_PYTHON = sys.executable
 DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
 

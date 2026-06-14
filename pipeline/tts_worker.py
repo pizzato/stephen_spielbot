@@ -1,4 +1,4 @@
-"""Distributed TTS — runs F5-TTS locally or on remote hosts via SSH."""
+"""TTS — runs F5-TTS locally or on a containerized HTTP worker (issue #12)."""
 
 import base64
 import json
@@ -12,12 +12,7 @@ from pathlib import Path
 
 logger = logging.getLogger("video_gen")
 
-# Remote deploy path (set by install_comfyui_worker.sh)
-_REMOTE_PYTHON = os.environ.get("F5TTS_REMOTE_PYTHON", "~/f5tts-env/bin/python")
-_REMOTE_RUNNER = os.environ.get("F5TTS_REMOTE_RUNNER", "~/github/video-generator/pipeline/tts_runner.py")
-
-_LOCAL_RUNNER = Path(__file__).parent / "tts_runner.py"
-DEFAULT_REF   = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
 
 
 def _find_local_python() -> str:
@@ -123,44 +118,12 @@ def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0) -> No
         raise RuntimeError(f"F5-TTS failed:\n{result.stderr}")
 
 
-def _f5_remote(text: str, ref: Path, output_path: Path, host: str, speed: float = 1.0) -> None:
-    payload = json.dumps({
-        "text": text,
-        "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
-        "speed": speed,
-    }).encode()
-
-    # Sync latest tts_runner.py to the deployed location on the remote
-    try:
-        subprocess.run(
-            ["rsync", "-q", str(_LOCAL_RUNNER), f"{host}:{_REMOTE_RUNNER}"],
-            check=True,
-            timeout=30,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"rsync to {host} timed out")
-
-    try:
-        proc = subprocess.run(
-            ["ssh", host, f"{_REMOTE_PYTHON} {_REMOTE_RUNNER}"],
-            input=payload,
-            capture_output=True,
-            timeout=_TTS_TIMEOUT,
-        )
-    except subprocess.TimeoutExpired:
-        raise RuntimeError(f"Remote F5-TTS timed out after {_TTS_TIMEOUT}s on {host}")
-    if proc.returncode != 0:
-        raise RuntimeError(f"Remote F5-TTS failed on {host}:\n{proc.stderr.decode()}")
-    output_path.write_bytes(proc.stdout)
-
-
 def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1.0) -> None:
     """POST narration to a containerized F5-TTS HTTP worker (pipeline/tts_server.py).
 
-    Same payload as the SSH transport, but over HTTP so the TTS worker can run as
-    a container with no SSH access. The request hits <url>/tts and the WAV bytes
-    come back in the response body. A default reference is sent as null so the
-    server uses its own bundled narrator, matching _f5_remote.
+    The TTS worker runs as a container with no SSH access. The request hits
+    <url>/tts and the WAV bytes come back in the response body. A default
+    reference is sent as null so the server uses its own bundled narrator.
     """
     payload = json.dumps({
         "text": text,
@@ -198,7 +161,9 @@ def generate_narration(
     host selects the transport:
       * "localhost" / "127.0.0.1" — run F5-TTS locally
       * "http://…" / "https://…"  — POST to a containerized F5-TTS worker (issue #12)
-      * anything else             — SSH to a bare host (legacy distributed path)
+
+    Workers are containers reached over HTTP, so tts_workers must be http:// URLs;
+    a bare hostname is rejected.
 
     When robotic is set, post-process the result into a robotic monotone so the
     voice is not mistaken for a human (issue #52). The effect runs locally on
@@ -218,7 +183,10 @@ def generate_narration(
     elif host.startswith(("http://", "https://")):
         _f5_http(text, ref, output_path, host, speed)
     else:
-        _f5_remote(text, ref, output_path, host, speed)
+        raise RuntimeError(
+            f"TTS worker must be an http:// container URL (e.g. http://host:8189); "
+            f"got bare host {host!r}. Set tts_workers to http:// URLs (issue #12)."
+        )
     if robotic:
         _robotize_wav(output_path, robotic_amount)
     return output_path

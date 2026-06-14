@@ -29,7 +29,7 @@ deployment, run one worker daemon per execution resource:
 
 ```bash
 make worker-agent KIND=comfy ENDPOINT=http://s1:8188
-make worker-agent KIND=tts ENDPOINT=s1
+make worker-agent KIND=tts ENDPOINT=http://s1:8189
 make worker-agent KIND=local ENDPOINT=assembler
 ```
 
@@ -41,11 +41,16 @@ Current implementation and test status are tracked in
 
 ## Requirements
 
+**Controller** (runs the web app):
 - Python 3.10+
-- [ComfyUI](https://github.com/comfyanonymous/ComfyUI) with LTX 2.3 models
-- F5-TTS in a separate Python environment (set `F5TTS_PYTHON`)
-- FFmpeg
+- FFmpeg (final assembly)
 - A local vLLM server **or** a Claude API key for script generation
+- Passwordless SSH to each worker (`ssh-copy-id`)
+
+**Workers** (GPU machines):
+- Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- ComfyUI (LTX 2.3) + F5-TTS run as containers — `make install` builds and
+  deploys them; the worker needs no Python/conda of its own
 
 ## Quick start
 
@@ -73,37 +78,35 @@ make status    # check health of the app and all workers
 ## Cluster setup
 
 Workers are configured in the single config file (see below) — there is no
-separate `cluster.conf`. List your render workers under `comfy_workers` (and the
-matching `tts_workers` hosts); `make install` will SSH into each host and deploy
-ComfyUI + F5-TTS automatically (as containers by default — see below). The local
-machine is always included.
+separate `cluster.conf`. List your render workers under `comfy_workers`;
+`make install` deploys the containers over SSH and derives `tts_workers` and
+`ui_workers` from them automatically:
 
 ```yaml
 # ~/.config/video-generator/config.yaml
-comfy_workers:
+comfy_workers:           # you set these
   - http://s1:8188
   - http://s2:8188
-tts_workers:
-  - s1
-  - s2
-ui_workers:            # ComfyUI endpoints for cover-image regeneration
-  - http://localhost:8188
+tts_workers:             # set by make install → containerized F5-TTS
+  - http://s1:8189
+  - http://s2:8189
+ui_workers:              # set by make install → container ComfyUI for cover regen
+  - http://s1:8188
 ```
 
-Workers must be reachable via SSH without a password (use `ssh-copy-id`).
+Workers must be reachable via SSH without a password (`ssh-copy-id`) and have
+Docker + the NVIDIA Container Toolkit installed.
 
-### Containerized workers (default)
+### Containerized workers
 
-`make install` deploys each remote render worker (ComfyUI + F5-TTS) as **Docker
+`make install` deploys each render worker (ComfyUI + F5-TTS) as **Docker
 containers**, driven over SSH from the controller: it rsyncs the build context,
-mounts the host's existing models, stops the native ComfyUI, runs
-`docker compose up -d --build`, and rewrites `tts_workers` to the
-`http://host:8189` container URLs. Each worker needs Docker + the NVIDIA
-Container Toolkit. See [`docker/README.md`](docker/README.md).
+mounts the host's existing models, runs `docker compose up -d --build`, and
+points the config at the container endpoints. See
+[`docker/README.md`](docker/README.md).
 
 ```bash
-make install WORKERS="s1 s2 s3"               # container deploy (default)
-DEPLOY=ssh make install WORKERS="s1 s2 s3"    # legacy Miniconda/venv install
+make install WORKERS="s1 s2 s3"
 ```
 
 Deploy or re-deploy a single host from the controller:
@@ -112,18 +115,17 @@ Deploy or re-deploy a single host from the controller:
 bash scripts/install_worker_container.sh s1
 ```
 
-Containerized TTS is reached over an **`http://` URL**; bare-hostname
-`tts_workers` still route over SSH, so containerized and SSH-installed hosts can
-coexist during a migration:
+Manage the workers from the controller — all of them, or one with `W=<host>`:
 
-```yaml
-comfy_workers: [ http://s1:8188 ]
-tts_workers:   [ http://s1:8189 ]   # http:// → containerized F5-TTS over HTTP
+```bash
+make status                 # web app + every worker container's health
+make restart W=s2           # restart just s2's containers
+make stop                   # stop all worker containers + the web app
+make logs W=s2              # tail s2's container logs
 ```
 
-> Note: `make start/stop/status` still target the **native** install. Containers
-> self-start via compose `restart: unless-stopped`; manage them with `make
-> worker-*` on the host (or `docker compose`).
+`make start/stop/restart/status` drive `docker compose` on each host over SSH.
+Containers carry `restart: unless-stopped`, so they also survive a host reboot.
 
 ## Configuration
 
@@ -143,9 +145,8 @@ cluster status panel). Worker lists are part of this file:
 
 | Variable | Default | Description |
 |---|---|---|
-| `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for F5-TTS |
+| `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for *local* F5-TTS (workers use the container) |
 | `CHATTERBOX_PYTHON` | `~/miniconda3/envs/chatterbox/bin/python` | Python interpreter for Chatterbox TTS |
-| `F5TTS_REMOTE_PYTHON` | `~/f5tts-env/bin/python` | F5-TTS Python path on remote TTS workers |
 
 ## Models
 

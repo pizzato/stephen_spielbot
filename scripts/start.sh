@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Start ComfyUI on all workers and the web app locally.
-# Worker hosts come from config.yaml (comfy_workers).
+# Start the containerized ComfyUI + F5-TTS workers on every host and the web app.
+# Worker hosts come from config.yaml (comfy_workers). Containers are managed over
+# SSH via docker compose (deployed by `make install`).
 # Usage: bash scripts/start.sh
 set -euo pipefail
 
@@ -18,48 +19,11 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
-wait_for_comfyui() {
-    local host="$1" url="$2"
-    echo -n "  Waiting for ComfyUI on $host"
-    for i in $(seq 1 30); do
-        if curl -sf "${url}/system_stats" &>/dev/null; then
-            echo " ✓"
-            return 0
-        fi
-        echo -n "."
-        sleep 3
-    done
-    echo " TIMEOUT (ComfyUI may still be loading)"
-}
-
-# ── 1. Remote ComfyUI workers ─────────────────────────────────────────────────
+# ── 1. Worker containers (ComfyUI + F5-TTS) on every host ─────────────────────
 
 for host in $(remote_hosts); do
-    echo "=== Starting ComfyUI ($host) ==="
-    ssh "$host" bash <<'REMOTE'
-        if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-            echo "  [comfyui] already running"
-        elif systemctl --user list-unit-files comfyui-worker.service 2>/dev/null | grep -q comfyui; then
-            systemctl --user start comfyui-worker.service
-            echo "  [comfyui] started via systemd"
-        elif [[ -x "$HOME/github/ComfyUI/start_worker.sh" ]]; then
-            bash "$HOME/github/ComfyUI/start_worker.sh"
-        else
-            echo "  [comfyui] WARNING: no start method found on $(hostname)"
-        fi
-REMOTE
-    wait_for_comfyui "$host" "http://${host}:8188"
-done
-
-# ── 1b. UI ComfyUI worker hosts ───────────────────────────────────────────────
-# Hosts in ui_workers that are NOT already render workers get started here via
-# the same SSH-based worker.sh (works for localhost too).
-
-_COMFY_HOSTS=" $(remote_hosts | tr '\n' ' ') "
-for host in $(ui_hosts); do
-    [[ "$_COMFY_HOSTS" == *" $host "* ]] && continue
-    echo "=== Starting ComfyUI (ui: $host) ==="
     bash "$REPO_ROOT/scripts/worker.sh" start "$host"
+    bash "$REPO_ROOT/scripts/worker.sh" status "$host"
 done
 
 # ── 2. Web app ────────────────────────────────────────────────────────────────
@@ -84,7 +48,9 @@ else
     echo "  [app] started (PID $!, log: $APP_LOG)"
 fi
 
-# ── 3. UI workers (cover-image regeneration) ──────────────────────────────────
+# ── 3. UI worker agent(s) (cover-image regeneration) ──────────────────────────
+# Controller-side daemons that lease cover tasks and render them against the
+# container ComfyUI endpoints in config.yaml (ui_workers).
 
 echo "=== Starting UI worker(s) ==="
 bash "$REPO_ROOT/scripts/ui_worker.sh" start
