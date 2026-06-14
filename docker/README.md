@@ -25,19 +25,18 @@ mounted in, so images stay small and rebuild fast.
   docker run --rm --gpus all nvidia/cuda:13.0.1-base-ubuntu24.04 nvidia-smi
   ```
 
-## Deploy from the controller (default — `make install`)
+## Deploy from the controller (`make install`)
 
 `make install` deploys containers to every host in `comfy_workers`, over SSH:
 
 ```bash
 make install WORKERS="s1 s2 s3"               # seeds config + container deploy
-DEPLOY=ssh make install WORKERS="s1 s2 s3"    # legacy Miniconda/venv install instead
 ```
 
 Per host it: preflights Docker + the NVIDIA toolkit; rsyncs the build context
 (no GitHub access needed on the worker — the repo is private); writes
 `docker/.env` with `MODELS_DIR=~/github/ComfyUI/models` (the host's existing
-models — **not** re-downloaded); **stops the native ComfyUI** so the container
+models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
 Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 
@@ -48,49 +47,30 @@ bash scripts/install_worker_container.sh s1
 ```
 
 > The container **mounts** the host's models; it does not download them. On a
-> fresh worker with no models yet, populate `~/github/ComfyUI/models` first
-> (`bash scripts/download_models.sh ~/github/ComfyUI` on the host, or rsync from
-> a worker that has them).
+> fresh worker with no models yet, `make install` downloads them on the first
+> worker and rsyncs to the rest; or populate `~/github/ComfyUI/models` yourself
+> (`bash scripts/download_models.sh ~/github/ComfyUI` on the host).
 
-## Or deploy on the worker itself
+## Config the controller writes
 
-```bash
-# On the worker machine:
-cd stephen_spielbot/docker
-cp .env.example .env
-#   edit .env → set MODELS_DIR (and, if needed, BASE_IMAGE / TORCH_INDEX_URL)
-
-# One-time: download the ~33 GB of models into MODELS_DIR
-bash ../scripts/worker_container.sh fetch-models
-#   (or copy/rsync an existing ComfyUI models/ folder into MODELS_DIR)
-
-# Build + start both workers
-bash ../scripts/worker_container.sh up
-bash ../scripts/worker_container.sh status
-```
-
-`make worker-up` / `worker-down` / `worker-status` / `worker-logs` / `worker-build`
-from the repo root do the same thing.
-
-## Point the controller at it
-
-On the controller, add the machine to `~/.config/video-generator/config.yaml`
-(or the Settings screen). The key change from the SSH setup: **TTS workers are
-now `http://` URLs**, which routes narration over HTTP instead of SSH.
+`make install` sets these in `~/.config/video-generator/config.yaml` from your
+`comfy_workers` (you can also edit them in the Settings screen). All worker
+endpoints are container URLs — TTS is reached over HTTP (`http://host:8189`), not
+SSH:
 
 ```yaml
-comfy_workers:
+comfy_workers:            # you set these
   - http://s1:8188
   - http://s2:8188
-ui_workers:               # cover-image regen reuses ComfyUI endpoints
+ui_workers:               # set by install — cover-image regen reuses the ComfyUI container
   - http://s1:8188
-tts_workers:
-  - http://s1:8189        # http:// → containerized F5-TTS over HTTP
+tts_workers:              # set by install — http:// selects the HTTP transport
+  - http://s1:8189
   - http://s2:8189
 ```
 
-Bare hostnames in `tts_workers` (e.g. `s1`) still use the legacy SSH path, so
-containerized and SSH-installed TTS hosts can coexist during a migration.
+A bare hostname in `tts_workers` is rejected — workers are HTTP containers, so
+the value must be an `http://host:8189` URL.
 
 ## Configuration knobs (`docker/.env`)
 
@@ -125,17 +105,16 @@ docker compose push        # after setting `image:` to your registry path
 # on each worker: docker compose pull && docker compose up -d
 ```
 
-## Relationship to the SSH installer
+## Managing workers from the controller
 
-The SSH-based installer (`scripts/install_comfyui_worker.sh`,
-`scripts/install_f5tts_worker.sh`) still works and is untouched — containers are
-an alternative deployment path, not a replacement. A fleet can mix both while you
-migrate (some hosts SSH-installed, some containerized).
+Containers are the only worker pathway. `make start/stop/restart/status` manage
+them over SSH (via `docker compose` on each host), and `W=<host>` scopes to one:
 
-> **Migrating a host: stop the native worker first.** The container ComfyUI and
-> the SSH-installed ComfyUI both want the GPU and the same models. Don't run both
-> on one machine — a containerized worker plus an already-loaded native render
-> can exhaust GPU memory and get a render OOM-killed. Before `worker-up` on a
-> host, stop its native worker: `make stop W=<host>` (ComfyUI) and ensure no
-> native F5-TTS is mid-job. The container then has the same GPU footprint the
-> native install had.
+```bash
+make status                 # web app + every worker container's health
+make restart W=s2           # restart just s2's containers
+make stop                   # stop all worker containers + the web app
+```
+
+Containers carry `restart: unless-stopped`, so they also come back on their own
+after a host reboot. `make logs W=s2` tails a host's container logs.

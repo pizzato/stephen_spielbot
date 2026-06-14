@@ -1,113 +1,66 @@
 #!/usr/bin/env bash
-# Manage a single remote ComfyUI worker.
-# Usage: bash scripts/worker.sh <start|stop|restart|status> <hostname>
+# Manage one host's containerized worker stack (ComfyUI + F5-TTS) from the
+# controller, over SSH. The stack is deployed to ~/spielbot-worker/docker on the
+# host by `make install` / install_worker_container.sh.
 #
+# Usage: bash scripts/worker.sh <start|stop|restart|status|logs> <hostname>
 #   bash scripts/worker.sh stop    s2
 #   bash scripts/worker.sh start   s2
 #   bash scripts/worker.sh restart s2
 #   bash scripts/worker.sh status  s2
+#   bash scripts/worker.sh logs    s2
 set -euo pipefail
 
 ACTION="${1:-}"
 HOST="${2:-}"
 
 if [[ -z "$ACTION" || -z "$HOST" ]]; then
-    echo "Usage: $0 <start|stop|restart|status> <hostname>"
+    echo "Usage: $0 <start|stop|restart|status|logs> <hostname>"
     exit 1
 fi
 
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
+TTS_PORT="${TTS_PORT:-8189}"
+REMOTE_DIR="spielbot-worker/docker"
 
-# ── Helpers ────────────────────────────────────────────────────────────────────
-
-_stop() {
-    echo "=== Stopping ComfyUI ($HOST) ==="
-    ssh "$HOST" bash <<'REMOTE'
-        if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-            systemctl --user stop comfyui-worker.service
-            echo "  [comfyui] stopped (systemd)"
-        else
-            # Kill by port — works regardless of how ComfyUI was invoked
-            PIDS=$(lsof -ti TCP:8188 -s TCP:LISTEN 2>/dev/null \
-                || ss -tlnp 'sport = :8188' 2>/dev/null | grep -oP 'pid=\K[0-9]+' \
-                || true)
-            if [[ -n "$PIDS" ]]; then
-                kill $PIDS
-                echo "  [comfyui] stopped (PID $PIDS)"
-            else
-                echo "  [comfyui] not running"
-            fi
-        fi
-REMOTE
+# Run a `docker compose` command on the host's deployed stack, over SSH.
+_compose() {
+    ssh "$HOST" "[ -d \$HOME/$REMOTE_DIR ] || { echo 'ERROR: no container stack at ~/$REMOTE_DIR on $HOST — run: make install'; exit 1; }; cd \$HOME/$REMOTE_DIR && docker compose $*"
 }
 
-_start() {
-    echo "=== Starting ComfyUI ($HOST) ==="
-    ssh "$HOST" bash <<'REMOTE'
-        if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-            echo "  [comfyui] already running"
-        elif systemctl --user list-unit-files comfyui-worker.service 2>/dev/null | grep -q comfyui; then
-            systemctl --user start comfyui-worker.service
-            echo "  [comfyui] started via systemd"
-        elif [[ -x "$HOME/github/ComfyUI/start_worker.sh" ]]; then
-            bash "$HOME/github/ComfyUI/start_worker.sh"
-        else
-            echo "  [comfyui] WARNING: no start method found on $(hostname)"
-            exit 1
-        fi
-REMOTE
-
-    # Wait for ComfyUI to respond
-    local url="http://${HOST}:${COMFYUI_PORT}"
-    echo -n "  Waiting for ComfyUI on $HOST"
-    for i in $(seq 1 40); do
-        if curl -sf "${url}/system_stats" &>/dev/null; then
-            echo " ✓"
-            echo "  ComfyUI is up at $url"
-            return 0
-        fi
-        echo -n "."
-        sleep 3
-    done
-    echo " TIMEOUT"
-    echo "  WARNING: ComfyUI did not respond within 2 minutes — it may still be loading."
-    return 1
-}
-
-_status() {
-    local url="http://${HOST}:${COMFYUI_PORT}"
-    echo -n "  $HOST: "
-    if curl -sf "${url}/system_stats" &>/dev/null; then
-        local nodes
-        nodes=$(curl -sf "${url}/object_info" 2>/dev/null \
-            | python3 -c 'import sys,json; d=json.load(sys.stdin); print(len(d))' 2>/dev/null || echo "?")
-        echo "✓ ComfyUI UP  ($nodes nodes)  $url"
+_health() {
+    local name="$1" url="$2"
+    if curl -sf -m 5 "$url" >/dev/null 2>&1; then
+        echo "    ✓ $name UP    ${url%/*}"
     else
-        echo "✗ ComfyUI DOWN  $url"
-        # Try to show systemd status if reachable
-        ssh "$HOST" bash <<'REMOTE' 2>/dev/null || true
-            if systemctl --user is-active comfyui-worker.service &>/dev/null; then
-                echo "  systemd service: active"
-            elif systemctl --user is-failed comfyui-worker.service &>/dev/null; then
-                echo "  systemd service: failed"
-                journalctl --user -u comfyui-worker.service -n 5 --no-pager 2>/dev/null || true
-            else
-                echo "  systemd service: inactive / not installed"
-            fi
-REMOTE
-        return 1
+        echo "    ✗ $name DOWN  ${url%/*}"
     fi
 }
 
-# ── Dispatch ──────────────────────────────────────────────────────────────────
-
 case "$ACTION" in
-    stop)    _stop ;;
-    start)   _start ;;
-    restart) _stop && _start ;;
-    status)  _status ;;
+    start)
+        echo "=== Starting containers ($HOST) ==="
+        _compose up -d
+        ;;
+    stop)
+        echo "=== Stopping containers ($HOST) ==="
+        _compose stop
+        ;;
+    restart)
+        echo "=== Restarting containers ($HOST) ==="
+        _compose restart
+        ;;
+    status)
+        echo "  $HOST:"
+        _compose ps 2>/dev/null || true
+        _health "ComfyUI" "http://${HOST}:${COMFYUI_PORT}/system_stats"
+        _health "F5-TTS " "http://${HOST}:${TTS_PORT}/health"
+        ;;
+    logs)
+        _compose logs --tail 100 -f
+        ;;
     *)
-        echo "Unknown action '$ACTION'. Use: start | stop | restart | status"
+        echo "Unknown action '$ACTION'. Use: start | stop | restart | status | logs"
         exit 1
         ;;
 esac

@@ -3,7 +3,7 @@
 generate_narration() picks a transport from the host string:
   localhost / 127.0.0.1   -> local F5-TTS subprocess
   http(s)://host:port     -> HTTP POST to a containerized F5-TTS worker
-  anything else           -> SSH to a bare host (legacy distributed path)
+  anything else           -> rejected (workers are http:// containers, not SSH)
 
 The HTTP transport is what lets the F5-TTS worker run as a container. These
 tests exercise the routing and the HTTP client without invoking real TTS.
@@ -32,33 +32,32 @@ class RoutingTests(unittest.TestCase):
 
     def _run(self, host):
         with mock.patch.object(tts_worker, "_f5_local") as local, \
-             mock.patch.object(tts_worker, "_f5_remote") as remote, \
              mock.patch.object(tts_worker, "_f5_http") as http:
             tts_worker.generate_narration("hello", self.out, reference_wav=self.ref, host=host)
-        return local, remote, http
+        return local, http
 
     def test_localhost_uses_local(self):
-        local, remote, http = self._run("localhost")
+        local, http = self._run("localhost")
         local.assert_called_once()
-        remote.assert_not_called()
         http.assert_not_called()
 
     def test_http_url_uses_http(self):
-        local, remote, http = self._run("http://s1:8189")
+        local, http = self._run("http://s1:8189")
         http.assert_called_once()
         local.assert_not_called()
-        remote.assert_not_called()
 
     def test_https_url_uses_http(self):
-        local, remote, http = self._run("https://s1:8189")
+        local, http = self._run("https://s1:8189")
         http.assert_called_once()
-        remote.assert_not_called()
 
-    def test_bare_host_uses_ssh(self):
-        local, remote, http = self._run("s1")
-        remote.assert_called_once()
-        http.assert_not_called()
-        local.assert_not_called()
+    def test_bare_host_rejected(self):
+        # Workers are http:// containers now — a bare hostname is a config error.
+        with mock.patch.object(tts_worker, "_f5_local") as local, \
+             mock.patch.object(tts_worker, "_f5_http") as http:
+            with self.assertRaises(RuntimeError):
+                tts_worker.generate_narration("hello", self.out, reference_wav=self.ref, host="s1")
+            local.assert_not_called()
+            http.assert_not_called()
 
 
 class HttpClientTests(unittest.TestCase):
