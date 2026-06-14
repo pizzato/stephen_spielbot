@@ -147,6 +147,25 @@ def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1
         raise RuntimeError(f"Remote F5-TTS unreachable at {url}: {exc.reason}")
 
 
+def worker_alive(host: str, timeout: int = 3) -> bool:
+    """Return True if a TTS worker is reachable, for the Settings health display.
+
+    Mirrors generate_narration's transport routing: an http(s):// worker is probed
+    at its /health endpoint (pipeline/tts_server.py); localhost runs F5-TTS in
+    process, so it has no endpoint to probe and is reported available; a bare
+    hostname is a config error (rejected at render time) and reported down.
+    """
+    if host in ("localhost", "127.0.0.1"):
+        return True
+    if host.startswith(("http://", "https://")):
+        try:
+            with urllib.request.urlopen(host.rstrip("/") + "/health", timeout=timeout):
+                return True
+        except Exception:
+            return False
+    return False
+
+
 def generate_narration(
     text: str,
     output_path: Path,
