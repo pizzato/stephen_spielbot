@@ -1,0 +1,61 @@
+# Per-machine worker stack (issue #12): ComfyUI + F5-TTS sharing the host GPU(s).
+#
+# On each worker machine:
+#   cp .env.example .env        # then set MODELS_DIR (and CUDA/torch if needed)
+#   docker compose up -d --build
+#
+# Then point the controller's config.yaml at this machine:
+#   comfy_workers: [ http://<host>:8188 ]
+#   tts_workers:   [ http://<host>:8189 ]   # http:// URL = containerized TTS
+name: spielbot-worker
+
+services:
+  comfyui:
+    build:
+      context: ..
+      dockerfile: docker/comfyui/Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
+        COMFYUI_REF: ${COMFYUI_REF:-master}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    image: spielbot-comfyui:latest
+    ports:
+      - "${COMFYUI_PORT:-8188}:8188"
+    volumes:
+      # ~33 GB of models live on the host; populate once (see docker/README.md).
+      - ${MODELS_DIR:?set MODELS_DIR in docker/.env}:/opt/ComfyUI/models
+      - comfyui-output:/opt/ComfyUI/output
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  tts:
+    build:
+      context: ..
+      dockerfile: docker/tts/Dockerfile
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+    image: spielbot-tts:latest
+    ports:
+      - "${TTS_PORT:-8189}:8189"
+    volumes:
+      # Persist the F5TTS_v1_Base weights (~1.3 GB) across container recreation.
+      - hf-cache:/cache/huggingface
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  comfyui-output:
+  hf-cache:

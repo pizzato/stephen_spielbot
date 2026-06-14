@@ -1,0 +1,23 @@
+# Keep the Docker build context small. The worker images need only a few
+# pipeline files + assets (TTS image) and otherwise clone ComfyUI themselves.
+.git
+.github
+.claude
+.venv
+venv
+env
+node_modules
+webapp/frontend/node_modules
+webapp/frontend/dist
+outputs
+videos
+*.mp4
+*.mp3
+*.flac
+*.log
+logs
+__pycache__
+*.pyc
+.DS_Store
+docs
+tests

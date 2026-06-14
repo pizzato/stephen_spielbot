@@ -38,13 +38,8 @@ remote_hosts() {
     _cfg_list comfy_workers | sed -E 's#^https?://##; s#[:/].*$##' | awk 'NF' | sort -u
 }
 
-# UI worker ComfyUI endpoints (full URLs).
+# UI worker ComfyUI endpoints (full URLs) — used by the controller-side ui
+# worker agent (cover-image regeneration).
 ui_endpoints() {
     _cfg_list ui_workers
-}
-
-# UI ComfyUI hosts — bare hostnames derived from ui_workers URLs.
-# Used for SSH-based install/start/stop, same interface as remote_hosts().
-ui_hosts() {
-    _cfg_list ui_workers | sed -E 's#^https?://##; s#[:/].*$##' | awk 'NF' | sort -u
 }
