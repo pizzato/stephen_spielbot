@@ -38,8 +38,12 @@ remote_hosts() {
     _cfg_list comfy_workers | sed -E 's#^https?://##; s#[:/].*$##' | awk 'NF' | sort -u
 }
 
-# UI worker ComfyUI endpoints (full URLs) — used by the controller-side ui
-# worker agent (cover-image regeneration).
-ui_endpoints() {
-    _cfg_list ui_workers
+# Fallback ComfyUI endpoint for the controller-side cover agent. The dedicated
+# UI worker was removed (issue #98): covers now route per-task to a render worker
+# the backend keeps idle while the UI is in use, so this is only the agent's
+# default endpoint. First comfy worker, or localhost for a single-machine setup.
+cover_endpoint() {
+    local first
+    first="$(_cfg_list comfy_workers | awk 'NF' | head -n1)"
+    echo "${first:-http://localhost:8188}"
 }

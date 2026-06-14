@@ -89,8 +89,8 @@ worker-agent:
 	ENDPOINT="$${ENDPOINT:-http://localhost:8188}"; \
 	.venv/bin/python worker_agent.py --kind "$$KIND" --endpoint "$$ENDPOINT"
 
-## Start/stop the UI worker(s) for cover-image regeneration (reads config.yaml ui_workers).
-## Started automatically by 'make start'; use this to (re)start them on their own.
+## Start/stop the controller-side cover agent (cover-image regeneration).
+## Started automatically by 'make start'; use this to (re)start it on its own.
 ## Usage: make ui-worker [ACT=start|stop|status]
 ui-worker:
 	@bash $(SCRIPTS)/ui_worker.sh "$${ACT:-start}"

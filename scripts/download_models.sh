@@ -169,9 +169,10 @@ else
         "flux1-schnell-fp8.safetensors" \
         "models/unet"
 
-    # BF16 (non-quantised) version — required for MPS (Apple Silicon) UI workers.
-    # fp8 models cannot run on MPS; this model is selected via ui_flux_model in config.
-    # Requires accepting the BFL license at huggingface.co/black-forest-labs/FLUX.1-schnell
+    # BF16 (non-quantised) version — required to run ComfyUI on MPS (Apple
+    # Silicon), which cannot load the fp8 model. Point flux_model at it in config
+    # on a Mac worker. Requires accepting the BFL license at
+    # huggingface.co/black-forest-labs/FLUX.1-schnell
     download \
         "black-forest-labs/FLUX.1-schnell" \
         "flux1-schnell.safetensors" \
