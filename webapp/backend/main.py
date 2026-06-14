@@ -1641,7 +1641,10 @@ def badges() -> dict:
     queue_pending = sum(1 for q in queue if q.get("status") == "pending")
 
     try:
-        attention = len(yt.get_pending_requests())
+        # Pending video requests + drafted community replies awaiting review (issue #84).
+        comment_cache = yt.load_comments_cache()
+        attention = (len(yt.get_pending_requests(comment_cache))
+                     + len(yt.get_pending_community_replies(comment_cache)))
     except Exception:
         attention = 0
 
@@ -1895,6 +1898,27 @@ def yt_disconnect(body: DisconnectBody | None = None) -> dict:
     cfg["youtube_channels"] = chans
     gapp.save_config(cfg)  # _ensure_channels clears style refs to the removed key
     return {"ok": True, "channels": chans}
+
+
+class ChannelSettingsBody(BaseModel):
+    id: str
+    engagement_prompt: str = ""
+    auto_respond: bool = False
+
+
+@api.post("/api/youtube/channels/settings")
+def yt_channel_settings(body: ChannelSettingsBody) -> dict:
+    """Save a channel's community-engagement config (issue #84): the persona/guidance
+    used to draft replies to non-request comments, and whether approved drafts post
+    immediately or wait for review. Auto-saves, like connect/disconnect."""
+    cfg = gapp.load_config()
+    entry = next((c for c in (cfg.get("youtube_channels") or []) if c.get("id") == body.id), None)
+    if entry is None:
+        raise HTTPException(404, "Channel not found.")
+    entry["engagement_prompt"] = body.engagement_prompt.strip()
+    entry["auto_respond"] = bool(body.auto_respond)
+    gapp.save_config(cfg)
+    return {"ok": True}
 
 
 @api.get("/api/youtube/analytics")
@@ -2425,7 +2449,9 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
             if fc.get("comment_id") not in existing:
                 cache.insert(0, {**fc, "channel": ch, "evaluated": False, "is_request": False,
                                  "suggested_title": "", "confidence": 0.0,
-                                 "interestingness": 0.0, "reason": "", "status": "new"})
+                                 "interestingness": 0.0, "reason": "", "status": "new",
+                                 "engagement_status": "", "engagement_draft": "",
+                                 "engagement_reason": ""})
                 existing.add(fc.get("comment_id"))
                 new_count += 1
     yt.save_comments_cache(cache)
@@ -2458,8 +2484,45 @@ def _fetch_and_evaluate(auto_approve: bool) -> dict:
                 except Exception:
                     pass
             approved += 1
+
+    # Community engagement (issue #84): for non-request comments, draft a reply per
+    # the comment's channel config and — if that channel auto-responds — post it now.
+    # Runs over the whole cache (not just new comments) so enabling a channel's
+    # engagement later picks up its backlog; the engagement_status stamp makes it
+    # run-once per comment. Channels with no guidance prompt stay untouched (status "").
+    chan_cfg = {c.get("id", ""): c for c in (cfg.get("youtube_channels") or [])}
+    drafted = sent = 0
+    for c in cache:
+        if c.get("is_request") or c.get("engagement_status"):
+            continue
+        entry = chan_cfg.get(c.get("channel", ""), {})
+        guidance = str(entry.get("engagement_prompt") or "").strip()
+        if not guidance:
+            continue
+        thread = "\n".join(
+            f"{r.get('commenter', 'viewer')}: {r.get('text', '')}"
+            for r in (c.get("replies") or [])
+        )
+        r = llm.generate_community_reply(c.get("text", ""), c.get("commenter", ""),
+                                         thread, guidance, cfg)
+        c["engagement_reason"] = r.get("reason", "")
+        if not (r.get("should_reply") and r.get("reply")):
+            c["engagement_status"] = "skip"
+            continue
+        c["engagement_draft"] = r["reply"]
+        if entry.get("auto_respond"):
+            rep = yt.reply_to_comment(secrets, c.get("comment_id", ""), r["reply"],
+                                      channel=c.get("channel", ""))
+            if rep.get("success"):
+                c["engagement_status"] = "sent"
+                sent += 1
+                continue
+        c["engagement_status"] = "draft"
+        drafted += 1
+
     yt.save_comments_cache(cache)
-    return {"new": new_count, "thanked": thanked, "auto_approved": approved}
+    return {"new": new_count, "thanked": thanked, "auto_approved": approved,
+            "community_drafted": drafted, "community_sent": sent}
 
 
 class FetchBody(BaseModel):
@@ -2525,6 +2588,43 @@ def youtube_reply(body: CommentActionBody) -> dict:
                               channel=(c or {}).get("channel", ""))
     if not res.get("success"):
         raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    return {"ok": True}
+
+
+@api.post("/api/youtube/comments/community/send")
+def youtube_community_send(body: CommentActionBody) -> dict:
+    """Post a drafted community reply (optionally edited) as the comment's channel,
+    then mark it sent (issue #84). No-op unless the draft is still pending."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Reply text required.")
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this comment.")
+    res = yt.reply_to_comment(gapp.load_config().get("youtube_client_secrets", ""),
+                              body.comment_id, text, channel=c.get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    c["engagement_status"] = "sent"
+    c["engagement_draft"] = text
+    yt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/youtube/comments/community/dismiss")
+def youtube_community_dismiss(body: CommentActionBody) -> dict:
+    """Discard a pending community-reply draft (issue #84)."""
+    cache = yt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this comment.")
+    c["engagement_status"] = "dismissed"
+    yt.save_comments_cache(cache)
     return {"ok": True}
 
 

@@ -268,6 +268,51 @@ youtube_description:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Community comment reply (engage with non-request comments — issue #84)
+# ═════════════════════════════════════════════════════════════════════════════
+
+community_reply:
+  description: |
+    Decides whether to reply to a non-request YouTube comment and, if so, drafts a
+    reply in the channel's voice. Returns JSON {should_reply, reply, reason}. The
+    channel's own engagement guidance is injected as ${guidance}.
+  system: |
+    You manage community engagement for a YouTube channel's comment section.
+    You are given a viewer's comment (and any existing replies in its thread) plus
+    the channel's own guidance for how it likes to engage with its audience.
+
+    Decide whether this comment is worth a reply, and if so, write ONE short, warm
+    reply in the channel's voice that follows the channel guidance.
+
+    Reply ONLY when a reply adds genuine value — answering a real question,
+    acknowledging thoughtful praise or feedback, or naturally continuing the
+    conversation. Do NOT reply to spam or self-promotion, hostile or abusive
+    comments, low-effort one-word reactions, or anything already addressed by an
+    existing reply in the thread. When in doubt, do not reply.
+
+    Keep the reply to 1–2 sentences. Never invent facts, make promises, or share
+    links the guidance did not provide.
+
+    Respond with ONLY a JSON object with EXACTLY these fields:
+    - "should_reply": boolean — whether to post a reply at all
+    - "reply": string — the reply text if should_reply is true, otherwise ""
+    - "reason": string — one short sentence explaining the decision
+
+    Output ONLY the JSON object, no other text.
+  user: |
+    Channel engagement guidance:
+    ${guidance}
+
+    Comment from "${commenter}":
+    ${comment}
+
+    Existing replies in this thread:
+    ${thread}
+
+    Output ONLY the JSON object.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Cover image (YouTube thumbnail) — FLUX prompt
 # ═════════════════════════════════════════════════════════════════════════════
 

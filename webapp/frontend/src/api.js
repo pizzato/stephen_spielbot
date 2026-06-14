@@ -91,6 +91,9 @@ export const api = {
   approveComment: (commentId, finalTitle) => req('POST', '/youtube/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
   rejectComment: (commentId) => req('POST', '/youtube/comments/reject', { comment_id: commentId }),
   replyComment: (commentId, text) => req('POST', '/youtube/comments/reply', { comment_id: commentId, text }),
+  // community engagement drafts (issue #84)
+  sendCommunityReply: (commentId, text) => req('POST', '/youtube/comments/community/send', { comment_id: commentId, text }),
+  dismissCommunityReply: (commentId) => req('POST', '/youtube/comments/community/dismiss', { comment_id: commentId }),
 
   // queue management
   queueMove: (id, direction) => req('POST', '/queue/move', { id, direction }),
@@ -114,6 +117,7 @@ export const api = {
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
   ytDisconnect: (channel) => req('POST', '/youtube/disconnect', { channel: channel || '' }),
+  ytChannelSettings: (id, fields) => req('POST', '/youtube/channels/settings', { id, ...fields }),
   ytPostOptions: () => req('GET', '/youtube/post/options'),
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),

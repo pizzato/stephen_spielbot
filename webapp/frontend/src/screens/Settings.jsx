@@ -197,6 +197,9 @@ function ChannelsCard({ onConfigChanged, onError }) {
   const [channels, setChannels] = useState(null)
   const [connecting, setConnecting] = useState(false)
   const [busy, setBusy] = useState('')
+  const [expanded, setExpanded] = useState('')   // channel id whose engagement editor is open
+  const [eng, setEng] = useState({})             // local engagement edits, keyed by channel id
+  const [savingEng, setSavingEng] = useState('')
   const pollRef = useRef(null)
 
   const refresh = () => api.ytChannels()
@@ -240,6 +243,22 @@ function ChannelsCard({ onConfigChanged, onError }) {
     } catch (e) { onError(e.message) } finally { setBusy('') }
   }
 
+  // Community-engagement config (issue #84) saves immediately, like connect/disconnect.
+  const toggleEng = (ch) => {
+    if (expanded === ch.id) { setExpanded(''); return }
+    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond } }))
+    setExpanded(ch.id)
+  }
+  const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
+  const saveEng = async (ch) => {
+    setSavingEng(ch.id); onError('')
+    try {
+      await api.ytChannelSettings(ch.id, eng[ch.id] || {})
+      await refresh()
+      setExpanded('')
+    } catch (e) { onError(e.message) } finally { setSavingEng('') }
+  }
+
   const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
   return (
     <Card span={12} className="reveal reveal-d1">
@@ -258,17 +277,39 @@ function ChannelsCard({ onConfigChanged, onError }) {
           <div className="muted" style={{ fontSize: 13 }}>No channels connected yet — click <strong>Connect channel</strong> and finish the Google login in the browser window.</div>
         )}
         {(channels || []).map((ch) => (
-          <div key={ch.id} className="row center gap-10 row--wrap" style={rowStyle}>
-            <Icon name="youtube" style={{ color: 'var(--accent)' }} />
-            <span style={{ fontWeight: 600 }}>{ch.name || ch.id}</span>
-            {ch.connected
-              ? <Chip tone="ok" dot>connected</Chip>
-              : <Chip tone="danger" dot title={ch.error}>not connected</Chip>}
-            {!ch.connected && ch.error && <span className="muted" style={{ fontSize: 11.5 }}>{ch.error}</span>}
-            <div className="grow" />
-            <Button variant="danger" icon="link-slash" disabled={busy === ch.id} onClick={() => disconnect(ch)}>
-              {busy === ch.id ? 'Removing…' : 'Disconnect'}
-            </Button>
+          <div key={ch.id} className="stack gap-10" style={rowStyle}>
+            <div className="row center gap-10 row--wrap">
+              <Icon name="youtube" style={{ color: 'var(--accent)' }} />
+              <span style={{ fontWeight: 600 }}>{ch.name || ch.id}</span>
+              {ch.connected
+                ? <Chip tone="ok" dot>connected</Chip>
+                : <Chip tone="danger" dot title={ch.error}>not connected</Chip>}
+              {!ch.connected && ch.error && <span className="muted" style={{ fontSize: 11.5 }}>{ch.error}</span>}
+              {ch.engagement_prompt ? <Chip tone="accent">engagement{ch.auto_respond ? ' · auto' : ''}</Chip> : null}
+              <div className="grow" />
+              <Button variant="ghost" icon="comment" onClick={() => toggleEng(ch)}>Engagement</Button>
+              <Button variant="danger" icon="link-slash" disabled={busy === ch.id} onClick={() => disconnect(ch)}>
+                {busy === ch.id ? 'Removing…' : 'Disconnect'}
+              </Button>
+            </div>
+            {expanded === ch.id && (
+              <div className="stack gap-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <Field label="Community engagement prompt"
+                  hint="How this channel replies to non-request comments — its persona and what to do. Leave empty to disable engagement for this channel.">
+                  <textarea className="textarea" rows={5} value={eng[ch.id]?.engagement_prompt || ''}
+                    onChange={(e) => setEngField(ch.id, 'engagement_prompt', e.target.value)} />
+                </Field>
+                <Check checked={!!eng[ch.id]?.auto_respond} onChange={(v) => setEngField(ch.id, 'auto_respond', v)}
+                  label="Automatically respond to community comments — post replies immediately instead of waiting for approval" />
+                <div className="row center gap-10 row--wrap">
+                  <Button variant="primary" icon="floppy-disk" disabled={savingEng === ch.id} onClick={() => saveEng(ch)}>
+                    {savingEng === ch.id ? 'Saving…' : 'Save engagement'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setExpanded('')}>Cancel</Button>
+                  <span className="muted" style={{ fontSize: 11.5 }}>Saves immediately — separate from the main Save settings button.</span>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
