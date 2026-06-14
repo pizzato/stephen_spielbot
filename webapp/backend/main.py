@@ -773,6 +773,53 @@ def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
     return ip or image_prompt
 
 
+class BriefImproveBody(BaseModel):
+    field: str = "title"           # "title" | "direction"
+    title: str = ""
+    direction: str = ""
+    style_name: str = ""
+
+
+@api.post("/api/create/improve")
+def create_improve(body: BriefImproveBody) -> dict:
+    """Improve the Create brief's title or direction in place (issue #88).
+
+    Standalone (no job yet): takes the current title + direction text and returns
+    a sharper version of the requested field. Honours the picked style's title
+    phrasing (issue #82) when improving the title."""
+    if body.field not in ("title", "direction"):
+        raise HTTPException(400, f"Unknown field: {body.field}")
+    cfg = gapp.load_config()
+    title = (body.title or "").strip()
+    direction = (body.direction or "").strip()
+    if body.field == "title":
+        title_style = gapp.style_settings(cfg, body.style_name).get("title_style", "") if body.style_name else ""
+        system = ("You write punchy, click-worthy YouTube video titles. "
+                  "Return ONLY the improved title — one line, no quotes, no label.")
+        user = (
+            f"Current title: {title or '(none yet)'}\n"
+            f"Direction / angle: {direction or '(none given)'}\n"
+            + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
+            + "\nImprove the title (or write a strong one if it's empty). "
+            "Keep it concise and true to the direction."
+        )
+    else:
+        system = ("You refine the creative-direction brief for a short, AI-generated video. "
+                  "Return ONLY the improved direction text — no preamble, no labels.")
+        user = (
+            f"Video title: {title or '(untitled)'}\n"
+            f"Current direction: {direction or '(none yet)'}\n"
+            "\nImprove and sharpen the direction: clarify the angle, tone, and what to "
+            "emphasise. Keep it to 1–3 sentences."
+        )
+    try:
+        with _track_op(f"Improving {body.field}", title or direction):
+            text = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Improve failed: {str(e).splitlines()[0][:200]}")
+    return {"value": text}
+
+
 # ── approve & generate (launches the background pipeline) ─────────────────────
 
 class GenerateBody(BaseModel):
@@ -2006,6 +2053,37 @@ def yt_describe(body: DescribeBody) -> dict:
     return {"description": desc}
 
 
+@api.post("/api/youtube/post/title")
+def yt_post_title(body: DescribeBody) -> dict:
+    """Regenerate the YouTube title for a finished film (issue #88), steered by the
+    film's scene outline and its style's title phrasing (issue #82)."""
+    wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
+    if wd is None or not wd.exists():
+        raise HTTPException(404, "No film found.")
+    cfg = gapp.load_config()
+    current = (body.title or "").strip() or _video_title_for(wd)
+    try:
+        scenes = gapp._load_scenes_for_work_dir(wd)
+    except Exception:
+        scenes = []
+    outline = "; ".join((s.get("title") or "").strip() for s in scenes if (s.get("title") or "").strip())
+    title_style = gapp.style_settings(cfg, _work_dir_style_name(wd)).get("title_style", "")
+    system = ("You write punchy, click-worthy YouTube video titles. "
+              "Return ONLY the improved title — one line, no quotes, no label.")
+    user = (
+        f"Current title: {current or '(none)'}\n"
+        f"Scene outline: {outline or '(unavailable)'}\n"
+        + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
+        + "\nWrite a strong YouTube title for this film. Keep it under 100 characters."
+    )
+    try:
+        with _track_op("Regenerating title", current):
+            text = _llm_complete(system, user, cfg, max_tokens=120).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Title generation failed: {str(e).splitlines()[0][:200]}")
+    return {"title": text[:100]}
+
+
 def _description_path(wd: Path) -> Path:
     return wd / "description.txt"
 
@@ -2633,6 +2711,41 @@ def youtube_community_dismiss(body: CommentActionBody) -> dict:
     c["engagement_status"] = "dismissed"
     yt.save_comments_cache(cache)
     return {"ok": True}
+
+
+@api.post("/api/youtube/comments/draft-reply")
+def youtube_draft_reply(body: CommentActionBody) -> dict:
+    """Draft a reply to any comment with the LLM (issue #88) — powers both the
+    manual reply composer and the "regenerate" on a community-engagement draft.
+    Always returns a reply; honours the comment's channel engagement voice when
+    one is configured. Does not touch the cache — the client holds the draft until
+    it sends."""
+    c = next((x for x in yt.load_comments_cache()
+              if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Comment not found.")
+    cfg = gapp.load_config()
+    chan_cfg = {ch.get("id", ""): ch for ch in (cfg.get("youtube_channels") or [])}
+    guidance = str(chan_cfg.get(c.get("channel", ""), {}).get("engagement_prompt") or "").strip()
+    thread = "\n".join(
+        f"{r.get('commenter', 'viewer')}: {r.get('text', '')}"
+        for r in (c.get("replies") or [])
+    )
+    system = ("You write short, friendly replies to YouTube comments as the channel owner. "
+              "Return ONLY the reply text — no preamble, no quotes, no labels.")
+    user = (
+        (f"Channel voice / guidance: {guidance}\n" if guidance else "Use a warm, friendly, on-brand tone.\n")
+        + f"Commenter: {c.get('commenter', 'viewer')}\n"
+        + f"Their comment: {c.get('text', '')}\n"
+        + (f"Earlier replies in this thread:\n{thread}\n" if thread else "")
+        + "\nWrite a concise reply (1–3 sentences)."
+    )
+    try:
+        with _track_op("Drafting reply", c.get("commenter", "")):
+            text = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+    except Exception as e:
+        raise HTTPException(503, f"Reply draft failed: {str(e).splitlines()[0][:200]}")
+    return {"reply": text}
 
 
 # ── Queue management ──────────────────────────────────────────────────────────

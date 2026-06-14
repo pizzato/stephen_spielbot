@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Field, Segmented, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Field, Segmented, Icon, Banner, RegenLabel } from '../components.jsx'
 import { api } from '../api.js'
 import Publish from './Publish.jsx'
 
@@ -51,6 +51,43 @@ let _analyticsCache = {}   // per-channel cache (issue #22): {channelKey: data}
 
 const SEG_BADGE = { marginLeft: 6, background: 'var(--accent)', color: '#fff', fontSize: 10, fontWeight: 700, borderRadius: 999, padding: '1px 6px', minWidth: 16, display: 'inline-block', textAlign: 'center', lineHeight: '14px' }
 
+// Inline manual-reply composer (issue #88): replaces the old window.prompt so a
+// reply can be drafted/regenerated with the LLM before sending. Holds its own
+// draft so other comments' state is untouched.
+function ReplyComposer({ comment, onSent, onCancel }) {
+  const [text, setText] = useState('')
+  const [busy, setBusy] = useState('')   // 'draft' | 'send'
+  const [error, setError] = useState('')
+
+  const draft = async () => {
+    setBusy('draft'); setError('')
+    try { const r = await api.draftCommentReply(comment.comment_id); setText(r.reply || '') }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const send = async () => {
+    const t = text.trim()
+    if (!t) return
+    setBusy('send'); setError('')
+    try { await api.replyComment(comment.comment_id, t); onSent() }
+    catch (e) { setError(e.message); setBusy('') }
+  }
+
+  return (
+    <div className="stack gap-10 mt-10">
+      <Field label={<RegenLabel busy={busy === 'draft'} onRegen={draft} label="Draft with AI" busyLabel="Drafting…">Your reply</RegenLabel>}>
+        <textarea className="input" rows={3} value={text} placeholder={`Reply to ${comment.commenter || 'viewer'}…`}
+          onChange={(e) => setText(e.target.value)} />
+      </Field>
+      {error && <p style={{ fontSize: 12, color: 'var(--danger)', margin: 0 }}>{error}</p>}
+      <div className="row gap-10 row--wrap">
+        <Button variant="primary" icon="reply" disabled={busy === 'send' || !text.trim()} onClick={send}>
+          {busy === 'send' ? 'Sending…' : 'Send reply'}</Button>
+        <Button variant="ghost" onClick={onCancel}>Cancel</Button>
+      </div>
+    </div>
+  )
+}
+
 export default function YouTube({ go, initial }) {
   const [view, setView] = useState(initial?.view || 'analytics')
   const [comments, setComments] = useState([])
@@ -59,6 +96,7 @@ export default function YouTube({ go, initial }) {
   const [busy, setBusy] = useState('')          // action key currently running
   const [titles, setTitles] = useState({})      // per-comment edited title
   const [drafts, setDrafts] = useState({})      // per-comment edited engagement draft (issue #84)
+  const [replyFor, setReplyFor] = useState('')  // comment_id with the manual reply composer open (issue #88)
   const [badges, setBadges] = useState({})      // {youtube_attention, youtube_publishable}
   const [channels, setChannels] = useState(null)  // connected channels (issue #22); null = loading
   const [channel, setChannel] = useState('')      // channel key the analytics view shows
@@ -109,11 +147,11 @@ export default function YouTube({ go, initial }) {
     try { await api.rejectComment(c.comment_id); await refreshComments(); setStatus('Rejected.') }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
-  const reply = async (c) => {
-    const text = window.prompt(`Reply to ${c.commenter}:`, '')
-    if (!text) return
-    setBusy('y' + c.comment_id); setError('')
-    try { await api.replyComment(c.comment_id, text); setStatus('Reply posted.') }
+  // Re-draft a community-engagement reply with the LLM (issue #88). Updates the
+  // local draft only — persisted when the user sends it.
+  const regenDraft = async (c) => {
+    setBusy('cr' + c.comment_id); setError('')
+    try { const r = await api.draftCommentReply(c.comment_id); setDrafts((d) => ({ ...d, [c.comment_id]: r.reply || '' })) }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // Community engagement drafts (issue #84): send the (possibly edited) draft, or dismiss it.
@@ -211,9 +249,13 @@ export default function YouTube({ go, initial }) {
                       </Field>
                       <div className="row gap-10 row--wrap">
                         <Button variant="primary" icon="plus" disabled={busy === 'a' + c.comment_id} onClick={() => approve(c)}>Approve → queue</Button>
-                        <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
+                        <Button variant="ghost" icon="reply" onClick={() => setReplyFor(replyFor === c.comment_id ? '' : c.comment_id)}>Reply</Button>
                         <Button variant="danger" icon="xmark" disabled={busy === 'r' + c.comment_id} onClick={() => reject(c)}>Reject</Button>
                       </div>
+                      {replyFor === c.comment_id && (
+                        <ReplyComposer comment={c} onCancel={() => setReplyFor('')}
+                          onSent={() => { setReplyFor(''); setStatus('Reply posted.') }} />
+                      )}
                     </>
                   )}
                 </div>
@@ -223,7 +265,7 @@ export default function YouTube({ go, initial }) {
                   {c.engagement_status === 'draft' ? (
                     <>
                       {c.engagement_reason && <p className="muted" style={{ fontSize: 12.5, margin: 0, fontStyle: 'italic' }}>{c.engagement_reason}</p>}
-                      <Field label="Suggested reply">
+                      <Field label={<RegenLabel busy={busy === 'cr' + c.comment_id} onRegen={() => regenDraft(c)}>Suggested reply</RegenLabel>}>
                         <textarea className="input" rows={3} value={drafts[c.comment_id] ?? c.engagement_draft ?? ''}
                           onChange={(e) => setDrafts((d) => ({ ...d, [c.comment_id]: e.target.value }))} />
                       </Field>
@@ -233,11 +275,17 @@ export default function YouTube({ go, initial }) {
                       </div>
                     </>
                   ) : (
-                    <div className="row center gap-10 row--wrap">
-                      {c.engagement_status === 'sent' && <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> replied</Chip>}
-                      {c.engagement_status === 'dismissed' && <Chip tone="neutral">dismissed</Chip>}
-                      <Button variant="ghost" icon="reply" disabled={busy === 'y' + c.comment_id} onClick={() => reply(c)}>Reply</Button>
-                    </div>
+                    <>
+                      <div className="row center gap-10 row--wrap">
+                        {c.engagement_status === 'sent' && <Chip tone="ok"><Icon name="check" style={{ fontSize: 10 }} /> replied</Chip>}
+                        {c.engagement_status === 'dismissed' && <Chip tone="neutral">dismissed</Chip>}
+                        <Button variant="ghost" icon="reply" onClick={() => setReplyFor(replyFor === c.comment_id ? '' : c.comment_id)}>Reply</Button>
+                      </div>
+                      {replyFor === c.comment_id && (
+                        <ReplyComposer comment={c} onCancel={() => setReplyFor('')}
+                          onSent={() => { setReplyFor(''); setStatus('Reply posted.') }} />
+                      )}
+                    </>
                   )}
                 </div>
               )}
