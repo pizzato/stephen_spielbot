@@ -1880,6 +1880,16 @@ def _channel_key_of(item: dict) -> str:
     return str(item.get("channel") or "")
 
 
+def _category_for_channel(cfg: dict, channel_key: str) -> str:
+    """Default YouTube category id for a channel: its configured video_category,
+    else the global youtube_post_category, else "22" (People & Blogs)."""
+    entry = next((c for c in (cfg.get("youtube_channels") or [])
+                  if c.get("id") == channel_key), None)
+    if entry and entry.get("video_category"):
+        return str(entry["video_category"])
+    return cfg.get("youtube_post_category", "22")
+
+
 @api.get("/api/youtube/channels")
 def yt_channels() -> dict:
     """Configured channels with live connection status, for Settings/Publish.
@@ -1993,11 +2003,13 @@ class ChannelSettingsBody(BaseModel):
     id: str
     engagement_prompt: str = ""
     auto_respond: bool = False
+    video_category: str = ""
 
 
 @api.post("/api/youtube/channels/settings")
 def yt_channel_settings(body: ChannelSettingsBody) -> dict:
-    """Save a channel's community-engagement config (issue #84): the persona/guidance
+    """Save a channel's per-channel settings: the default YouTube category for its
+    uploads, plus the community-engagement config (issue #84) — the persona/guidance
     used to draft replies to non-request comments, and whether approved drafts post
     immediately or wait for review. Auto-saves, like connect/disconnect."""
     cfg = gapp.load_config()
@@ -2006,6 +2018,7 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
         raise HTTPException(404, "Channel not found.")
     entry["engagement_prompt"] = body.engagement_prompt.strip()
     entry["auto_respond"] = bool(body.auto_respond)
+    entry["video_category"] = body.video_category.strip()
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -2076,6 +2089,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         pass
     vid_w, vid_h = _film_dimensions(wd)
     orientation = "portrait" if vid_h > vid_w else ("square" if vid_h == vid_w else "landscape")
+    # Channel this film publishes to, resolved from its style (issue #22).
+    channel = _channel_for_work_dir(wd)
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -2084,8 +2099,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
-        # Channel this film publishes to, resolved from its style (issue #22).
-        "channel": _channel_for_work_dir(wd),
+        "channel": channel,
+        # The target channel's default category (its own, else the global default).
+        "category": _category_for_channel(gapp.load_config(), channel),
         "orientation": orientation,
         "vid_width": vid_w,
         "vid_height": vid_h,
@@ -3975,10 +3991,12 @@ def _auto_post_done() -> list[str]:
             title = jc.get("video_title") or _video_title_for(p)
             # The description was cached at script time; only generate if missing.
             description = _cached_description(p) or _generate_and_cache_description(str(p), title)
+            channel = _channel_for_work_dir(p)
             res = yt_post(PostBody(
                 work_dir=str(p), title=title,
-                description=description, category=cfg.get("youtube_post_category", "22"),
+                description=description, category=_category_for_channel(cfg, channel),
                 privacy=cfg.get("youtube_post_privacy", "private"),
+                channel=channel,
                 # Shorts (portrait) don't take custom thumbnails — skip by default.
                 include_thumbnail=not _is_portrait_film(p)))
             if res.get("video_id"):

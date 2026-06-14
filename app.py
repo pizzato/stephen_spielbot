@@ -322,12 +322,16 @@ def _ensure_channels(cfg: dict) -> dict:
             # whether approved drafts post immediately or wait for review.
             "engagement_prompt": str(c.get("engagement_prompt") or ""),
             "auto_respond": bool(c.get("auto_respond")),
+            # Default YouTube category id for this channel's uploads (empty =
+            # fall back to the global youtube_post_category).
+            "video_category": str(c.get("video_category") or ""),
         })
     if not channels and yt._token_path().exists():
         # Pre-#22 setups have one token at the legacy path — surface it as the
         # "default" channel so styles can reference it without re-connecting.
         channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": "",
-                     "engagement_prompt": "", "auto_respond": False}]
+                     "engagement_prompt": "", "auto_respond": False,
+                     "video_category": ""}]
         seen = {yt.DEFAULT_CHANNEL_KEY}
     cfg["youtube_channels"] = channels
     for s in (cfg.get("styles") or []):

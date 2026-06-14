@@ -197,15 +197,21 @@ function ChannelsCard({ onConfigChanged, onError }) {
   const [channels, setChannels] = useState(null)
   const [connecting, setConnecting] = useState(false)
   const [busy, setBusy] = useState('')
-  const [expanded, setExpanded] = useState('')   // channel id whose engagement editor is open
-  const [eng, setEng] = useState({})             // local engagement edits, keyed by channel id
+  const [expanded, setExpanded] = useState('')   // channel id whose settings editor is open
+  const [eng, setEng] = useState({})             // local per-channel settings edits, keyed by channel id
   const [savingEng, setSavingEng] = useState('')
+  const [categories, setCategories] = useState({})   // YouTube category name → id, for the picker
+  const [defaultCat, setDefaultCat] = useState('22') // global fallback category id
   const pollRef = useRef(null)
 
   const refresh = () => api.ytChannels()
     .then((r) => { setChannels(r.channels || []); if (r.auth_running) startPolling() })
     .catch((e) => onError(e.message))
-  useEffect(() => { refresh(); return () => clearInterval(pollRef.current) }, [])
+  useEffect(() => {
+    refresh()
+    api.ytPostOptions().then((o) => { setCategories(o.categories || {}); setDefaultCat(o.default_category || '22') }).catch(() => {})
+    return () => clearInterval(pollRef.current)
+  }, [])
 
   const startPolling = () => {
     setConnecting(true)
@@ -243,10 +249,11 @@ function ChannelsCard({ onConfigChanged, onError }) {
     } catch (e) { onError(e.message) } finally { setBusy('') }
   }
 
-  // Community-engagement config (issue #84) saves immediately, like connect/disconnect.
+  // Per-channel settings (default category + engagement, issue #84) save
+  // immediately, like connect/disconnect.
   const toggleEng = (ch) => {
     if (expanded === ch.id) { setExpanded(''); return }
-    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond } }))
+    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond, video_category: ch.video_category || '' } }))
     setExpanded(ch.id)
   }
   const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
@@ -287,13 +294,20 @@ function ChannelsCard({ onConfigChanged, onError }) {
               {!ch.connected && ch.error && <span className="muted" style={{ fontSize: 11.5 }}>{ch.error}</span>}
               {ch.engagement_prompt ? <Chip tone="accent">engagement{ch.auto_respond ? ' · auto' : ''}</Chip> : null}
               <div className="grow" />
-              <Button variant="ghost" icon="comment" onClick={() => toggleEng(ch)}>Engagement</Button>
+              <Button variant="ghost" icon="gear" onClick={() => toggleEng(ch)}>Settings</Button>
               <Button variant="danger" icon="link-slash" disabled={busy === ch.id} onClick={() => disconnect(ch)}>
                 {busy === ch.id ? 'Removing…' : 'Disconnect'}
               </Button>
             </div>
             {expanded === ch.id && (
               <div className="stack gap-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <Field label="Video category"
+                  hint="Default YouTube category for this channel's uploads. Prefilled on the Publish screen and used when this channel auto-publishes.">
+                  <select className="select" value={eng[ch.id]?.video_category || defaultCat}
+                    onChange={(e) => setEngField(ch.id, 'video_category', e.target.value)}>
+                    {Object.entries(categories).map(([name, id]) => <option key={id} value={id}>{name}</option>)}
+                  </select>
+                </Field>
                 <Field label="Community engagement prompt"
                   hint="How this channel replies to non-request comments — its persona and what to do. Leave empty to disable engagement for this channel.">
                   <textarea className="textarea" rows={5} value={eng[ch.id]?.engagement_prompt || ''}
@@ -303,7 +317,7 @@ function ChannelsCard({ onConfigChanged, onError }) {
                   label="Automatically respond to community comments — post replies immediately instead of waiting for approval" />
                 <div className="row center gap-10 row--wrap">
                   <Button variant="primary" icon="floppy-disk" disabled={savingEng === ch.id} onClick={() => saveEng(ch)}>
-                    {savingEng === ch.id ? 'Saving…' : 'Save engagement'}
+                    {savingEng === ch.id ? 'Saving…' : 'Save'}
                   </Button>
                   <Button variant="ghost" onClick={() => setExpanded('')}>Cancel</Button>
                   <span className="muted" style={{ fontSize: 11.5 }}>Saves immediately — separate from the main Save settings button.</span>

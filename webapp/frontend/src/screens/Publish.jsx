@@ -90,6 +90,7 @@ export default function Publish({ initialWorkDir, go }) {
       setYoutubeUrl(p.youtube_url || '')
       setYoutubeVideoId(p.youtube_video_id || '')
       setChannel(p.channel || '')   // the film's style decides the target channel
+      setCategory(p.category || '22')   // …and that channel's default video category
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
       setBestTimes(null)
@@ -182,6 +183,13 @@ export default function Publish({ initialWorkDir, go }) {
     }
   }
 
+  // Switching the publish channel pulls in that channel's default category.
+  const onChannelChange = (id) => {
+    setChannel(id)
+    const c = channels.find((x) => x.id === id)
+    setCategory(c?.video_category || opts.default_category || '22')
+  }
+
   // The channel this upload goes to — prefilled from the film's style, overridable.
   const chan = channels.find((c) => c.id === channel) || channels[0]
   const canUpload = !!chan?.connected && workDir && title.trim() && finalUrl
@@ -194,7 +202,7 @@ export default function Publish({ initialWorkDir, go }) {
           {channels.length > 0 && (
             <span className="row center gap-10">
               <span className="muted" style={{ fontSize: 12.5 }}>Publish to</span>
-              <select className="select" value={chan?.id || ''} onChange={(e) => setChannel(e.target.value)} style={{ maxWidth: 220 }}>
+              <select className="select" value={chan?.id || ''} onChange={(e) => onChannelChange(e.target.value)} style={{ maxWidth: 220 }}>
                 {channels.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
               </select>
               {chan?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
