@@ -1970,12 +1970,24 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
 
 
 @api.get("/api/youtube/analytics")
-def yt_analytics(channel: str = Query("")) -> dict:
+def yt_analytics(channel: str = Query(""), refresh: bool = Query(False)) -> dict:
+    # Cache-first, like comments: serve the persisted per-channel snapshot
+    # instantly (fast load across restarts); only hit YouTube on an explicit
+    # refresh or a cold cache, then save the fresh result back to disk.
+    key = channel or _channel_for_style("")
+    cache = yt.load_analytics_cache()
+    if not refresh and key in cache:
+        return cache[key]
     try:
-        return yt.fetch_channel_analytics(
-            _client_secrets_path(), channel=channel or _channel_for_style(""))
+        data = yt.fetch_channel_analytics(_client_secrets_path(), channel=key)
     except Exception as e:
+        if key in cache:
+            return cache[key]   # keep the stale snapshot if a refresh fails
         return {"channel": {}, "videos": [], "error": str(e)[:200]}
+    if data.get("channel"):     # only persist a real result, not a no-auth/error skeleton
+        cache[key] = data
+        yt.save_analytics_cache(cache)
+    return data
 
 
 @api.get("/api/youtube/post/options")
