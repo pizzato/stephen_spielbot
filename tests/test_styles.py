@@ -30,6 +30,7 @@ def _style(name, **overrides):
         "visual_style": f"{name} visual",
         "extra_instructions": f"{name} instructions",
         "title_style": f"{name} title style",
+        "cover_phrase_style": f"{name} cover phrase style",
         "voice": f"{name}-voice",
         "voice_robotic": False,
         "voice_robotic_amount": 0.2,
@@ -293,6 +294,7 @@ class StartGenerationStyleTests(TempConfigCase):
             ))
         jc = json.loads((work_dir / "job_config.json").read_text())
         self.assertEqual(jc["style_name"], "B")
+        self.assertEqual(jc["cover_phrase_style"], "B cover phrase style")
         self.assertEqual(jc["music_vol"], 42)
         self.assertEqual(jc["voice_vol"], 142)
         self.assertEqual(jc["ambient_vol"], 3)
@@ -527,6 +529,68 @@ class StyleAwareIdeasTests(TempConfigCase):
             item = app._auto_pick_suggestion(app.load_config())
         self.assertEqual(item["gen_style_name"], "B")
         self.assertEqual(updates["q9"]["gen_style_name"], "B")
+
+
+class CoverPhraseTests(TempConfigCase):
+    """The cover/thumbnail phrase is LLM-chosen and per-style steerable
+    (cover_phrase_style), with the deterministic title-shortener as fallback."""
+
+    def test_cover_phrase_style_backfills_default_style_only(self):
+        # A config migrated BEFORE cover_phrase_style became per-style: styles
+        # carry no field, the flat key still holds the value. Only the default
+        # style inherits it; others get the built-in blank (no cross-style leak).
+        styles = [_style("A"), _style("B")]
+        for s in styles:
+            s.pop("cover_phrase_style", None)
+        self.write_config({
+            "styles": styles,
+            "default_style": "A",
+            "cover_phrase_style": "prefer the tagline",
+        })
+        cfg = app.load_config()
+        by_name = {s["name"]: s for s in cfg["styles"]}
+        self.assertEqual(by_name["A"]["cover_phrase_style"], "prefer the tagline")
+        self.assertEqual(by_name["B"]["cover_phrase_style"], "")
+        self.assertEqual(cfg["cover_phrase_style"], "prefer the tagline")  # mirror intact
+
+    def test_no_style_blanks_cover_phrase_style(self):
+        # cover_phrase_style is content-shaped, so experiment mode imposes none.
+        self.write_config({"styles": [_style("A", cover_phrase_style="one bold word")],
+                           "default_style": "A"})
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "A")["cover_phrase_style"], "one bold word")
+        self.assertEqual(app.style_settings(cfg, app.NO_STYLE)["cover_phrase_style"], "")
+
+    def test_generate_cover_phrase_uses_llm_and_steering(self):
+        from pipeline import llm
+        seen = {}
+
+        def fake_local(messages, **kw):
+            seen["user"] = messages[-1]["content"]
+            return '  "The Night Everything Changed"  '
+
+        with mock.patch.object(llm, "_local_llm", side_effect=fake_local):
+            out = llm.generate_cover_phrase(
+                "Chernobyl: The Night That Changed Everything",
+                "prefer the tagline",
+                {"llm_backend": "local"},
+            )
+        self.assertEqual(out, "The Night Everything Changed")   # surrounding quotes stripped
+        self.assertIn("prefer the tagline", seen["user"])       # per-style steering reached the prompt
+        self.assertIn("Night That Changed Everything", seen["user"])  # FULL title given, not pre-shortened
+
+    def test_generate_cover_phrase_falls_back_on_failure(self):
+        from pipeline import llm
+        with mock.patch.object(llm, "_local_llm", side_effect=RuntimeError("backend down")):
+            out = llm.generate_cover_phrase(
+                "Chernobyl: The Night That Changed Everything", "", {"llm_backend": "local"})
+        self.assertEqual(out, "Chernobyl")  # deterministic shortener drops the subtitle
+
+    def test_generate_cover_phrase_rejects_overlong_reply(self):
+        from pipeline import llm
+        with mock.patch.object(llm, "_local_llm", return_value="x" * 80):
+            out = llm.generate_cover_phrase("Short Title", "", {"llm_backend": "local"})
+        self.assertEqual(out, "Short Title")  # implausibly long → fell back to the title
 
 
 if __name__ == "__main__":

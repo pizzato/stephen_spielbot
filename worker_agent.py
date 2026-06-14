@@ -257,7 +257,10 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
             except Exception:
                 rows = []
 
-    prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows)
+    # The backend picks a punchy cover phrase via the LLM and passes it here;
+    # fall back to the deterministic shortener for tasks queued before that.
+    cover_phrase = p.get("cover_phrase") or shorten_title_for_cover(title)
+    prompt = build_cover_prompt(cover_phrase, p.get("style") or "", scenes=rows)
 
     cover_path = work_dir / "cover.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
