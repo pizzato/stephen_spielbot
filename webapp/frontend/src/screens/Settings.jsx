@@ -643,9 +643,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="Title style" hint="How AI-suggested video titles are worded — e.g. “short and punchy” or “pose an intriguing question”.">
                 <textarea className="textarea" rows={2} value={st.title_style || ''} onChange={(e) => setStyleField('title_style', e.target.value)} />
               </Field>
-              <Field label="Cover phrase style" hint="How the punchy phrase printed on the thumbnail is chosen — e.g. “prefer the tagline” or “one bold word”. An LLM picks a concise phrase from the title.">
-                <textarea className="textarea" rows={2} value={st.cover_phrase_style || ''} onChange={(e) => setStyleField('cover_phrase_style', e.target.value)} />
-              </Field>
               <Field label="Extra script instructions" hint="Appended to every topic.">
                 <textarea className="textarea" rows={8} value={st.extra_instructions || ''} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
               </Field>

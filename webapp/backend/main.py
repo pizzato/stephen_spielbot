@@ -907,7 +907,6 @@ def start_generation(body: GenerateBody) -> dict:
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
         "style_name": ss["name"],
-        "cover_phrase_style": ss.get("cover_phrase_style", ""),
         "lora_strength": ss.get("lora_strength"),
         "first_pass_cfg": ss.get("first_pass_cfg"),
         "first_pass_steps": ss.get("first_pass_steps"),
@@ -2245,11 +2244,6 @@ def yt_cover(body: CoverBody) -> dict:
     job_id = job_id_from_work_dir(wd)
     title = body.title or _video_title_for(wd)
     cfg = gapp.load_config()
-    # Pick the punchy cover phrase via the LLM, steered by the job's style, with
-    # a shortened title as fallback. Done here (the backend has the API keys) so
-    # the UI cover worker stays a pure renderer.
-    phrase_style = gapp.style_settings(cfg, _work_dir_style_name(wd)).get("cover_phrase_style", "")
-    cover_phrase = llm.generate_cover_phrase(title, phrase_style, cfg)
     vid_width, vid_height = _film_dimensions(wd)
     store = DurableStore.default()
     try:
@@ -2261,7 +2255,6 @@ def yt_cover(body: CoverBody) -> dict:
             payload={
                 "work_dir": str(wd),
                 "title": title,
-                "cover_phrase": cover_phrase,
                 "style": body.style or "",
                 "vid_width": vid_width,
                 "vid_height": vid_height,
