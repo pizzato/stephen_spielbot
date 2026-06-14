@@ -116,7 +116,13 @@ export const api = {
   autoPost: () => req('POST', '/automation/post'),
   autoTick: () => req('POST', '/automation/tick'),
 
-  ytAnalytics: (channel) => req('GET', '/youtube/analytics' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
+  ytAnalytics: (channel, refresh) => {
+    const p = new URLSearchParams()
+    if (channel) p.set('channel', channel)
+    if (refresh) p.set('refresh', 'true')
+    const qs = p.toString()
+    return req('GET', '/youtube/analytics' + (qs ? `?${qs}` : ''))
+  },
   // multi-channel management (issue #22) — channels live in Settings → YouTube
   ytChannels: () => req('GET', '/youtube/channels'),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
