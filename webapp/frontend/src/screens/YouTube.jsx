@@ -232,6 +232,17 @@ export default function YouTube({ go, initial }) {
               </div>
               <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text}</p>
 
+              {(c.replies?.length > 0) && (
+                <div className="stack gap-6" style={{ marginTop: 10, paddingLeft: 12, borderLeft: '2px solid var(--border)' }}>
+                  {c.replies.map((r, ri) => (
+                    <p key={r.reply_id || ri} style={{ fontSize: 13, margin: 0 }}>
+                      <span style={{ fontWeight: 600 }}>{r.is_owner ? (channelName(c.channel) || 'You') : (r.commenter || 'viewer')}</span>
+                      <span className="muted">{' '}{r.text}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+
               {c.is_request && (
                 <div className="mt-16 stack gap-10">
                   <div className="row center gap-16" style={{ flexWrap: 'wrap' }}>

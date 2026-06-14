@@ -146,6 +146,110 @@ class FetchEngagementTests(unittest.TestCase):
             backend._fetch_and_evaluate(auto_approve=False)
         self.assertEqual(gen.call_count, 1)
 
+    def test_new_viewer_reply_reopens_thread(self):
+        # A reply landing on an already-engaged thread (a viewer answering our
+        # reply) must re-open it and re-draft against the new message (issue #84).
+        cfg = _cfg(engagement_prompt="Be friendly", auto_respond=False)
+        cache_store = []
+        gen = mock.MagicMock(return_value={"should_reply": True, "reply": "hi", "reason": "r"})
+        fetches = iter([
+            [{"comment_id": "a", "text": "nice", "commenter": "x",
+              "published_at": "2026-01-01T00:00:00Z", "replies": []}],
+            [{"comment_id": "a", "text": "nice", "commenter": "x",
+              "published_at": "2026-01-01T00:00:00Z", "total_reply_count": 2, "replies": [
+                  {"reply_id": "r1", "commenter": "Chan", "text": "thanks",
+                   "published_at": "2026-01-02T00:00:00Z", "is_owner": True},
+                  {"reply_id": "r2", "commenter": "x", "text": "one more thing",
+                   "published_at": "2026-01-03T00:00:00Z", "is_owner": False}]}],
+        ])
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend.yt, "fetch_channel_comments",
+                               side_effect=lambda s, channel="": [dict(c) for c in next(fetches)]), \
+             mock.patch.object(backend.yt, "load_comments_cache", return_value=cache_store), \
+             mock.patch.object(backend.yt, "save_comments_cache",
+                               side_effect=lambda c: cache_store.__setitem__(slice(None), c)), \
+             mock.patch.object(backend.yt, "evaluate_comment", return_value=_non_request_eval()), \
+             mock.patch.object(backend.yt, "reply_to_comment", return_value={"success": True, "error": ""}), \
+             mock.patch.object(backend.llm, "generate_community_reply", gen):
+            backend._fetch_and_evaluate(auto_approve=False)   # drafts vs the top-level comment
+            self.assertEqual(cache_store[0]["engagement_anchor"], "a")
+            backend._fetch_and_evaluate(auto_approve=False)   # viewer replied → re-draft vs r2
+        self.assertEqual(gen.call_count, 2)
+        self.assertEqual(cache_store[0]["engagement_anchor"], "r2")
+        self.assertEqual(cache_store[0]["replies"][-1]["text"], "one more thing")
+        # the re-draft answers the latest viewer reply, with our prior reply as context
+        self.assertEqual(gen.call_args.args[0], "one more thing")
+        self.assertIn("Channel: thanks", gen.call_args.args[2])
+
+    def test_pre_existing_dismissed_not_resurrected(self):
+        # A legacy record (status but no engagement_anchor) with no new viewer reply
+        # must not be re-evaluated or auto-sent — respect the earlier dismiss.
+        cfg = _cfg(engagement_prompt="Be friendly", auto_respond=True)
+        cache_store = [{"comment_id": "a", "channel": "UC1", "text": "meh", "commenter": "x",
+                        "published_at": "2026-01-01T00:00:00Z", "replies": [],
+                        "is_request": False, "evaluated": True, "engagement_status": "dismissed"}]
+        gen = mock.MagicMock(return_value={"should_reply": True, "reply": "hi", "reason": "r"})
+        reply = mock.MagicMock(return_value={"success": True, "error": ""})
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend.yt, "fetch_channel_comments",
+                               side_effect=lambda s, channel="": [{"comment_id": "a", "text": "meh",
+                                   "commenter": "x", "published_at": "2026-01-01T00:00:00Z", "replies": []}]), \
+             mock.patch.object(backend.yt, "load_comments_cache", return_value=cache_store), \
+             mock.patch.object(backend.yt, "save_comments_cache",
+                               side_effect=lambda c: cache_store.__setitem__(slice(None), c)), \
+             mock.patch.object(backend.yt, "evaluate_comment", return_value=_non_request_eval()), \
+             mock.patch.object(backend.yt, "reply_to_comment", reply), \
+             mock.patch.object(backend.llm, "generate_community_reply", gen):
+            backend._fetch_and_evaluate(auto_approve=False)
+        self.assertEqual(cache_store[0]["engagement_status"], "dismissed")
+        gen.assert_not_called()
+        reply.assert_not_called()
+
+    def test_no_redraft_when_channel_spoke_last(self):
+        # Our own reply is the most recent message → nothing to answer; no LLM call.
+        cfg = _cfg(engagement_prompt="Be friendly")
+        comments = [{"comment_id": "a", "text": "nice", "commenter": "x",
+                     "published_at": "2026-01-01T00:00:00Z", "replies": [
+                         {"reply_id": "r1", "commenter": "Chan", "text": "thanks",
+                          "published_at": "2026-01-02T00:00:00Z", "is_owner": True}]}]
+        out, cache, gen, reply = self._run(
+            cfg, {"should_reply": True, "reply": "x", "reason": ""}, comments=comments)
+        self.assertEqual(cache[0].get("engagement_status", ""), "")
+        gen.assert_not_called()
+
+
+class ThreadAnchorTests(unittest.TestCase):
+    A = staticmethod(lambda **kw: backend.yt.thread_anchor(kw))
+
+    def test_top_level_only(self):
+        a = self.A(comment_id="a", commenter="x", text="hi", published_at="t1")
+        self.assertFalse(a["last_is_owner"])
+        self.assertEqual(a["anchor_id"], "a")
+        self.assertEqual(a["anchor_text"], "hi")
+        self.assertEqual(a["thread_text"], "")
+
+    def test_viewer_reply_is_latest(self):
+        a = self.A(comment_id="a", commenter="x", text="hi", published_at="t1", replies=[
+            {"reply_id": "r1", "commenter": "Chan", "text": "ty", "published_at": "t2", "is_owner": True},
+            {"reply_id": "r2", "commenter": "x", "text": "more", "published_at": "t3", "is_owner": False}])
+        self.assertFalse(a["last_is_owner"])
+        self.assertEqual(a["anchor_id"], "r2")
+        self.assertIn("Channel: ty", a["thread_text"])
+        self.assertIn("x: hi", a["thread_text"])
+        self.assertNotIn("more", a["thread_text"])   # the anchor itself is excluded from context
+
+    def test_owner_reply_is_latest(self):
+        a = self.A(comment_id="a", commenter="x", text="hi", published_at="t1", replies=[
+            {"reply_id": "r1", "commenter": "Chan", "text": "ty", "published_at": "t2", "is_owner": True}])
+        self.assertTrue(a["last_is_owner"])
+
+    def test_out_of_order_replies_sort_by_time(self):
+        a = self.A(comment_id="a", commenter="x", text="hi", published_at="t1", replies=[
+            {"reply_id": "r2", "commenter": "x", "text": "newer", "published_at": "t3", "is_owner": False},
+            {"reply_id": "r1", "commenter": "Chan", "text": "older", "published_at": "t2", "is_owner": True}])
+        self.assertEqual(a["anchor_id"], "r2")
+        self.assertFalse(a["last_is_owner"])
+
 
 class ChannelSettingsEndpointTests(unittest.TestCase):
     def test_saves_engagement_fields(self):
