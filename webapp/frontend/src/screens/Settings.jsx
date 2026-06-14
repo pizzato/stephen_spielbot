@@ -22,8 +22,10 @@ function shortHost(url) {
   try { return new URL(url).hostname } catch { return url }
 }
 
-// Compact inline status row shown under each worker textarea
-function WorkerStatus({ items, probed = true, extra }) {
+// Compact inline status row shown under each worker textarea. With `load`, each
+// server shows its render load (issue #98): green=idle (free for the UI; during a
+// render this is the reserved worker), amber=busy rendering, red=down.
+function WorkerStatus({ items, probed = true, load = false, extra }) {
   if (!items) return <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>Checking…</div>
   if (!items.length) return null
   if (!probed) {
@@ -31,6 +33,17 @@ function WorkerStatus({ items, probed = true, extra }) {
       <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
         {items.map((w) => <Chip key={w.host} tone="neutral">{w.host}</Chip>)}
         <span className="muted" style={{ fontSize: 11 }}>not probed</span>
+      </div>
+    )
+  }
+  if (load) {
+    return (
+      <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>
+        {items.map((w) => {
+          const [tone, label] = !w.up ? ['danger', 'down'] : w.busy ? ['warn', 'busy'] : ['ok', 'idle']
+          return <Chip key={w.endpoint} tone={tone} dot>{shortHost(w.endpoint)} {label}</Chip>
+        })}
+        {extra}
       </div>
     )
   }
@@ -549,9 +562,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
             </div>
             <div className="stack gap-22 mt-16">
-              <Field label="ComfyUI workers" hint="One URL per line.">
+              <Field label="ComfyUI workers" hint="One URL per line. idle = free for the UI (the reserved worker during a render); busy = rendering.">
                 <textarea className="textarea" rows={3} value={toLines(cfg.comfy_workers)} onChange={(e) => set('comfy_workers', e.target.value)} />
-                <WorkerStatus items={workers?.comfy} />
+                <WorkerStatus items={workers?.comfy} load />
               </Field>
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
