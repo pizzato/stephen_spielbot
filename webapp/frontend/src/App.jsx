@@ -9,6 +9,7 @@ import Progress from './screens/Progress.jsx'
 import Remix from './screens/Remix.jsx'
 import Queue from './screens/Queue.jsx'
 import YouTube from './screens/YouTube.jsx'
+import X from './screens/X.jsx'
 import Ideas from './screens/Ideas.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
@@ -51,6 +52,11 @@ export default function App() {
   // an effect on `initial`).
   const ytInitial = useMemo(
     () => (route === 'youtube' && nav.view === 'publish' && workDir) ? { view: 'publish', workDir } : null,
+    [route, nav.view, workDir],
+  )
+  // Same deep link for the X tab's Publish view (#/x/publish/<slug>).
+  const xInitial = useMemo(
+    () => (route === 'x' && nav.view === 'publish' && workDir) ? { view: 'publish', workDir } : null,
     [route, nav.view, workDir],
   )
 
@@ -243,6 +249,7 @@ export default function App() {
       case 'remix': return <Remix workDir={workDir} go={go} />
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />
       case 'youtube': return <YouTube go={go} initial={ytInitial} />
+      case 'x': return <X go={go} initial={xInitial} />
       case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />

@@ -166,6 +166,14 @@ export const api = {
   xAccountSettings: (id, fields) => req('POST', '/x/accounts/settings', { id, ...fields }),
   xPost: (body) => req('POST', '/x/post', body),
   xPostStatus: (taskId) => req('GET', `/x/post/status?task_id=${encodeURIComponent(taskId)}`),
+  // X mentions ("comments") — mirror the YouTube comment actions.
+  xComments: () => req('GET', '/x/comments'),
+  xFetchComments: (autoApprove) => req('POST', '/x/comments/fetch', { auto_approve: autoApprove ?? null }),
+  xApproveComment: (commentId, finalTitle) => req('POST', '/x/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
+  xRejectComment: (commentId) => req('POST', '/x/comments/reject', { comment_id: commentId }),
+  xReplyComment: (commentId, text) => req('POST', '/x/comments/reply', { comment_id: commentId, text }),
+  xSendCommunityReply: (commentId, text) => req('POST', '/x/comments/community/send', { comment_id: commentId, text }),
+  xDismissCommunityReply: (commentId) => req('POST', '/x/comments/community/dismiss', { comment_id: commentId }),
 
   // film scene editor (post-render)
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
