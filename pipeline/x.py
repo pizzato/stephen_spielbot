@@ -660,3 +660,81 @@ def load_comments_cache() -> list[dict]:
 def save_comments_cache(comments: list[dict]) -> None:
     COMMENTS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
     COMMENTS_CACHE_PATH.write_text(json.dumps(comments, indent=2))
+
+
+# ── Analytics ─────────────────────────────────────────────────────────────────
+# Returns the same {channel, videos} envelope as fetch_channel_analytics so the
+# dashboard renders similarly. public_metrics (likes/reposts/replies/impressions)
+# are available on any tier with read access; reading tweets at all needs a paid
+# X API tier, so without one this degrades to an empty/error result.
+
+def load_analytics_cache() -> dict[str, dict]:
+    try:
+        return json.loads(ANALYTICS_CACHE_PATH.read_text())
+    except Exception:
+        return {}
+
+
+def save_analytics_cache(cache: dict[str, dict]) -> None:
+    ANALYTICS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    ANALYTICS_CACHE_PATH.write_text(json.dumps(cache, indent=2))
+
+
+def fetch_x_analytics(client_id: str, client_secret: str, account: str = "",
+                      max_tweets: int = 25) -> dict:
+    """Account-level stats + recent-tweet metrics. {channel, videos} envelope."""
+    access = _bearer(client_id, client_secret, account)
+    if not access:
+        return {"channel": {}, "videos": []}
+    try:
+        me = _api_get(access, "/users/me", {
+            "user.fields": "username,name,public_metrics,verified_type,subscription_type"})
+        data = me.get("data", {})
+        pm = data.get("public_metrics", {})
+        username = data.get("username", "")
+        channel = {
+            "name": username,
+            "display_name": data.get("name", ""),
+            "followers_count": int(pm.get("followers_count", 0)),
+            "following_count": int(pm.get("following_count", 0)),
+            "tweet_count": int(pm.get("tweet_count", 0)),
+            "listed_count": int(pm.get("listed_count", 0)),
+            "premium": _premium_from_me(me),
+            "impressions": None, "likes": None, "reposts": None, "replies": None,
+        }
+        videos: list[dict] = []
+        # Reading tweets is the paid-tier-gated part — isolate it so a 403 leaves
+        # the account header intact and just yields no per-tweet rows.
+        try:
+            user_id = data.get("id", "")
+            resp = _api_get(access, f"/users/{user_id}/tweets", {
+                "max_results": min(max(max_tweets, 5), 100),
+                "tweet.fields": "created_at,public_metrics",
+                "exclude": "retweets,replies",
+            })
+            for t in resp.get("data", []):
+                m = t.get("public_metrics", {})
+                videos.append({
+                    "tweet_id": t["id"],
+                    "text": t.get("text", "")[:140],
+                    "created_at": t.get("created_at", ""),
+                    "url": (f"https://x.com/{username}/status/{t['id']}" if username
+                            else f"https://x.com/i/status/{t['id']}"),
+                    "like_count": int(m.get("like_count", 0)),
+                    "retweet_count": int(m.get("retweet_count", 0)),
+                    "reply_count": int(m.get("reply_count", 0)),
+                    "quote_count": int(m.get("quote_count", 0)),
+                    "impression_count": int(m.get("impression_count", 0)),
+                })
+        except Exception as exc:
+            logger.info("X tweet metrics unavailable (may need a paid tier): %s", exc)
+        if videos:
+            channel["impressions"] = sum(v["impression_count"] for v in videos)
+            channel["likes"] = sum(v["like_count"] for v in videos)
+            channel["reposts"] = sum(v["retweet_count"] for v in videos)
+            channel["replies"] = sum(v["reply_count"] for v in videos)
+        logger.info("Fetched X analytics for %d tweets", len(videos))
+        return {"channel": channel, "videos": videos}
+    except Exception as exc:
+        logger.warning("fetch_x_analytics failed: %s", exc)
+        return {"channel": {}, "videos": [], "error": str(exc)[:300]}

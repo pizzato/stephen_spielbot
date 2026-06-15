@@ -170,5 +170,43 @@ class CompletionReplyPlatformTests(unittest.TestCase):
         xr.assert_not_called()
 
 
+class XAnalyticsTests(unittest.TestCase):
+    def test_aggregates_public_metrics(self):
+        import pipeline.x as xt
+        me = {"data": {"id": "9", "username": "bot", "name": "Bot",
+                       "public_metrics": {"followers_count": 100, "tweet_count": 5},
+                       "subscription_type": "Premium"}}
+        tweets = {"data": [{"id": "t1", "text": "hi", "created_at": "2026-01-01",
+                            "public_metrics": {"like_count": 3, "retweet_count": 1,
+                                               "reply_count": 0, "quote_count": 0,
+                                               "impression_count": 50}}]}
+
+        def api_get(access, path, params=None):
+            return me if path == "/users/me" else tweets
+
+        with mock.patch.object(xt, "_bearer", return_value="tok"), \
+             mock.patch.object(xt, "_api_get", side_effect=api_get):
+            data = xt.fetch_x_analytics("cid", "sec", account="acc1")
+        self.assertEqual(data["channel"]["followers_count"], 100)
+        self.assertTrue(data["channel"]["premium"])
+        self.assertEqual(data["channel"]["impressions"], 50)
+        self.assertEqual(data["videos"][0]["like_count"], 3)
+
+    def test_no_auth_returns_empty(self):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_bearer", return_value=None):
+            data = xt.fetch_x_analytics("cid", "sec", account="acc1")
+        self.assertEqual(data, {"channel": {}, "videos": []})
+
+    def test_backend_serves_cache_first(self):
+        cached = {"acc1": {"channel": {"name": "bot"}, "videos": []}}
+        with mock.patch.object(backend.xt, "load_analytics_cache", return_value=cached), \
+             mock.patch.object(backend.xt, "fetch_x_analytics") as fetch, \
+             mock.patch.object(backend, "_x_client_creds", return_value=("cid", "sec")):
+            out = backend.x_analytics(account="acc1", refresh=False)
+        self.assertEqual(out["channel"]["name"], "bot")
+        fetch.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

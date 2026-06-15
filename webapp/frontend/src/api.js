@@ -166,6 +166,13 @@ export const api = {
   xAccountSettings: (id, fields) => req('POST', '/x/accounts/settings', { id, ...fields }),
   xPost: (body) => req('POST', '/x/post', body),
   xPostStatus: (taskId) => req('GET', `/x/post/status?task_id=${encodeURIComponent(taskId)}`),
+  xAnalytics: (account, refresh) => {
+    const p = new URLSearchParams()
+    if (account) p.set('account', account)
+    if (refresh) p.set('refresh', 'true')
+    const qs = p.toString()
+    return req('GET', '/x/analytics' + (qs ? `?${qs}` : ''))
+  },
   // X mentions ("comments") — mirror the YouTube comment actions.
   xComments: () => req('GET', '/x/comments'),
   xFetchComments: (autoApprove) => req('POST', '/x/comments/fetch', { auto_approve: autoApprove ?? null }),

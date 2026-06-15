@@ -13,6 +13,28 @@ function Stars({ value }) {
   return <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(value).toFixed(1)}</span>
 }
 function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
+function fmtNum(n) {
+  if (n == null) return '—'
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
+  if (n >= 1_000) return (n / 1_000).toFixed(1).replace(/\.0$/, '') + 'K'
+  return String(n)
+}
+function fmtDate(iso) {
+  if (!iso) return ''
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) }
+  catch { return iso.slice(0, 10) }
+}
+function StatCard({ label, value, sub, delay = 1 }) {
+  return (
+    <Card span={3} className={`reveal reveal-d${delay}`}>
+      <div className="muted" style={{ fontSize: 12, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.03em' }}>{value}</div>
+      {sub && <div className="muted" style={{ fontSize: 11, marginTop: 4 }}>{sub}</div>}
+    </Card>
+  )
+}
+
+let _xAnalyticsCache = {}   // per-account cache: {accountKey: data}
 
 // Plain manual-reply composer for a mention (no AI draft button — engagement
 // drafts already provide AI replies for non-request mentions).
@@ -44,7 +66,7 @@ function ReplyComposer({ comment, onSent, onCancel }) {
 }
 
 export default function X({ go, initial }) {
-  const [view, setView] = useState(initial?.view || 'comments')
+  const [view, setView] = useState(initial?.view || 'analytics')
   const [comments, setComments] = useState([])
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
@@ -53,12 +75,19 @@ export default function X({ go, initial }) {
   const [drafts, setDrafts] = useState({})
   const [replyFor, setReplyFor] = useState('')
   const [accounts, setAccounts] = useState(null)
+  const [account, setAccount] = useState('')
+  const [analytics, setAnalytics] = useState(null)
+  const [loadingAnalytics, setLoadingAnalytics] = useState(false)
 
   const refreshComments = () => api.xComments().then((d) => setComments(d.comments || [])).catch((e) => setError(e.message))
 
   useEffect(() => {
     refreshComments()
-    api.xAccounts().then((r) => setAccounts(r.accounts || [])).catch(() => setAccounts([]))
+    api.xAccounts().then((r) => {
+      const list = r.accounts || []
+      setAccounts(list)
+      setAccount((a) => a || list[0]?.id || '')
+    }).catch(() => setAccounts([]))
   }, [])
   useEffect(() => { if (initial?.view) setView(initial.view) }, [initial])
 
@@ -66,6 +95,17 @@ export default function X({ go, initial }) {
     const a = (accounts || []).find((x) => x.id === key)
     return a ? (a.name ? `@${a.name}` : a.id) : ''
   }
+
+  const fetchAnalytics = async (refresh = false) => {
+    setLoadingAnalytics(true); setError('')
+    try { const d = await api.xAnalytics(account, refresh); _xAnalyticsCache[account] = d; setAnalytics(d) }
+    catch (e) { setAnalytics({ channel: {}, videos: [], error: e.message }) } finally { setLoadingAnalytics(false) }
+  }
+  useEffect(() => {
+    if (view !== 'analytics' || accounts === null) return
+    if (_xAnalyticsCache[account]) { setAnalytics(_xAnalyticsCache[account]); return }
+    if (!loadingAnalytics) fetchAnalytics(false)
+  }, [view, account, accounts])
 
   const fetchEvaluate = async () => {
     setBusy('fetch'); setError(''); setStatus('')
@@ -112,7 +152,13 @@ export default function X({ go, initial }) {
           <h1 className="display-md reveal reveal-d1">Mentions &amp; publishing</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
-          {(accounts || []).length > 0 && <Chip tone="ok" dot>{accountName((accounts || [])[0]?.id) || 'X'}</Chip>}
+          {(accounts || []).length > 1 ? (
+            <select className="select" value={account} onChange={(e) => setAccount(e.target.value)} style={{ maxWidth: 220 }}>
+              {(accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
+            </select>
+          ) : (accounts || []).length > 0 ? (
+            <Chip tone="ok" dot>{accountName((accounts || [])[0]?.id) || 'X'}</Chip>
+          ) : null}
         </div>
       </div>
 
@@ -121,10 +167,74 @@ export default function X({ go, initial }) {
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={setView} options={[
+          { value: 'analytics', label: 'Analytics' },
           { value: 'comments', label: 'Mentions' },
           { value: 'publish', label: 'Publish' },
         ]} />
       </div>
+
+      {view === 'analytics' && (
+        <div className="bento">
+          {loadingAnalytics && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>Loading analytics…</p></Card>}
+          {!loadingAnalytics && !analytics && (
+            <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No data yet. Connect X to see your account analytics.</p></Card>
+          )}
+          {analytics?.error && (
+            <Card span={12}><p style={{ fontSize: 13, color: 'var(--danger)' }}>{analytics.error}</p></Card>
+          )}
+          {!loadingAnalytics && analytics && !analytics.error && (() => {
+            const ch = analytics.channel || {}
+            const vids = analytics.videos || []
+            return (
+              <>
+                <StatCard label="Followers" value={fmtNum(ch.followers_count)} delay={1} />
+                <StatCard label="Posts" value={fmtNum(ch.tweet_count)} delay={2} />
+                <StatCard label="Impressions (recent)" value={fmtNum(ch.impressions)} delay={3} />
+                <StatCard label="Likes (recent)" value={fmtNum(ch.likes)}
+                  sub={<Button variant="ghost" icon="rotate" style={{ marginTop: 8 }} disabled={loadingAnalytics} onClick={() => fetchAnalytics(true)}>Refresh</Button>}
+                  delay={4} />
+                {vids.length === 0 && (
+                  <Card span={12} className="reveal reveal-d1">
+                    <p className="muted" style={{ fontSize: 13 }}>
+                      No per-post metrics. Reading posts and engagement needs a paid X API tier — followers/post counts show above once connected.
+                    </p>
+                  </Card>
+                )}
+                {vids.length > 0 && (
+                  <Card span={12} className="reveal reveal-d2">
+                    <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent posts</div>
+                    <div style={{ overflowX: 'auto' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ borderBottom: '1px solid var(--border)' }}>
+                            {['Post', 'Impressions', 'Likes', 'Reposts', 'Replies', 'Posted'].map((h, i) => (
+                              <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {vids.map((v) => (
+                            <tr key={v.tweet_id} style={{ borderBottom: '1px solid var(--border-subtle, var(--border))' }}>
+                              <td style={{ padding: '8px 10px', maxWidth: 360 }}>
+                                <a href={v.url} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.text || '(no text)'}</a>
+                              </td>
+                              <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.impression_count)}</td>
+                              <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.like_count)}</td>
+                              <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.retweet_count)}</td>
+                              <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.reply_count)}</td>
+                              <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDate(v.created_at)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </Card>
+                )}
+              </>
+            )
+          })()}
+        </div>
+      )}
 
       {view === 'comments' && (
         <div className="bento">
