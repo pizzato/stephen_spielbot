@@ -63,8 +63,20 @@ export default function Publish({ initialWorkDir, go }) {
   const [youtubeUrl, setYoutubeUrl] = useState('')
   const [youtubeVideoId, setYoutubeVideoId] = useState('')
   const [uiWorker, setUiWorker] = useState(null)   // cover-worker reservation (issue #98)
+  // X (Twitter) posting (issue #107) — a sibling publish destination.
+  const [xAccounts, setXAccounts] = useState([])
+  const [xAccount, setXAccount] = useState('')
+  const [xBusy, setXBusy] = useState(false)
+  const [xStatus, setXStatus] = useState('')
+  const [xError, setXError] = useState('')
+  const [xUrl, setXUrl] = useState('')
 
   const refreshChannels = () => api.ytChannels().then((r) => setChannels(r.channels || [])).catch(() => {})
+  const refreshXAccounts = () => api.xAccounts().then((r) => {
+    const accs = r.accounts || []
+    setXAccounts(accs)
+    setXAccount((a) => a || accs.find((x) => x.connected)?.id || accs[0]?.id || '')
+  }).catch(() => {})
 
   // Poll the UI-worker reservation so we can tell the user, next to the cover
   // button, when a render worker will be free for a regenerate (issue #98).
@@ -88,10 +100,12 @@ export default function Publish({ initialWorkDir, go }) {
       if (target) selectFilm(target)
     }).catch((e) => setError(e.message))
     refreshChannels()
+    refreshXAccounts()
   }, [initialWorkDir])
 
   const selectFilm = async (wd) => {
     setWorkDir(wd); setError(''); setStatus(''); setConfirming(false); setReuploading(false); setYoutubeUrl(''); setYoutubeVideoId('')
+    setXStatus(''); setXError(''); setXUrl('')
     try {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
@@ -205,6 +219,31 @@ export default function Publish({ initialWorkDir, go }) {
   const chan = channels.find((c) => c.id === channel) || channels[0]
   const canUpload = !!chan?.connected && workDir && title.trim() && finalUrl
 
+  // The X account this post goes to. Non-Premium accounts can't take a long
+  // video — the backend posts the YouTube link instead (or warns if none).
+  const xacc = xAccounts.find((a) => a.id === xAccount) || xAccounts[0]
+  const canPostX = !!xacc?.connected && workDir && title.trim() && finalUrl
+
+  const postToX = async () => {
+    setXBusy(true); setXError(''); setXStatus('Posting to X…'); setXUrl('')
+    let pollTimer = null
+    try {
+      const { task_id } = await api.xPost({ work_dir: workDir, title, account: xacc?.id || '' })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const s = await api.xPostStatus(task_id)
+            if (s.status === 'done') { setXStatus(s.message || 'Posted to X.'); setXUrl(s.url || ''); resolve() }
+            else if (s.status === 'warning') { setXStatus(s.message || 'Not posted to X.'); resolve() }
+            else if (s.status === 'error') { reject(new Error(s.error || 'X post failed')) }
+            else { setXStatus('Posting to X… (this can take a minute)'); pollTimer = setTimeout(check, 4000) }
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setXError(e.message) } finally { clearTimeout(pollTimer); setXBusy(false) }
+  }
+
   return (
     <div className="bento">
       <Card span={8} padLg className="reveal reveal-d1">
@@ -311,6 +350,33 @@ export default function Publish({ initialWorkDir, go }) {
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
             <video src={finalUrl} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: aspect, maxHeight: 360, objectFit: 'contain' }} />
+          </Card>
+        )}
+        {xAccounts.length > 0 && (
+          <Card className="reveal reveal-d3">
+            <div className="row center between">
+              <span className="label-sm">Share on X</span>
+              <Icon name="x-twitter" brand style={{ color: 'var(--accent)' }} />
+            </div>
+            <div className="stack gap-10 mt-16">
+              <select className="select" value={xacc?.id || ''} onChange={(e) => setXAccount(e.target.value)}>
+                {xAccounts.map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
+              </select>
+              <div className="row center gap-6 row--wrap">
+                {xacc?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
+                {xacc?.premium ? <Chip tone="accent">Premium</Chip> : null}
+              </div>
+              {!xacc?.premium && (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  Non-Premium: videos over 2m20s post the YouTube link instead{youtubeUrl ? '' : ' (none yet — upload to YouTube first, or it won’t post)'}.
+                </div>
+              )}
+              {xError && <Banner tone="danger">{xError}</Banner>}
+              {xStatus && <Banner tone="ok">{xStatus}</Banner>}
+              {xUrl
+                ? <a className="btn btn--ghost" href={xUrl} target="_blank" rel="noreferrer"><Icon name="x-twitter" brand /> View on X</a>
+                : <Button variant="primary" block icon="x-twitter" brand disabled={!canPostX || xBusy} onClick={postToX}>{xBusy ? 'Posting…' : 'Post to X'}</Button>}
+            </div>
           </Card>
         )}
         <BestTimesCard data={bestTimes} />

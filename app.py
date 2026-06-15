@@ -48,6 +48,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import generate_video_prompt, generate_video_suggestions
 import pipeline.youtube as yt
+import pipeline.x as xt
 from pipeline.comfyui import (
     generate_scene_image,
     ltx_dimensions,
@@ -191,6 +192,20 @@ DEFAULT_CFG = {
     "youtube_post_privacy": "private",
     "youtube_post_category": "22",
     "description_suffix": "",
+    # X (Twitter) integration (issue #107) — mirrors the YouTube block above.
+    "x_client_id": "",
+    "x_client_secret": "",       # blank → public PKCE client; set → confidential
+    # Connected X accounts: [{id, name, account_id, premium, ...}] where `id` is
+    # the local key the token file is stored under ("default" = the legacy
+    # x_token.json login, otherwise the X user id). Managed from Settings → X;
+    # each style picks one via its `x_account` field.
+    "x_accounts": [],
+    "x_account": "",             # flat mirror of the DEFAULT style's X account key
+    "x_auto_fetch_evaluate": False,   # fetch+evaluate X mentions on startup / after a post
+    "x_auto_approve_comments": False, # auto-approve request mentions ≥ threshold
+    "x_auto_post": False,             # auto-publish to X when video generation completes
+    "x_fully_automated": False,       # derived mirror of the x_auto_* steps (no behaviour of its own)
+    "x_post_default_text": "",        # appended to the tweet text on post (like description_suffix)
     # Engagement prediction (issue #50) — config-file-only advanced knobs.
     "engagement_embed_model": "BAAI/bge-small-en-v1.5",  # fastembed text-embedding model
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
@@ -219,6 +234,8 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
     "channel":              "youtube_channel",
+    # Publishing (issue #107) — which connected X account this style posts to
+    "x_account":            "x_account",
     # Render quality
     "resolution":           "resolution",
     "lora_strength":        "lora_strength",
@@ -362,6 +379,55 @@ def channel_for_style(cfg: dict, style_name: str = "") -> str:
     return keys[0] if keys else ""
 
 
+def _ensure_x_accounts(cfg: dict) -> dict:
+    """Normalize the connected X accounts list (issue #107) in place — the X
+    mirror of _ensure_channels. Drops malformed entries, dedupes keys, seeds the
+    reserved "default" entry when a pre-multi-account token file exists, and
+    clears style x_account references that point at an account that's no longer
+    connected. Runs BEFORE _ensure_styles so the flat-key mirror is clean."""
+    accounts, seen = [], set()
+    for a in (cfg.get("x_accounts") or []):
+        key = str(a.get("id") or "").strip() if isinstance(a, dict) else ""
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        accounts.append({
+            "id": key,
+            "name": str(a.get("name") or ""),
+            "account_id": str(a.get("account_id") or ""),
+            "premium": bool(a.get("premium")),
+            # Community-engagement config (mirrors YouTube channels): per-account
+            # persona/guidance for replying to mentions, and whether approved
+            # drafts post immediately or wait for review.
+            "engagement_prompt": str(a.get("engagement_prompt") or ""),
+            "auto_respond": bool(a.get("auto_respond")),
+            "language": str(a.get("language") or "").strip() or "en",
+        })
+    if not accounts and xt._token_path().exists():
+        accounts = [{"id": xt.DEFAULT_ACCOUNT_KEY, "name": "", "account_id": "",
+                     "premium": False, "engagement_prompt": "", "auto_respond": False,
+                     "language": "en"}]
+        seen = {xt.DEFAULT_ACCOUNT_KEY}
+    cfg["x_accounts"] = accounts
+    for s in (cfg.get("styles") or []):
+        if isinstance(s, dict) and s.get("x_account") and s["x_account"] not in seen:
+            s["x_account"] = ""
+    if cfg.get("x_account") and cfg["x_account"] not in seen:
+        cfg["x_account"] = ""
+    return cfg
+
+
+def x_account_for_style(cfg: dict, style_name: str = "") -> str:
+    """Account KEY a style publishes to on X: the style's own account if
+    connected, else the first connected account, else '' (legacy token)."""
+    keys = [a["id"] for a in (cfg.get("x_accounts") or [])
+            if isinstance(a, dict) and a.get("id")]
+    acc = str(style_settings(cfg, style_name).get("x_account") or "")
+    if acc and acc in keys:
+        return acc
+    return keys[0] if keys else ""
+
+
 def style_settings(cfg: dict, name: str = "") -> dict:
     """Resolved settings for the named style profile.
 
@@ -485,11 +551,13 @@ def load_config() -> dict:
     # "Default" style.
     fresh = not any(flat in data for flat in STYLE_FIELD_TO_FLAT.values())
     _ensure_channels(cfg)
+    _ensure_x_accounts(cfg)
     return _ensure_styles(cfg, fresh=fresh)
 
 
 def save_config(cfg: dict) -> None:
     _ensure_channels(cfg)
+    _ensure_x_accounts(cfg)
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))

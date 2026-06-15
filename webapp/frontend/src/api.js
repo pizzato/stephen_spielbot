@@ -158,6 +158,15 @@ export const api = {
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),
 
+  // X (Twitter) — mirrors the YouTube account/auth/post methods (issue #107).
+  xAccounts: () => req('GET', '/x/accounts'),
+  xAuthStart: () => req('POST', '/x/auth/start'),
+  xAuthPoll: () => req('POST', '/x/auth/poll'),
+  xDisconnect: (account) => req('POST', '/x/disconnect', { channel: account || '' }),
+  xAccountSettings: (id, fields) => req('POST', '/x/accounts/settings', { id, ...fields }),
+  xPost: (body) => req('POST', '/x/post', body),
+  xPostStatus: (taskId) => req('GET', `/x/post/status?task_id=${encodeURIComponent(taskId)}`),
+
   // film scene editor (post-render)
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),

@@ -5,14 +5,14 @@ export function Icon({ name, brand, style, spin }) {
   return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
 }
 
-export function Button({ variant = 'ghost', size, block, icon, iconRight, children, onClick, disabled, type = 'button' }) {
+export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button' }) {
   const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : '', block ? 'btn--block' : '']
     .filter(Boolean).join(' ')
   return (
     <button type={type} className={cls} onClick={onClick} disabled={disabled}>
-      {icon ? <Icon name={icon} /> : null}
+      {icon ? <Icon name={icon} brand={brand} /> : null}
       {children}
-      {iconRight ? <Icon name={iconRight} /> : null}
+      {iconRight ? <Icon name={iconRight} brand={brand} /> : null}
     </button>
   )
 }
