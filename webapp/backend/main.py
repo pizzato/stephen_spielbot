@@ -2595,9 +2595,15 @@ def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
         return {"attempted": False, "already_replied": True}
 
     text = _completion_reply_text(title, url)
-    # Reply as the channel the comment was posted on, not the upload channel.
-    result = yt.reply_to_comment(_client_secrets_path(), comment_id, text,
-                                 channel=_channel_key_of(item))
+    # Reply on the platform + channel/account the request came from (issue #107),
+    # not the upload destination.
+    if item.get("source_platform") == "x":
+        cid, secret = _x_client_creds()
+        result = xt.reply_to_tweet(cid, secret, comment_id, text,
+                                   account=_channel_key_of(item))
+    else:
+        result = yt.reply_to_comment(_client_secrets_path(), comment_id, text,
+                                     channel=_channel_key_of(item))
     now = time.time()
     if result.get("success"):
         updates = {
@@ -3247,6 +3253,208 @@ def youtube_draft_reply(body: CommentActionBody) -> dict:
     except Exception as e:
         raise HTTPException(503, f"Reply draft failed: {str(e).splitlines()[0][:200]}")
     return {"reply": text}
+
+
+# ── X (Twitter) mention actions (issue #107) ─────────────────────────────────
+# The X mirror of the YouTube comment actions above. Mentions are the "comments";
+# requests feed the SAME generation queue (source_platform="x"); the LLM
+# evaluation, community-reply drafting and thread_anchor are reused from the
+# platform-agnostic helpers — only the fetch/reply/cache are X-specific.
+
+_X_THANKS = "Thanks for the suggestion! We'll look into making a video about this. 🎬"
+
+
+def _fetch_and_evaluate_x(auto_approve: bool) -> dict:
+    cfg = gapp.load_config()
+    cid, secret = _x_client_creds()
+    accounts = [a.get("id", "") for a in (cfg.get("x_accounts") or [])] or [""]
+    new_count = 0
+    errors: list[str] = []
+    fetched_any = False
+    cache = xt.load_comments_cache()
+    by_id = {c.get("comment_id"): c for c in cache}
+    for acc in accounts:
+        try:
+            fetched = xt.fetch_mentions(cid, secret, account=acc)
+            fetched_any = True
+        except Exception as e:
+            errors.append(f"{acc or 'default'}: {str(e).splitlines()[0][:120]}")
+            continue
+        for fc in fetched:
+            cur = by_id.get(fc.get("comment_id"))
+            if cur is None:
+                entry = {**fc, "channel": acc, "evaluated": False, "is_request": False,
+                         "suggested_title": "", "confidence": 0.0,
+                         "interestingness": 0.0, "reason": "", "status": "new",
+                         "engagement_status": "", "engagement_draft": "",
+                         "engagement_reason": "", "engagement_anchor": ""}
+                cache.insert(0, entry)
+                by_id[fc.get("comment_id")] = entry
+                new_count += 1
+            else:
+                cur["like_count"] = fc.get("like_count", cur.get("like_count", 0))
+                cur["total_reply_count"] = fc.get("total_reply_count", cur.get("total_reply_count", 0))
+    xt.save_comments_cache(cache)
+    if not fetched_any:
+        raise HTTPException(503, f"Fetch failed: {errors[0] if errors else 'no accounts configured'}")
+
+    approved = thanked = 0
+    for c in [x for x in cache if not x.get("evaluated")]:
+        r = yt.evaluate_comment(c.get("text", ""), c.get("commenter", ""), cfg)
+        c.update({"evaluated": True, "is_request": r["is_request"],
+                  "suggested_title": r["suggested_title"], "confidence": r["confidence"],
+                  "interestingness": r.get("interestingness", 0.0), "reason": r["reason"],
+                  "status": "evaluated" if c.get("status") == "new" else c.get("status")})
+        if r["is_request"] and not c.get("thanked"):
+            rep = xt.reply_to_tweet(cid, secret, c.get("comment_id", ""), _X_THANKS,
+                                    account=c.get("channel", ""))
+            if rep.get("success"):
+                c["thanked"] = True
+                thanked += 1
+        if (auto_approve and r["is_request"] and r["confidence"] >= _AUTO_APPROVE_THRESHOLD
+                and c.get("status") not in ("approved", "rejected")):
+            c["status"] = "approved"
+            qi = yt.add_to_queue(c, r["suggested_title"], source="comment", source_platform="x")
+            if qi:
+                try:
+                    vp = llm.generate_video_prompt(r["suggested_title"], c.get("text", ""))
+                    if vp:
+                        yt.update_queue_item(qi["id"], video_prompt=vp)
+                except Exception:
+                    pass
+            approved += 1
+
+    # Community engagement, per X account (mirrors the YouTube pass).
+    acct_cfg = {a.get("id", ""): a for a in (cfg.get("x_accounts") or [])}
+    drafted = sent = 0
+    for c in cache:
+        if c.get("is_request"):
+            continue
+        entry = acct_cfg.get(c.get("channel", ""), {})
+        guidance = str(entry.get("engagement_prompt") or "").strip()
+        if not guidance:
+            continue
+        st = yt.thread_anchor(c)
+        if st["last_is_owner"] or not st["anchor_id"]:
+            continue
+        prior_anchor = c.get("engagement_anchor") or (c.get("comment_id", "") if c.get("engagement_status") else "")
+        if prior_anchor == st["anchor_id"] and c.get("engagement_status"):
+            continue
+        r = llm.generate_community_reply(st["anchor_text"], st["anchor_author"],
+                                         st["thread_text"], guidance, cfg)
+        c["engagement_anchor"] = st["anchor_id"]
+        c["engagement_reason"] = r.get("reason", "")
+        if not (r.get("should_reply") and r.get("reply")):
+            c["engagement_status"] = "skip"
+            continue
+        c["engagement_draft"] = r["reply"]
+        if entry.get("auto_respond"):
+            rep = xt.reply_to_tweet(cid, secret, c.get("comment_id", ""), r["reply"],
+                                    account=c.get("channel", ""))
+            if rep.get("success"):
+                c["engagement_status"] = "sent"
+                sent += 1
+                continue
+        c["engagement_status"] = "draft"
+        drafted += 1
+
+    xt.save_comments_cache(cache)
+    return {"new": new_count, "thanked": thanked, "auto_approved": approved,
+            "community_drafted": drafted, "community_sent": sent}
+
+
+@api.get("/api/x/comments")
+def x_comments() -> dict:
+    return {"comments": xt.load_comments_cache()}
+
+
+@api.post("/api/x/comments/fetch")
+def x_fetch(body: FetchBody | None = None) -> dict:
+    body = body or FetchBody()
+    cfg = gapp.load_config()
+    aa = cfg.get("x_auto_approve_comments", False) if body.auto_approve is None else body.auto_approve
+    with _track_op("Fetching X mentions"):
+        result = _fetch_and_evaluate_x(aa)
+    return {**result, "comments": xt.load_comments_cache()}
+
+
+@api.post("/api/x/comments/approve")
+def x_approve(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    c["status"] = "approved"
+    xt.save_comments_cache(cache)
+    title = (body.final_title or "").strip() or c.get("suggested_title", "")
+    qi = yt.add_to_queue(c, title, source="comment", source_platform="x")
+    if qi:
+        try:
+            vp = llm.generate_video_prompt(title, c.get("text", ""))
+            if vp:
+                yt.update_queue_item(qi["id"], video_prompt=vp)
+        except Exception:
+            pass
+    return {"ok": True, "queued": bool(qi), "final_title": title}
+
+
+@api.post("/api/x/comments/reject")
+def x_reject(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    c["status"] = "rejected"
+    xt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/reply")
+def x_reply(body: CommentActionBody) -> dict:
+    if not body.text.strip():
+        raise HTTPException(400, "Reply text required.")
+    c = next((x for x in xt.load_comments_cache()
+              if x.get("comment_id") == body.comment_id), None)
+    cid, secret = _x_client_creds()
+    res = xt.reply_to_tweet(cid, secret, body.comment_id, body.text.strip(),
+                            account=(c or {}).get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/community/send")
+def x_community_send(body: CommentActionBody) -> dict:
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Reply text required.")
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this mention.")
+    cid, secret = _x_client_creds()
+    res = xt.reply_to_tweet(cid, secret, body.comment_id, text, account=c.get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    c["engagement_status"] = "sent"
+    c["engagement_draft"] = text
+    xt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/community/dismiss")
+def x_community_dismiss(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this mention.")
+    c["engagement_status"] = "dismissed"
+    xt.save_comments_cache(cache)
+    return {"ok": True}
 
 
 # ── Queue management ──────────────────────────────────────────────────────────

@@ -571,3 +571,92 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
         logger.exception("X post failed")
         return {"tweet_id": "", "url": "", "error": str(exc)[:400],
                 "fell_back_to_link": False, "skipped": False, "reason": ""}
+
+
+# ── Mentions (comment management) ─────────────────────────────────────────────
+# X's "comments" are mentions/replies. Records use the SAME shape as YouTube's
+# comment dicts so the backend's evaluate/engagement/queue logic and
+# pipeline.youtube.thread_anchor are reused unchanged. Reading mentions needs a
+# paid X API tier — a 403 surfaces as an error the caller reports, like YouTube.
+
+def _account_user_id(client_id: str, client_secret: str, account: str) -> str:
+    """The X numeric user id for an account (from the token, else /2/users/me)."""
+    token = _load_token(account) or {}
+    if token.get("account_id"):
+        return str(token["account_id"])
+    access = _bearer(client_id, client_secret, account)
+    if not access:
+        return ""
+    return str(_fetch_me(access).get("data", {}).get("id", ""))
+
+
+def fetch_mentions(client_id: str, client_secret: str, account: str = "",
+                   max_results: int = 50) -> list[dict]:
+    """Fetch recent mentions of the account as comment dicts (YouTube shape).
+
+    Raises RuntimeError when not authenticated (mirrors fetch_channel_comments),
+    so the backend sweep reports per-account failures.
+    """
+    access = _bearer(client_id, client_secret, account)
+    if not access:
+        raise RuntimeError("Not authenticated. Connect X first.")
+    user_id = _account_user_id(client_id, client_secret, account)
+    if not user_id:
+        raise RuntimeError("Could not resolve the X account id.")
+    resp = _api_get(access, f"/users/{user_id}/mentions", {
+        "max_results": min(max(max_results, 5), 100),
+        "tweet.fields": "created_at,conversation_id,author_id,public_metrics,in_reply_to_user_id",
+        "expansions": "author_id",
+        "user.fields": "username",
+    })
+    users = {u["id"]: u for u in resp.get("includes", {}).get("users", [])}
+    out: list[dict] = []
+    for t in resp.get("data", []):
+        metrics = t.get("public_metrics", {})
+        author = users.get(t.get("author_id"), {})
+        out.append({
+            "comment_id": t["id"],
+            "video_id": "",
+            "conversation_id": t.get("conversation_id", ""),
+            "commenter": author.get("username", "user"),
+            "text": t.get("text", ""),
+            "published_at": t.get("created_at", ""),
+            "like_count": int(metrics.get("like_count", 0)),
+            "total_reply_count": int(metrics.get("reply_count", 0)),
+            # Full thread reconstruction needs a conversation search (paid tier);
+            # mentions carry no inline replies, so engagement anchors on the
+            # mention itself, exactly like a fresh top-level YouTube comment.
+            "replies": [],
+        })
+    return out
+
+
+def reply_to_tweet(client_id: str, client_secret: str, in_reply_to_tweet_id: str,
+                   text: str, account: str = "") -> dict:
+    """Reply to a tweet (the X mirror of reply_to_comment). Returns {success, error}."""
+    if not in_reply_to_tweet_id or not text:
+        return {"success": False, "error": "Missing tweet id or reply text"}
+    access = _bearer(client_id, client_secret, account)
+    if not access:
+        return {"success": False, "error": "Not authenticated"}
+    try:
+        _post_tweet(access, text, reply_to=in_reply_to_tweet_id)
+        logger.info("Replied to tweet %s", in_reply_to_tweet_id)
+        return {"success": True, "error": ""}
+    except Exception as exc:
+        logger.warning("reply_to_tweet failed: %s", exc)
+        return {"success": False, "error": str(exc)[:300]}
+
+
+# ── Comments cache (separate file from YouTube; same record shape) ────────────
+
+def load_comments_cache() -> list[dict]:
+    try:
+        return json.loads(COMMENTS_CACHE_PATH.read_text())
+    except Exception:
+        return []
+
+
+def save_comments_cache(comments: list[dict]) -> None:
+    COMMENTS_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    COMMENTS_CACHE_PATH.write_text(json.dumps(comments, indent=2))

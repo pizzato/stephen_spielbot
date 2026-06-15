@@ -725,10 +725,14 @@ def save_queue(queue: list[dict]) -> None:
     QUEUE_PATH.write_text(json.dumps(queue, indent=2))
 
 
-def add_to_queue(comment: dict, final_title: str, source: str = "") -> dict:
+def add_to_queue(comment: dict, final_title: str, source: str = "",
+                 source_platform: str = "youtube") -> dict:
     """Add an approved video request to the queue. Returns the new entry (or {} if duplicate).
 
     source: "comment" | "suggestion" | "manual". Inferred from comment_id if not provided.
+    source_platform: "youtube" | "x" — which platform the request came from, so the
+    completion reply goes back to the right place (issue #107). Defaults to youtube;
+    existing items keep their original shape.
     Comment requests are inserted before suggestions (FIFO within each group).
     """
     queue = load_queue()
@@ -742,9 +746,10 @@ def add_to_queue(comment: dict, final_title: str, source: str = "") -> dict:
         "id": str(uuid.uuid4())[:8],
         "comment_id": comment_id,
         "video_id": comment.get("video_id", ""),
-        # Channel the source comment was fetched from (issue #22) — the
-        # completion reply must be posted as that channel.
+        # Channel/account the source comment was fetched from (issue #22/#107) —
+        # the completion reply must be posted as that channel/account.
         "channel": comment.get("channel", ""),
+        "source_platform": source_platform,
         "commenter": comment.get("commenter", ""),
         "comment_text": comment.get("text", ""),
         "final_title": final_title,
