@@ -167,6 +167,7 @@ DEFAULT_CFG = {
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 20,
     "default_visual_style": "",
+    "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
     # YouTube integration
@@ -209,6 +210,7 @@ DEFAULT_CFG = {
 STYLE_FIELD_TO_FLAT = {
     # Script & content
     "visual_style":         "default_visual_style",
+    "video_style":          "default_video_style",
     "extra_instructions":   "script_extra_instructions",
     "title_style":          "title_style",
     "description_suffix":   "description_suffix",
@@ -386,7 +388,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     if target:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
-        out.update(visual_style="", extra_instructions="", description_suffix="",
+        out.update(visual_style="", video_style="", extra_instructions="", description_suffix="",
                    title_style="", voice="", voice_robotic=False, voice_speed=1.0)
         out["name"] = NO_STYLE
         out["description"] = ""
