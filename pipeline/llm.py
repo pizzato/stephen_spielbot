@@ -154,7 +154,8 @@ def _fill_empty_narrations(client, model: str, scenes: list[Scene],
 
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str,
-                     video_title: str | None = None) -> tuple[list[Scene], str, str]:
+                     video_title: str | None = None,
+                     video_style_hint: str | None = None) -> tuple[list[Scene], str, str]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -170,6 +171,10 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         f'\nIMPORTANT: Use exactly this text for the "style" field: "{style_hint}"'
         if style_hint and style_hint.strip() else ""
     )
+    video_style_note = (
+        f'\nMOTION DIRECTION — apply to EVERY scene\'s "video_prompt": {video_style_hint.strip()}'
+        if video_style_hint and video_style_hint.strip() else ""
+    )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
@@ -184,6 +189,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         n_scenes=n_scenes,
         first_batch=first_batch,
         style_note=style_note,
+        video_style_note=video_style_note,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
@@ -232,6 +238,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             batch_start=batch_start,
             batch_end=batch_end,
             ctx_str=ctx_str,
+            video_style_note=video_style_note,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
@@ -439,13 +446,19 @@ def _fill_empty_outlines_local(outlines: list[dict], title: str, video_title: st
 
 def _local_generate_visual(title: str, style: str,
                             scene_id: int, scene_title: str, narration: str,
-                            url: str, model: str) -> tuple[str, str]:
+                            url: str, model: str,
+                            video_style_hint: str | None = None) -> tuple[str, str]:
+    video_style_note = (
+        f"\nMOTION DIRECTION for the VIDEO line: {video_style_hint.strip()}"
+        if video_style_hint and video_style_hint.strip() else ""
+    )
     user_msg = _prompts.user(
         "script_local_visual",
         title=title,
         style=style,
         scene_title=scene_title,
         narration=narration,
+        video_style_note=video_style_note,
     )
     raw = _local_llm(
         [
@@ -467,7 +480,8 @@ def _local_generate_visual(title: str, style: str,
 
 def _local_generate(title: str, n_scenes: int,
                     style_hint: str | None,
-                    video_title: str | None = None) -> tuple[list[Scene], str, str]:
+                    video_title: str | None = None,
+                    video_style_hint: str | None = None) -> tuple[list[Scene], str, str]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -497,6 +511,7 @@ def _local_generate(title: str, n_scenes: int,
             outline.get("title", f"Scene {outline['id']}"),
             outline.get("narration", ""),
             url=url, model=model,
+            video_style_hint=video_style_hint,
         )
         return outline["id"], img_p, vid_p
 
@@ -538,11 +553,14 @@ def generate_script(
     n_scenes: int,
     style_hint: str | None = None,
     video_title: str | None = None,
+    video_style_hint: str | None = None,
 ) -> tuple[list[Scene], str, str]:
     """Return (scenes, music_description, style).
 
     Backend is chosen from config: llm_backend = "claude" | "local".
     video_title is the short YouTube title; title is the full topic/description.
+    video_style_hint is per-style motion/cinematography guidance steering each
+    scene's video_prompt (camera + subject movement).
     """
     cfg     = _load_cfg()
     backend = cfg.get("llm_backend", "local")
@@ -555,10 +573,12 @@ def generate_script(
             )
         model = cfg.get("claude_model", "claude-sonnet-4-6")
         logger.info("Using Claude backend: model=%s", model)
-        return _claude_generate(title, n_scenes, style_hint, api_key, model, video_title=video_title)
+        return _claude_generate(title, n_scenes, style_hint, api_key, model,
+                                video_title=video_title, video_style_hint=video_style_hint)
 
     logger.info("Using local vLLM backend")
-    return _local_generate(title, n_scenes, style_hint, video_title=video_title)
+    return _local_generate(title, n_scenes, style_hint, video_title=video_title,
+                           video_style_hint=video_style_hint)
 
 
 # ── YouTube video prompt generation (director's brief) ───────────────────────
