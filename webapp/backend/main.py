@@ -2993,6 +2993,27 @@ def x_post_status(task_id: str) -> dict:
     return {"ok": True, **task}
 
 
+@api.get("/api/x/analytics")
+def x_analytics(account: str = Query(""), refresh: bool = Query(False)) -> dict:
+    # Cache-first, mirroring yt_analytics: serve the persisted per-account
+    # snapshot instantly; only hit X on an explicit refresh or a cold cache.
+    key = account or _x_account_for_style("")
+    cache = xt.load_analytics_cache()
+    if not refresh and key in cache:
+        return cache[key]
+    cid, secret = _x_client_creds()
+    try:
+        data = xt.fetch_x_analytics(cid, secret, account=key)
+    except Exception as e:
+        if key in cache:
+            return cache[key]
+        return {"channel": {}, "videos": [], "error": str(e)[:200]}
+    if data.get("channel"):
+        cache[key] = data
+        xt.save_analytics_cache(cache)
+    return data
+
+
 # ── YouTube comment actions (fetch / evaluate / approve / reject / reply) ─────
 # Mirrors app.py's _yt_fetch_new_comments + _yt_evaluate_unevaluated + on_yt_approve,
 # reusing the pipeline.youtube primitives so behaviour matches the classic app.
