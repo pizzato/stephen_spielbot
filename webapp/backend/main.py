@@ -523,11 +523,13 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         topic = f"{topic}\n\n{extra}"
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
+    video_style_hint = ss.get("video_style", "") or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style = generate_script(
-                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None
+                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
+                video_style_hint=video_style_hint,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
