@@ -28,6 +28,7 @@ def _style(name, **overrides):
         "name": name,
         "description": f"{name} look",
         "visual_style": f"{name} visual",
+        "video_style": f"{name} motion",
         "extra_instructions": f"{name} instructions",
         "title_style": f"{name} title style",
         "voice": f"{name}-voice",
@@ -198,6 +199,7 @@ class StyleSettingsTests(TempConfigCase):
         self.assertEqual(ss["name"], app.NO_STYLE)
         # nothing content-shaped is imposed…
         self.assertEqual(ss["visual_style"], "")
+        self.assertEqual(ss["video_style"], "")
         self.assertEqual(ss["extra_instructions"], "")
         self.assertEqual(ss["title_style"], "")
         self.assertEqual(ss["voice"], "")
@@ -356,10 +358,12 @@ class QueueItemStyleTests(TempConfigCase):
              mock.patch.object(backend.gapp, "_launch_generation_job") as launch:
             out = backend._start_queue_item(dict(item))
 
-        # The LLM prompt carried style B's extra instructions and visual style.
+        # The LLM prompt carried style B's extra instructions, visual style and
+        # motion/video style.
         topic_arg, _n, style_hint = gen.call_args[0][:3]
         self.assertIn("Speak like B.", topic_arg)
         self.assertEqual(style_hint, "B-vision")
+        self.assertEqual(gen.call_args.kwargs["video_style_hint"], "B motion")
         # The render launched straight away and its job_config carries the
         # profile: style B's name, voice and resolution drive the worker.
         launch.assert_called_once()
