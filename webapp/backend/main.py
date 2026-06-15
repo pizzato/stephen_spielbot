@@ -37,6 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 # behind `if __name__ == "__main__"`, so nothing UI-related starts here.
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
+import pipeline.x as xt  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
@@ -2733,6 +2734,256 @@ def yt_post_status(task_id: str) -> dict:
     task = _upload_tasks.get(task_id)
     if not task:
         raise HTTPException(404, "Upload task not found.")
+    return {"ok": True, **task}
+
+
+# ── X (Twitter) posting (issue #107) ──────────────────────────────────────────
+# Mirrors the YouTube channel/auth/post routes above. Multi-account, style→account
+# mapping, and a Premium-aware post that falls back to the YouTube link when a
+# non-Premium account can't take a long video.
+
+def _x_client_creds() -> tuple[str, str]:
+    cfg = gapp.load_config()
+    return str(cfg.get("x_client_id", "") or ""), str(cfg.get("x_client_secret", "") or "")
+
+
+def _x_account_for_style(style_name: str = "") -> str:
+    return gapp.x_account_for_style(gapp.load_config(), style_name)
+
+
+def _x_account_for_work_dir(wd: Path | None) -> str:
+    """X account key the work dir's video publishes to (via its style profile)."""
+    return _x_account_for_style(_work_dir_style_name(wd))
+
+
+def _youtube_url_for_work_dir(wd: Path) -> str:
+    """Best-effort YouTube URL for a film, for the non-Premium X fallback: the
+    job meta written after a YouTube upload, else its queue item."""
+    try:
+        meta = json.loads((wd / "job.json").read_text())
+        if meta.get("youtube_url"):
+            return str(meta["youtube_url"])
+    except Exception:
+        pass
+    try:
+        qid = json.loads((wd / "job_config.json").read_text()).get("queue_item_id", "")
+        item = _queue_item_by_id(qid)
+        if item and item.get("youtube_url"):
+            return str(item["youtube_url"])
+    except Exception:
+        pass
+    return ""
+
+
+@api.get("/api/x/accounts")
+def x_accounts() -> dict:
+    """Configured X accounts with live connection status + premium, for Settings/
+    Publish. Backfills name/account_id/premium once a status check resolves them."""
+    cfg = gapp.load_config()
+    cid, secret = str(cfg.get("x_client_id", "") or ""), str(cfg.get("x_client_secret", "") or "")
+    out, dirty = [], False
+    for entry in (cfg.get("x_accounts") or []):
+        st = xt.check_auth_status(cid, secret, account=entry["id"])
+        if st.get("connected"):
+            if (entry.get("name") != st.get("account_name")
+                    or entry.get("account_id") != st.get("account_id")
+                    or bool(entry.get("premium")) != bool(st.get("premium"))):
+                entry["name"] = st.get("account_name", entry.get("name", ""))
+                entry["account_id"] = st.get("account_id", entry.get("account_id", ""))
+                entry["premium"] = bool(st.get("premium"))
+                dirty = True
+        out.append({**entry, "connected": bool(st.get("connected")),
+                    "premium": bool(st.get("premium") or entry.get("premium")),
+                    "error": st.get("error", "")})
+    if dirty:
+        gapp.save_config(cfg)
+    return {"accounts": out, "auth_running": xt.poll_auth_flow().get("running", False)}
+
+
+def _finalize_new_x_account(account_id: str, username: str) -> str:
+    """Auth-flow callback: record the just-authorized X account and return the key
+    its token is stored under. Reconnecting a known account reuses its entry; a
+    legacy "default" entry that hasn't resolved its identity gets resolved."""
+    cfg = gapp.load_config()
+    accts = cfg.get("x_accounts") or []
+    key = account_id or xt.DEFAULT_ACCOUNT_KEY
+    entry = next((a for a in accts if a.get("id") == key
+                  or (account_id and a.get("account_id") == account_id)), None)
+    if entry is None and account_id:
+        legacy = next((a for a in accts if a.get("id") == xt.DEFAULT_ACCOUNT_KEY
+                       and not a.get("account_id")), None)
+        if legacy is not None:
+            cid, secret = _x_client_creds()
+            st = xt.check_auth_status(cid, secret, force=True, account=xt.DEFAULT_ACCOUNT_KEY)
+            if st.get("account_id"):
+                legacy["account_id"] = st["account_id"]
+                legacy["name"] = st.get("account_name", "") or legacy.get("name", "")
+            if st.get("account_id") == account_id:
+                entry = legacy
+    if entry is None:
+        entry = {"id": key, "name": "", "account_id": ""}
+        accts.append(entry)
+    if account_id:
+        entry["account_id"] = account_id
+    if username:
+        entry["name"] = username
+    cfg["x_accounts"] = accts
+    gapp.save_config(cfg)
+    return entry["id"]
+
+
+@api.get("/api/x/auth")
+def x_auth_status(account: str = Query("")) -> dict:
+    try:
+        return xt.check_auth_status(*_x_client_creds(), account=account)
+    except Exception as e:
+        return {"connected": False, "account_name": "", "premium": False, "error": str(e)[:200]}
+
+
+@api.post("/api/x/auth/start")
+def x_auth_start() -> dict:
+    """Start the OAuth2 PKCE flow that connects a (new or re-connected) X account."""
+    try:
+        cid, secret = _x_client_creds()
+        msg = xt.start_auth_flow(cid, secret, finalize=_finalize_new_x_account)
+        return {"ok": not msg.startswith("Error"), "message": msg}
+    except Exception as e:
+        raise HTTPException(503, str(e).splitlines()[0][:200])
+
+
+@api.post("/api/x/auth/poll")
+def x_auth_poll() -> dict:
+    try:
+        return xt.poll_auth_flow()
+    except Exception as e:
+        return {"status": "error", "error": str(e)[:200]}
+
+
+@api.post("/api/x/disconnect")
+def x_disconnect(body: DisconnectBody | None = None) -> dict:
+    """Remove an X account: delete its token and drop it from the config."""
+    account = (body.channel if body else "") or ""
+    try:
+        xt.disconnect_x(account)
+    except Exception:
+        pass
+    cfg = gapp.load_config()
+    accts = [a for a in (cfg.get("x_accounts") or [])
+             if a.get("id") != (account or xt.DEFAULT_ACCOUNT_KEY)]
+    cfg["x_accounts"] = accts
+    gapp.save_config(cfg)  # _ensure_x_accounts clears style refs to the removed key
+    return {"ok": True, "accounts": accts}
+
+
+class XAccountSettingsBody(BaseModel):
+    id: str
+    engagement_prompt: str = ""
+    auto_respond: bool = False
+    language: str = "en"
+
+
+@api.post("/api/x/accounts/settings")
+def x_account_settings(body: XAccountSettingsBody) -> dict:
+    """Save an X account's per-account settings (community-engagement persona +
+    auto-respond + language). Auto-saves, like connect/disconnect."""
+    cfg = gapp.load_config()
+    entry = next((a for a in (cfg.get("x_accounts") or []) if a.get("id") == body.id), None)
+    if entry is None:
+        raise HTTPException(404, "X account not found.")
+    entry["engagement_prompt"] = body.engagement_prompt.strip()
+    entry["auto_respond"] = bool(body.auto_respond)
+    entry["language"] = body.language.strip() or "en"
+    gapp.save_config(cfg)
+    return {"ok": True}
+
+
+class XPostBody(BaseModel):
+    work_dir: str
+    text: str = ""              # tweet text; defaults to the film title
+    title: str = ""
+    account: str = ""           # account key override; empty → the film's style's account
+
+
+# In-memory store for background X post tasks {task_id -> {status, ...}}
+_x_post_tasks: dict = {}
+
+
+def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> None:
+    """Background thread: post the film to X with Premium-aware length handling."""
+    try:
+        cid, secret = _x_client_creds()
+        account = body_dict.get("account", "")
+        cfg = gapp.load_config()
+        text = (body_dict.get("text") or "").strip()
+        suffix = str(cfg.get("x_post_default_text", "") or "").strip()
+        if suffix:
+            text = f"{text}\n{suffix}".strip()
+        # Premium gates long-video posting; check_auth_status reads it live.
+        st = xt.check_auth_status(cid, secret, account=account)
+        premium = bool(st.get("premium"))
+        youtube_url = _youtube_url_for_work_dir(wd)
+        with _track_op("Posting to X", body_dict.get("title", "")):
+            result = xt.post_video(
+                cid, secret, str(final), text, account=account,
+                premium=premium, youtube_url=youtube_url)
+    except Exception as e:
+        _x_post_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        return
+
+    if result.get("skipped") and not result.get("tweet_id"):
+        _x_post_tasks[task_id] = {"status": "warning",
+                                  "message": result.get("error") or result.get("reason")
+                                  or "Not posted to X."}
+        return
+    if result.get("error"):
+        _x_post_tasks[task_id] = {"status": "error", "error": result["error"][:240]}
+        return
+
+    tweet_id, url = result.get("tweet_id", ""), result.get("url", "")
+    try:
+        gapp._write_job_meta(wd, x_tweet_id=tweet_id, x_url=url)
+    except Exception:
+        pass
+    try:
+        qid = json.loads((wd / "job_config.json").read_text()).get("queue_item_id", "")
+        if qid:
+            yt.update_queue_item(qid, x_tweet_id=tweet_id, x_url=url)
+    except Exception:
+        pass
+
+    msg = f"Posted to X — {url}" if url else "Posted to X."
+    if result.get("fell_back_to_link"):
+        msg = f"Video too long for X — posted the YouTube link instead: {url}"
+    _x_post_tasks[task_id] = {"status": "done", "tweet_id": tweet_id, "url": url,
+                              "fell_back_to_link": bool(result.get("fell_back_to_link")),
+                              "message": msg}
+
+
+@api.post("/api/x/post")
+def x_post(body: XPostBody) -> dict:
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    final = gapp._final_path_for_work_dir(wd)
+    if not (final.exists() and final.stat().st_size > 10_000):
+        raise HTTPException(400, "No final video found for this film.")
+    task_id = uuid.uuid4().hex[:12]
+    _x_post_tasks[task_id] = {"status": "posting"}
+    account = body.account or _x_account_for_work_dir(wd)
+    text = body.text or body.title
+    threading.Thread(
+        target=_run_x_post_task,
+        args=(task_id, {"text": text, "title": body.title, "account": account}, wd, final),
+        daemon=True,
+    ).start()
+    return {"ok": True, "task_id": task_id}
+
+
+@api.get("/api/x/post/status")
+def x_post_status(task_id: str) -> dict:
+    task = _x_post_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "X post task not found.")
     return {"ok": True, **task}
 
 

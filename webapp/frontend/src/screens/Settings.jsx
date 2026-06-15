@@ -205,6 +205,7 @@ const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
   { id: 'youtube', label: 'YouTube' },
+  { id: 'x', label: 'X' },
   { id: 'automation', label: 'Automation' },
 ]
 
@@ -352,6 +353,142 @@ function ChannelsCard({ onConfigChanged, onError }) {
                 <div className="row center gap-10 row--wrap">
                   <Button variant="primary" icon="floppy-disk" disabled={savingEng === ch.id} onClick={() => saveEng(ch)}>
                     {savingEng === ch.id ? 'Saving…' : 'Save'}
+                  </Button>
+                  <Button variant="ghost" onClick={() => setExpanded('')}>Cancel</Button>
+                  <span className="muted" style={{ fontSize: 11.5 }}>Saves immediately — separate from the main Save settings button.</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+// Connected X (Twitter) accounts (issue #107) — the X mirror of ChannelsCard.
+// Connecting runs the backend OAuth2 PKCE flow (a browser window opens on the
+// server machine); each account's token is stored separately, and styles pick
+// which account they publish to. Settings are simpler than YouTube's (no
+// category/captions): community-engagement persona + auto-respond + language.
+function XAccountsCard({ onConfigChanged, onError }) {
+  const [accounts, setAccounts] = useState(null)
+  const [connecting, setConnecting] = useState(false)
+  const [busy, setBusy] = useState('')
+  const [expanded, setExpanded] = useState('')
+  const [eng, setEng] = useState({})
+  const [savingEng, setSavingEng] = useState('')
+  const pollRef = useRef(null)
+
+  const refresh = () => api.xAccounts()
+    .then((r) => { setAccounts(r.accounts || []); if (r.auth_running) startPolling() })
+    .catch((e) => onError(e.message))
+  useEffect(() => { refresh(); return () => clearInterval(pollRef.current) }, [])
+
+  const startPolling = () => {
+    setConnecting(true)
+    clearInterval(pollRef.current)
+    pollRef.current = setInterval(async () => {
+      try {
+        const r = await api.xAuthPoll()
+        if (r.running) return
+        clearInterval(pollRef.current)
+        setConnecting(false)
+        if (r.result && !r.result.success) onError(r.result.error || 'Authorization failed.')
+        await refresh()
+        onConfigChanged()
+      } catch { /* keep polling */ }
+    }, 2000)
+  }
+
+  const connect = async () => {
+    onError('')
+    try {
+      const r = await api.xAuthStart()
+      if (!r.ok) { onError(r.message || 'Could not start the X authorization.'); return }
+      startPolling()
+    } catch (e) { onError(e.message) }
+  }
+
+  const disconnect = async (acc) => {
+    const label = acc.name || acc.id
+    if (!window.confirm(`Disconnect “${label}”? Styles publishing to it fall back to the first remaining account.`)) return
+    setBusy(acc.id); onError('')
+    try {
+      await api.xDisconnect(acc.id)
+      await refresh()
+      onConfigChanged()
+    } catch (e) { onError(e.message) } finally { setBusy('') }
+  }
+
+  const toggleEng = (acc) => {
+    if (expanded === acc.id) { setExpanded(''); return }
+    setEng((e) => ({ ...e, [acc.id]: { engagement_prompt: acc.engagement_prompt || '', auto_respond: !!acc.auto_respond, language: acc.language || 'en' } }))
+    setExpanded(acc.id)
+  }
+  const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
+  const saveEng = async (acc) => {
+    setSavingEng(acc.id); onError('')
+    try {
+      await api.xAccountSettings(acc.id, eng[acc.id] || {})
+      await refresh()
+      setExpanded('')
+    } catch (e) { onError(e.message) } finally { setSavingEng('') }
+  }
+
+  const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
+  return (
+    <Card span={12} className="reveal reveal-d1">
+      <div className="row center between">
+        <span className="label-sm">Accounts</span>
+        <Button variant="primary" icon="x-twitter" brand disabled={connecting} onClick={connect}>
+          {connecting ? 'Waiting for X…' : 'Connect X account'}
+        </Button>
+      </div>
+      <div className="field__hint" style={{ marginTop: 6 }}>
+        Each connected X login is one account. Pick the account a style publishes to under <strong>Styles</strong>. Posting needs the X API client ID below; reading mentions and analytics needs a paid X API tier.
+      </div>
+      <div className="stack gap-10 mt-16">
+        {accounts === null && <div className="muted" style={{ fontSize: 13 }}>Checking…</div>}
+        {accounts !== null && accounts.length === 0 && (
+          <div className="muted" style={{ fontSize: 13 }}>No accounts connected yet — set the X API client ID below, then click <strong>Connect X account</strong>.</div>
+        )}
+        {(accounts || []).map((acc) => (
+          <div key={acc.id} className="stack gap-10" style={rowStyle}>
+            <div className="row center gap-10 row--wrap">
+              <Icon name="x-twitter" brand style={{ color: 'var(--accent)' }} />
+              <span style={{ fontWeight: 600 }}>{acc.name ? `@${acc.name}` : acc.id}</span>
+              {acc.connected
+                ? <Chip tone="ok" dot>connected</Chip>
+                : <Chip tone="danger" dot title={acc.error}>not connected</Chip>}
+              {!acc.connected && acc.error && <span className="muted" style={{ fontSize: 11.5 }}>{acc.error}</span>}
+              {acc.premium ? <Chip tone="accent">Premium</Chip> : null}
+              {acc.engagement_prompt ? <Chip tone="accent">engagement{acc.auto_respond ? ' · auto' : ''}</Chip> : null}
+              <div className="grow" />
+              <Button variant="ghost" icon="gear" onClick={() => toggleEng(acc)}>Settings</Button>
+              <Button variant="danger" icon="link-slash" disabled={busy === acc.id} onClick={() => disconnect(acc)}>
+                {busy === acc.id ? 'Removing…' : 'Disconnect'}
+              </Button>
+            </div>
+            {expanded === acc.id && (
+              <div className="stack gap-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <Field label="Post language"
+                  hint="Declared as this account's spoken/metadata language.">
+                  <select className="select" value={eng[acc.id]?.language || 'en'}
+                    onChange={(e) => setEngField(acc.id, 'language', e.target.value)}>
+                    {Object.entries(LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+                  </select>
+                </Field>
+                <Field label="Community engagement prompt"
+                  hint="How this account replies to mentions — its persona and what to do. Leave empty to disable engagement. (Reading mentions needs a paid X API tier.)">
+                  <textarea className="textarea" rows={5} value={eng[acc.id]?.engagement_prompt || ''}
+                    onChange={(e) => setEngField(acc.id, 'engagement_prompt', e.target.value)} />
+                </Field>
+                <Check checked={!!eng[acc.id]?.auto_respond} onChange={(v) => setEngField(acc.id, 'auto_respond', v)}
+                  label="Automatically respond to mentions — post replies immediately instead of waiting for approval" />
+                <div className="row center gap-10 row--wrap">
+                  <Button variant="primary" icon="floppy-disk" disabled={savingEng === acc.id} onClick={() => saveEng(acc)}>
+                    {savingEng === acc.id ? 'Saving…' : 'Save'}
                   </Button>
                   <Button variant="ghost" onClick={() => setExpanded('')}>Cancel</Button>
                   <span className="muted" style={{ fontSize: 11.5 }}>Saves immediately — separate from the main Save settings button.</span>
@@ -537,6 +674,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
         styles: (c.styles || []).map((s) => {
           const srv = (r.config.styles || []).find((x) => x.name === s.name)
           return srv ? { ...s, channel: srv.channel } : s
+        }),
+      }))
+    } catch { /* the next full load picks it up */ }
+  }
+
+  const reloadXAccounts = async () => {
+    try {
+      const r = await api.getConfig()
+      setCfg((c) => ({
+        ...c,
+        x_accounts: r.config.x_accounts,
+        styles: (c.styles || []).map((s) => {
+          const srv = (r.config.styles || []).find((x) => x.name === s.name)
+          return srv ? { ...s, x_account: srv.x_account } : s
         }),
       }))
     } catch { /* the next full load picks it up */ }
@@ -764,6 +915,25 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             <div className="stack gap-22 mt-16">
               <Field label="Client secrets file" hint="Path to the OAuth client JSON from Google Cloud Console — one app shared by every channel.">
                 <input className="input" value={cfg.youtube_client_secrets || ''} onChange={(e) => set('youtube_client_secrets', e.target.value)} />
+              </Field>
+            </div>
+          </Card>
+        </>)}
+
+        {tab === 'x' && (<>
+          {/* ── X (Twitter) accounts (issue #107) ── */}
+          <XAccountsCard onConfigChanged={reloadXAccounts} onError={setError} />
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">X API</span>
+            <div className="stack gap-22 mt-16">
+              <Field label="Client ID" hint="OAuth 2.0 Client ID from the X developer portal. Register the redirect URI http://127.0.0.1:8723/callback on the app.">
+                <input className="input" value={cfg.x_client_id || ''} onChange={(e) => set('x_client_id', e.target.value)} />
+              </Field>
+              <Field label="Client secret" hint="Only for confidential X apps. Leave blank for a public (PKCE-only) app.">
+                <input className="input" type="password" value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
+              </Field>
+              <Field label="Default post text" hint="Appended to every tweet (like the YouTube description suffix). Optional.">
+                <input className="input" value={cfg.x_post_default_text || ''} onChange={(e) => set('x_post_default_text', e.target.value)} />
               </Field>
             </div>
           </Card>
