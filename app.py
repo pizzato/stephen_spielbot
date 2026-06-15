@@ -8,6 +8,8 @@ work-dir bookkeeping, job launching, progress polling, and automation.
 """
 
 import concurrent.futures
+import fnmatch
+import io
 import threading
 import json
 import logging
@@ -18,6 +20,7 @@ import subprocess
 import sys
 import time
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 
@@ -495,6 +498,128 @@ def save_config(cfg: dict) -> None:
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+
+
+# ── Settings backup / restore (issue #106) ──────────────────────────────────
+# Everything the app persists lives under the config dir. A backup is a zip of
+# that dir (minus regenerable scratch files); "operational" state is the subset
+# the app re-accumulates on its own (queue, fetched comments/analytics, AI
+# ideas, the trained engagement model) — the rest is settings + credentials you
+# can't regenerate (config.yaml, YouTube client secrets + tokens, voices).
+
+BACKUP_APP_ID = "stephen-spielbot"
+
+# Operational state, identified by basename / top-level subdir under the config
+# dir. Anything NOT listed here is treated as a setting/credential.
+_OPERATIONAL_FILE_NAMES = {
+    "youtube_queue.json",
+    "youtube_comments.json",
+    "youtube_analytics.json",
+    "youtube_suggestions.json",
+    "youtube_dismissed_suggestions.json",
+    "youtube_daily_uploads.json",
+    "last_session.json",
+    "ui_seen.json",
+}
+_OPERATIONAL_TOP_DIRS = {"engagement"}
+
+# Regenerable scratch that should never enter a backup: editor/migration
+# backups and the voice-audition cache (top-level voice_test*.wav; the real
+# reference clips live under voices/ and are kept).
+_BACKUP_BAK_GLOBS = ("*.bak", "*.bak-*", "*.bck", "*.bck.*", "*.migrated-bak",
+                     "*.orig", "*.tmp", "*~")
+
+
+def _is_backup_junk(rel: str) -> bool:
+    p = Path(rel)
+    if len(p.parts) == 1 and fnmatch.fnmatch(p.name, "voice_test*"):
+        return True
+    return any(fnmatch.fnmatch(p.name, g) for g in _BACKUP_BAK_GLOBS)
+
+
+def _is_operational(rel: str) -> bool:
+    p = Path(rel)
+    return p.parts[0] in _OPERATIONAL_TOP_DIRS or p.name in _OPERATIONAL_FILE_NAMES
+
+
+def _backup_files(scope: str) -> list[tuple[str, Path]]:
+    """(arcname, path) pairs to put in a backup of the given scope, sorted."""
+    cfg_dir = CONFIG_FILE.parent
+    if not cfg_dir.exists():
+        return []
+    items = []
+    for p in cfg_dir.rglob("*"):
+        if not p.is_file():
+            continue
+        rel = p.relative_to(cfg_dir).as_posix()
+        if _is_backup_junk(rel):
+            continue
+        if scope == "operational" and not _is_operational(rel):
+            continue
+        items.append((rel, p))
+    return sorted(items)
+
+
+def build_settings_backup(scope: str = "full") -> tuple[bytes, str]:
+    """Zip the config dir (full) or just its operational state, with a manifest.
+
+    Returns (zip_bytes, suggested_filename)."""
+    if scope not in ("full", "operational"):
+        raise ValueError("scope must be 'full' or 'operational'")
+    items = _backup_files(scope)
+    manifest = {
+        "app": BACKUP_APP_ID,
+        "kind": "settings-backup",
+        "scope": scope,
+        "version": 1,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+        "files": [rel for rel, _ in items],
+    }
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("backup_manifest.json", json.dumps(manifest, indent=2))
+        for rel, path in items:
+            zf.write(path, rel)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return buf.getvalue(), f"{BACKUP_APP_ID}-{scope}-{stamp}.zip"
+
+
+def restore_settings_backup(data: bytes) -> dict:
+    """Extract a backup zip over the config dir (overlay; existing files win
+    only where the backup is silent). Validates the manifest and refuses unsafe
+    paths. Returns {scope, restored:[arcname,...]}."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        raise ValueError("That file is not a valid backup (.zip).")
+    with zf:
+        if "backup_manifest.json" not in zf.namelist():
+            raise ValueError("Missing backup manifest — is this a Stephen Spielbot backup?")
+        try:
+            manifest = json.loads(zf.read("backup_manifest.json"))
+        except Exception:
+            raise ValueError("The backup manifest is unreadable.")
+        if manifest.get("app") != BACKUP_APP_ID:
+            raise ValueError("This backup was not produced by Stephen Spielbot.")
+
+        cfg_dir = CONFIG_FILE.parent
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        root = cfg_dir.resolve()
+        restored = []
+        for info in zf.infolist():
+            name = info.filename
+            if info.is_dir() or name == "backup_manifest.json":
+                continue
+            # Guard against zip-slip / absolute paths escaping the config dir.
+            if os.path.isabs(name) or ".." in Path(name).parts:
+                raise ValueError(f"Unsafe path in backup: {name}")
+            target = (cfg_dir / name).resolve()
+            if target != root and root not in target.parents:
+                raise ValueError(f"Unsafe path in backup: {name}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(zf.read(info))
+            restored.append(Path(name).as_posix())
+    return {"scope": manifest.get("scope", "full"), "restored": sorted(restored)}
 
 
 
