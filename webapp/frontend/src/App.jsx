@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Sidebar, Banner } from './components.jsx'
 import { api } from './api.js'
 import { parseHash, buildHash, nameOf, pathOf } from './nav.js'
@@ -8,8 +8,9 @@ import Script from './screens/Script.jsx'
 import Progress from './screens/Progress.jsx'
 import Remix from './screens/Remix.jsx'
 import Queue from './screens/Queue.jsx'
-import YouTube from './screens/YouTube.jsx'
-import X from './screens/X.jsx'
+import Analytics from './screens/Analytics.jsx'
+import Community from './screens/Community.jsx'
+import Publish from './screens/Publish.jsx'
 import Ideas from './screens/Ideas.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
@@ -47,18 +48,9 @@ export default function App() {
   // Reconstruct the full work_dir for the page from the URL slug. Empty until
   // config (videos_dir) has loaded, or when no slug is present (active job).
   const workDir = nav.name ? pathOf(nav.name, videosDir) : ''
-  // Deep-link into the YouTube tab's Publish view (#/youtube/publish/<slug>).
-  // Memoized so its identity only changes when the target does (YouTube re-runs
-  // an effect on `initial`).
-  const ytInitial = useMemo(
-    () => (route === 'youtube' && nav.view === 'publish' && workDir) ? { view: 'publish', workDir } : null,
-    [route, nav.view, workDir],
-  )
-  // Same deep link for the X tab's Publish view (#/x/publish/<slug>).
-  const xInitial = useMemo(
-    () => (route === 'x' && nav.view === 'publish' && workDir) ? { view: 'publish', workDir } : null,
-    [route, nav.view, workDir],
-  )
+  // The Publish page is film-scoped (#/publish/<slug>); the slug resolves to the
+  // film to publish, or empty to let the page pick the newest finished film.
+  const publishWorkDir = (route === 'publish' && workDir) ? workDir : ''
 
   // Poll the "needs attention" counts for the sidebar (render activity, queue,
   // YouTube, new films) on a light interval so the indicators stay live.
@@ -248,8 +240,9 @@ export default function App() {
       case 'progress': return <Progress workDir={workDir} job={job} go={go} onOpenScript={onOpenScript} />
       case 'remix': return <Remix workDir={workDir} go={go} />
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />
-      case 'youtube': return <YouTube go={go} initial={ytInitial} />
-      case 'x': return <X go={go} initial={xInitial} />
+      case 'analytics': return <Analytics />
+      case 'community': return <Community />
+      case 'publish': return <Publish initialWorkDir={publishWorkDir} go={go} />
       case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />
