@@ -1,6 +1,7 @@
 """X posting backend wiring (issue #107): the background post task routes the
 right account + premium flag to pipeline.x.post_video, and surfaces skip /
 YouTube-link-fallback outcomes. Mirrors UploadRoutingTests. No network."""
+import json
 import os
 import tempfile
 import unittest
@@ -245,6 +246,38 @@ class XPostTextTests(unittest.TestCase):
              mock.patch.object(backend.gapp, "style_settings", return_value={"description_suffix": "SIG"}), \
              mock.patch.object(backend, "_cached_description", return_value=""):
             self.assertEqual(backend._x_post_text_for(wd, {}, passed="", fallback="Title"), "Title")
+
+
+class XAutoPostRetryTests(unittest.TestCase):
+    """A failed auto-post must release its claim so a later tick retries — capped
+    at _X_AUTO_POST_MAX_ATTEMPTS, after which the job stays claimed (issue #107)."""
+
+    def _job(self, meta: dict) -> Path:
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-"))
+        (wd / "job.json").write_text(json.dumps(meta))
+        return wd
+
+    def test_release_on_failure_under_cap(self):
+        wd = self._job({"status": "done", "_x_auto_post_triggered": True})
+        backend._x_auto_release_on_failure(wd)
+        m = json.loads((wd / "job.json").read_text())
+        self.assertFalse(m["_x_auto_post_triggered"])      # released -> retriable
+        self.assertEqual(m["_x_auto_post_attempts"], 1)
+
+    def test_gives_up_at_cap(self):
+        wd = self._job({"status": "done", "_x_auto_post_triggered": True,
+                        "_x_auto_post_attempts": backend._X_AUTO_POST_MAX_ATTEMPTS - 1})
+        backend._x_auto_release_on_failure(wd)
+        m = json.loads((wd / "job.json").read_text())
+        self.assertTrue(m["_x_auto_post_triggered"])       # stays claimed -> given up
+        self.assertEqual(m["_x_auto_post_attempts"], backend._X_AUTO_POST_MAX_ATTEMPTS)
+
+    def test_noop_for_manual_post(self):
+        wd = self._job({"status": "done"})                 # never auto-claimed
+        backend._x_auto_release_on_failure(wd)
+        m = json.loads((wd / "job.json").read_text())
+        self.assertNotIn("_x_auto_post_triggered", m)
+        self.assertNotIn("_x_auto_post_attempts", m)
 
 
 class XLongVideoFallbackTests(unittest.TestCase):
