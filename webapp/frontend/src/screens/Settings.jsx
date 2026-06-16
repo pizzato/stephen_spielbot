@@ -381,6 +381,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
   const [showImport, setShowImport] = useState(false)
   const [tok, setTok] = useState({ access: '', refresh: '' })
   const [importBusy, setImportBusy] = useState(false)
+  const [authUrl, setAuthUrl] = useState('')   // surfaced so it can be opened in Incognito
   const pollRef = useRef(null)
 
   const refresh = () => api.xAccounts()
@@ -396,7 +397,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
         const r = await api.xAuthPoll()
         if (r.running) return
         clearInterval(pollRef.current)
-        setConnecting(false)
+        setConnecting(false); setAuthUrl('')
         if (r.result && !r.result.success) onError(r.result.error || 'Authorization failed.')
         await refresh()
         onConfigChanged()
@@ -405,10 +406,11 @@ function XAccountsCard({ onConfigChanged, onError }) {
   }
 
   const connect = async () => {
-    onError('')
+    onError(''); setAuthUrl('')
     try {
       const r = await api.xAuthStart()
       if (!r.ok) { onError(r.message || 'Could not start the X authorization.'); return }
+      setAuthUrl(r.authorize_url || '')
       startPolling()
     } catch (e) { onError(e.message) }
   }
@@ -465,6 +467,18 @@ function XAccountsCard({ onConfigChanged, onError }) {
       <div className="field__hint" style={{ marginTop: 6 }}>
         Each connected X login is one account. Pick the account a style publishes to under <strong>Styles</strong>. Posting needs the X API client ID below; reading mentions and analytics needs a paid X API tier.
       </div>
+      {connecting && authUrl && (
+        <div className="stack gap-10" style={{ marginTop: 12, padding: '12px 14px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }}>
+          <div className="field__hint">
+            A browser window opened for X authorization (this grants video-upload permission). If it shows <strong>“redirected you too many times”</strong>, copy this link and open it in an <strong>Incognito/Private window</strong> — a clean session avoids X’s loop, and approving there still finishes the connection here.
+          </div>
+          <input className="input" readOnly value={authUrl} onFocus={(e) => e.target.select()} style={{ fontSize: 11 }} />
+          <div className="row center gap-10 row--wrap">
+            <Button variant="primary" icon="copy" onClick={() => { try { navigator.clipboard.writeText(authUrl) } catch { /* select-and-copy fallback */ } }}>Copy authorize link</Button>
+            <span className="muted" style={{ fontSize: 11.5 }}>Then paste it into a new Incognito window.</span>
+          </div>
+        </div>
+      )}
       {showImport && (
         <div className="stack gap-10" style={{ marginTop: 12, padding: '12px 14px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }}>
           <div className="field__hint">

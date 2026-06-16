@@ -316,34 +316,40 @@ class _AuthFlow:
     def __init__(self):
         self.running = False
         self.result: dict | None = None
+        self.authorize_url = ""
         self._thread: threading.Thread | None = None
 
     def start(self, client_id: str, client_secret: str = "", finalize=None) -> str:
         """Run the OAuth2 PKCE flow in a background thread. After login, the
         authorized account is identified via /2/users/me and
-        ``finalize(account_id, username)`` (if given) decides the storage key."""
+        ``finalize(account_id, username)`` (if given) decides the storage key.
+
+        The authorize URL is built here (synchronously) and exposed as
+        ``self.authorize_url`` so the UI can offer it for an Incognito window —
+        the local callback listener catches the redirect regardless of which
+        browser completes the consent, sidestepping X's logged-in redirect loop."""
         if self.running:
             return "Auth flow already in progress — check your browser."
         if not client_id:
             return "Error: X API client ID not configured (see Settings → X)."
         self.result = None
         self.running = True
+        verifier, challenge = _pkce_pair()
+        state = secrets.token_urlsafe(24)
+        self.authorize_url = AUTHORIZE_URL + "?" + urlencode({
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": REDIRECT_URI,
+            "scope": " ".join(SCOPES),
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        })
 
         def _run():
             try:
                 import webbrowser
-                verifier, challenge = _pkce_pair()
-                state = secrets.token_urlsafe(24)
-                authorize = AUTHORIZE_URL + "?" + urlencode({
-                    "response_type": "code",
-                    "client_id": client_id,
-                    "redirect_uri": REDIRECT_URI,
-                    "scope": " ".join(SCOPES),
-                    "state": state,
-                    "code_challenge": challenge,
-                    "code_challenge_method": "S256",
-                })
-                webbrowser.open(authorize)
+                webbrowser.open(self.authorize_url)
                 code = _capture_redirect(state)
                 # Exchange the code for tokens.
                 resp = requests.post(TOKEN_URL, data={
@@ -403,7 +409,8 @@ def start_auth_flow(client_id: str, client_secret: str = "", finalize=None) -> s
 
 
 def poll_auth_flow() -> dict:
-    return {"running": _auth_flow.running, "result": _auth_flow.result}
+    return {"running": _auth_flow.running, "result": _auth_flow.result,
+            "authorize_url": _auth_flow.authorize_url}
 
 
 def disconnect_x(account: str = ""):

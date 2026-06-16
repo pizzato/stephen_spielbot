@@ -2851,11 +2851,16 @@ def x_auth_status(account: str = Query("")) -> dict:
 
 @api.post("/api/x/auth/start")
 def x_auth_start() -> dict:
-    """Start the OAuth2 PKCE flow that connects a (new or re-connected) X account."""
+    """Start the OAuth2 PKCE flow that connects a (new or re-connected) X account.
+
+    Also returns the authorize URL so the UI can offer it for an Incognito window
+    (a clean session dodges X's logged-in redirect loop); the local listener
+    catches the callback regardless of which browser finishes consent."""
     try:
         cid, secret = _x_client_creds()
         msg = xt.start_auth_flow(cid, secret, finalize=_finalize_new_x_account)
-        return {"ok": not msg.startswith("Error"), "message": msg}
+        return {"ok": not msg.startswith("Error"), "message": msg,
+                "authorize_url": xt.poll_auth_flow().get("authorize_url", "")}
     except Exception as e:
         raise HTTPException(503, str(e).splitlines()[0][:200])
 
