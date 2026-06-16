@@ -57,6 +57,7 @@ AUTHORIZE_URL = "https://x.com/i/oauth2/authorize"
 TOKEN_URL = "https://api.x.com/2/oauth2/token"
 API_BASE = "https://api.x.com/2"
 UPLOAD_URL = f"{API_BASE}/media/upload"
+UPLOAD_URL_V11 = "https://upload.twitter.com/1.1/media/upload.json"  # OAuth 1.0a media upload
 
 # OAuth 2.0 scopes. ``media.write`` is required to upload media under user
 # context; ``offline.access`` yields a refresh token (access tokens last ~2h).
@@ -161,9 +162,42 @@ def _bearer(client_id: str, client_secret: str, account: str = "") -> str | None
     return refreshed.get("access_token")
 
 
-def _api_get(access_token: str, path: str, params: dict | None = None) -> dict:
-    r = requests.get(f"{API_BASE}{path}", params=params or {},
-                     headers={"Authorization": f"Bearer {access_token}"}, timeout=30)
+def _account_auth(client_id: str, client_secret: str, account: str = "") -> dict | None:
+    """Resolve how to authenticate requests for an account: OAuth 1.0a user keys
+    (no-browser — pasted API key/secret + access token/secret) or a refreshed
+    OAuth 2.0 bearer token. Returns {"oauth1": <OAuth1>} or {"bearer": <token>},
+    or None if not connected."""
+    token = _load_token(account)
+    if not token:
+        return None
+    if token.get("auth") == "oauth1":
+        try:
+            from requests_oauthlib import OAuth1
+        except Exception as exc:
+            logger.warning("requests_oauthlib unavailable for OAuth1: %s", exc)
+            return None
+        return {"oauth1": OAuth1(token.get("api_key", ""), token.get("api_secret", ""),
+                                 token.get("access_token", ""), token.get("access_secret", ""))}
+    access = _bearer(client_id, client_secret, account)
+    return {"bearer": access} if access else None
+
+
+def _bearer_auth(access_token: str) -> dict:
+    """Auth descriptor for a raw bearer token (used before a token is saved)."""
+    return {"bearer": access_token}
+
+
+def _xreq(method: str, url: str, auth: dict, **kw):
+    """requests with the account's auth applied (OAuth1 signer or Bearer header)."""
+    if auth.get("oauth1") is not None:
+        kw["auth"] = auth["oauth1"]
+    else:
+        kw.setdefault("headers", {})["Authorization"] = f"Bearer {auth.get('bearer', '')}"
+    return requests.request(method, url, **kw)
+
+
+def _api_get(auth: dict, path: str, params: dict | None = None) -> dict:
+    r = _xreq("GET", f"{API_BASE}{path}", auth, params=params or {}, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -185,9 +219,10 @@ def _premium_from_me(me: dict) -> bool:
     return vt in ("blue",)
 
 
-def _fetch_me(access_token: str) -> dict:
-    """GET /2/users/me with the fields needed for identity + premium detection."""
-    return _api_get(access_token, "/users/me", {
+def _fetch_me(auth: dict) -> dict:
+    """GET /2/users/me with the fields needed for identity + premium detection.
+    ``auth`` is an _account_auth descriptor (OAuth1 signer or bearer)."""
+    return _api_get(auth, "/users/me", {
         "user.fields": "username,name,verified,verified_type,subscription_type",
     })
 
@@ -216,11 +251,11 @@ def check_auth_status(client_id: str, client_secret: str = "",
         return cached["result"]
 
     def _full_check() -> dict:
-        access = _bearer(client_id, client_secret, account)
-        if not access:
+        auth = _account_auth(client_id, client_secret, account)
+        if not auth:
             return {"connected": False, "account_name": "", "account_id": "",
                     "premium": False, "error": "Not authenticated — click Connect X"}
-        me = _fetch_me(access)
+        me = _fetch_me(auth)
         data = me.get("data", {})
         token = _load_token(account) or {}
         premium = _premium_from_me(me)
@@ -365,7 +400,7 @@ class _AuthFlow:
                 # Identify the account.
                 account_id, username, premium = "", "", False
                 try:
-                    me = _fetch_me(token["access_token"])
+                    me = _fetch_me(_bearer_auth(token["access_token"]))
                     data = me.get("data", {})
                     account_id = data.get("id", "")
                     username = data.get("username", "")
@@ -436,7 +471,7 @@ def import_tokens(client_id: str, client_secret: str, access_token: str,
              "token_type": "bearer", "expires_at": time.time() + 7200 - 60}
     me = None
     try:
-        me = _fetch_me(access_token)
+        me = _fetch_me(_bearer_auth(access_token))
     except Exception as exc:
         # Maybe already expired — try one refresh, then re-validate.
         if refresh_token:
@@ -444,13 +479,60 @@ def import_tokens(client_id: str, client_secret: str, access_token: str,
             if refreshed:
                 token = refreshed
                 try:
-                    me = _fetch_me(token["access_token"])
+                    me = _fetch_me(_bearer_auth(token["access_token"]))
                 except Exception:
                     me = None
         if me is None:
             return {"success": False,
                     "error": f"X rejected the token: {str(exc)[:200]}. Check it has the "
                              "right scopes and was issued by this app."}
+    data = me.get("data", {})
+    account_id = data.get("id", "")
+    username = data.get("username", "")
+    premium = _premium_from_me(me)
+    token.update({"account_id": account_id, "username": username, "premium": premium})
+    key = account_id or DEFAULT_ACCOUNT_KEY
+    if finalize is not None:
+        try:
+            key = finalize(account_id, username) or key
+        except Exception as exc:
+            logger.warning("X finalize callback failed: %s", exc)
+    _save_token(key, token)
+    _clear_auth_cache(key)
+    return {"success": True, "account": key, "account_id": account_id,
+            "account_name": username, "premium": premium, "error": ""}
+
+
+def import_oauth1(api_key: str, api_secret: str, access_token: str, access_secret: str,
+                  finalize=None) -> dict:
+    """Connect an account from OAuth 1.0a user keys (no browser, no scopes).
+
+    These are generated with one click in the X developer portal (API Key/Secret
+    + Access Token/Secret) and authorize the app for the OWNER's account at the
+    app's permission level (Read+Write covers posting AND media upload — so this
+    sidesteps both the authorize redirect loop and the media.write scope issue).
+    Validates via /2/users/me, then stores an oauth1 token file. Returns
+    {success, account, account_id, account_name, premium, error}.
+    """
+    api_key = (api_key or "").strip()
+    api_secret = (api_secret or "").strip()
+    access_token = (access_token or "").strip()
+    access_secret = (access_secret or "").strip()
+    if not (api_key and api_secret and access_token and access_secret):
+        return {"success": False, "error": "All four keys are required (API key/secret + access token/secret)."}
+    token = {"auth": "oauth1", "api_key": api_key, "api_secret": api_secret,
+             "access_token": access_token, "access_secret": access_secret}
+    try:
+        from requests_oauthlib import OAuth1
+    except Exception as exc:
+        return {"success": False, "error": f"OAuth1 support unavailable: {exc}"}
+    auth = {"oauth1": OAuth1(api_key, api_secret, access_token, access_secret)}
+    try:
+        me = _fetch_me(auth)
+    except Exception as exc:
+        return {"success": False,
+                "error": f"X rejected the keys: {str(exc)[:200]}. Check they're correct and the "
+                         "app has Read and Write permission."}
     data = me.get("data", {})
     account_id = data.get("id", "")
     username = data.get("username", "")
@@ -506,13 +588,15 @@ def decide_post_target(video_path: str, premium: bool, youtube_url: str = "",
 
 # ── Video upload + posting ────────────────────────────────────────────────────
 
-def _chunked_upload(access_token: str, video_path: str, progress_callback=None) -> str:
-    """Upload a video via the v2 chunked media endpoint (INIT/APPEND/FINALIZE/
-    STATUS). Returns the media id. Raises on failure."""
-    headers = {"Authorization": f"Bearer {access_token}"}
+def _chunked_upload(auth: dict, video_path: str, progress_callback=None) -> str:
+    """Upload a video via the chunked media endpoint (INIT/APPEND/FINALIZE/
+    STATUS). OAuth 1.0a uses the v1.1 endpoint (the classic media upload, which
+    needs only the app's Read+Write permission — no media.write scope); OAuth2
+    bearer uses the v2 endpoint. Returns the media id. Raises on failure."""
+    url = UPLOAD_URL_V11 if auth.get("oauth1") is not None else UPLOAD_URL
     size = Path(video_path).stat().st_size
 
-    init = requests.post(UPLOAD_URL, headers=headers, data={
+    init = _xreq("POST", url, auth, data={
         "command": "INIT", "total_bytes": size,
         "media_type": "video/mp4", "media_category": "tweet_video",
     }, timeout=60)
@@ -531,10 +615,9 @@ def _chunked_upload(access_token: str, video_path: str, progress_callback=None) 
             chunk = fh.read(chunk_size)
             if not chunk:
                 break
-            ap = requests.post(UPLOAD_URL, headers=headers,
-                               data={"command": "APPEND", "media_id": media_id,
-                                     "segment_index": segment},
-                               files={"media": chunk}, timeout=120)
+            ap = _xreq("POST", url, auth,
+                       data={"command": "APPEND", "media_id": media_id, "segment_index": segment},
+                       files={"media": chunk}, timeout=120)
             ap.raise_for_status()
             sent += len(chunk)
             segment += 1
@@ -542,15 +625,13 @@ def _chunked_upload(access_token: str, video_path: str, progress_callback=None) 
                 pct = sent / size * 100
                 progress_callback(pct, f"Uploading to X… {pct:.0f}%")
 
-    fin = requests.post(UPLOAD_URL, headers=headers,
-                        data={"command": "FINALIZE", "media_id": media_id}, timeout=60)
+    fin = _xreq("POST", url, auth, data={"command": "FINALIZE", "media_id": media_id}, timeout=60)
     fin.raise_for_status()
     info = fin.json().get("data", fin.json()).get("processing_info")
     # Poll STATUS until the video finishes transcoding.
     while info and info.get("state") in ("pending", "in_progress"):
         time.sleep(min(int(info.get("check_after_secs", 3)), 10))
-        st = requests.get(UPLOAD_URL, headers=headers,
-                          params={"command": "STATUS", "media_id": media_id}, timeout=30)
+        st = _xreq("GET", url, auth, params={"command": "STATUS", "media_id": media_id}, timeout=30)
         st.raise_for_status()
         info = st.json().get("data", st.json()).get("processing_info")
     if info and info.get("state") == "failed":
@@ -558,16 +639,14 @@ def _chunked_upload(access_token: str, video_path: str, progress_callback=None) 
     return str(media_id)
 
 
-def _post_tweet(access_token: str, text: str, media_id: str | None = None,
+def _post_tweet(auth: dict, text: str, media_id: str | None = None,
                 reply_to: str | None = None) -> dict:
     body: dict[str, Any] = {"text": text[:TWEET_TEXT_LIMIT]}
     if media_id:
         body["media"] = {"media_ids": [media_id]}
     if reply_to:
         body["reply"] = {"in_reply_to_tweet_id": reply_to}
-    r = requests.post(f"{API_BASE}/tweets", json=body,
-                      headers={"Authorization": f"Bearer {access_token}",
-                               "Content-Type": "application/json"}, timeout=60)
+    r = _xreq("POST", f"{API_BASE}/tweets", auth, json=body, timeout=60)
     r.raise_for_status()
     return r.json().get("data", {})
 
@@ -586,8 +665,8 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
     Honours the Premium/length rule: Premium → full video; non-Premium over the
     limit → the YouTube link if one exists, else skip with a warning.
     """
-    access = _bearer(client_id, client_secret, account)
-    if not access:
+    auth = _account_auth(client_id, client_secret, account)
+    if not auth:
         return {"tweet_id": "", "url": "", "error": "Not authenticated. Connect X first.",
                 "fell_back_to_link": False, "skipped": True, "reason": ""}
     if not video_path or not Path(video_path).exists():
@@ -604,13 +683,13 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                     "fell_back_to_link": False, "skipped": True, "reason": decision["reason"]}
         if decision["action"] == "post_link":
             link_text = f"{text}\n{youtube_url}".strip()
-            data = _post_tweet(access, link_text)
+            data = _post_tweet(auth, link_text)
             tid = data.get("id", "")
             return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
                     "fell_back_to_link": True, "skipped": False, "reason": decision["reason"]}
         # post_full
-        media_id = _chunked_upload(access, video_path, progress_callback)
-        data = _post_tweet(access, text, media_id=media_id)
+        media_id = _chunked_upload(auth, video_path, progress_callback)
+        data = _post_tweet(auth, text, media_id=media_id)
         tid = data.get("id", "")
         logger.info("X post complete: %s (tweet_id=%s)", text[:60], tid)
         return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
@@ -641,10 +720,10 @@ def _account_user_id(client_id: str, client_secret: str, account: str) -> str:
     token = _load_token(account) or {}
     if token.get("account_id"):
         return str(token["account_id"])
-    access = _bearer(client_id, client_secret, account)
-    if not access:
+    auth = _account_auth(client_id, client_secret, account)
+    if not auth:
         return ""
-    return str(_fetch_me(access).get("data", {}).get("id", ""))
+    return str(_fetch_me(auth).get("data", {}).get("id", ""))
 
 
 def fetch_mentions(client_id: str, client_secret: str, account: str = "",
@@ -654,13 +733,13 @@ def fetch_mentions(client_id: str, client_secret: str, account: str = "",
     Raises RuntimeError when not authenticated (mirrors fetch_channel_comments),
     so the backend sweep reports per-account failures.
     """
-    access = _bearer(client_id, client_secret, account)
-    if not access:
+    auth = _account_auth(client_id, client_secret, account)
+    if not auth:
         raise RuntimeError("Not authenticated. Connect X first.")
     user_id = _account_user_id(client_id, client_secret, account)
     if not user_id:
         raise RuntimeError("Could not resolve the X account id.")
-    resp = _api_get(access, f"/users/{user_id}/mentions", {
+    resp = _api_get(auth, f"/users/{user_id}/mentions", {
         "max_results": min(max(max_results, 5), 100),
         "tweet.fields": "created_at,conversation_id,author_id,public_metrics,in_reply_to_user_id",
         "expansions": "author_id",
@@ -693,11 +772,11 @@ def reply_to_tweet(client_id: str, client_secret: str, in_reply_to_tweet_id: str
     """Reply to a tweet (the X mirror of reply_to_comment). Returns {success, error}."""
     if not in_reply_to_tweet_id or not text:
         return {"success": False, "error": "Missing tweet id or reply text"}
-    access = _bearer(client_id, client_secret, account)
-    if not access:
+    auth = _account_auth(client_id, client_secret, account)
+    if not auth:
         return {"success": False, "error": "Not authenticated"}
     try:
-        _post_tweet(access, text, reply_to=in_reply_to_tweet_id)
+        _post_tweet(auth, text, reply_to=in_reply_to_tweet_id)
         logger.info("Replied to tweet %s", in_reply_to_tweet_id)
         return {"success": True, "error": ""}
     except Exception as exc:
@@ -740,11 +819,11 @@ def save_analytics_cache(cache: dict[str, dict]) -> None:
 def fetch_x_analytics(client_id: str, client_secret: str, account: str = "",
                       max_tweets: int = 25) -> dict:
     """Account-level stats + recent-tweet metrics. {channel, videos} envelope."""
-    access = _bearer(client_id, client_secret, account)
-    if not access:
+    auth = _account_auth(client_id, client_secret, account)
+    if not auth:
         return {"channel": {}, "videos": []}
     try:
-        me = _api_get(access, "/users/me", {
+        me = _api_get(auth, "/users/me", {
             "user.fields": "username,name,public_metrics,verified_type,subscription_type"})
         data = me.get("data", {})
         pm = data.get("public_metrics", {})
@@ -764,7 +843,7 @@ def fetch_x_analytics(client_id: str, client_secret: str, account: str = "",
         # the account header intact and just yields no per-tweet rows.
         try:
             user_id = data.get("id", "")
-            resp = _api_get(access, f"/users/{user_id}/tweets", {
+            resp = _api_get(auth, f"/users/{user_id}/tweets", {
                 "max_results": min(max(max_tweets, 5), 100),
                 "tweet.fields": "created_at,public_metrics",
                 "exclude": "retweets,replies",

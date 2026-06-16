@@ -2892,6 +2892,25 @@ def x_auth_import(body: XImportTokensBody) -> dict:
     return {"ok": True, **res}
 
 
+class XImportKeysBody(BaseModel):
+    api_key: str
+    api_secret: str
+    access_token: str
+    access_secret: str
+
+
+@api.post("/api/x/auth/import-keys")
+def x_auth_import_keys(body: XImportKeysBody) -> dict:
+    """Connect an X account from OAuth 1.0a API keys (no browser, no scopes) —
+    the most reliable path for a self-owned account. Uses the app's Read+Write
+    permission, so it can upload media without the media.write OAuth2 scope."""
+    res = xt.import_oauth1(body.api_key, body.api_secret, body.access_token,
+                           body.access_secret, finalize=_finalize_new_x_account)
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Could not connect with those keys."))
+    return {"ok": True, **res}
+
+
 @api.post("/api/x/disconnect")
 def x_disconnect(body: DisconnectBody | None = None) -> dict:
     """Remove an X account: delete its token and drop it from the config."""
