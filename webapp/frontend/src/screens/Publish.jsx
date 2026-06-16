@@ -70,6 +70,9 @@ export default function Publish({ initialWorkDir, go }) {
   const [xStatus, setXStatus] = useState('')
   const [xError, setXError] = useState('')
   const [xUrl, setXUrl] = useState('')
+  // Which destinations to publish to (issue #107). A box is only acted on when
+  // that platform also has a connected channel/account (see willYouTube/willX).
+  const [dest, setDest] = useState({ youtube: true, x: true })
 
   const refreshChannels = () => api.ytChannels().then((r) => setChannels(r.channels || [])).catch(() => {})
   const refreshXAccounts = () => api.xAccounts().then((r) => {
@@ -173,23 +176,21 @@ export default function Publish({ initialWorkDir, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const upload = async () => {
-    setBusy('upload'); setError(''); setStatus('Starting upload…')
+  // Upload to YouTube and resolve once done (so a combined publish can wait for
+  // the link before posting to X). Throws on failure.
+  const uploadYouTube = async () => {
+    setStatus('Uploading to YouTube…')
+    const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy, include_thumbnail: includeThumbnail, channel: chan?.id || '' })
     let pollTimer = null
     try {
-      // Send the channel shown in the header so the upload matches the UI even
-      // when the prefill couldn't resolve one and we fell back to the first.
-      const { task_id } = await api.ytPost({ work_dir: workDir, title, description, category, privacy, include_thumbnail: includeThumbnail, channel: chan?.id || '' })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
             const s = await api.ytPostStatus(task_id)
             if (s.status === 'done') {
-              setStatus(s.message || 'Uploaded.')
+              setStatus(s.message || 'Uploaded to YouTube.')
               setYoutubeUrl(s.url || '')
               setYoutubeVideoId(s.video_id || '')
-              setConfirming(false)
-              setReuploading(false)
               refreshChannels()
               resolve()
             } else if (s.status === 'error') {
@@ -202,10 +203,19 @@ export default function Publish({ initialWorkDir, go }) {
         }
         check()
       })
-    } catch (e) { setError(e.message) } finally {
-      clearTimeout(pollTimer)
-      setBusy('')
-    }
+    } finally { clearTimeout(pollTimer) }
+  }
+
+  // Publish to the selected destinations. YouTube goes first so a non-Premium X
+  // post can fall back to the fresh YouTube link (the backend reads it from the
+  // film's job meta, written by the YouTube upload).
+  const publishAll = async () => {
+    setBusy('publish'); setError('')
+    try {
+      if (willYouTube) await uploadYouTube()
+      if (willX) await postToX()
+      setConfirming(false); setReuploading(false)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
   // Switching the publish channel pulls in that channel's default category.
@@ -217,12 +227,17 @@ export default function Publish({ initialWorkDir, go }) {
 
   // The channel this upload goes to — prefilled from the film's style, overridable.
   const chan = channels.find((c) => c.id === channel) || channels[0]
-  const canUpload = !!chan?.connected && workDir && title.trim() && finalUrl
-
   // The X account this post goes to. Non-Premium accounts can't take a long
   // video — the backend posts the YouTube link instead (or warns if none).
   const xacc = xAccounts.find((a) => a.id === xAccount) || xAccounts[0]
-  const canPostX = !!xacc?.connected && workDir && title.trim() && finalUrl
+
+  // Resolved publish targets: a destination only fires when it's both ticked and
+  // has a connected channel/account.
+  const ytAvailable = !!chan?.connected
+  const xAvailable = !!xacc?.connected
+  const willYouTube = dest.youtube && ytAvailable
+  const willX = dest.x && xAvailable
+  const canPublish = !!(workDir && title.trim() && finalUrl && (willYouTube || willX))
 
   const postToX = async () => {
     setXBusy(true); setXError(''); setXStatus('Posting to X…'); setXUrl('')
@@ -249,20 +264,10 @@ export default function Publish({ initialWorkDir, go }) {
       <Card span={8} padLg className="reveal reveal-d1">
         <div className="row center between row--wrap gap-16">
           <span className="row center gap-10"><span className="label-sm">Publish a finished film</span>{go && <Button variant="ghost" icon="film" disabled={!workDir} onClick={() => go('editfilm', { workDir })}>Edit</Button>}</span>
-          {channels.length > 0 && (
-            <span className="row center gap-10">
-              <span className="muted" style={{ fontSize: 12.5 }}>Publish to</span>
-              <select className="select" value={chan?.id || ''} onChange={(e) => onChannelChange(e.target.value)} style={{ maxWidth: 220 }}>
-                {channels.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
-              </select>
-              {chan?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
-            </span>
-          )}
         </div>
 
-        {!chan?.connected && <Banner tone="warn">{channels.length === 0
-          ? 'No YouTube channels connected — add one in Settings → YouTube.'
-          : (chan?.error || 'This channel is not connected — reconnect it in Settings → YouTube.')}</Banner>}
+        {channels.length === 0 && xAccounts.length === 0 && (
+          <Banner tone="warn">No channels or accounts connected — add one in Settings → YouTube or Settings → X.</Banner>)}
         <Banner tone="danger">{error}</Banner>
         {status && <Banner tone="ok">{status}</Banner>}
 
@@ -273,49 +278,83 @@ export default function Publish({ initialWorkDir, go }) {
               {opts.finished.map((f) => <option key={f.work_dir} value={f.work_dir}>{f.label}</option>)}
             </select>
           </Field>
-          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
+          <Field label="Publish to">
+            <div className="stack gap-10">
+              <div className="row center gap-10 row--wrap">
+                <Check checked={dest.youtube} onChange={(v) => setDest((d) => ({ ...d, youtube: v }))} label="YouTube" />
+                {dest.youtube && channels.length > 0 && (<>
+                  <select className="select" value={chan?.id || ''} onChange={(e) => onChannelChange(e.target.value)} style={{ maxWidth: 220 }}>
+                    {channels.map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
+                  </select>
+                  {chan?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
+                </>)}
+                {dest.youtube && channels.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No channel connected (Settings → YouTube)</span>}
+              </div>
+              <div className="row center gap-10 row--wrap">
+                <Check checked={dest.x} onChange={(v) => setDest((d) => ({ ...d, x: v }))} label="X" />
+                {dest.x && xAccounts.length > 0 && (<>
+                  <select className="select" value={xacc?.id || ''} onChange={(e) => setXAccount(e.target.value)} style={{ maxWidth: 220 }}>
+                    {xAccounts.map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
+                  </select>
+                  {xacc?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
+                  {xacc?.premium ? <Chip tone="accent">Premium</Chip> : null}
+                </>)}
+                {dest.x && xAccounts.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No account connected (Settings → X)</span>}
+              </div>
+              {willX && !xacc?.premium && (
+                <div className="muted" style={{ fontSize: 11.5 }}>
+                  X is non-Premium: videos over 2m20s post the YouTube link instead{(willYouTube || youtubeUrl) ? '' : ' — enable YouTube too, or it won’t post'}.
+                </div>
+              )}
+            </div>
+          </Field>
+          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters. Also used as the X post text.">
             <input className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
           </Field>
-          <Field label={<span className="row center between"><span>Description</span><button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }} disabled={busy === 'desc' || !workDir} onClick={genDescription}><Icon name="wand-magic-sparkles" /> {busy === 'desc' ? 'Writing…' : 'Generate'}</button></span>}>
-            <textarea className="textarea" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Write a description, or click Generate." />
-          </Field>
-          <div className="row gap-22 row--wrap">
-            <div className="grow">
-              <Field label="Category">
-                <select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>
-                  {Object.entries(opts.categories).map(([name, id]) => <option key={id} value={id}>{name}</option>)}
-                </select>
+          {dest.youtube && (<>
+            <Field label={<span className="row center between"><span>Description</span><button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }} disabled={busy === 'desc' || !workDir} onClick={genDescription}><Icon name="wand-magic-sparkles" /> {busy === 'desc' ? 'Writing…' : 'Generate'}</button></span>} hint="YouTube description.">
+              <textarea className="textarea" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Write a description, or click Generate." />
+            </Field>
+            <div className="row gap-22 row--wrap">
+              <div className="grow">
+                <Field label="Category">
+                  <select className="select" value={category} onChange={(e) => setCategory(e.target.value)}>
+                    {Object.entries(opts.categories).map(([name, id]) => <option key={id} value={id}>{name}</option>)}
+                  </select>
+                </Field>
+              </div>
+              <Field label="Privacy">
+                <Segmented value={privacy} onChange={setPrivacy} options={opts.privacy} />
               </Field>
             </div>
-            <Field label="Privacy">
-              <Segmented value={privacy} onChange={setPrivacy} options={opts.privacy} />
-            </Field>
-          </div>
+          </>)}
 
           <div className="row center gap-10" style={{ padding: '10px 12px', background: 'var(--warn-soft)', borderRadius: 'var(--r-md)' }}>
             <Icon name="robot" style={{ color: 'var(--warn)' }} />
-            <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Uploads are flagged as <strong>synthetic media</strong> per the channel's automated settings.</span>
+            <span style={{ fontSize: 12.5, color: 'var(--ink-2)' }}>Posts are flagged as <strong>synthetic media</strong> per each platform's automated settings.</span>
           </div>
 
           {confirming ? (
             <div className="row gap-10 center row--wrap">
               <span className="muted" style={{ fontSize: 13 }}>
-                {reuploading
-                  ? <>Re-upload "{title}" as a <strong>new</strong> {privacy} video on <strong>{chan?.name || chan?.id || 'the channel'}</strong>? The existing one stays on your channel.</>
-                  : <>Upload "{title}" as <strong>{privacy}</strong> to <strong>{chan?.name || chan?.id || 'the channel'}</strong>?</>}
+                Publish "{title}" to {[willYouTube && `YouTube (${privacy})`, willX && `X (${xacc?.name ? '@' + xacc.name : 'account'})`].filter(Boolean).join(' + ')}?
               </span>
-              <Button variant="primary" icon="youtube" disabled={busy === 'upload'} onClick={upload}>{busy === 'upload' ? 'Uploading…' : (reuploading ? 'Confirm re-upload' : 'Confirm upload')}</Button>
+              <Button variant="primary" icon="upload" disabled={busy === 'publish'} onClick={publishAll}>{busy === 'publish' ? 'Publishing…' : 'Confirm'}</Button>
               <Button variant="ghost" onClick={() => { setConfirming(false); setReuploading(false) }}>Cancel</Button>
             </div>
-          ) : youtubeUrl ? (
-            <div className="row center gap-10 row--wrap">
-              <Button variant="ghost" icon="check" disabled style={{ cursor: 'default' }}>Uploaded to YouTube</Button>
-              <a className="btn btn--ghost" href={youtubeUrl} target="_blank" rel="noreferrer"><Icon name="youtube" /> View on YouTube</a>
-              <Button variant="ghost" icon="rotate" disabled={!canUpload} onClick={() => { setReuploading(true); setConfirming(true) }}>Re-upload as new video</Button>
-            </div>
           ) : (
-            <Button variant="primary" size="lg" icon="youtube" disabled={!canUpload} onClick={() => setConfirming(true)}>Upload to YouTube</Button>
+            <Button variant="primary" size="lg" icon="upload" disabled={!canPublish || busy === 'publish'} onClick={() => setConfirming(true)}>
+              {busy === 'publish' ? 'Publishing…' : ((youtubeUrl || xUrl) ? 'Publish again' : 'Publish')}
+            </Button>
           )}
+          {(youtubeUrl || xUrl) && (
+            <div className="row center gap-10 row--wrap">
+              {youtubeUrl && <a className="btn btn--ghost" href={youtubeUrl} target="_blank" rel="noreferrer"><Icon name="youtube" brand /> View on YouTube</a>}
+              {xUrl && <a className="btn btn--ghost" href={xUrl} target="_blank" rel="noreferrer"><Icon name="x-twitter" brand /> View on X</a>}
+            </div>
+          )}
+          {xStatus && <Banner tone="ok">{xStatus}</Banner>}
+          {xError && <Banner tone="danger">{xError}</Banner>}
         </div>
       </Card>
 
@@ -350,33 +389,6 @@ export default function Publish({ initialWorkDir, go }) {
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
             <video src={finalUrl} controls style={{ width: '100%', display: 'block', background: '#15171a', aspectRatio: aspect, maxHeight: 360, objectFit: 'contain' }} />
-          </Card>
-        )}
-        {xAccounts.length > 0 && (
-          <Card className="reveal reveal-d3">
-            <div className="row center between">
-              <span className="label-sm">Share on X</span>
-              <Icon name="x-twitter" brand style={{ color: 'var(--accent)' }} />
-            </div>
-            <div className="stack gap-10 mt-16">
-              <select className="select" value={xacc?.id || ''} onChange={(e) => setXAccount(e.target.value)}>
-                {xAccounts.map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
-              </select>
-              <div className="row center gap-6 row--wrap">
-                {xacc?.connected ? <Chip tone="ok" dot>connected</Chip> : <Chip tone="danger" dot>not connected</Chip>}
-                {xacc?.premium ? <Chip tone="accent">Premium</Chip> : null}
-              </div>
-              {!xacc?.premium && (
-                <div className="muted" style={{ fontSize: 11.5 }}>
-                  Non-Premium: videos over 2m20s post the YouTube link instead{youtubeUrl ? '' : ' (none yet — upload to YouTube first, or it won’t post)'}.
-                </div>
-              )}
-              {xError && <Banner tone="danger">{xError}</Banner>}
-              {xStatus && <Banner tone="ok">{xStatus}</Banner>}
-              {xUrl
-                ? <a className="btn btn--ghost" href={xUrl} target="_blank" rel="noreferrer"><Icon name="x-twitter" brand /> View on X</a>
-                : <Button variant="primary" block icon="x-twitter" brand disabled={!canPostX || xBusy} onClick={postToX}>{xBusy ? 'Posting…' : 'Post to X'}</Button>}
-            </div>
           </Card>
         )}
         <BestTimesCard data={bestTimes} />
