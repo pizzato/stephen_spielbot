@@ -411,6 +411,56 @@ def disconnect_x(account: str = ""):
     _clear_auth_cache(account)
 
 
+def import_tokens(client_id: str, client_secret: str, access_token: str,
+                  refresh_token: str = "", finalize=None) -> dict:
+    """Connect an account from OAuth2 tokens obtained elsewhere (no browser flow).
+
+    Validates the access token against /2/users/me (refreshing first if it's
+    already expired and a refresh token is given), then stores it in the same
+    format the OAuth flow produces so all the normal token handling — refresh on
+    expiry, premium detection, posting — works unchanged. Returns
+    {success, account, account_id, account_name, premium, error}.
+    """
+    access_token = (access_token or "").strip()
+    refresh_token = (refresh_token or "").strip()
+    if not access_token:
+        return {"success": False, "error": "Access token is required."}
+    token = {"access_token": access_token, "refresh_token": refresh_token,
+             "token_type": "bearer", "expires_at": time.time() + 7200 - 60}
+    me = None
+    try:
+        me = _fetch_me(access_token)
+    except Exception as exc:
+        # Maybe already expired — try one refresh, then re-validate.
+        if refresh_token:
+            refreshed = _refresh_token(client_id, client_secret, token)
+            if refreshed:
+                token = refreshed
+                try:
+                    me = _fetch_me(token["access_token"])
+                except Exception:
+                    me = None
+        if me is None:
+            return {"success": False,
+                    "error": f"X rejected the token: {str(exc)[:200]}. Check it has the "
+                             "right scopes and was issued by this app."}
+    data = me.get("data", {})
+    account_id = data.get("id", "")
+    username = data.get("username", "")
+    premium = _premium_from_me(me)
+    token.update({"account_id": account_id, "username": username, "premium": premium})
+    key = account_id or DEFAULT_ACCOUNT_KEY
+    if finalize is not None:
+        try:
+            key = finalize(account_id, username) or key
+        except Exception as exc:
+            logger.warning("X finalize callback failed: %s", exc)
+    _save_token(key, token)
+    _clear_auth_cache(key)
+    return {"success": True, "account": key, "account_id": account_id,
+            "account_name": username, "premium": premium, "error": ""}
+
+
 # ── Video-length / Premium decision ──────────────────────────────────────────────
 
 def decide_post_target(video_path: str, premium: bool, youtube_url: str = "",
