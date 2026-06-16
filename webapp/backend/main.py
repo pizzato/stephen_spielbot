@@ -2960,13 +2960,34 @@ class XPostBody(BaseModel):
 _x_post_tasks: dict = {}
 
 
+def _strip_description_suffix(text: str, wd: Path, cfg: dict) -> str:
+    """Drop the style's description_suffix from the end of a description, leaving
+    the body (issue #107). The suffix is the boilerplate sign-off appended to
+    YouTube descriptions; the X post wants only the body before it."""
+    suffix = str(gapp.style_settings(cfg, _work_dir_style_name(wd)).get("description_suffix") or "").strip()
+    if suffix and suffix in text:
+        return text.rsplit(suffix, 1)[0].rstrip()
+    return text.strip()
+
+
+def _x_post_text_for(wd: Path, cfg: dict, passed: str = "", fallback: str = "") -> str:
+    """X post text: the YouTube description body — everything before the style's
+    suffix. Prefers an explicit (possibly edited) description, else the cached
+    one; falls back to the title when there's no description."""
+    raw = (passed or "").strip() or _cached_description(wd)
+    return _strip_description_suffix(raw, wd, cfg) or fallback.strip()
+
+
 def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> None:
     """Background thread: post the film to X with Premium-aware length handling."""
     try:
         cid, secret = _x_client_creds()
         account = body_dict.get("account", "")
         cfg = gapp.load_config()
-        text = (body_dict.get("text") or "").strip()
+        # The X post is the description body (before the style's suffix), not the
+        # title; an explicit description edited on the Publish screen wins.
+        text = _x_post_text_for(wd, cfg, passed=body_dict.get("text", ""),
+                                fallback=body_dict.get("title", ""))
         suffix = str(cfg.get("x_post_default_text", "") or "").strip()
         if suffix:
             text = f"{text}\n{suffix}".strip()
@@ -3022,10 +3043,11 @@ def x_post(body: XPostBody) -> dict:
     task_id = uuid.uuid4().hex[:12]
     _x_post_tasks[task_id] = {"status": "posting"}
     account = body.account or _x_account_for_work_dir(wd)
-    text = body.text or body.title
+    # Pass text + title separately so the task can derive the description body
+    # (and fall back to the title only when there's no description).
     threading.Thread(
         target=_run_x_post_task,
-        args=(task_id, {"text": text, "title": body.title, "account": account}, wd, final),
+        args=(task_id, {"text": body.text, "title": body.title, "account": account}, wd, final),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": task_id}
