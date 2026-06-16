@@ -418,14 +418,13 @@ def _ensure_x_accounts(cfg: dict) -> dict:
 
 
 def x_account_for_style(cfg: dict, style_name: str = "") -> str:
-    """Account KEY a style publishes to on X: the style's own account if
-    connected, else the first connected account, else '' (legacy token)."""
+    """Account KEY a style publishes to on X, or '' for none. Unlike YouTube,
+    X is opt-in per style (issue #107): a style only posts to X when it has
+    explicitly picked a connected account — a blank choice means don't post."""
     keys = [a["id"] for a in (cfg.get("x_accounts") or [])
             if isinstance(a, dict) and a.get("id")]
     acc = str(style_settings(cfg, style_name).get("x_account") or "")
-    if acc and acc in keys:
-        return acc
-    return keys[0] if keys else ""
+    return acc if acc in keys else ""
 
 
 def style_settings(cfg: dict, name: str = "") -> dict:

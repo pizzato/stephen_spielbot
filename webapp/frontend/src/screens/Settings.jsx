@@ -860,6 +860,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   {(cfg.youtube_channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
               </Field>
+              <Field label="X account" hint="Which X account this style posts to (or none) — connect accounts in the X tab.">
+                <select className="select" value={st.x_account || ''} onChange={(e) => setStyleField('x_account', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="">(none — don’t post to X)</option>
+                  {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
+                </select>
+              </Field>
             </div>
           </Card>
 
@@ -975,8 +981,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           </Card>
         </>)}
 
-        {tab === 'automation' && (
-          /* ── YouTube automation ── */
+        {tab === 'automation' && (<>
+          {/* ── YouTube automation ── */}
           <Card span={12} className="reveal reveal-d1">
             <span className="label-sm">YouTube automation</span>
             <div className="stack gap-16 mt-16">
@@ -992,7 +998,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               </Field>
             </div>
           </Card>
-        )}
+          {/* ── X automation (issue #107) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <span className="label-sm">X automation</span>
+            <div className="stack gap-16 mt-16">
+              <Check checked={!!cfg.x_auto_fetch_evaluate} onChange={(v) => set('x_auto_fetch_evaluate', v)} label="Fetch & evaluate X mentions on a schedule (needs a paid X API tier)" />
+              <Check checked={!!cfg.x_auto_approve_comments} onChange={(v) => set('x_auto_approve_comments', v)} label="Auto-approve X requests above the confidence threshold" />
+              <Check checked={!!cfg.x_auto_post} onChange={(v) => set('x_auto_post', v)} label="Auto-post to X when a film finishes — uses the film's style X account; long videos fall back to the YouTube link on non-Premium" />
+            </div>
+          </Card>
+        </>)}
 
       </div>
     </div>

@@ -94,13 +94,14 @@ class XAccountForStyleTests(unittest.TestCase):
     def test_uses_the_styles_account(self):
         self.assertEqual(gapp.x_account_for_style(self._cfg(), "Docs"), "2")
 
-    def test_blank_style_account_falls_back_to_first(self):
-        self.assertEqual(gapp.x_account_for_style(self._cfg(), "Kids"), "1")
+    def test_blank_style_account_is_none(self):
+        # X is opt-in per style — a blank choice means "don't post to X".
+        self.assertEqual(gapp.x_account_for_style(self._cfg(), "Kids"), "")
 
     def test_unknown_style_uses_default_style(self):
         self.assertEqual(gapp.x_account_for_style(self._cfg(), "nope"), "2")
 
-    def test_no_accounts_resolves_to_legacy_empty(self):
+    def test_no_accounts_resolves_to_empty(self):
         cfg = self._cfg()
         cfg["x_accounts"] = []
         self.assertEqual(gapp.x_account_for_style(cfg, "Docs"), "")
