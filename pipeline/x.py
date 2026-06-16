@@ -40,11 +40,16 @@ logger = logging.getLogger("video_gen")
 
 
 def _video_duration(path: Path) -> float:
-    """Media duration in seconds, or 0.0 if it can't be read. Kept local (rather
-    than importing pipeline.captions) so this module stays import-light."""
+    """Media duration in seconds, or 0.0 if it can't be read. Resolves ffprobe via
+    the assembler's locator (lazy-imported to keep this module import-light): the
+    launchd service's PATH lacks /opt/homebrew/bin, so a bare "ffprobe" isn't found
+    and would silently return 0.0 — making every video look short and defeating the
+    long-video YouTube-link fallback (issue #107)."""
     try:
+        from pipeline.assembler import _resolve_media_tool
+        ffprobe = _resolve_media_tool("ffprobe")
         out = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
+            [ffprobe, "-v", "quiet", "-show_entries", "format=duration",
              "-of", "csv=p=0", str(path)],
             capture_output=True, text=True, timeout=30,
         ).stdout.strip()
@@ -660,6 +665,23 @@ def _tweet_url(account: str, tweet_id: str) -> str:
     return f"https://x.com/{username}/status/{tweet_id}" if username else f"https://x.com/i/status/{tweet_id}"
 
 
+def _is_x_video_too_long(exc: Exception) -> bool:
+    """True when an X API error is a video-length rejection. The public API caps
+    video duration well below the web UI (~2:20) even for Premium, so a long video
+    is rejected at tweet creation — we treat that as the signal to fall back to the
+    YouTube link, even if our own duration probe under-read (e.g. ffprobe missing).
+    The reason is in the response body; requests' HTTPError str() omits it."""
+    text = ""
+    resp = getattr(exc, "response", None)
+    if resp is not None:
+        try:
+            text = resp.text or ""
+        except Exception:
+            text = ""
+    text = (text or str(exc)).lower()
+    return "longer than" in text or ("video" in text and "minute" in text)
+
+
 def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                account: str = "", premium: bool | None = None,
                youtube_url: str = "", progress_callback=None) -> dict:
@@ -703,7 +725,10 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
             media_id = _chunked_upload(auth, video_path, progress_callback, media_category=category)
             data = _post_tweet(auth, text, media_id=media_id, max_len=limit)
         except Exception as exc:
-            if not (long and youtube_url):
+            # Fall back to the YouTube link when X rejects the native video for
+            # length — either we already knew it was long, or X says so (our
+            # duration probe can under-read). Any other failure re-raises.
+            if not (youtube_url and (long or _is_x_video_too_long(exc))):
                 raise
             logger.warning("X native long-video post failed (%s); posting the YouTube link instead.",
                            str(exc)[:160])
