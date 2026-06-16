@@ -3007,6 +3007,11 @@ class XPostBody(BaseModel):
 # In-memory store for background X post tasks {task_id -> {status, ...}}
 _x_post_tasks: dict = {}
 
+# An auto-post failure frees the job for a later retry, but only a few times so a
+# permanently-rejected post (duplicate text, unsupported video) doesn't hammer
+# the API every tick. Mirrors the render retry cap.
+_X_AUTO_POST_MAX_ATTEMPTS = 3
+
 
 def _strip_description_suffix(text: str, wd: Path, cfg: dict) -> str:
     """Drop the style's description_suffix from the end of a description, leaving
@@ -3024,6 +3029,33 @@ def _x_post_text_for(wd: Path, cfg: dict, passed: str = "", fallback: str = "") 
     one; falls back to the title when there's no description."""
     raw = (passed or "").strip() or _cached_description(wd)
     return _strip_description_suffix(raw, wd, cfg) or fallback.strip()
+
+
+def _x_auto_release_on_failure(wd: Path) -> None:
+    """Release an auto-post claim after a failed post so a later tick retries,
+    capped at _X_AUTO_POST_MAX_ATTEMPTS (after which the job stays claimed = given
+    up). No-op for manual Publish posts, which don't set the claim and surface the
+    error in the UI instead.
+
+    The async worker — not _auto_post_x_done's synchronous except — is the only
+    place that learns whether the post actually succeeded (x_post returns a
+    task_id immediately), so the claim must be released here.
+    """
+    try:
+        meta = json.loads((wd / "job.json").read_text())
+    except Exception:
+        return
+    if not meta.get("_x_auto_post_triggered"):
+        return  # manual post, or already released — nothing claimed to free
+    attempts = int(meta.get("_x_auto_post_attempts", 0)) + 1
+    try:
+        if attempts < _X_AUTO_POST_MAX_ATTEMPTS:
+            gapp._write_job_meta(wd, _x_auto_post_triggered=False,
+                                 _x_auto_post_attempts=attempts)
+        else:
+            gapp._write_job_meta(wd, _x_auto_post_attempts=attempts)
+    except Exception:
+        pass
 
 
 def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> None:
@@ -3049,15 +3081,18 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
                 premium=premium, youtube_url=youtube_url)
     except Exception as e:
         _x_post_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        _x_auto_release_on_failure(wd)
         return
 
     if result.get("skipped") and not result.get("tweet_id"):
         _x_post_tasks[task_id] = {"status": "warning",
                                   "message": result.get("error") or result.get("reason")
                                   or "Not posted to X."}
+        _x_auto_release_on_failure(wd)
         return
     if result.get("error"):
         _x_post_tasks[task_id] = {"status": "error", "error": result["error"][:240]}
+        _x_auto_release_on_failure(wd)
         return
 
     tweet_id, url = result.get("tweet_id", ""), result.get("url", "")
