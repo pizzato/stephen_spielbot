@@ -216,6 +216,48 @@ class XImportTokensTests(unittest.TestCase):
         self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
 
 
+class XLongVideoFallbackTests(unittest.TestCase):
+    """Premium accounts still hit the API's lower video-length cap (issue #107).
+    post_video should fall back to the YouTube link when X rejects the native
+    long video, and otherwise post natively."""
+
+    def _post_video(self, tweet_side_effect, duration=300, youtube_url="https://youtu.be/x"):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_account_auth", return_value={"bearer": "t"}), \
+             mock.patch.object(xt, "decide_post_target",
+                               return_value={"action": "post_full", "reason": "",
+                                             "duration_secs": duration, "size_bytes": 1}), \
+             mock.patch.object(xt, "_chunked_upload", return_value="m1"), \
+             mock.patch.object(xt, "_post_tweet", side_effect=tweet_side_effect), \
+             mock.patch("pipeline.x.Path.exists", return_value=True):
+            return xt.post_video("cid", "sec", "/v.mp4", "Title", account="a",
+                                 premium=True, youtube_url=youtube_url)
+
+    def test_falls_back_to_link_when_native_rejected(self):
+        def post_tweet(auth, text, media_id=None, reply_to=None):
+            if media_id:
+                raise RuntimeError("403 longer than 2 minutes")
+            return {"id": "L1"}
+        res = self._post_video(post_tweet)
+        self.assertTrue(res["fell_back_to_link"])
+        self.assertEqual(res["tweet_id"], "L1")
+        self.assertFalse(res.get("error"))
+
+    def test_no_link_surfaces_the_error(self):
+        def post_tweet(auth, text, media_id=None, reply_to=None):
+            if media_id:
+                raise RuntimeError("403 longer than 2 minutes")
+            return {"id": "L1"}
+        res = self._post_video(post_tweet, youtube_url="")
+        self.assertFalse(res["fell_back_to_link"])
+        self.assertIn("longer than", res["error"].lower())
+
+    def test_native_success_no_fallback(self):
+        res = self._post_video(lambda auth, text, media_id=None, reply_to=None: {"id": "N1"})
+        self.assertFalse(res["fell_back_to_link"])
+        self.assertEqual(res["tweet_id"], "N1")
+
+
 class XImportOAuth1Tests(unittest.TestCase):
     def test_valid_keys_save_oauth1_token(self):
         import pipeline.x as xt

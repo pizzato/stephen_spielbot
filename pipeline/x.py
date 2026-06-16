@@ -588,17 +588,20 @@ def decide_post_target(video_path: str, premium: bool, youtube_url: str = "",
 
 # ── Video upload + posting ────────────────────────────────────────────────────
 
-def _chunked_upload(auth: dict, video_path: str, progress_callback=None) -> str:
+def _chunked_upload(auth: dict, video_path: str, progress_callback=None,
+                    media_category: str = "tweet_video") -> str:
     """Upload a video via the chunked media endpoint (INIT/APPEND/FINALIZE/
     STATUS). OAuth 1.0a uses the v1.1 endpoint (the classic media upload, which
     needs only the app's Read+Write permission — no media.write scope); OAuth2
-    bearer uses the v2 endpoint. Returns the media id. Raises on failure."""
+    bearer uses the v2 endpoint. ``media_category`` is ``tweet_video`` for short
+    clips or ``amplify_video`` for longer ones (the API's longer-video category).
+    Returns the media id. Raises on failure."""
     url = UPLOAD_URL_V11 if auth.get("oauth1") is not None else UPLOAD_URL
     size = Path(video_path).stat().st_size
 
     init = _xreq("POST", url, auth, data={
         "command": "INIT", "total_bytes": size,
-        "media_type": "video/mp4", "media_category": "tweet_video",
+        "media_type": "video/mp4", "media_category": media_category,
     }, timeout=60)
     init.raise_for_status()
     init_json = init.json()
@@ -687,9 +690,25 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
             tid = data.get("id", "")
             return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
                     "fell_back_to_link": True, "skipped": False, "reason": decision["reason"]}
-        # post_full
-        media_id = _chunked_upload(auth, video_path, progress_callback)
-        data = _post_tweet(auth, text, media_id=media_id)
+        # post_full. Long videos use the amplify_video category (the API's
+        # longer-video path); if X still rejects the native video — the public
+        # API caps length below the web UI even for Premium — fall back to the
+        # YouTube link when one exists.
+        long = decision["duration_secs"] > X_MAX_VIDEO_SECONDS
+        category = "amplify_video" if long else "tweet_video"
+        try:
+            media_id = _chunked_upload(auth, video_path, progress_callback, media_category=category)
+            data = _post_tweet(auth, text, media_id=media_id)
+        except Exception as exc:
+            if not (long and youtube_url):
+                raise
+            logger.warning("X native long-video post failed (%s); posting the YouTube link instead.",
+                           str(exc)[:160])
+            data = _post_tweet(auth, f"{text}\n{youtube_url}".strip())
+            tid = data.get("id", "")
+            return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
+                    "fell_back_to_link": True, "skipped": False,
+                    "reason": "X's API wouldn't accept this video length — posted the YouTube link instead."}
         tid = data.get("id", "")
         logger.info("X post complete: %s (tweet_id=%s)", text[:60], tid)
         return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
