@@ -164,6 +164,32 @@ export const api = {
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),
 
+  // X (Twitter) — mirrors the YouTube account/auth/post methods (issue #107).
+  xAccounts: () => req('GET', '/x/accounts'),
+  xAuthStart: () => req('POST', '/x/auth/start'),
+  xAuthPoll: () => req('POST', '/x/auth/poll'),
+  xImportTokens: (accessToken, refreshToken) => req('POST', '/x/auth/import', { access_token: accessToken, refresh_token: refreshToken || '' }),
+  xImportKeys: (keys) => req('POST', '/x/auth/import-keys', keys),
+  xDisconnect: (account) => req('POST', '/x/disconnect', { channel: account || '' }),
+  xAccountSettings: (id, fields) => req('POST', '/x/accounts/settings', { id, ...fields }),
+  xPost: (body) => req('POST', '/x/post', body),
+  xPostStatus: (taskId) => req('GET', `/x/post/status?task_id=${encodeURIComponent(taskId)}`),
+  xAnalytics: (account, refresh) => {
+    const p = new URLSearchParams()
+    if (account) p.set('account', account)
+    if (refresh) p.set('refresh', 'true')
+    const qs = p.toString()
+    return req('GET', '/x/analytics' + (qs ? `?${qs}` : ''))
+  },
+  // X mentions ("comments") — mirror the YouTube comment actions.
+  xComments: () => req('GET', '/x/comments'),
+  xFetchComments: (autoApprove) => req('POST', '/x/comments/fetch', { auto_approve: autoApprove ?? null }),
+  xApproveComment: (commentId, finalTitle) => req('POST', '/x/comments/approve', { comment_id: commentId, final_title: finalTitle || '' }),
+  xRejectComment: (commentId) => req('POST', '/x/comments/reject', { comment_id: commentId }),
+  xReplyComment: (commentId, text) => req('POST', '/x/comments/reply', { comment_id: commentId, text }),
+  xSendCommunityReply: (commentId, text) => req('POST', '/x/comments/community/send', { comment_id: commentId, text }),
+  xDismissCommunityReply: (commentId) => req('POST', '/x/comments/community/dismiss', { comment_id: commentId }),
+
   // film scene editor (post-render)
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),

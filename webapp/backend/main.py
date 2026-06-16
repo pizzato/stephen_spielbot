@@ -37,6 +37,7 @@ if str(REPO_ROOT) not in sys.path:
 # behind `if __name__ == "__main__"`, so nothing UI-related starts here.
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
+import pipeline.x as xt  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
@@ -2243,8 +2244,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         pass
     vid_w, vid_h = _film_dimensions(wd)
     orientation = "portrait" if vid_h > vid_w else ("square" if vid_h == vid_w else "landscape")
-    # Channel this film publishes to, resolved from its style (issue #22).
+    # Channel/account this film publishes to, resolved from its style (issue #22/#107).
     channel = _channel_for_work_dir(wd)
+    x_account = _x_account_for_work_dir(wd)
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -2254,6 +2256,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
         "channel": channel,
+        # The X account this film's style posts to ('' = none → X off by default).
+        "x_account": x_account,
         # The target channel's default category (its own, else the global default).
         "category": _category_for_channel(gapp.load_config(), channel),
         "orientation": orientation,
@@ -2642,9 +2646,15 @@ def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
         return {"attempted": False, "already_replied": True}
 
     text = _completion_reply_text(title, url)
-    # Reply as the channel the comment was posted on, not the upload channel.
-    result = yt.reply_to_comment(_client_secrets_path(), comment_id, text,
-                                 channel=_channel_key_of(item))
+    # Reply on the platform + channel/account the request came from (issue #107),
+    # not the upload destination.
+    if item.get("source_platform") == "x":
+        cid, secret = _x_client_creds()
+        result = xt.reply_to_tweet(cid, secret, comment_id, text,
+                                   account=_channel_key_of(item))
+    else:
+        result = yt.reply_to_comment(_client_secrets_path(), comment_id, text,
+                                     channel=_channel_key_of(item))
     now = time.time()
     if result.get("success"):
         updates = {
@@ -2782,6 +2792,342 @@ def yt_post_status(task_id: str) -> dict:
     if not task:
         raise HTTPException(404, "Upload task not found.")
     return {"ok": True, **task}
+
+
+# ── X (Twitter) posting (issue #107) ──────────────────────────────────────────
+# Mirrors the YouTube channel/auth/post routes above. Multi-account, style→account
+# mapping, and a Premium-aware post that falls back to the YouTube link when a
+# non-Premium account can't take a long video.
+
+def _x_client_creds() -> tuple[str, str]:
+    cfg = gapp.load_config()
+    return str(cfg.get("x_client_id", "") or ""), str(cfg.get("x_client_secret", "") or "")
+
+
+def _x_account_for_style(style_name: str = "") -> str:
+    return gapp.x_account_for_style(gapp.load_config(), style_name)
+
+
+def _x_account_for_work_dir(wd: Path | None) -> str:
+    """X account key the work dir's video publishes to (via its style profile)."""
+    return _x_account_for_style(_work_dir_style_name(wd))
+
+
+def _youtube_url_for_work_dir(wd: Path) -> str:
+    """Best-effort YouTube URL for a film, for the non-Premium X fallback: the
+    job meta written after a YouTube upload, else its queue item."""
+    try:
+        meta = json.loads((wd / "job.json").read_text())
+        if meta.get("youtube_url"):
+            return str(meta["youtube_url"])
+    except Exception:
+        pass
+    try:
+        qid = json.loads((wd / "job_config.json").read_text()).get("queue_item_id", "")
+        item = _queue_item_by_id(qid)
+        if item and item.get("youtube_url"):
+            return str(item["youtube_url"])
+    except Exception:
+        pass
+    return ""
+
+
+@api.get("/api/x/accounts")
+def x_accounts() -> dict:
+    """Configured X accounts with live connection status + premium, for Settings/
+    Publish. Backfills name/account_id/premium once a status check resolves them."""
+    cfg = gapp.load_config()
+    cid, secret = str(cfg.get("x_client_id", "") or ""), str(cfg.get("x_client_secret", "") or "")
+    out, dirty = [], False
+    for entry in (cfg.get("x_accounts") or []):
+        st = xt.check_auth_status(cid, secret, account=entry["id"])
+        if st.get("connected"):
+            if (entry.get("name") != st.get("account_name")
+                    or entry.get("account_id") != st.get("account_id")
+                    or bool(entry.get("premium")) != bool(st.get("premium"))):
+                entry["name"] = st.get("account_name", entry.get("name", ""))
+                entry["account_id"] = st.get("account_id", entry.get("account_id", ""))
+                entry["premium"] = bool(st.get("premium"))
+                dirty = True
+        out.append({**entry, "connected": bool(st.get("connected")),
+                    "premium": bool(st.get("premium") or entry.get("premium")),
+                    "error": st.get("error", "")})
+    if dirty:
+        gapp.save_config(cfg)
+    return {"accounts": out, "auth_running": xt.poll_auth_flow().get("running", False)}
+
+
+def _finalize_new_x_account(account_id: str, username: str) -> str:
+    """Auth-flow callback: record the just-authorized X account and return the key
+    its token is stored under. Reconnecting a known account reuses its entry; a
+    legacy "default" entry that hasn't resolved its identity gets resolved."""
+    cfg = gapp.load_config()
+    accts = cfg.get("x_accounts") or []
+    key = account_id or xt.DEFAULT_ACCOUNT_KEY
+    entry = next((a for a in accts if a.get("id") == key
+                  or (account_id and a.get("account_id") == account_id)), None)
+    if entry is None and account_id:
+        legacy = next((a for a in accts if a.get("id") == xt.DEFAULT_ACCOUNT_KEY
+                       and not a.get("account_id")), None)
+        if legacy is not None:
+            cid, secret = _x_client_creds()
+            st = xt.check_auth_status(cid, secret, force=True, account=xt.DEFAULT_ACCOUNT_KEY)
+            if st.get("account_id"):
+                legacy["account_id"] = st["account_id"]
+                legacy["name"] = st.get("account_name", "") or legacy.get("name", "")
+            if st.get("account_id") == account_id:
+                entry = legacy
+    if entry is None:
+        entry = {"id": key, "name": "", "account_id": ""}
+        accts.append(entry)
+    if account_id:
+        entry["account_id"] = account_id
+    if username:
+        entry["name"] = username
+    cfg["x_accounts"] = accts
+    gapp.save_config(cfg)
+    return entry["id"]
+
+
+@api.get("/api/x/auth")
+def x_auth_status(account: str = Query("")) -> dict:
+    try:
+        return xt.check_auth_status(*_x_client_creds(), account=account)
+    except Exception as e:
+        return {"connected": False, "account_name": "", "premium": False, "error": str(e)[:200]}
+
+
+@api.post("/api/x/auth/start")
+def x_auth_start() -> dict:
+    """Start the OAuth2 PKCE flow that connects a (new or re-connected) X account.
+
+    Also returns the authorize URL so the UI can offer it for an Incognito window
+    (a clean session dodges X's logged-in redirect loop); the local listener
+    catches the callback regardless of which browser finishes consent."""
+    try:
+        cid, secret = _x_client_creds()
+        msg = xt.start_auth_flow(cid, secret, finalize=_finalize_new_x_account)
+        return {"ok": not msg.startswith("Error"), "message": msg,
+                "authorize_url": xt.poll_auth_flow().get("authorize_url", "")}
+    except Exception as e:
+        raise HTTPException(503, str(e).splitlines()[0][:200])
+
+
+@api.post("/api/x/auth/poll")
+def x_auth_poll() -> dict:
+    try:
+        return xt.poll_auth_flow()
+    except Exception as e:
+        return {"status": "error", "error": str(e)[:200]}
+
+
+class XImportTokensBody(BaseModel):
+    access_token: str
+    refresh_token: str = ""
+
+
+@api.post("/api/x/auth/import")
+def x_auth_import(body: XImportTokensBody) -> dict:
+    """Connect an X account from pasted OAuth2 tokens (access + refresh) — skips
+    the browser flow entirely. Validates against X, then registers the account."""
+    cid, secret = _x_client_creds()
+    if not cid:
+        raise HTTPException(400, "Set the X API Client ID first (above).")
+    res = xt.import_tokens(cid, secret, body.access_token, body.refresh_token,
+                           finalize=_finalize_new_x_account)
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Could not import the tokens."))
+    return {"ok": True, **res}
+
+
+class XImportKeysBody(BaseModel):
+    api_key: str
+    api_secret: str
+    access_token: str
+    access_secret: str
+
+
+@api.post("/api/x/auth/import-keys")
+def x_auth_import_keys(body: XImportKeysBody) -> dict:
+    """Connect an X account from OAuth 1.0a API keys (no browser, no scopes) —
+    the most reliable path for a self-owned account. Uses the app's Read+Write
+    permission, so it can upload media without the media.write OAuth2 scope."""
+    res = xt.import_oauth1(body.api_key, body.api_secret, body.access_token,
+                           body.access_secret, finalize=_finalize_new_x_account)
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Could not connect with those keys."))
+    return {"ok": True, **res}
+
+
+@api.post("/api/x/disconnect")
+def x_disconnect(body: DisconnectBody | None = None) -> dict:
+    """Remove an X account: delete its token and drop it from the config."""
+    account = (body.channel if body else "") or ""
+    try:
+        xt.disconnect_x(account)
+    except Exception:
+        pass
+    cfg = gapp.load_config()
+    accts = [a for a in (cfg.get("x_accounts") or [])
+             if a.get("id") != (account or xt.DEFAULT_ACCOUNT_KEY)]
+    cfg["x_accounts"] = accts
+    gapp.save_config(cfg)  # _ensure_x_accounts clears style refs to the removed key
+    return {"ok": True, "accounts": accts}
+
+
+class XAccountSettingsBody(BaseModel):
+    id: str
+    engagement_prompt: str = ""
+    auto_respond: bool = False
+    language: str = "en"
+
+
+@api.post("/api/x/accounts/settings")
+def x_account_settings(body: XAccountSettingsBody) -> dict:
+    """Save an X account's per-account settings (community-engagement persona +
+    auto-respond + language). Auto-saves, like connect/disconnect."""
+    cfg = gapp.load_config()
+    entry = next((a for a in (cfg.get("x_accounts") or []) if a.get("id") == body.id), None)
+    if entry is None:
+        raise HTTPException(404, "X account not found.")
+    entry["engagement_prompt"] = body.engagement_prompt.strip()
+    entry["auto_respond"] = bool(body.auto_respond)
+    entry["language"] = body.language.strip() or "en"
+    gapp.save_config(cfg)
+    return {"ok": True}
+
+
+class XPostBody(BaseModel):
+    work_dir: str
+    text: str = ""              # tweet text; defaults to the film title
+    title: str = ""
+    account: str = ""           # account key override; empty → the film's style's account
+
+
+# In-memory store for background X post tasks {task_id -> {status, ...}}
+_x_post_tasks: dict = {}
+
+
+def _strip_description_suffix(text: str, wd: Path, cfg: dict) -> str:
+    """Drop the style's description_suffix from the end of a description, leaving
+    the body (issue #107). The suffix is the boilerplate sign-off appended to
+    YouTube descriptions; the X post wants only the body before it."""
+    suffix = str(gapp.style_settings(cfg, _work_dir_style_name(wd)).get("description_suffix") or "").strip()
+    if suffix and suffix in text:
+        return text.rsplit(suffix, 1)[0].rstrip()
+    return text.strip()
+
+
+def _x_post_text_for(wd: Path, cfg: dict, passed: str = "", fallback: str = "") -> str:
+    """X post text: the YouTube description body — everything before the style's
+    suffix. Prefers an explicit (possibly edited) description, else the cached
+    one; falls back to the title when there's no description."""
+    raw = (passed or "").strip() or _cached_description(wd)
+    return _strip_description_suffix(raw, wd, cfg) or fallback.strip()
+
+
+def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> None:
+    """Background thread: post the film to X with Premium-aware length handling."""
+    try:
+        cid, secret = _x_client_creds()
+        account = body_dict.get("account", "")
+        cfg = gapp.load_config()
+        # The X post is the description body (before the style's suffix), not the
+        # title; an explicit description edited on the Publish screen wins.
+        text = _x_post_text_for(wd, cfg, passed=body_dict.get("text", ""),
+                                fallback=body_dict.get("title", ""))
+        suffix = str(cfg.get("x_post_default_text", "") or "").strip()
+        if suffix:
+            text = f"{text}\n{suffix}".strip()
+        # Premium gates long-video posting; check_auth_status reads it live.
+        st = xt.check_auth_status(cid, secret, account=account)
+        premium = bool(st.get("premium"))
+        youtube_url = _youtube_url_for_work_dir(wd)
+        with _track_op("Posting to X", body_dict.get("title", "")):
+            result = xt.post_video(
+                cid, secret, str(final), text, account=account,
+                premium=premium, youtube_url=youtube_url)
+    except Exception as e:
+        _x_post_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        return
+
+    if result.get("skipped") and not result.get("tweet_id"):
+        _x_post_tasks[task_id] = {"status": "warning",
+                                  "message": result.get("error") or result.get("reason")
+                                  or "Not posted to X."}
+        return
+    if result.get("error"):
+        _x_post_tasks[task_id] = {"status": "error", "error": result["error"][:240]}
+        return
+
+    tweet_id, url = result.get("tweet_id", ""), result.get("url", "")
+    try:
+        gapp._write_job_meta(wd, x_tweet_id=tweet_id, x_url=url)
+    except Exception:
+        pass
+    try:
+        qid = json.loads((wd / "job_config.json").read_text()).get("queue_item_id", "")
+        if qid:
+            yt.update_queue_item(qid, x_tweet_id=tweet_id, x_url=url)
+    except Exception:
+        pass
+
+    msg = f"Posted to X — {url}" if url else "Posted to X."
+    if result.get("fell_back_to_link"):
+        msg = f"Video too long for X — posted the YouTube link instead: {url}"
+    _x_post_tasks[task_id] = {"status": "done", "tweet_id": tweet_id, "url": url,
+                              "fell_back_to_link": bool(result.get("fell_back_to_link")),
+                              "message": msg}
+
+
+@api.post("/api/x/post")
+def x_post(body: XPostBody) -> dict:
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    final = gapp._final_path_for_work_dir(wd)
+    if not (final.exists() and final.stat().st_size > 10_000):
+        raise HTTPException(400, "No final video found for this film.")
+    task_id = uuid.uuid4().hex[:12]
+    _x_post_tasks[task_id] = {"status": "posting"}
+    account = body.account or _x_account_for_work_dir(wd)
+    # Pass text + title separately so the task can derive the description body
+    # (and fall back to the title only when there's no description).
+    threading.Thread(
+        target=_run_x_post_task,
+        args=(task_id, {"text": body.text, "title": body.title, "account": account}, wd, final),
+        daemon=True,
+    ).start()
+    return {"ok": True, "task_id": task_id}
+
+
+@api.get("/api/x/post/status")
+def x_post_status(task_id: str) -> dict:
+    task = _x_post_tasks.get(task_id)
+    if not task:
+        raise HTTPException(404, "X post task not found.")
+    return {"ok": True, **task}
+
+
+@api.get("/api/x/analytics")
+def x_analytics(account: str = Query(""), refresh: bool = Query(False)) -> dict:
+    # Cache-first, mirroring yt_analytics: serve the persisted per-account
+    # snapshot instantly; only hit X on an explicit refresh or a cold cache.
+    key = account or _x_account_for_style("")
+    cache = xt.load_analytics_cache()
+    if not refresh and key in cache:
+        return cache[key]
+    cid, secret = _x_client_creds()
+    try:
+        data = xt.fetch_x_analytics(cid, secret, account=key)
+    except Exception as e:
+        if key in cache:
+            return cache[key]
+        return {"channel": {}, "videos": [], "error": str(e)[:200]}
+    if data.get("channel"):
+        cache[key] = data
+        xt.save_analytics_cache(cache)
+    return data
 
 
 # ── YouTube comment actions (fetch / evaluate / approve / reject / reply) ─────
@@ -3044,6 +3390,208 @@ def youtube_draft_reply(body: CommentActionBody) -> dict:
     except Exception as e:
         raise HTTPException(503, f"Reply draft failed: {str(e).splitlines()[0][:200]}")
     return {"reply": text}
+
+
+# ── X (Twitter) mention actions (issue #107) ─────────────────────────────────
+# The X mirror of the YouTube comment actions above. Mentions are the "comments";
+# requests feed the SAME generation queue (source_platform="x"); the LLM
+# evaluation, community-reply drafting and thread_anchor are reused from the
+# platform-agnostic helpers — only the fetch/reply/cache are X-specific.
+
+_X_THANKS = "Thanks for the suggestion! We'll look into making a video about this. 🎬"
+
+
+def _fetch_and_evaluate_x(auto_approve: bool) -> dict:
+    cfg = gapp.load_config()
+    cid, secret = _x_client_creds()
+    accounts = [a.get("id", "") for a in (cfg.get("x_accounts") or [])] or [""]
+    new_count = 0
+    errors: list[str] = []
+    fetched_any = False
+    cache = xt.load_comments_cache()
+    by_id = {c.get("comment_id"): c for c in cache}
+    for acc in accounts:
+        try:
+            fetched = xt.fetch_mentions(cid, secret, account=acc)
+            fetched_any = True
+        except Exception as e:
+            errors.append(f"{acc or 'default'}: {str(e).splitlines()[0][:120]}")
+            continue
+        for fc in fetched:
+            cur = by_id.get(fc.get("comment_id"))
+            if cur is None:
+                entry = {**fc, "channel": acc, "evaluated": False, "is_request": False,
+                         "suggested_title": "", "confidence": 0.0,
+                         "interestingness": 0.0, "reason": "", "status": "new",
+                         "engagement_status": "", "engagement_draft": "",
+                         "engagement_reason": "", "engagement_anchor": ""}
+                cache.insert(0, entry)
+                by_id[fc.get("comment_id")] = entry
+                new_count += 1
+            else:
+                cur["like_count"] = fc.get("like_count", cur.get("like_count", 0))
+                cur["total_reply_count"] = fc.get("total_reply_count", cur.get("total_reply_count", 0))
+    xt.save_comments_cache(cache)
+    if not fetched_any:
+        raise HTTPException(503, f"Fetch failed: {errors[0] if errors else 'no accounts configured'}")
+
+    approved = thanked = 0
+    for c in [x for x in cache if not x.get("evaluated")]:
+        r = yt.evaluate_comment(c.get("text", ""), c.get("commenter", ""), cfg)
+        c.update({"evaluated": True, "is_request": r["is_request"],
+                  "suggested_title": r["suggested_title"], "confidence": r["confidence"],
+                  "interestingness": r.get("interestingness", 0.0), "reason": r["reason"],
+                  "status": "evaluated" if c.get("status") == "new" else c.get("status")})
+        if r["is_request"] and not c.get("thanked"):
+            rep = xt.reply_to_tweet(cid, secret, c.get("comment_id", ""), _X_THANKS,
+                                    account=c.get("channel", ""))
+            if rep.get("success"):
+                c["thanked"] = True
+                thanked += 1
+        if (auto_approve and r["is_request"] and r["confidence"] >= _AUTO_APPROVE_THRESHOLD
+                and c.get("status") not in ("approved", "rejected")):
+            c["status"] = "approved"
+            qi = yt.add_to_queue(c, r["suggested_title"], source="comment", source_platform="x")
+            if qi:
+                try:
+                    vp = llm.generate_video_prompt(r["suggested_title"], c.get("text", ""))
+                    if vp:
+                        yt.update_queue_item(qi["id"], video_prompt=vp)
+                except Exception:
+                    pass
+            approved += 1
+
+    # Community engagement, per X account (mirrors the YouTube pass).
+    acct_cfg = {a.get("id", ""): a for a in (cfg.get("x_accounts") or [])}
+    drafted = sent = 0
+    for c in cache:
+        if c.get("is_request"):
+            continue
+        entry = acct_cfg.get(c.get("channel", ""), {})
+        guidance = str(entry.get("engagement_prompt") or "").strip()
+        if not guidance:
+            continue
+        st = yt.thread_anchor(c)
+        if st["last_is_owner"] or not st["anchor_id"]:
+            continue
+        prior_anchor = c.get("engagement_anchor") or (c.get("comment_id", "") if c.get("engagement_status") else "")
+        if prior_anchor == st["anchor_id"] and c.get("engagement_status"):
+            continue
+        r = llm.generate_community_reply(st["anchor_text"], st["anchor_author"],
+                                         st["thread_text"], guidance, cfg)
+        c["engagement_anchor"] = st["anchor_id"]
+        c["engagement_reason"] = r.get("reason", "")
+        if not (r.get("should_reply") and r.get("reply")):
+            c["engagement_status"] = "skip"
+            continue
+        c["engagement_draft"] = r["reply"]
+        if entry.get("auto_respond"):
+            rep = xt.reply_to_tweet(cid, secret, c.get("comment_id", ""), r["reply"],
+                                    account=c.get("channel", ""))
+            if rep.get("success"):
+                c["engagement_status"] = "sent"
+                sent += 1
+                continue
+        c["engagement_status"] = "draft"
+        drafted += 1
+
+    xt.save_comments_cache(cache)
+    return {"new": new_count, "thanked": thanked, "auto_approved": approved,
+            "community_drafted": drafted, "community_sent": sent}
+
+
+@api.get("/api/x/comments")
+def x_comments() -> dict:
+    return {"comments": xt.load_comments_cache()}
+
+
+@api.post("/api/x/comments/fetch")
+def x_fetch(body: FetchBody | None = None) -> dict:
+    body = body or FetchBody()
+    cfg = gapp.load_config()
+    aa = cfg.get("x_auto_approve_comments", False) if body.auto_approve is None else body.auto_approve
+    with _track_op("Fetching X mentions"):
+        result = _fetch_and_evaluate_x(aa)
+    return {**result, "comments": xt.load_comments_cache()}
+
+
+@api.post("/api/x/comments/approve")
+def x_approve(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    c["status"] = "approved"
+    xt.save_comments_cache(cache)
+    title = (body.final_title or "").strip() or c.get("suggested_title", "")
+    qi = yt.add_to_queue(c, title, source="comment", source_platform="x")
+    if qi:
+        try:
+            vp = llm.generate_video_prompt(title, c.get("text", ""))
+            if vp:
+                yt.update_queue_item(qi["id"], video_prompt=vp)
+        except Exception:
+            pass
+    return {"ok": True, "queued": bool(qi), "final_title": title}
+
+
+@api.post("/api/x/comments/reject")
+def x_reject(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    c["status"] = "rejected"
+    xt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/reply")
+def x_reply(body: CommentActionBody) -> dict:
+    if not body.text.strip():
+        raise HTTPException(400, "Reply text required.")
+    c = next((x for x in xt.load_comments_cache()
+              if x.get("comment_id") == body.comment_id), None)
+    cid, secret = _x_client_creds()
+    res = xt.reply_to_tweet(cid, secret, body.comment_id, body.text.strip(),
+                            account=(c or {}).get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/community/send")
+def x_community_send(body: CommentActionBody) -> dict:
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Reply text required.")
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this mention.")
+    cid, secret = _x_client_creds()
+    res = xt.reply_to_tweet(cid, secret, body.comment_id, text, account=c.get("channel", ""))
+    if not res.get("success"):
+        raise HTTPException(502, f"Reply failed: {res.get('error', 'unknown')[:160]}")
+    c["engagement_status"] = "sent"
+    c["engagement_draft"] = text
+    xt.save_comments_cache(cache)
+    return {"ok": True}
+
+
+@api.post("/api/x/comments/community/dismiss")
+def x_community_dismiss(body: CommentActionBody) -> dict:
+    cache = xt.load_comments_cache()
+    c = next((x for x in cache if x.get("comment_id") == body.comment_id), None)
+    if not c:
+        raise HTTPException(404, "Mention not found.")
+    if c.get("engagement_status") != "draft":
+        raise HTTPException(409, "No pending draft for this mention.")
+    c["engagement_status"] = "dismissed"
+    xt.save_comments_cache(cache)
+    return {"ok": True}
 
 
 # ── Queue management ──────────────────────────────────────────────────────────
@@ -4228,6 +4776,58 @@ def _auto_post_done() -> list[str]:
     return posted
 
 
+def _auto_post_x_done() -> list[str]:
+    """Auto-post finished, queue-driven jobs to X (issue #107).
+
+    Mirrors _auto_post_done. A job is X-posted once (claimed via the
+    ``_x_auto_post_triggered`` job-meta marker; ``x_tweet_id`` is the permanent
+    "already on X" marker). When YouTube auto-post is ALSO on, we wait until the
+    YouTube upload finished (``youtube_video_id`` present) so a non-Premium X
+    post can fall back to the fresh YouTube link.
+    """
+    cfg = gapp.load_config()
+    yt_on = bool(cfg.get("youtube_auto_post"))
+    posted: list[str] = []
+    for _label, wd in gapp._list_recent_jobs(max_results=50):
+        p = Path(wd)
+        jc: dict = {}
+        acct = ""
+        with gapp._auto_post_lock:
+            try:
+                meta = json.loads((p / "job.json").read_text())
+            except Exception:
+                continue
+            if (meta.get("status") != "done" or meta.get("x_tweet_id")
+                    or meta.get("_x_auto_post_triggered")):
+                continue
+            if yt_on and not meta.get("youtube_video_id"):
+                continue  # let the YouTube upload finish first (link fallback)
+            try:
+                jc = json.loads((p / "job_config.json").read_text())
+            except Exception:
+                jc = {}
+            if not jc.get("queue_item_id"):
+                continue  # only auto-post videos that came from the queue
+            acct = _x_account_for_work_dir(p)
+            # Claim it either way: with no X account there's nothing to post, and
+            # marking it avoids re-checking the same job every tick.
+            gapp._write_job_meta(p, _x_auto_post_triggered=True)
+        if not acct:
+            continue
+        try:
+            title = jc.get("video_title") or _video_title_for(p)
+            res = x_post(XPostBody(work_dir=str(p), title=title, account=acct))
+            if res.get("task_id"):
+                posted.append(res["task_id"])
+        except Exception:
+            # Posting failed to even start — release the claim so a later tick retries.
+            try:
+                gapp._write_job_meta(p, _x_auto_post_triggered=False)
+            except Exception:
+                pass
+    return posted
+
+
 def _ensure_descriptions() -> int:
     """Cache YouTube descriptions for completed jobs that don't have one yet.
     Called from the automation loop so it runs server-side, not on browser polls."""
@@ -4281,10 +4881,17 @@ def _automation_tick() -> dict:
                     out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
                 except Exception as e:
                     out["fetch_error"] = str(e)[:120]
+            if cfg.get("x_auto_fetch_evaluate"):
+                try:
+                    out["x_fetch"] = _fetch_and_evaluate_x(cfg.get("x_auto_approve_comments", False))
+                except Exception as e:
+                    out["x_fetch_error"] = str(e)[:120]
             if cfg.get("youtube_auto_start_job"):
                 out["started"] = _auto_start_best()
             if cfg.get("youtube_auto_post"):
                 out["posted"] = _auto_post_done()
+            if cfg.get("x_auto_post"):
+                out["x_posted"] = _auto_post_x_done()
         return out
     finally:
         _tick_lock.release()
@@ -4353,7 +4960,8 @@ def _automation_loop():
         try:
             cfg = gapp.load_config()
             if any(cfg.get(k) for k in (
-                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post")):
+                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post",
+                    "x_auto_fetch_evaluate", "x_auto_post")):
                 _automation_tick()
         except Exception:
             pass

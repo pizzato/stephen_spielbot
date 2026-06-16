@@ -90,6 +90,15 @@ def _state_for(channel: str = "") -> dict:
         {"content": None, "timing": None, "metrics": None, "mtime": 0.0, "loaded": False})
 
 
+def _all_channels(cfg: dict) -> list[str]:
+    """Every connected channel key, for pooling history into one global model
+    (issue #107). Falls back to the legacy single-channel token when none are
+    configured."""
+    keys = [c.get("id", "") for c in (cfg.get("youtube_channels") or [])
+            if isinstance(c, dict) and c.get("id")]
+    return keys or [""]
+
+
 # ── lazy imports ──────────────────────────────────────────────────────────────
 
 def _ml():
@@ -221,7 +230,14 @@ def build_dataset(client_secrets_path: str, channel: str = "") -> tuple[list[dic
     # UTC date to match the published_at timestamps below — local date.today()
     # would shift the recency boundary by a day on machines ahead of/behind UTC.
     cutoff = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=lag)
-    rows = yt.fetch_training_rows(client_secrets_path, channel=channel)
+    # Pool history across every connected channel into one global model (issue
+    # #107). `channel` is ignored — there is a single model for everything now.
+    rows: list[dict] = []
+    for ch in _all_channels(cfg):
+        try:
+            rows.extend(yt.fetch_training_rows(client_secrets_path, channel=ch))
+        except Exception as exc:
+            logger.warning("training rows fetch failed for %s: %s", ch or "default", exc)
     dataset: list[dict] = []
     dropped = 0
     for r in rows:
@@ -342,7 +358,8 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
                 pass
 
     phase("fetching")
-    dataset, dropped = build_dataset(client_secrets_path, channel=channel)
+    # One global model across all channels (issue #107) — `channel` is ignored.
+    dataset, dropped = build_dataset(client_secrets_path)
     n = len(dataset)
     if n < 2:
         return {"available": False, "n_samples": n, "n_dropped": dropped,
@@ -372,10 +389,10 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
         "embed_model": cfg.get("engagement_embed_model", _DEFAULT_EMBED_MODEL),
         "data_lag_days": int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS)),
         "n_short": int(sum(shorts)),
-        "channel": channel or "",
+        "channel": "",   # global model (issue #107)
     })
 
-    content_path, timing_path, metrics_path = _paths(channel)
+    content_path, timing_path, metrics_path = _paths("")
     _ENG_DIR.mkdir(parents=True, exist_ok=True)
     with open(content_path, "wb") as f:
         pickle.dump(content, f)
@@ -383,8 +400,8 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
         pickle.dump(timing, f)
     metrics_path.write_text(json.dumps(metrics, indent=2))
     with _lock:
-        _state_for(channel).update({"content": content, "timing": timing, "metrics": metrics,
-                                    "mtime": metrics_path.stat().st_mtime, "loaded": True})
+        _state_for("").update({"content": content, "timing": timing, "metrics": metrics,
+                               "mtime": metrics_path.stat().st_mtime, "loaded": True})
     phase("done")
     return {"available": True, **metrics}
 
@@ -392,12 +409,14 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
 # ── inference (fast path) ─────────────────────────────────────────────────────
 
 def _get_models(channel: str = ""):
-    """Return (content, timing, metrics) for a channel, loading/refreshing from
-    disk as needed. A scikit-learn version mismatch yields (None, None, metrics)
-    so callers can prompt a rebuild instead of crashing on a stale pickle."""
-    content_path, timing_path, metrics_path = _paths(channel)
+    """Return (content, timing, metrics) for the single global model (issue #107),
+    loading/refreshing from disk as needed. ``channel`` is accepted for call-site
+    compatibility but ignored — there's one model for every channel/style now. A
+    scikit-learn version mismatch yields (None, None, metrics) so callers can
+    prompt a rebuild instead of crashing on a stale pickle."""
+    content_path, timing_path, metrics_path = _paths("")
     with _lock:
-        state = _state_for(channel)
+        state = _state_for("")
         if not metrics_path.exists() or not content_path.exists():
             return None, None, None
         mtime = metrics_path.stat().st_mtime
