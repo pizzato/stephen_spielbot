@@ -607,6 +607,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
   const [vbusy, setVbusy] = useState(false)   // a voice operation is in flight
+  const [restoring, setRestoring] = useState(false)  // a backup restore is in flight
+  const restoreRef = useRef(null)
   const [workers, setWorkers] = useState(null)
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
@@ -788,6 +790,32 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     } catch { /* the next full load picks it up */ }
   }
 
+  // Backup & restore (issue #106). Restore overlays the uploaded zip onto the
+  // config dir, then we adopt the reloaded config — dropping any staged edits,
+  // which the confirm warns about.
+  const onRestoreFile = async (file) => {
+    if (!file) return
+    const ok = window.confirm(
+      'Restore from this backup? Files in the backup overwrite the matching '
+      + 'settings on this machine, and any unsaved changes here are discarded.')
+    if (!ok) { if (restoreRef.current) restoreRef.current.value = ''; return }
+    setError(''); setStatus(''); setRestoring(true)
+    try {
+      const r = await api.restoreSettings(await fileToDataUrl(file))
+      dirtyRef.current = false
+      setCfg(r.config)
+      setMeta((m) => ({ ...m, config: r.config }))
+      const n = r.restored?.length || 0
+      setStatus(`Restored ${n} file${n === 1 ? '' : 's'} (${r.scope} backup). `
+        + 'Restart the server if workers or the LLM backend changed.')
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRestoring(false)
+      if (restoreRef.current) restoreRef.current.value = ''
+    }
+  }
+
   const isClaude = cfg.llm_backend === 'claude'
 
   return (
@@ -858,6 +886,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
 
           {/* ── Voices ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+
+          {/* ── Backup & restore (issue #106) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Backup &amp; restore</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>for moving to new hardware</span>
+            </div>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              <strong>Full backup</strong> bundles config, YouTube login (client secrets + channel tokens), voices, and operational state
+              (queue, comments, analytics, AI ideas, engagement model). <strong>Operational state</strong> is just the app-accumulated
+              data. Restoring overwrites the matching files on this machine.
+            </div>
+            <div className="row center gap-10 row--wrap mt-16">
+              <a className="btn btn--primary" href={api.backupUrl('full')} download style={{ textDecoration: 'none' }}>
+                <Icon name="download" /> Full backup
+              </a>
+              <a className="btn btn--ghost" href={api.backupUrl('operational')} download style={{ textDecoration: 'none' }}>
+                <Icon name="download" /> Operational state only
+              </a>
+              <div className="grow" />
+              <label className="btn btn--ghost" style={{ cursor: restoring ? 'not-allowed' : 'pointer' }}>
+                <Icon name="upload" /> {restoring ? 'Restoring…' : 'Restore from backup…'}
+                <input ref={restoreRef} type="file" accept=".zip,application/zip" hidden disabled={restoring}
+                  onChange={(e) => onRestoreFile(e.target.files?.[0] || null)} />
+              </label>
+            </div>
+          </Card>
         </>)}
 
         {tab === 'styles' && (<>
@@ -937,6 +992,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={st.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
+              </Field>
+              <Field label="Video / motion style" hint="Steers how each scene moves — camera and subject motion in every scene's video prompt. e.g. “Favour dynamic action and visible movement over static shots and slow pans.”">
+                <textarea className="textarea" rows={2} value={st.video_style || ''} onChange={(e) => setStyleField('video_style', e.target.value)} />
               </Field>
               <Field label="Title style" hint="How AI-suggested video titles are worded — e.g. “short and punchy” or “pose an intriguing question”.">
                 <textarea className="textarea" rows={2} value={st.title_style || ''} onChange={(e) => setStyleField('title_style', e.target.value)} />

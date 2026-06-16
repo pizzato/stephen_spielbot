@@ -37,6 +37,12 @@ export const api = {
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
 
+  // settings backup / restore (issue #106). Backup downloads straight from the
+  // browser via an <a download> hitting backupUrl(); restore POSTs the zip as
+  // a base64 data-URL (same shape as voice uploads).
+  backupUrl: (scope) => `/api/settings/backup?scope=${encodeURIComponent(scope || 'full')}`,
+  restoreSettings: (data) => req('POST', '/settings/restore', { data }),
+
   // UI-worker reservation (issue #98): heartbeat marks "the UI is in use" so the
   // render holds a worker idle for covers/previews; uiWorker polls that state.
   uiHeartbeat: () => req('POST', '/ui/heartbeat'),
