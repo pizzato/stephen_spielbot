@@ -80,7 +80,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit })
               <div className="row gap-10 mt-16">
                 <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
                 <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
-                <Button variant="primary" icon="youtube" onClick={(e) => { e.stopPropagation(); go('youtube', { publishWorkDir: f.work_dir }) }}>Publish</Button>
+                <Button variant="primary" icon="upload" onClick={(e) => { e.stopPropagation(); go('publish', { publishWorkDir: f.work_dir }) }}>Publish</Button>
               </div>
             </div>
           </Card>

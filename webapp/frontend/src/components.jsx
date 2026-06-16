@@ -173,8 +173,9 @@ const NAV = [
   { id: 'progress', label: 'Render', icon: 'gauge-high' },
   { sep: true },
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
-  { id: 'youtube', label: 'YouTube', icon: 'youtube', brand: true },
-  { id: 'x', label: 'X', icon: 'x-twitter', brand: true },
+  { id: 'community', label: 'Community', icon: 'comments' },
+  { id: 'publish', label: 'Publish', icon: 'upload' },
+  { id: 'analytics', label: 'Analytics', icon: 'chart-simple' },
   { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },
   { id: 'engagement', label: 'Predictive Model', icon: 'chart-line' },
@@ -193,7 +194,7 @@ function navIndicator(id, badges) {
       </span>
     )
   }
-  const counts = { queue: badges.queue, youtube: badges.youtube, library: badges.films }
+  const counts = { queue: badges.queue, community: badges.youtube, publish: badges.youtube_publishable, library: badges.films }
   const n = counts[id]
   return n ? <span className="nav__badge nav__badge--attn">{n}</span> : null
 }
