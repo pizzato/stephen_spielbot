@@ -316,10 +316,15 @@ export default function Publish({ initialWorkDir, go }) {
           <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters (YouTube title).">
             <input className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
           </Field>
-          {dest.youtube && (<>
-            <Field label={<span className="row center between"><span>Description</span><button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }} disabled={busy === 'desc' || !workDir} onClick={genDescription}><Icon name="wand-magic-sparkles" /> {busy === 'desc' ? 'Writing…' : 'Generate'}</button></span>} hint="YouTube description.">
+          {(dest.youtube || dest.x) && (
+            <Field label={<span className="row center between"><span>Description</span><button className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }} disabled={busy === 'desc' || !workDir} onClick={genDescription}><Icon name="wand-magic-sparkles" /> {busy === 'desc' ? 'Writing…' : 'Generate'}</button></span>}
+              hint={dest.youtube
+                ? (dest.x ? 'YouTube description. X posts this minus the style’s sign-off.' : 'YouTube description.')
+                : 'Posted to X (minus the style’s sign-off) — not the title.'}>
               <textarea className="textarea" rows={6} value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Write a description, or click Generate." />
             </Field>
+          )}
+          {dest.youtube && (
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label="Category">
@@ -332,7 +337,7 @@ export default function Publish({ initialWorkDir, go }) {
                 <Segmented value={privacy} onChange={setPrivacy} options={opts.privacy} />
               </Field>
             </div>
-          </>)}
+          )}
 
           <div className="row center gap-10" style={{ padding: '10px 12px', background: 'var(--warn-soft)', borderRadius: 'var(--r-md)' }}>
             <Icon name="robot" style={{ color: 'var(--warn)' }} />
