@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 # Make the repo root importable so `import app` and `import pipeline.*` resolve
@@ -219,6 +219,52 @@ def post_config(body: ConfigUpdate) -> dict:
     cfg.update(body.config)
     gapp.save_config(cfg)
     return {"ok": True, "config": gapp.load_config()}
+
+
+# ── settings backup / restore (issue #106) ───────────────────────────────────
+
+@api.get("/api/settings/backup")
+def settings_backup(scope: str = Query("full")):
+    """Download a zip of this machine's settings. scope=full is everything in
+    the config dir (config, YouTube login, voices, operational state) minus
+    regenerable scratch; scope=operational is just the app-accumulated state."""
+    try:
+        data, filename = gapp.build_settings_backup(scope)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+class SettingsRestore(BaseModel):
+    data: str
+
+
+@api.post("/api/settings/restore")
+def settings_restore(body: SettingsRestore) -> dict:
+    """Restore a backup zip (full or operational) over the config dir."""
+    raw = body.data or ""
+    if raw.startswith("data:"):
+        raw = raw.split(",", 1)[-1]
+    try:
+        blob = base64.b64decode(raw)
+    except Exception:
+        raise HTTPException(400, "Could not read the uploaded backup file.")
+    if not blob:
+        raise HTTPException(400, "The uploaded backup is empty.")
+    try:
+        result = gapp.restore_settings_backup(blob)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # Restored tokens/secrets won't be seen while the old auth result is cached.
+    try:
+        yt._auth_cache.clear()
+    except Exception:
+        pass
+    return {"ok": True, **result, "config": gapp.load_config()}
 
 
 # ── voices ───────────────────────────────────────────────────────────────────
@@ -524,11 +570,13 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         topic = f"{topic}\n\n{extra}"
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
+    video_style_hint = ss.get("video_style", "") or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style = generate_script(
-                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None
+                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
+                video_style_hint=video_style_hint,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
