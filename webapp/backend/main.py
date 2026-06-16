@@ -2865,6 +2865,25 @@ def x_auth_poll() -> dict:
         return {"status": "error", "error": str(e)[:200]}
 
 
+class XImportTokensBody(BaseModel):
+    access_token: str
+    refresh_token: str = ""
+
+
+@api.post("/api/x/auth/import")
+def x_auth_import(body: XImportTokensBody) -> dict:
+    """Connect an X account from pasted OAuth2 tokens (access + refresh) — skips
+    the browser flow entirely. Validates against X, then registers the account."""
+    cid, secret = _x_client_creds()
+    if not cid:
+        raise HTTPException(400, "Set the X API Client ID first (above).")
+    res = xt.import_tokens(cid, secret, body.access_token, body.refresh_token,
+                           finalize=_finalize_new_x_account)
+    if not res.get("success"):
+        raise HTTPException(400, res.get("error", "Could not import the tokens."))
+    return {"ok": True, **res}
+
+
 @api.post("/api/x/disconnect")
 def x_disconnect(body: DisconnectBody | None = None) -> dict:
     """Remove an X account: delete its token and drop it from the config."""

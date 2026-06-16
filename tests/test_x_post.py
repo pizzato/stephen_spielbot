@@ -170,6 +170,52 @@ class CompletionReplyPlatformTests(unittest.TestCase):
         xr.assert_not_called()
 
 
+class XImportTokensTests(unittest.TestCase):
+    def test_valid_tokens_save_and_resolve_account(self):
+        import pipeline.x as xt
+        me = {"data": {"id": "77", "username": "bot", "subscription_type": "Premium"}}
+        saved = {}
+        with mock.patch.object(xt, "_fetch_me", return_value=me), \
+             mock.patch.object(xt, "_save_token", side_effect=lambda k, t: saved.update(key=k, token=t)):
+            res = xt.import_tokens("cid", "sec", "ACCESS", "REFRESH")
+        self.assertTrue(res["success"])
+        self.assertEqual(res["account_id"], "77")
+        self.assertTrue(res["premium"])
+        self.assertEqual(saved["key"], "77")
+        self.assertEqual(saved["token"]["access_token"], "ACCESS")
+        self.assertEqual(saved["token"]["refresh_token"], "REFRESH")
+
+    def test_empty_access_token_fails(self):
+        import pipeline.x as xt
+        self.assertFalse(xt.import_tokens("cid", "sec", "", "")["success"])
+
+    def test_refreshes_when_access_token_expired(self):
+        import pipeline.x as xt
+        me = {"data": {"id": "77", "username": "bot"}}
+
+        def fetch(access):
+            if access == "ACCESS":
+                raise RuntimeError("401 expired")
+            return me
+
+        with mock.patch.object(xt, "_fetch_me", side_effect=fetch), \
+             mock.patch.object(xt, "_refresh_token",
+                               return_value={"access_token": "FRESH", "refresh_token": "R2", "expires_at": 1}), \
+             mock.patch.object(xt, "_save_token"):
+            res = xt.import_tokens("cid", "sec", "ACCESS", "REFRESH")
+        self.assertTrue(res["success"])
+        self.assertEqual(res["account_id"], "77")
+
+    def test_backend_import_registers_account(self):
+        with mock.patch.object(backend, "_x_client_creds", return_value=("cid", "sec")), \
+             mock.patch.object(backend.xt, "import_tokens",
+                               return_value={"success": True, "account": "77", "account_id": "77",
+                                             "account_name": "bot", "premium": True}) as imp:
+            out = backend.x_auth_import(backend.XImportTokensBody(access_token="A", refresh_token="R"))
+        self.assertTrue(out["ok"])
+        self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
+
+
 class XAnalyticsTests(unittest.TestCase):
     def test_aggregates_public_metrics(self):
         import pipeline.x as xt

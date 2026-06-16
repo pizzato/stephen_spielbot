@@ -378,6 +378,9 @@ function XAccountsCard({ onConfigChanged, onError }) {
   const [expanded, setExpanded] = useState('')
   const [eng, setEng] = useState({})
   const [savingEng, setSavingEng] = useState('')
+  const [showImport, setShowImport] = useState(false)
+  const [tok, setTok] = useState({ access: '', refresh: '' })
+  const [importBusy, setImportBusy] = useState(false)
   const pollRef = useRef(null)
 
   const refresh = () => api.xAccounts()
@@ -436,18 +439,51 @@ function XAccountsCard({ onConfigChanged, onError }) {
     } catch (e) { onError(e.message) } finally { setSavingEng('') }
   }
 
+  const importTokens = async () => {
+    if (!tok.access.trim()) return
+    setImportBusy(true); onError('')
+    try {
+      await api.xImportTokens(tok.access.trim(), tok.refresh.trim())
+      setTok({ access: '', refresh: '' }); setShowImport(false)
+      await refresh()
+      onConfigChanged()
+    } catch (e) { onError(e.message) } finally { setImportBusy(false) }
+  }
+
   const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
   return (
     <Card span={12} className="reveal reveal-d1">
       <div className="row center between">
         <span className="label-sm">Accounts</span>
-        <Button variant="primary" icon="x-twitter" brand disabled={connecting} onClick={connect}>
-          {connecting ? 'Waiting for X…' : 'Connect X account'}
-        </Button>
+        <div className="row center gap-10">
+          <Button variant="ghost" icon="key" onClick={() => setShowImport((v) => !v)}>Paste tokens</Button>
+          <Button variant="primary" icon="x-twitter" brand disabled={connecting} onClick={connect}>
+            {connecting ? 'Waiting for X…' : 'Connect X account'}
+          </Button>
+        </div>
       </div>
       <div className="field__hint" style={{ marginTop: 6 }}>
         Each connected X login is one account. Pick the account a style publishes to under <strong>Styles</strong>. Posting needs the X API client ID below; reading mentions and analytics needs a paid X API tier.
       </div>
+      {showImport && (
+        <div className="stack gap-10" style={{ marginTop: 12, padding: '12px 14px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }}>
+          <div className="field__hint">
+            Paste OAuth 2.0 tokens you generated for this app (skips the browser sign-in). The access token is validated against X; the refresh token keeps it connected after it expires (~2h). Set the Client ID + Secret below first so refresh works.
+          </div>
+          <Field label="Access token">
+            <input className="input" value={tok.access} onChange={(e) => setTok((t) => ({ ...t, access: e.target.value }))} placeholder="OAuth 2.0 access token" />
+          </Field>
+          <Field label="Refresh token" hint="Optional but recommended — without it the connection drops when the access token expires.">
+            <input className="input" value={tok.refresh} onChange={(e) => setTok((t) => ({ ...t, refresh: e.target.value }))} placeholder="OAuth 2.0 refresh token" />
+          </Field>
+          <div className="row center gap-10 row--wrap">
+            <Button variant="primary" icon="plug" disabled={importBusy || !tok.access.trim()} onClick={importTokens}>
+              {importBusy ? 'Connecting…' : 'Connect with tokens'}
+            </Button>
+            <Button variant="ghost" onClick={() => { setShowImport(false); setTok({ access: '', refresh: '' }) }}>Cancel</Button>
+          </div>
+        </div>
+      )}
       <div className="stack gap-10 mt-16">
         {accounts === null && <div className="muted" style={{ fontSize: 13 }}>Checking…</div>}
         {accounts !== null && accounts.length === 0 && (
