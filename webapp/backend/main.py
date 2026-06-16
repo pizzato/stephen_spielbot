@@ -2196,8 +2196,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         pass
     vid_w, vid_h = _film_dimensions(wd)
     orientation = "portrait" if vid_h > vid_w else ("square" if vid_h == vid_w else "landscape")
-    # Channel this film publishes to, resolved from its style (issue #22).
+    # Channel/account this film publishes to, resolved from its style (issue #22/#107).
     channel = _channel_for_work_dir(wd)
+    x_account = _x_account_for_work_dir(wd)
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -2207,6 +2208,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
         "channel": channel,
+        # The X account this film's style posts to ('' = none → X off by default).
+        "x_account": x_account,
         # The target channel's default category (its own, else the global default).
         "category": _category_for_channel(gapp.load_config(), channel),
         "orientation": orientation,
@@ -4679,6 +4682,58 @@ def _auto_post_done() -> list[str]:
     return posted
 
 
+def _auto_post_x_done() -> list[str]:
+    """Auto-post finished, queue-driven jobs to X (issue #107).
+
+    Mirrors _auto_post_done. A job is X-posted once (claimed via the
+    ``_x_auto_post_triggered`` job-meta marker; ``x_tweet_id`` is the permanent
+    "already on X" marker). When YouTube auto-post is ALSO on, we wait until the
+    YouTube upload finished (``youtube_video_id`` present) so a non-Premium X
+    post can fall back to the fresh YouTube link.
+    """
+    cfg = gapp.load_config()
+    yt_on = bool(cfg.get("youtube_auto_post"))
+    posted: list[str] = []
+    for _label, wd in gapp._list_recent_jobs(max_results=50):
+        p = Path(wd)
+        jc: dict = {}
+        acct = ""
+        with gapp._auto_post_lock:
+            try:
+                meta = json.loads((p / "job.json").read_text())
+            except Exception:
+                continue
+            if (meta.get("status") != "done" or meta.get("x_tweet_id")
+                    or meta.get("_x_auto_post_triggered")):
+                continue
+            if yt_on and not meta.get("youtube_video_id"):
+                continue  # let the YouTube upload finish first (link fallback)
+            try:
+                jc = json.loads((p / "job_config.json").read_text())
+            except Exception:
+                jc = {}
+            if not jc.get("queue_item_id"):
+                continue  # only auto-post videos that came from the queue
+            acct = _x_account_for_work_dir(p)
+            # Claim it either way: with no X account there's nothing to post, and
+            # marking it avoids re-checking the same job every tick.
+            gapp._write_job_meta(p, _x_auto_post_triggered=True)
+        if not acct:
+            continue
+        try:
+            title = jc.get("video_title") or _video_title_for(p)
+            res = x_post(XPostBody(work_dir=str(p), title=title, account=acct))
+            if res.get("task_id"):
+                posted.append(res["task_id"])
+        except Exception:
+            # Posting failed to even start — release the claim so a later tick retries.
+            try:
+                gapp._write_job_meta(p, _x_auto_post_triggered=False)
+            except Exception:
+                pass
+    return posted
+
+
 def _ensure_descriptions() -> int:
     """Cache YouTube descriptions for completed jobs that don't have one yet.
     Called from the automation loop so it runs server-side, not on browser polls."""
@@ -4732,10 +4787,17 @@ def _automation_tick() -> dict:
                     out["fetch"] = _fetch_and_evaluate(cfg.get("youtube_auto_approve_comments", False))
                 except Exception as e:
                     out["fetch_error"] = str(e)[:120]
+            if cfg.get("x_auto_fetch_evaluate"):
+                try:
+                    out["x_fetch"] = _fetch_and_evaluate_x(cfg.get("x_auto_approve_comments", False))
+                except Exception as e:
+                    out["x_fetch_error"] = str(e)[:120]
             if cfg.get("youtube_auto_start_job"):
                 out["started"] = _auto_start_best()
             if cfg.get("youtube_auto_post"):
                 out["posted"] = _auto_post_done()
+            if cfg.get("x_auto_post"):
+                out["x_posted"] = _auto_post_x_done()
         return out
     finally:
         _tick_lock.release()
@@ -4804,7 +4866,8 @@ def _automation_loop():
         try:
             cfg = gapp.load_config()
             if any(cfg.get(k) for k in (
-                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post")):
+                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post",
+                    "x_auto_fetch_evaluate", "x_auto_post")):
                 _automation_tick()
         except Exception:
             pass

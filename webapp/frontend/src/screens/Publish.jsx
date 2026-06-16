@@ -119,6 +119,9 @@ export default function Publish({ initialWorkDir, go }) {
       setYoutubeVideoId(p.youtube_video_id || '')
       setChannel(p.channel || '')   // the film's style decides the target channel
       setCategory(p.category || '22')   // …and that channel's default video category
+      // The style decides the X account too; with none, default the X box off.
+      if (p.x_account) setXAccount(p.x_account)
+      setDest({ youtube: true, x: !!p.x_account })
       setAspect(p.vid_width && p.vid_height ? `${p.vid_width}/${p.vid_height}` : '16/9')
       setIncludeThumbnail(p.include_thumbnail_default !== false)
       setBestTimes(null)
