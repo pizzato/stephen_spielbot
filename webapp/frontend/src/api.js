@@ -163,6 +163,7 @@ export const api = {
   xAuthStart: () => req('POST', '/x/auth/start'),
   xAuthPoll: () => req('POST', '/x/auth/poll'),
   xImportTokens: (accessToken, refreshToken) => req('POST', '/x/auth/import', { access_token: accessToken, refresh_token: refreshToken || '' }),
+  xImportKeys: (keys) => req('POST', '/x/auth/import-keys', keys),
   xDisconnect: (account) => req('POST', '/x/disconnect', { channel: account || '' }),
   xAccountSettings: (id, fields) => req('POST', '/x/accounts/settings', { id, ...fields }),
   xPost: (body) => req('POST', '/x/post', body),

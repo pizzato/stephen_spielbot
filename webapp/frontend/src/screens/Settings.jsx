@@ -381,6 +381,8 @@ function XAccountsCard({ onConfigChanged, onError }) {
   const [showImport, setShowImport] = useState(false)
   const [tok, setTok] = useState({ access: '', refresh: '' })
   const [importBusy, setImportBusy] = useState(false)
+  const [importMode, setImportMode] = useState('keys')   // 'keys' (OAuth1, no browser) | 'oauth2'
+  const [keys, setKeys] = useState({ api_key: '', api_secret: '', access_token: '', access_secret: '' })
   const [authUrl, setAuthUrl] = useState('')   // surfaced so it can be opened in Incognito
   const pollRef = useRef(null)
 
@@ -452,6 +454,21 @@ function XAccountsCard({ onConfigChanged, onError }) {
     } catch (e) { onError(e.message) } finally { setImportBusy(false) }
   }
 
+  const importKeys = async () => {
+    if (!Object.values(keys).every((v) => v.trim())) return
+    setImportBusy(true); onError('')
+    try {
+      await api.xImportKeys({
+        api_key: keys.api_key.trim(), api_secret: keys.api_secret.trim(),
+        access_token: keys.access_token.trim(), access_secret: keys.access_secret.trim(),
+      })
+      setKeys({ api_key: '', api_secret: '', access_token: '', access_secret: '' })
+      setShowImport(false)
+      await refresh()
+      onConfigChanged()
+    } catch (e) { onError(e.message) } finally { setImportBusy(false) }
+  }
+
   const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
   return (
     <Card span={12} className="reveal reveal-d1">
@@ -481,21 +498,49 @@ function XAccountsCard({ onConfigChanged, onError }) {
       )}
       {showImport && (
         <div className="stack gap-10" style={{ marginTop: 12, padding: '12px 14px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }}>
-          <div className="field__hint">
-            Paste OAuth 2.0 tokens you generated for this app (skips the browser sign-in). The access token is validated against X; the refresh token keeps it connected after it expires (~2h). Set the Client ID + Secret below first so refresh works.
-          </div>
-          <Field label="Access token">
-            <input className="input" value={tok.access} onChange={(e) => setTok((t) => ({ ...t, access: e.target.value }))} placeholder="OAuth 2.0 access token" />
-          </Field>
-          <Field label="Refresh token" hint="Optional but recommended — without it the connection drops when the access token expires.">
-            <input className="input" value={tok.refresh} onChange={(e) => setTok((t) => ({ ...t, refresh: e.target.value }))} placeholder="OAuth 2.0 refresh token" />
-          </Field>
-          <div className="row center gap-10 row--wrap">
-            <Button variant="primary" icon="plug" disabled={importBusy || !tok.access.trim()} onClick={importTokens}>
-              {importBusy ? 'Connecting…' : 'Connect with tokens'}
-            </Button>
-            <Button variant="ghost" onClick={() => { setShowImport(false); setTok({ access: '', refresh: '' }) }}>Cancel</Button>
-          </div>
+          <Segmented value={importMode} onChange={setImportMode} options={[
+            { value: 'keys', label: 'API keys (no browser)' },
+            { value: 'oauth2', label: 'OAuth 2.0 tokens' },
+          ]} />
+          {importMode === 'keys' ? (<>
+            <div className="field__hint">
+              <strong>Recommended.</strong> From the X developer portal → <strong>Keys and tokens</strong>: copy <strong>API Key &amp; Secret</strong> and generate an <strong>Access Token &amp; Secret</strong> (one click — no browser sign-in, no redirect loop). Make sure the app’s user-auth permission is <strong>Read and Write</strong> so it can upload video.
+            </div>
+            <Field label="API Key">
+              <input className="input" value={keys.api_key} onChange={(e) => setKeys((k) => ({ ...k, api_key: e.target.value }))} />
+            </Field>
+            <Field label="API Key Secret">
+              <input className="input" type="password" value={keys.api_secret} onChange={(e) => setKeys((k) => ({ ...k, api_secret: e.target.value }))} />
+            </Field>
+            <Field label="Access Token">
+              <input className="input" value={keys.access_token} onChange={(e) => setKeys((k) => ({ ...k, access_token: e.target.value }))} />
+            </Field>
+            <Field label="Access Token Secret">
+              <input className="input" type="password" value={keys.access_secret} onChange={(e) => setKeys((k) => ({ ...k, access_secret: e.target.value }))} />
+            </Field>
+            <div className="row center gap-10 row--wrap">
+              <Button variant="primary" icon="plug" disabled={importBusy || !Object.values(keys).every((v) => v.trim())} onClick={importKeys}>
+                {importBusy ? 'Connecting…' : 'Connect with keys'}
+              </Button>
+              <Button variant="ghost" onClick={() => setShowImport(false)}>Cancel</Button>
+            </div>
+          </>) : (<>
+            <div className="field__hint">
+              Paste OAuth 2.0 tokens you generated for this app. The access token is validated against X; the refresh token keeps it connected after it expires (~2h). Needs the <strong>media.write</strong> scope to upload video — set the Client ID + Secret below first so refresh works.
+            </div>
+            <Field label="Access token">
+              <input className="input" value={tok.access} onChange={(e) => setTok((t) => ({ ...t, access: e.target.value }))} placeholder="OAuth 2.0 access token" />
+            </Field>
+            <Field label="Refresh token" hint="Optional but recommended — without it the connection drops when the access token expires.">
+              <input className="input" value={tok.refresh} onChange={(e) => setTok((t) => ({ ...t, refresh: e.target.value }))} placeholder="OAuth 2.0 refresh token" />
+            </Field>
+            <div className="row center gap-10 row--wrap">
+              <Button variant="primary" icon="plug" disabled={importBusy || !tok.access.trim()} onClick={importTokens}>
+                {importBusy ? 'Connecting…' : 'Connect with tokens'}
+              </Button>
+              <Button variant="ghost" onClick={() => { setShowImport(false); setTok({ access: '', refresh: '' }) }}>Cancel</Button>
+            </div>
+          </>)}
         </div>
       )}
       <div className="stack gap-10 mt-16">

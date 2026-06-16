@@ -216,6 +216,46 @@ class XImportTokensTests(unittest.TestCase):
         self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
 
 
+class XImportOAuth1Tests(unittest.TestCase):
+    def test_valid_keys_save_oauth1_token(self):
+        import pipeline.x as xt
+        me = {"data": {"id": "55", "username": "bot", "subscription_type": "Premium"}}
+        saved = {}
+        with mock.patch.object(xt, "_fetch_me", return_value=me), \
+             mock.patch.object(xt, "_save_token", side_effect=lambda k, t: saved.update(key=k, token=t)):
+            res = xt.import_oauth1("ak", "asec", "at", "atsec")
+        self.assertTrue(res["success"])
+        self.assertEqual(res["account_id"], "55")
+        self.assertTrue(res["premium"])
+        self.assertEqual(saved["token"]["auth"], "oauth1")
+        self.assertEqual(saved["token"]["api_key"], "ak")
+        self.assertEqual(saved["token"]["access_secret"], "atsec")
+
+    def test_missing_key_fails(self):
+        import pipeline.x as xt
+        self.assertFalse(xt.import_oauth1("ak", "", "at", "atsec")["success"])
+
+    def test_account_auth_routes_by_token_type(self):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_load_token", return_value={"auth": "oauth1", "api_key": "k",
+                               "api_secret": "s", "access_token": "t", "access_secret": "ts"}):
+            a = xt._account_auth("cid", "sec", "acc")
+        self.assertIn("oauth1", a)
+        with mock.patch.object(xt, "_load_token", return_value={"access_token": "x"}), \
+             mock.patch.object(xt, "_bearer", return_value="BEAR"):
+            b = xt._account_auth("cid", "sec", "acc")
+        self.assertEqual(b, {"bearer": "BEAR"})
+
+    def test_backend_import_keys_registers_account(self):
+        with mock.patch.object(backend.xt, "import_oauth1",
+                               return_value={"success": True, "account": "55", "account_id": "55",
+                                             "account_name": "bot", "premium": True}) as imp:
+            out = backend.x_auth_import_keys(backend.XImportKeysBody(
+                api_key="ak", api_secret="asec", access_token="at", access_secret="atsec"))
+        self.assertTrue(out["ok"])
+        self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
+
+
 class XAnalyticsTests(unittest.TestCase):
     def test_aggregates_public_metrics(self):
         import pipeline.x as xt
@@ -227,10 +267,10 @@ class XAnalyticsTests(unittest.TestCase):
                                                "reply_count": 0, "quote_count": 0,
                                                "impression_count": 50}}]}
 
-        def api_get(access, path, params=None):
+        def api_get(auth, path, params=None):
             return me if path == "/users/me" else tweets
 
-        with mock.patch.object(xt, "_bearer", return_value="tok"), \
+        with mock.patch.object(xt, "_account_auth", return_value={"bearer": "tok"}), \
              mock.patch.object(xt, "_api_get", side_effect=api_get):
             data = xt.fetch_x_analytics("cid", "sec", account="acc1")
         self.assertEqual(data["channel"]["followers_count"], 100)
@@ -240,7 +280,7 @@ class XAnalyticsTests(unittest.TestCase):
 
     def test_no_auth_returns_empty(self):
         import pipeline.x as xt
-        with mock.patch.object(xt, "_bearer", return_value=None):
+        with mock.patch.object(xt, "_account_auth", return_value=None):
             data = xt.fetch_x_analytics("cid", "sec", account="acc1")
         self.assertEqual(data, {"channel": {}, "videos": []})
 
