@@ -74,6 +74,7 @@ REDIRECT_URI = f"http://127.0.0.1:{REDIRECT_PORT}/callback"
 X_MAX_VIDEO_SECONDS = 140
 X_MAX_VIDEO_BYTES = 512 * 1024 * 1024
 TWEET_TEXT_LIMIT = 280
+TWEET_TEXT_LIMIT_PREMIUM = 25000  # X Premium long posts
 
 _CONFIG_DIR = Path.home() / ".config" / "video-generator"
 _X_TOKEN_PATH = _CONFIG_DIR / "x_token.json"
@@ -643,8 +644,8 @@ def _chunked_upload(auth: dict, video_path: str, progress_callback=None,
 
 
 def _post_tweet(auth: dict, text: str, media_id: str | None = None,
-                reply_to: str | None = None) -> dict:
-    body: dict[str, Any] = {"text": text[:TWEET_TEXT_LIMIT]}
+                reply_to: str | None = None, max_len: int = TWEET_TEXT_LIMIT) -> dict:
+    body: dict[str, Any] = {"text": text[:max_len]}
     if media_id:
         body["media"] = {"media_ids": [media_id]}
     if reply_to:
@@ -679,6 +680,8 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
         premium = bool((_load_token(account) or {}).get("premium"))
 
     decision = decide_post_target(video_path, premium, youtube_url)
+    # Premium accounts can post long text; others are capped at 280.
+    limit = TWEET_TEXT_LIMIT_PREMIUM if premium else TWEET_TEXT_LIMIT
     try:
         if decision["action"] == "skip":
             logger.warning("X post skipped: %s", decision["reason"])
@@ -686,7 +689,7 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                     "fell_back_to_link": False, "skipped": True, "reason": decision["reason"]}
         if decision["action"] == "post_link":
             link_text = f"{text}\n{youtube_url}".strip()
-            data = _post_tweet(auth, link_text)
+            data = _post_tweet(auth, link_text, max_len=limit)
             tid = data.get("id", "")
             return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
                     "fell_back_to_link": True, "skipped": False, "reason": decision["reason"]}
@@ -698,13 +701,13 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
         category = "amplify_video" if long else "tweet_video"
         try:
             media_id = _chunked_upload(auth, video_path, progress_callback, media_category=category)
-            data = _post_tweet(auth, text, media_id=media_id)
+            data = _post_tweet(auth, text, media_id=media_id, max_len=limit)
         except Exception as exc:
             if not (long and youtube_url):
                 raise
             logger.warning("X native long-video post failed (%s); posting the YouTube link instead.",
                            str(exc)[:160])
-            data = _post_tweet(auth, f"{text}\n{youtube_url}".strip())
+            data = _post_tweet(auth, f"{text}\n{youtube_url}".strip(), max_len=limit)
             tid = data.get("id", "")
             return {"tweet_id": tid, "url": _tweet_url(account, tid), "error": "",
                     "fell_back_to_link": True, "skipped": False,

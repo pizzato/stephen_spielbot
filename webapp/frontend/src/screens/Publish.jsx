@@ -246,7 +246,8 @@ export default function Publish({ initialWorkDir, go }) {
     setXBusy(true); setXError(''); setXStatus('Posting to X…'); setXUrl('')
     let pollTimer = null
     try {
-      const { task_id } = await api.xPost({ work_dir: workDir, title, account: xacc?.id || '' })
+      // X posts the description body (before the style's sign-off), not the title.
+      const { task_id } = await api.xPost({ work_dir: workDir, title, text: description, account: xacc?.id || '' })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -304,6 +305,7 @@ export default function Publish({ initialWorkDir, go }) {
                 </>)}
                 {dest.x && xAccounts.length === 0 && <span className="muted" style={{ fontSize: 12 }}>No account connected (Settings → X)</span>}
               </div>
+              {willX && <div className="muted" style={{ fontSize: 11.5 }}>X posts the video description (the part before the style’s sign-off), not the title.</div>}
               {willX && !xacc?.premium && (
                 <div className="muted" style={{ fontSize: 11.5 }}>
                   X is non-Premium: videos over 2m20s post the YouTube link instead{(willYouTube || youtubeUrl) ? '' : ' — enable YouTube too, or it won’t post'}.
@@ -311,7 +313,7 @@ export default function Publish({ initialWorkDir, go }) {
               )}
             </div>
           </Field>
-          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters. Also used as the X post text.">
+          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters (YouTube title).">
             <input className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
           </Field>
           {dest.youtube && (<>

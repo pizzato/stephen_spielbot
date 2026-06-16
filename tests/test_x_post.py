@@ -216,6 +216,37 @@ class XImportTokensTests(unittest.TestCase):
         self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
 
 
+class XPostTextTests(unittest.TestCase):
+    """X post text = the description body, before the style's sign-off suffix."""
+
+    def test_strips_style_suffix(self):
+        wd = Path("/tmp/film")
+        with mock.patch.object(backend, "_work_dir_style_name", return_value="S"), \
+             mock.patch.object(backend.gapp, "style_settings",
+                               return_value={"description_suffix": "SIGN-OFF."}):
+            body = backend._strip_description_suffix("Hello world.\n\nSIGN-OFF.", wd, {})
+        self.assertEqual(body, "Hello world.")
+
+    def test_prefers_passed_description_over_cached(self):
+        wd = Path("/tmp/film")
+        with mock.patch.object(backend, "_work_dir_style_name", return_value="S"), \
+             mock.patch.object(backend.gapp, "style_settings", return_value={"description_suffix": "SIG"}), \
+             mock.patch.object(backend, "_cached_description", return_value="Cached\n\nSIG"):
+            self.assertEqual(backend._x_post_text_for(wd, {}, passed="Edited body.\n\nSIG", fallback="Title"),
+                             "Edited body.")
+
+    def test_falls_back_to_cached_then_title(self):
+        wd = Path("/tmp/film")
+        with mock.patch.object(backend, "_work_dir_style_name", return_value="S"), \
+             mock.patch.object(backend.gapp, "style_settings", return_value={"description_suffix": "SIG"}), \
+             mock.patch.object(backend, "_cached_description", return_value="Cached body\n\nSIG"):
+            self.assertEqual(backend._x_post_text_for(wd, {}, passed="", fallback="Title"), "Cached body")
+        with mock.patch.object(backend, "_work_dir_style_name", return_value="S"), \
+             mock.patch.object(backend.gapp, "style_settings", return_value={"description_suffix": "SIG"}), \
+             mock.patch.object(backend, "_cached_description", return_value=""):
+            self.assertEqual(backend._x_post_text_for(wd, {}, passed="", fallback="Title"), "Title")
+
+
 class XLongVideoFallbackTests(unittest.TestCase):
     """Premium accounts still hit the API's lower video-length cap (issue #107).
     post_video should fall back to the YouTube link when X rejects the native
@@ -234,7 +265,7 @@ class XLongVideoFallbackTests(unittest.TestCase):
                                  premium=True, youtube_url=youtube_url)
 
     def test_falls_back_to_link_when_native_rejected(self):
-        def post_tweet(auth, text, media_id=None, reply_to=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
             if media_id:
                 raise RuntimeError("403 longer than 2 minutes")
             return {"id": "L1"}
@@ -244,7 +275,7 @@ class XLongVideoFallbackTests(unittest.TestCase):
         self.assertFalse(res.get("error"))
 
     def test_no_link_surfaces_the_error(self):
-        def post_tweet(auth, text, media_id=None, reply_to=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
             if media_id:
                 raise RuntimeError("403 longer than 2 minutes")
             return {"id": "L1"}
@@ -253,7 +284,7 @@ class XLongVideoFallbackTests(unittest.TestCase):
         self.assertIn("longer than", res["error"].lower())
 
     def test_native_success_no_fallback(self):
-        res = self._post_video(lambda auth, text, media_id=None, reply_to=None: {"id": "N1"})
+        res = self._post_video(lambda auth, text, media_id=None, reply_to=None, max_len=None: {"id": "N1"})
         self.assertFalse(res["fell_back_to_link"])
         self.assertEqual(res["tweet_id"], "N1")
 
