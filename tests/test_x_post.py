@@ -321,6 +321,52 @@ class XLongVideoFallbackTests(unittest.TestCase):
         self.assertFalse(res["fell_back_to_link"])
         self.assertEqual(res["tweet_id"], "N1")
 
+    def test_falls_back_when_probe_underread_but_x_says_too_long(self):
+        # Duration probe under-read (ffprobe missing -> 0 -> long False), but X
+        # rejects for length: X's verdict still triggers the link fallback.
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+            if media_id:
+                raise RuntimeError("403: not allowed to post a video longer than 2 minutes")
+            return {"id": "L2"}
+        res = self._post_video(post_tweet, duration=0)
+        self.assertTrue(res["fell_back_to_link"])
+        self.assertEqual(res["tweet_id"], "L2")
+        self.assertFalse(res.get("error"))
+
+    def test_short_video_other_error_surfaces(self):
+        # A non-length failure must surface, not silently post a link.
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+            if media_id:
+                raise RuntimeError("503 service unavailable")
+            return {"id": "L3"}
+        res = self._post_video(post_tweet, duration=0)
+        self.assertFalse(res["fell_back_to_link"])
+        self.assertIn("503", res["error"])
+
+
+class XVideoTooLongDetectionTests(unittest.TestCase):
+    """_is_x_video_too_long keys the link fallback off X's own length rejection."""
+
+    def test_detects_from_response_body(self):
+        import pipeline.x as xt
+        class R:
+            text = '{"detail":"This user is not allowed to post a video longer than 2 minutes."}'
+        e = RuntimeError("403 Client Error: Forbidden")
+        e.response = R()
+        self.assertTrue(xt._is_x_video_too_long(e))
+
+    def test_detects_from_str_when_no_response(self):
+        import pipeline.x as xt
+        self.assertTrue(xt._is_x_video_too_long(RuntimeError("video longer than 2 minutes")))
+
+    def test_ignores_unrelated_errors(self):
+        import pipeline.x as xt
+        class R:
+            text = '{"detail":"duplicate content"}'
+        e = RuntimeError("403"); e.response = R()
+        self.assertFalse(xt._is_x_video_too_long(e))
+        self.assertFalse(xt._is_x_video_too_long(RuntimeError("rate limit exceeded")))
+
 
 class XImportOAuth1Tests(unittest.TestCase):
     def test_valid_keys_save_oauth1_token(self):
