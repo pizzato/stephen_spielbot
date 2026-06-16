@@ -65,7 +65,7 @@ export default function Remix({ workDir, go }) {
         <div className="row gap-10 reveal reveal-d1 row--wrap">
           {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
           <Button variant="ghost" icon="film" onClick={() => go('editfilm', { workDir: data.work_dir || workDir })}>Edit</Button>
-          <Button variant="primary" icon="youtube" onClick={() => go('youtube', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
+          <Button variant="primary" icon="upload" onClick={() => go('publish', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
           {confirmDel ? (
             <>
               <Button variant="danger" icon="trash-can" disabled={deleting} onClick={del}>{deleting ? 'Deleting…' : 'Confirm delete'}</Button>

@@ -160,9 +160,9 @@ export default function Home({ go }) {
           <div className="muted mt-8" style={{ fontSize: 13 }}>requests waiting to render</div>
         </Card>
 
-        <Card span={6} className="reveal reveal-d4" link onClick={() => go('youtube')}>
-          <div className="card__head"><span className="label-sm">YouTube</span><span className="card__arrow"><Icon name="youtube" brand /></span></div>
-          <p className="body-1" style={{ fontSize: 13.5, marginTop: 0 }}>Pull comments, evaluate requests, generate fresh ideas, and publish finished films.</p>
+        <Card span={6} className="reveal reveal-d4" link onClick={() => go('community')}>
+          <div className="card__head"><span className="label-sm">Community</span><span className="card__arrow"><Icon name="comments" /></span></div>
+          <p className="body-1" style={{ fontSize: 13.5, marginTop: 0 }}>Pull comments and mentions across YouTube and X, evaluate requests, and reply.</p>
           <div className="row center gap-10 mt-16"><Chip tone="ok" dot>@StephenSpielbot</Chip></div>
         </Card>
 
