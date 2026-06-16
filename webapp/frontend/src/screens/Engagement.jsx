@@ -15,7 +15,7 @@ function fmtDate(ts) {
 }
 
 const PHASE_LABEL = {
-  fetching: 'Fetching channel history & first-3-day views…',
+  fetching: 'Fetching every channel’s history & first-3-day views…',
   embedding: 'Computing embeddings… (first run downloads the model, ~130 MB)',
   training: 'Training & cross-validating…',
   done: 'Done.',
@@ -71,9 +71,7 @@ export default function Engagement() {
   const [phase, setPhase] = useState('')
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
-  // One model per channel (issue #22) — the selector picks whose model is shown/built.
-  const [channels, setChannels] = useState(null)
-  const [channel, setChannel] = useState('')
+  // One global model across all channels/styles (issue #107) — no selector.
   const pollRef = useRef(null)
 
   // try-an-idea predictor (live — estimates as you type)
@@ -83,24 +81,19 @@ export default function Engagement() {
   const [pred, setPred] = useState(null)
   const [predicting, setPredicting] = useState(false)
 
-  const load = (ch = channel) => {
+  const load = () => {
     setLoading(true)
-    return api.engagementStatus(ch).then(setStatus).catch((e) => setError(e.message)).finally(() => setLoading(false))
+    return api.engagementStatus().then(setStatus).catch((e) => setError(e.message)).finally(() => setLoading(false))
   }
   useEffect(() => {
-    api.ytChannels().then((r) => {
-      const list = r.channels || []
-      setChannels(list)
-      setChannel((c) => c || list[0]?.id || '')
-    }).catch(() => setChannels([]))
+    load()
     return () => clearTimeout(pollRef.current)
   }, [])
-  useEffect(() => { if (channels !== null) load() }, [channel, channels])
 
   const build = async () => {
     setBuilding(true); setError(''); setNote(''); setPhase('fetching')
     try {
-      const { task_id } = await api.engagementBuild(channel)
+      const { task_id } = await api.engagementBuild()
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -122,11 +115,11 @@ export default function Engagement() {
     if (!tTitle.trim() && !tDesc.trim()) { setPred(null); setPredicting(false); return }
     setPredicting(true)
     const t = setTimeout(() => {
-      api.engagementPredict({ title: tTitle, description: tDesc, is_short: tShort, channel })
+      api.engagementPredict({ title: tTitle, description: tDesc, is_short: tShort })
         .then(setPred).catch(() => setPred(null)).finally(() => setPredicting(false))
     }, 400)
     return () => clearTimeout(t)
-  }, [tTitle, tDesc, tShort, channel])
+  }, [tTitle, tDesc, tShort])
 
   const available = status?.available
   const content = status?.content
@@ -141,11 +134,6 @@ export default function Engagement() {
           <h1 className="display-md reveal reveal-d1">Predict a video's reach</h1>
         </div>
         <div className="row center gap-10 reveal reveal-d1">
-          {(channels || []).length > 1 && (
-            <select className="select" value={channel} onChange={(e) => setChannel(e.target.value)} style={{ maxWidth: 220 }}>
-              {(channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
-            </select>
-          )}
           <Button variant={available ? 'ghost' : 'primary'} icon="wand-magic-sparkles"
             disabled={building} onClick={build}>
             {building ? 'Building…' : (available ? 'Rebuild model' : 'Build model')}
@@ -178,7 +166,7 @@ export default function Engagement() {
               <p className="muted" style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 640 }}>
                 {status?.needs_rebuild
                   ? 'A model exists but is out of date (different library version or feature set). Rebuild it to use predictions again.'
-                  : "Build a model from your channel's history to estimate how many views a new idea will get in its first 3 days. Predictions then appear on the Create screen and on YouTube ideas, with posting-time guidance on the Publish screen."}
+                  : "Build one model from all your channels' history to estimate how many views a new idea will get in its first 3 days. Predictions then appear on the Create screen and on AI ideas, with posting-time guidance on the Publish screen."}
               </p>
             </div>
             <Button variant="primary" icon="wand-magic-sparkles" disabled={building} onClick={build}>
