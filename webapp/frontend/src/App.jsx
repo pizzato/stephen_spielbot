@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Sidebar, Banner } from './components.jsx'
+import { Sidebar, Banner, Icon } from './components.jsx'
 import { api } from './api.js'
 import { parseHash, buildHash, nameOf, pathOf } from './nav.js'
 import Home from './screens/Home.jsx'
@@ -30,6 +30,8 @@ export default function App() {
   // A screen can register a guard here to veto navigating away — Settings uses it
   // to warn about unsaved edits. Returns false to cancel the navigation.
   const leaveGuardRef = useRef(null)
+  // Mobile nav: ≤720px the sidebar collapses into a hamburger-triggered drawer.
+  const [menuOpen, setMenuOpen] = useState(false)
 
   useEffect(() => {
     api.getConfig().then(setMeta).catch(() => {})
@@ -96,6 +98,7 @@ export default function App() {
   }, [])
 
   const go = useCallback((id, payload) => {
+    setMenuOpen(false)  // any navigation closes the mobile drawer
     // Video-scoped pages carry the work_dir basename in the URL. Resolve the
     // destination first so an active screen can veto a *real* navigation (a
     // changed URL) before we run any side effects below.
@@ -257,8 +260,16 @@ export default function App() {
   const uiWait = uiWorker?.active && !uiWorker.available && uiWorker.eta_text
 
   return (
-    <div className="shell">
+    <div className={`shell${menuOpen ? ' is-nav-open' : ''}`}>
+      {/* Mobile top bar — the hamburger opens the sidebar as a drawer (≤720px). */}
+      <header className="topbar">
+        <button className="topbar__menu" onClick={() => setMenuOpen(true)} aria-label="Open menu">
+          <Icon name="bars" />
+        </button>
+        <span className="topbar__title">Spielbot</span>
+      </header>
       <Sidebar route={route} go={go} badges={badges} />
+      <div className="scrim" onClick={() => setMenuOpen(false)} aria-hidden="true" />
       <main className="main" key={route}>
         {uiWait && (
           <Banner tone="info">A render worker for the UI will be free in {uiWorker.eta_text}.</Banner>
