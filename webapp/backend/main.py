@@ -3075,10 +3075,23 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         st = xt.check_auth_status(cid, secret, account=account)
         premium = bool(st.get("premium"))
         youtube_url = _youtube_url_for_work_dir(wd)
+        # Attach the same script-based caption track the YouTube upload uses, so the
+        # X video carries CC too. Reuses the film's channel language + upload_captions
+        # preference (single source of truth); best-effort, like YouTube's captions.
+        language, attach_captions = _upload_prefs_for_channel(cfg, _channel_for_work_dir(wd))
+        caption_file = ""
+        if attach_captions:
+            try:
+                from pipeline import captions as _captions
+                _srt = _captions.build_srt(wd)
+                caption_file = str(_srt) if _srt else ""
+            except Exception:
+                caption_file = ""
         with _track_op("Posting to X", body_dict.get("title", "")):
             result = xt.post_video(
                 cid, secret, str(final), text, account=account,
-                premium=premium, youtube_url=youtube_url)
+                premium=premium, youtube_url=youtube_url,
+                captions_path=caption_file, language=language)
     except Exception as e:
         _x_post_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
         _x_auto_release_on_failure(wd)

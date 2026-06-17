@@ -63,6 +63,8 @@ TOKEN_URL = "https://api.x.com/2/oauth2/token"
 API_BASE = "https://api.x.com/2"
 UPLOAD_URL = f"{API_BASE}/media/upload"
 UPLOAD_URL_V11 = "https://upload.twitter.com/1.1/media/upload.json"  # OAuth 1.0a media upload
+SUBTITLES_URL = f"{API_BASE}/media/subtitles"  # OAuth 2.0 bearer subtitle association
+SUBTITLES_URL_V11 = "https://upload.twitter.com/1.1/media/subtitles/create.json"  # OAuth 1.0a
 
 # OAuth 2.0 scopes. ``media.write`` is required to upload media under user
 # context; ``offline.access`` yields a refresh token (access tokens last ~2h).
@@ -595,19 +597,21 @@ def decide_post_target(video_path: str, premium: bool, youtube_url: str = "",
 # ── Video upload + posting ────────────────────────────────────────────────────
 
 def _chunked_upload(auth: dict, video_path: str, progress_callback=None,
-                    media_category: str = "tweet_video") -> str:
-    """Upload a video via the chunked media endpoint (INIT/APPEND/FINALIZE/
-    STATUS). OAuth 1.0a uses the v1.1 endpoint (the classic media upload, which
-    needs only the app's Read+Write permission — no media.write scope); OAuth2
-    bearer uses the v2 endpoint. ``media_category`` is ``tweet_video`` for short
-    clips or ``amplify_video`` for longer ones (the API's longer-video category).
+                    media_category: str = "tweet_video",
+                    media_type: str = "video/mp4") -> str:
+    """Upload media via the chunked endpoint (INIT/APPEND/FINALIZE/STATUS).
+    OAuth 1.0a uses the v1.1 endpoint (the classic media upload, which needs only
+    the app's Read+Write permission — no media.write scope); OAuth2 bearer uses
+    the v2 endpoint. ``media_category`` is ``tweet_video`` for short clips,
+    ``amplify_video`` for longer ones (the API's longer-video category), or
+    ``subtitles`` for an SRT track; ``media_type`` is the MIME type of the file.
     Returns the media id. Raises on failure."""
     url = UPLOAD_URL_V11 if auth.get("oauth1") is not None else UPLOAD_URL
     size = Path(video_path).stat().st_size
 
     init = _xreq("POST", url, auth, data={
         "command": "INIT", "total_bytes": size,
-        "media_type": "video/mp4", "media_category": media_category,
+        "media_type": media_type, "media_category": media_category,
     }, timeout=60)
     init.raise_for_status()
     init_json = init.json()
@@ -648,6 +652,48 @@ def _chunked_upload(auth: dict, video_path: str, progress_callback=None,
     return str(media_id)
 
 
+# Friendly CC-track labels for the languages the pipeline captions in; anything
+# else falls back to the uppercased code (it's only the track's display name).
+_LANGUAGE_DISPLAY_NAMES = {
+    "en": "English", "es": "Spanish", "pt": "Portuguese", "fr": "French",
+    "de": "German", "it": "Italian", "ja": "Japanese", "zh": "Chinese",
+}
+
+
+def _attach_subtitles(auth: dict, video_media_id: str, srt_path: str,
+                      language: str = "en", media_category: str = "tweet_video") -> None:
+    """Associate an SRT caption track with an already-uploaded video so the tweet's
+    video carries closed captions — the X mirror of YouTube's caption upload.
+
+    Uploads the SRT as a ``subtitles`` media, then calls the subtitle-association
+    endpoint: v1.1 (``subtitle_info.subtitles`` array) for OAuth 1.0a accounts,
+    v2 (``subtitles`` object) for bearer accounts — matching ``_chunked_upload``'s
+    host split. ``media_category`` must match the video's. Raises on failure;
+    callers attach captions best-effort so a failure never blocks the post."""
+    srt_media_id = _chunked_upload(auth, srt_path, media_category="subtitles",
+                                   media_type="text/plain; charset=UTF-8")
+    lang = (language or "en").strip() or "en"
+    name = _LANGUAGE_DISPLAY_NAMES.get(lang.lower(), lang.upper())
+    if auth.get("oauth1") is not None:
+        body = {
+            "media_id": int(video_media_id),
+            "media_category": media_category,
+            "subtitle_info": {"subtitles": [
+                {"media_id": int(srt_media_id), "language_code": lang, "display_name": name},
+            ]},
+        }
+        r = _xreq("POST", SUBTITLES_URL_V11, auth, json=body, timeout=60)
+    else:
+        cat = "AmplifyVideo" if media_category == "amplify_video" else "TweetVideo"
+        body = {
+            "id": str(video_media_id),
+            "media_category": cat,
+            "subtitles": {"id": str(srt_media_id), "language_code": lang, "display_name": name},
+        }
+        r = _xreq("POST", SUBTITLES_URL, auth, json=body, timeout=60)
+    r.raise_for_status()
+
+
 def _post_tweet(auth: dict, text: str, media_id: str | None = None,
                 reply_to: str | None = None, max_len: int = TWEET_TEXT_LIMIT) -> dict:
     body: dict[str, Any] = {"text": text[:max_len]}
@@ -684,12 +730,17 @@ def _is_x_video_too_long(exc: Exception) -> bool:
 
 def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                account: str = "", premium: bool | None = None,
-               youtube_url: str = "", progress_callback=None) -> dict:
+               youtube_url: str = "", progress_callback=None,
+               captions_path: str = "", language: str = "en") -> dict:
     """Post a video to X. Returns
     {tweet_id, url, error, fell_back_to_link, skipped, reason}.
 
     Honours the Premium/length rule: Premium → full video; non-Premium over the
     limit → the YouTube link if one exists, else skip with a warning.
+
+    When ``captions_path`` points to an SRT file, a closed-caption track is
+    attached to the uploaded video (best-effort — a caption failure is logged but
+    never blocks the post, and the link-fallback paths carry no video to caption).
     """
     auth = _account_auth(client_id, client_secret, account)
     if not auth:
@@ -723,6 +774,20 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
         category = "amplify_video" if long else "tweet_video"
         try:
             media_id = _chunked_upload(auth, video_path, progress_callback, media_category=category)
+            if captions_path and Path(captions_path).exists():
+                try:
+                    _attach_subtitles(auth, media_id, captions_path,
+                                      language=language, media_category=category)
+                    logger.info("Attached captions to X video (%s)", Path(captions_path).name)
+                except Exception as cexc:
+                    detail = ""
+                    resp = getattr(cexc, "response", None)
+                    if resp is not None:
+                        try:
+                            detail = (resp.text or "")[:200]
+                        except Exception:
+                            detail = ""
+                    logger.warning("Could not attach captions to X video: %s %s", cexc, detail)
             data = _post_tweet(auth, text, media_id=media_id, max_len=limit)
         except Exception as exc:
             # Fall back to the YouTube link when X rejects the native video for
