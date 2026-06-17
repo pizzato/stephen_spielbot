@@ -501,7 +501,7 @@ def ui_heartbeat() -> dict:
 class GenerateScriptBody(BaseModel):
     video_title: str = ""
     topic: str = ""
-    n_scenes: int = 12
+    n_scenes: int = 6
     visual_style: str | None = None
     auto_approve: bool = False
     voice: str = ""
