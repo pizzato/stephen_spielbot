@@ -408,6 +408,121 @@ class XImportOAuth1Tests(unittest.TestCase):
         self.assertEqual(imp.call_args.kwargs.get("finalize"), backend._finalize_new_x_account)
 
 
+class XCaptionAttachTests(unittest.TestCase):
+    """_attach_subtitles uploads the SRT as a subtitles media, then associates it:
+    the v1.1 subtitle_info.subtitles array for OAuth1, the v2 subtitles object for
+    bearer."""
+
+    def _attach(self, auth, media_category="tweet_video", language="en"):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_chunked_upload", return_value="99") as up, \
+             mock.patch.object(xt, "_xreq", return_value=mock.MagicMock()) as req:
+            xt._attach_subtitles(auth, "7", "/tmp/captions.srt",
+                                 language=language, media_category=media_category)
+        return up, req
+
+    def test_oauth1_uploads_subtitle_and_posts_v11_array_body(self):
+        import pipeline.x as xt
+        up, req = self._attach({"oauth1": object()})
+        self.assertEqual(up.call_args.kwargs.get("media_category"), "subtitles")
+        self.assertEqual(up.call_args.kwargs.get("media_type"), "text/plain; charset=UTF-8")
+        self.assertEqual(req.call_args.args[0], "POST")
+        self.assertEqual(req.call_args.args[1], xt.SUBTITLES_URL_V11)
+        body = req.call_args.kwargs["json"]
+        self.assertEqual(body["media_id"], 7)              # ints for v1.1
+        self.assertEqual(body["media_category"], "tweet_video")
+        sub = body["subtitle_info"]["subtitles"][0]
+        self.assertEqual(sub["media_id"], 99)
+        self.assertEqual(sub["language_code"], "en")
+        self.assertEqual(sub["display_name"], "English")
+
+    def test_bearer_posts_v2_object_body_with_category_enum(self):
+        import pipeline.x as xt
+        _, req = self._attach({"bearer": "t"}, media_category="amplify_video", language="es")
+        self.assertEqual(req.call_args.args[1], xt.SUBTITLES_URL)
+        body = req.call_args.kwargs["json"]
+        self.assertEqual(body["id"], "7")                  # strings for v2
+        self.assertEqual(body["media_category"], "AmplifyVideo")
+        self.assertEqual(body["subtitles"]["id"], "99")
+        self.assertEqual(body["subtitles"]["language_code"], "es")
+        self.assertEqual(body["subtitles"]["display_name"], "Spanish")
+
+
+class XCaptionPostTests(unittest.TestCase):
+    """post_video attaches captions on the native path, and never lets a caption
+    failure block the post."""
+
+    def _post(self, captions_path="/tmp/c.srt", attach_side_effect=None):
+        import pipeline.x as xt
+        posted = {}
+
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+            posted["media_id"] = media_id
+            return {"id": "N1"}
+
+        with mock.patch.object(xt, "_account_auth", return_value={"bearer": "t"}), \
+             mock.patch.object(xt, "decide_post_target",
+                               return_value={"action": "post_full", "reason": "",
+                                             "duration_secs": 10, "size_bytes": 1}), \
+             mock.patch.object(xt, "_chunked_upload", return_value="m1"), \
+             mock.patch.object(xt, "_attach_subtitles", side_effect=attach_side_effect) as att, \
+             mock.patch.object(xt, "_post_tweet", side_effect=post_tweet), \
+             mock.patch("pipeline.x.Path.exists", return_value=True):
+            res = xt.post_video("cid", "sec", "/v.mp4", "Title", account="a",
+                                premium=True, captions_path=captions_path, language="en")
+        return res, att, posted
+
+    def test_attaches_captions_to_uploaded_media_then_posts(self):
+        res, att, posted = self._post()
+        att.assert_called_once()
+        self.assertEqual(att.call_args.args[1], "m1")   # attached to the upload's media id
+        self.assertEqual(posted["media_id"], "m1")      # same media tweeted
+        self.assertEqual(res["tweet_id"], "N1")
+        self.assertFalse(res.get("error"))
+
+    def test_caption_failure_still_posts(self):
+        res, att, _ = self._post(attach_side_effect=RuntimeError("subtitle boom"))
+        att.assert_called_once()
+        self.assertEqual(res["tweet_id"], "N1")          # tweet still went out
+        self.assertFalse(res.get("error"))
+        self.assertFalse(res.get("fell_back_to_link"))   # a caption fail is not a length fail
+
+    def test_no_captions_path_skips_attach(self):
+        res, att, _ = self._post(captions_path="")
+        att.assert_not_called()
+        self.assertEqual(res["tweet_id"], "N1")
+
+
+class XCaptionBackendWiringTests(unittest.TestCase):
+    """_run_x_post_task builds the script-based SRT and forwards it (+ the channel
+    language) to post_video, honouring the channel's upload_captions preference."""
+
+    def _run(self, prefs, srt_path):
+        wd, final = _film_dir()
+        with mock.patch.object(backend, "_x_client_creds", return_value=("cid", "sec")), \
+             mock.patch.object(backend.xt, "check_auth_status",
+                               return_value={"connected": True, "premium": True}), \
+             mock.patch.object(backend.xt, "post_video",
+                               return_value={"tweet_id": "x1", "url": "u", "error": "",
+                                             "fell_back_to_link": False, "skipped": False, "reason": ""}) as pv, \
+             mock.patch.object(backend, "_channel_for_work_dir", return_value="ch"), \
+             mock.patch.object(backend, "_upload_prefs_for_channel", return_value=prefs), \
+             mock.patch("pipeline.captions.build_srt", return_value=srt_path), \
+             mock.patch.object(backend.gapp, "_write_job_meta"), \
+             mock.patch.object(backend.yt, "update_queue_item"):
+            backend._run_x_post_task("t1", {"text": "Hi", "title": "T", "account": "a"}, wd, final)
+        return pv
+
+    def test_forwards_caption_path_and_language(self):
+        pv = self._run(("pt", True), Path("/tmp/captions.srt"))
+        self.assertEqual(pv.call_args.kwargs.get("captions_path"), "/tmp/captions.srt")
+        self.assertEqual(pv.call_args.kwargs.get("language"), "pt")
+
+    def test_captions_disabled_forwards_empty_path(self):
+        pv = self._run(("en", False), Path("/tmp/captions.srt"))
+        self.assertEqual(pv.call_args.kwargs.get("captions_path"), "")
+
+
 class XAnalyticsTests(unittest.TestCase):
     def test_aggregates_public_metrics(self):
         import pipeline.x as xt
