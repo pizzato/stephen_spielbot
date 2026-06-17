@@ -90,6 +90,9 @@ body {
    App shell
    ============================================================ */
 .shell { display: grid; grid-template-columns: 248px 1fr; min-height: 100%; }
+/* Mobile chrome — hidden on desktop; the ≤720px query turns these on. */
+.topbar { display: none; }
+.scrim { display: none; }
 
 .sidebar {
   position: sticky; top: 0; align-self: start;
@@ -347,7 +350,37 @@ body {
 }
 @media (max-width: 720px) {
   .shell { grid-template-columns: 1fr; }
-  .sidebar { display: none; }
+
+  /* Top bar with a hamburger replaces the always-on sidebar. */
+  .topbar {
+    display: flex; align-items: center; gap: 12px;
+    position: sticky; top: 0; z-index: 30;
+    padding: 12px 16px;
+    background: var(--surface); border-bottom: 1px solid var(--line);
+  }
+  .topbar__menu {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border-radius: var(--r-md);
+    border: 1px solid var(--line); background: var(--surface-2);
+    color: var(--ink); font-size: 17px; cursor: pointer;
+  }
+  .topbar__title { font-weight: 800; font-size: 15.5px; letter-spacing: -0.01em; }
+
+  /* The sidebar slides in as a drawer instead of being hidden. */
+  .sidebar {
+    position: fixed; top: 0; left: 0; z-index: 50;
+    width: 264px; max-width: 84vw; height: 100vh; overflow-y: auto;
+    transform: translateX(-100%); transition: transform .22s ease;
+    box-shadow: var(--shadow-lg);
+  }
+  .shell.is-nav-open .sidebar { transform: translateX(0); }
+
+  /* Backdrop behind the open drawer; tap to close. */
+  .shell.is-nav-open .scrim {
+    display: block; position: fixed; inset: 0; z-index: 40;
+    background: rgba(0, 0, 0, .42);
+  }
+
   .main { padding: 22px 18px 60px; }
   .bento > * { grid-column: span 12 !important; }
 }
