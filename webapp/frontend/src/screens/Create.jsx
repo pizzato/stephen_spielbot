@@ -44,7 +44,7 @@ export default function Create({ seed, meta, onGenerated }) {
 
   const [videoTitle, setVideoTitle] = useState(seed?.title || '')
   const [direction, setDirection] = useState(seed?.description || '')
-  const [scenes, setScenes] = useState(seed?.scenes || profile?.n_scenes || 12)
+  const [scenes, setScenes] = useState(seed?.scenes || profile?.n_scenes || 6)
   const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
   const [robotic, setRobotic] = useState(!!profile?.voice_robotic)
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')

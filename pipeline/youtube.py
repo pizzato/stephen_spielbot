@@ -753,7 +753,10 @@ def add_to_queue(comment: dict, final_title: str, source: str = "",
         "commenter": comment.get("commenter", ""),
         "comment_text": comment.get("text", ""),
         "final_title": final_title,
-        "suggested_scene_count": comment.get("suggested_scene_count", 20),
+        # 0 when the source carries no count (comment pickups never stamp one) →
+        # the render falls back to the item's style n_scenes, so auto videos match
+        # the short default instead of always rendering 20 scenes.
+        "suggested_scene_count": comment.get("suggested_scene_count", 0),
         "interestingness": float(comment.get("interestingness", 0.5)),
         "source": source,
         "status": "pending",
