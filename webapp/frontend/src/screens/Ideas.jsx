@@ -106,8 +106,9 @@ export default function Ideas({ go, meta = {} }) {
     setIdeas((arr) => arr.filter((it) => ideaKey(it) !== key && (it.title || it.final_title || it) !== title))
   }
   // Per-idea video length: stored on the idea itself so each card keeps its own
-  // choice. New ideas have no length and default to 'medium' until toggled.
-  const ideaLength = (idea) => idea?.length || 'medium'
+  // choice. New ideas have no length and default to 'short' (portrait, 6 scenes)
+  // until toggled.
+  const ideaLength = (idea) => idea?.length || 'short'
   const setIdeaLength = (idea, length) => {
     const key = ideaKey(idea)
     setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, length } : it)))

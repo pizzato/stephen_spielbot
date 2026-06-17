@@ -124,7 +124,7 @@ def _build_resolutions() -> dict:
 
 
 _RESOLUTIONS = _build_resolutions()
-_DEFAULT_ORIENTATION = "Landscape"
+_DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
 
@@ -169,7 +169,7 @@ DEFAULT_CFG = {
     "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
-    "default_n_scenes": 20,
+    "default_n_scenes": 6,
     "default_visual_style": "",
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
@@ -1686,7 +1686,9 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
         "video_id": "",
         "commenter": "AI Suggestion",
         "text": suggestion.get("reason", ""),
-        "suggested_scene_count": 20,
+        # 0 → the render falls back to the item's style n_scenes (the short
+        # default), so auto-suggested videos match the rest instead of forcing 20.
+        "suggested_scene_count": 0,
         "interestingness": suggestion.get("interestingness", 0.7),
     }
     queue_item = yt.add_to_queue(fake_comment, suggestion["title"], source="suggestion")
