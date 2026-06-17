@@ -6,7 +6,7 @@ W ?=
 
 .PHONY: install download-models download-flux download-flux-cluster \
         start stop restart restart-server status logs worker-agent ui-worker help \
-        web-install web-build web web-dev \
+        web-install web-build web web-dev tailscale \
         launchd-install launchd-uninstall \
         lint lint-fix lint-web ensure-ruff
 
@@ -118,6 +118,21 @@ web-dev:
 	  cd $(FRONTEND) && npm run dev; \
 	  kill %1 2>/dev/null || true
 
+## Expose the web app to your other devices over Tailscale — tailnet-only HTTPS,
+## no rebind (tailscaled proxies localhost:8001). Open the printed https URL on a
+## device connected to your tailnet (e.g. your phone). Off: tailscale serve reset.
+tailscale:
+	@TS=$$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale); \
+	if [ ! -x "$$TS" ]; then \
+	    echo "Tailscale CLI not found. Install from https://tailscale.com/download, then run 'tailscale up'."; \
+	    exit 1; \
+	fi; \
+	"$$TS" serve --bg $(WEB_PORT) && { \
+	    echo ""; \
+	    echo "Reachable from your Tailscale devices at the https URL shown above."; \
+	    echo "Turn it off with:  tailscale serve reset"; \
+	}
+
 # ── Linting / dead-code ──
 RUFF := .venv/bin/ruff
 ensure-ruff:
@@ -171,6 +186,7 @@ help:
 	@echo "  web             Build the SPA and serve UI + API (localhost:8001)"
 	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"
 	@echo "  web-build       Build the React frontend to webapp/frontend/dist"
+	@echo "  tailscale       Expose the web app to your Tailscale devices (tailnet-only HTTPS)"
 	@echo ""
 	@echo "Linting / dead-code:"
 	@echo "  lint            Lint Python with ruff (unused imports/vars, undefined names)"
