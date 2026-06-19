@@ -43,7 +43,7 @@ class EnsureChannelsTests(unittest.TestCase):
                          [{"id": "default", "name": "", "channel_id": "",
                            "engagement_prompt": "", "auto_respond": False,
                            "video_category": "", "language": "en",
-                           "upload_captions": True}])
+                           "upload_captions": True, "publish_per_day": 0}])
 
     def test_no_seed_without_legacy_token(self):
         cfg = {"youtube_channels": []}
@@ -63,7 +63,7 @@ class EnsureChannelsTests(unittest.TestCase):
                          [{"id": "UC1", "name": "One", "channel_id": "UC1",
                            "engagement_prompt": "", "auto_respond": False,
                            "video_category": "", "language": "en",
-                           "upload_captions": True}])
+                           "upload_captions": True, "publish_per_day": 0}])
 
     def test_preserves_explicit_language_and_caption_toggle(self):
         cfg = {"youtube_channels": [
@@ -73,6 +73,20 @@ class EnsureChannelsTests(unittest.TestCase):
         entry = cfg["youtube_channels"][0]
         self.assertEqual(entry["language"], "es")
         self.assertFalse(entry["upload_captions"])
+
+    def test_normalizes_publish_per_day(self):
+        # Whole numbers (and numeric strings) stay ints, fractions stay floats,
+        # and anything <= 0 or unparseable collapses to 0 (no throttle).
+        cfg = {"youtube_channels": [
+            {"id": "UC1", "publish_per_day": 3},
+            {"id": "UC2", "publish_per_day": "2"},
+            {"id": "UC3", "publish_per_day": 2.5},
+            {"id": "UC4", "publish_per_day": -1},
+            {"id": "UC5", "publish_per_day": "nope"},
+        ]}
+        gapp._ensure_channels(cfg)
+        self.assertEqual([c["publish_per_day"] for c in cfg["youtube_channels"]],
+                         [3, 2, 2.5, 0, 0])
 
     def test_clears_dangling_style_refs(self):
         cfg = {

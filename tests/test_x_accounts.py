@@ -38,7 +38,8 @@ class EnsureXAccountsTests(unittest.TestCase):
         self.assertEqual(cfg["x_accounts"],
                          [{"id": "default", "name": "", "account_id": "",
                            "premium": False, "engagement_prompt": "",
-                           "auto_respond": False, "language": "en"}])
+                           "auto_respond": False, "language": "en",
+                           "publish_per_day": 0}])
 
     def test_no_seed_without_legacy_token(self):
         cfg = {"x_accounts": []}
@@ -57,7 +58,8 @@ class EnsureXAccountsTests(unittest.TestCase):
             gapp._ensure_x_accounts(cfg)
         self.assertEqual(cfg["x_accounts"],
                          [{"id": "1", "name": "one", "account_id": "1", "premium": True,
-                           "engagement_prompt": "", "auto_respond": False, "language": "en"}])
+                           "engagement_prompt": "", "auto_respond": False, "language": "en",
+                           "publish_per_day": 0}])
 
     def test_preserves_engagement_and_language(self):
         cfg = {"x_accounts": [
@@ -68,6 +70,21 @@ class EnsureXAccountsTests(unittest.TestCase):
         self.assertEqual(entry["engagement_prompt"], "be witty")
         self.assertTrue(entry["auto_respond"])
         self.assertEqual(entry["language"], "es")
+
+    def test_normalizes_publish_per_day(self):
+        # Whole numbers (and numeric strings) stay ints, fractions stay floats,
+        # and anything <= 0 or unparseable collapses to 0 (no throttle).
+        cfg = {"x_accounts": [
+            {"id": "1", "publish_per_day": 3},
+            {"id": "2", "publish_per_day": "2"},
+            {"id": "3", "publish_per_day": 2.5},
+            {"id": "4", "publish_per_day": -1},
+            {"id": "5", "publish_per_day": "nope"},
+        ]}
+        with mock.patch.object(Path, "exists", return_value=False):
+            gapp._ensure_x_accounts(cfg)
+        self.assertEqual([a["publish_per_day"] for a in cfg["x_accounts"]],
+                         [3, 2, 2.5, 0, 0])
 
     def test_clears_dangling_style_refs(self):
         cfg = {
