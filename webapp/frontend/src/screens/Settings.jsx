@@ -702,6 +702,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     if (k === 'name' && c.default_style === cur.name) next.default_style = v
     return next
   })
+  // Update one field of one size bucket (small/medium/large) on the current style.
+  const setSizePreset = (bucket, key, value) => {
+    const presets = { ...(st.size_presets || {}) }
+    presets[bucket] = { ...(presets[bucket] || {}), [key]: value }
+    setStyleField('size_presets', presets)
+  }
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -1090,6 +1096,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   <input className="slider" type="range" min={0} max={max} value={st[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />
                 </Field>
               ))}
+            </div>
+          </Card>
+
+          {/* ── Size presets (Small/Medium/Large) ── */}
+          <Card span={12} className="reveal reveal-d3">
+            <span className="label-sm">Size presets</span>
+            <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
+              The Small / Medium / Large one-tap sizes on the AI ideas screen — each sets a scene count and a resolution for this style.
+            </div>
+            <div className="stack gap-22 mt-16">
+              {(meta.size_buckets || ['small', 'medium', 'large']).map((bucket) => {
+                const preset = (st.size_presets || {})[bucket] || (meta.default_size_presets || {})[bucket] || {}
+                return (
+                  <div key={bucket} className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <div style={{ minWidth: 78 }}>
+                      <span className="label-sm" style={{ textTransform: 'capitalize' }}>{bucket}</span>
+                    </div>
+                    <Field label="Scenes">
+                      <input className="input" type="number" min={1} value={preset.scenes ?? ''} style={{ maxWidth: 110 }}
+                        onChange={(e) => setSizePreset(bucket, 'scenes', +e.target.value)} />
+                    </Field>
+                    <div className="grow"><Field label="Resolution">
+                      <ResolutionPicker value={preset.resolution || ''} onChange={(r) => setSizePreset(bucket, 'resolution', r)} meta={meta} />
+                    </Field></div>
+                  </div>
+                )
+              })}
             </div>
           </Card>
         </>)}
