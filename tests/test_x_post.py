@@ -298,7 +298,7 @@ class XLongVideoFallbackTests(unittest.TestCase):
                                  premium=True, youtube_url=youtube_url)
 
     def test_falls_back_to_link_when_native_rejected(self):
-        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
             if media_id:
                 raise RuntimeError("403 longer than 2 minutes")
             return {"id": "L1"}
@@ -308,7 +308,7 @@ class XLongVideoFallbackTests(unittest.TestCase):
         self.assertFalse(res.get("error"))
 
     def test_no_link_surfaces_the_error(self):
-        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
             if media_id:
                 raise RuntimeError("403 longer than 2 minutes")
             return {"id": "L1"}
@@ -317,14 +317,14 @@ class XLongVideoFallbackTests(unittest.TestCase):
         self.assertIn("longer than", res["error"].lower())
 
     def test_native_success_no_fallback(self):
-        res = self._post_video(lambda auth, text, media_id=None, reply_to=None, max_len=None: {"id": "N1"})
+        res = self._post_video(lambda auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False: {"id": "N1"})
         self.assertFalse(res["fell_back_to_link"])
         self.assertEqual(res["tweet_id"], "N1")
 
     def test_falls_back_when_probe_underread_but_x_says_too_long(self):
         # Duration probe under-read (ffprobe missing -> 0 -> long False), but X
         # rejects for length: X's verdict still triggers the link fallback.
-        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
             if media_id:
                 raise RuntimeError("403: not allowed to post a video longer than 2 minutes")
             return {"id": "L2"}
@@ -335,13 +335,62 @@ class XLongVideoFallbackTests(unittest.TestCase):
 
     def test_short_video_other_error_surfaces(self):
         # A non-length failure must surface, not silently post a link.
-        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
             if media_id:
                 raise RuntimeError("503 service unavailable")
             return {"id": "L3"}
         res = self._post_video(post_tweet, duration=0)
         self.assertFalse(res["fell_back_to_link"])
         self.assertIn("503", res["error"])
+
+
+class XMadeWithAITests(unittest.TestCase):
+    """Posts carrying our AI-generated video set made_with_ai=true on
+    POST /2/tweets so X applies the "Made with AI" label; link-only fallbacks
+    (no media uploaded to X) and replies do not."""
+
+    def test_post_tweet_sets_flag_in_body_when_requested(self):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_xreq", return_value=mock.MagicMock()) as req:
+            xt._post_tweet({"bearer": "t"}, "hi", media_id="m1", made_with_ai=True)
+        self.assertIs(req.call_args.kwargs["json"]["made_with_ai"], True)
+
+    def test_post_tweet_omits_flag_by_default(self):
+        import pipeline.x as xt
+        with mock.patch.object(xt, "_xreq", return_value=mock.MagicMock()) as req:
+            xt._post_tweet({"bearer": "t"}, "hi", media_id="m1")
+        self.assertNotIn("made_with_ai", req.call_args.kwargs["json"])
+
+    def _post(self, duration, youtube_url=""):
+        import pipeline.x as xt
+        flags = []
+
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
+            flags.append(made_with_ai)
+            if media_id and duration > xt.X_MAX_VIDEO_SECONDS:
+                raise RuntimeError("403 longer than 2 minutes")
+            return {"id": "T1"}
+
+        with mock.patch.object(xt, "_account_auth", return_value={"bearer": "t"}), \
+             mock.patch.object(xt, "decide_post_target",
+                               return_value={"action": "post_full", "reason": "",
+                                             "duration_secs": duration, "size_bytes": 1}), \
+             mock.patch.object(xt, "_chunked_upload", return_value="m1"), \
+             mock.patch.object(xt, "_post_tweet", side_effect=post_tweet), \
+             mock.patch("pipeline.x.Path.exists", return_value=True):
+            res = xt.post_video("cid", "sec", "/v.mp4", "Title", account="a",
+                                premium=True, youtube_url=youtube_url)
+        return res, flags
+
+    def test_native_video_post_is_flagged(self):
+        res, flags = self._post(duration=10)
+        self.assertFalse(res["fell_back_to_link"])
+        self.assertEqual(flags, [True])         # the AI video post is labelled
+
+    def test_link_fallback_post_is_not_flagged(self):
+        res, flags = self._post(duration=300, youtube_url="https://youtu.be/x")
+        self.assertTrue(res["fell_back_to_link"])
+        self.assertEqual(flags, [True, False])  # native attempt flagged; link fallback not
 
 
 class XVideoTooLongDetectionTests(unittest.TestCase):
@@ -456,7 +505,7 @@ class XCaptionPostTests(unittest.TestCase):
         import pipeline.x as xt
         posted = {}
 
-        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None):
+        def post_tweet(auth, text, media_id=None, reply_to=None, max_len=None, made_with_ai=False):
             posted["media_id"] = media_id
             return {"id": "N1"}
 
