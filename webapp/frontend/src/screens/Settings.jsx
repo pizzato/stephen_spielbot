@@ -682,7 +682,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     return () => { alive = false; clearInterval(id) }
   }, [])
 
-  const set = (k, v) => editCfg((c) => ({ ...c, [k]: v }))
+  const set = (k, v) => editCfg((c) => {
+    const next = { ...c, [k]: v }
+    // Immediate auto-post and scheduled publishing are mutually exclusive —
+    // turning one on clears the other so they can never both be active.
+    if (v && k === 'publish_schedule_enabled') { next.youtube_auto_post = false; next.x_auto_post = false }
+    else if (v && (k === 'youtube_auto_post' || k === 'x_auto_post')) { next.publish_schedule_enabled = false }
+    return next
+  })
 
   // ── Style profiles (issue #66) ──
   // Each style bundles the script/content, render-quality and audio-mix
@@ -736,6 +743,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const setFullyAutomated = (v) => editCfg((c) => {
     const next = { ...c, youtube_fully_automated: v }
     AUTO_FLAGS.forEach((f) => { next[f] = v })
+    // Fully automated uses immediate auto-post, which excludes the schedule.
+    if (v) next.publish_schedule_enabled = false
     return next
   })
 
@@ -1172,7 +1181,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
               <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
               <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
-              <Check checked={!!cfg.youtube_auto_post} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube when a film finishes" />
+              <Check checked={!!cfg.youtube_auto_post} disabled={!!cfg.publish_schedule_enabled} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube the moment a film finishes (off = it waits in the publish queue)" />
               <Field label="Default privacy">
                 <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
               </Field>
@@ -1184,18 +1193,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             <div className="stack gap-16 mt-16">
               <Check checked={!!cfg.x_auto_fetch_evaluate} onChange={(v) => set('x_auto_fetch_evaluate', v)} label="Fetch & evaluate X mentions on a schedule (needs a paid X API tier)" />
               <Check checked={!!cfg.x_auto_approve_comments} onChange={(v) => set('x_auto_approve_comments', v)} label="Auto-approve X requests above the confidence threshold" />
-              <Check checked={!!cfg.x_auto_post} onChange={(v) => set('x_auto_post', v)} label="Auto-post to X when a film finishes — uses the film's style X account; long videos fall back to the YouTube link on non-Premium" />
+              <Check checked={!!cfg.x_auto_post} disabled={!!cfg.publish_schedule_enabled} onChange={(v) => set('x_auto_post', v)} label="Auto-post to X the moment a film finishes — uses the film's style X account; long videos fall back to the YouTube link on non-Premium" />
             </div>
           </Card>
-          {/* ── Publishing schedule — decouples publishing from rendering ── */}
+          {/* ── Publishing schedule — release the queue on a cadence ── */}
           <Card span={12} className="reveal reveal-d3">
             <span className="label-sm">Publishing schedule</span>
             <div className="field__hint" style={{ marginTop: 6 }}>
-              Needs auto-post (above) on. When enabled, finished videos enter a publish queue and are released on each channel/account's own cadence — set the per-channel and per-account <strong>Videos per day</strong> in the YouTube and X tabs. Review the queue under <strong>Publishing → Schedule</strong>.
+              Finished videos always collect in the publish queue (<strong>Publishing → Schedule</strong>) — publishing one manually removes it. Turn this on to release them automatically on each channel/account's own cadence instead of the moment they finish; set the per-channel and per-account <strong>Videos per day</strong> in the YouTube and X tabs. Mutually exclusive with the “auto-post the moment a film finishes” toggles above.
             </div>
             <div className="stack gap-16 mt-16">
-              <Check checked={!!cfg.publish_schedule_enabled} onChange={(v) => set('publish_schedule_enabled', v)}
-                label="Schedule publishing instead of posting the moment a film finishes" />
+              <Check checked={!!cfg.publish_schedule_enabled} disabled={!!cfg.youtube_auto_post || !!cfg.x_auto_post}
+                onChange={(v) => set('publish_schedule_enabled', v)}
+                label="Publish on a schedule instead of the moment a film finishes" />
               <Check checked={cfg.publish_schedule_skip_comment_requests !== false} disabled={!cfg.publish_schedule_enabled}
                 onChange={(v) => set('publish_schedule_skip_comment_requests', v)}
                 label="Let comment-requested videos skip the schedule and post immediately" />
