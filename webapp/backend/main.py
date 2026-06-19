@@ -5278,14 +5278,30 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
             # Still wait for the YouTube link when this video also goes to YouTube
             # (non-Premium long-video fallback) — bypass skips cadence, not this.
             require_link = bool(yt_sub.get("enabled") and yt_sub.get("status") != "done")
-            if bypass or (k not in fired and _eligible(k, interval_min)):
+            # "Publish now" forces X too. But when the same call also starts the
+            # YouTube upload, that upload finishes asynchronously, so X is deferred
+            # here (require_link, no video_id yet) and posts on a later tick. A
+            # one-shot force would then lose to cadence and sink behind the backlog
+            # — X never posts "now". So make the force sticky: persist it while X
+            # waits for the link, honour it on later ticks (bypassing cadence), and
+            # clear it once X is released.
+            x_bypass = bypass or bool(x_sub.get("force"))
+            if x_bypass or (k not in fired and _eligible(k, interval_min)):
                 tid = _claim_and_post_x(p, jc, require_yt_link=require_link)
                 if tid:
-                    x_sub.update(status="publishing", released_at=now, task_id=tid)
+                    x_sub.update(status="publishing", released_at=now, task_id=tid, force=False)
                     pq.update_item(e["id"], x=x_sub)
                     released["x"].append(e["id"])
                     fired.add(k)
                     last[k] = now
+                elif x_bypass:
+                    # Keep the force only while genuinely waiting for the YT link; a
+                    # terminal failure (no account, etc.) must not be force-retried
+                    # every tick — cadence and the attempt cap handle real retries.
+                    want_force = bool(require_link)
+                    if bool(x_sub.get("force")) != want_force:
+                        x_sub.update(force=want_force)
+                        pq.update_item(e["id"], x=x_sub)
     return {kk: v for kk, v in released.items() if v}
 
 

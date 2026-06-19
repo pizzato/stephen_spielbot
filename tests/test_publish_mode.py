@@ -111,5 +111,101 @@ class DropFromPublishQueueTests(TempConfigCase):
         self.assertEqual(len(backend.pq.load_queue()), 1)
 
 
+class StickyForceXTests(TempConfigCase):
+    """'Publish now' on a both-platforms video must still reach X.
+
+    The YouTube upload starts asynchronously, so X is deferred (it waits for the
+    fresh YouTube link in case the video is too long to post natively). A one-shot
+    force would then drop X into the cadence-gated backlog and it would never post
+    'now'. The force must persist until X is actually released.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pq_path = Path(self._tmp.name) / "publish_queue.json"
+        for target, attr, value in [(backend.pq, "PUBLISH_QUEUE_PATH", self.pq_path)]:
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        # _reconcile_publish_queue reads job.json off disk (absent here) and would
+        # error our in-memory entries; _film_job_config reads job_config.json.
+        for name, ret in [("_reconcile_publish_queue", None), ("_film_job_config", {})]:
+            p = mock.patch.object(backend, name, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _entry(self, **over):
+        e = {
+            "id": "e1", "work_dir": "/tmp/wd1", "title": "T", "source": "manual",
+            "created_at": 1.0,
+            "youtube": {"enabled": True, "channel": "chan", "status": "pending"},
+            "x": {"enabled": True, "account": "acct", "status": "pending"},
+        }
+        e.update(over)
+        return e
+
+    def test_forced_publish_defers_x_and_persists_force(self):
+        # YT starts (async upload, not 'done' yet) so X is deferred — but the force
+        # is remembered so a later tick can release it.
+        self.write_config({
+            "youtube_channels": [{"id": "chan", "publish_per_day": 0}],
+            "x_accounts": [{"id": "acct", "publish_per_day": 0}],
+        })
+        backend.pq.save_queue([self._entry()])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt-task"), \
+             mock.patch.object(backend, "_claim_and_post_x", return_value=None) as cpx:
+            out = backend._release_scheduled_publishes(force_id="e1")
+        self.assertTrue(cpx.call_args.kwargs.get("require_yt_link"))  # waited for link
+        q = {e["id"]: e for e in backend.pq.load_queue()}
+        self.assertEqual(q["e1"]["youtube"]["status"], "publishing")
+        self.assertEqual(q["e1"]["x"]["status"], "pending")
+        self.assertTrue(q["e1"]["x"]["force"])  # sticky force persisted
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+    def test_sticky_force_releases_x_next_tick_bypassing_cadence(self):
+        # State after a forced publish: YT done, X pending+force. A recent X post on
+        # the same account means cadence would normally block — force must override.
+        import time
+        e = self._entry()
+        e["youtube"] = {"enabled": True, "channel": "chan", "status": "done",
+                        "video_id": "v", "published_at": 100.0}
+        e["x"] = {"enabled": True, "account": "acct", "status": "pending", "force": True}
+        other = self._entry(id="e0", work_dir="/tmp/wd0", created_at=0.5)
+        other["youtube"] = {"enabled": False}
+        other["x"] = {"enabled": True, "account": "acct", "status": "done",
+                      "tweet_id": "t", "published_at": time.time() - 60}
+        backend.pq.save_queue([other, e])
+        self.write_config({  # 4/day → 6h spacing; the recent post above blocks cadence
+            "youtube_channels": [{"id": "chan", "publish_per_day": 0}],
+            "x_accounts": [{"id": "acct", "publish_per_day": 4}],
+        })
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value=None), \
+             mock.patch.object(backend, "_claim_and_post_x", return_value="x-task") as cpx:
+            out = backend._release_scheduled_publishes()  # NO force_id
+        cpx.assert_called_once()
+        self.assertFalse(cpx.call_args.kwargs.get("require_yt_link"))  # YT done
+        q = {e["id"]: e for e in backend.pq.load_queue()}
+        self.assertEqual(q["e1"]["x"]["status"], "publishing")
+        self.assertFalse(q["e1"]["x"].get("force"))  # cleared on release
+        self.assertEqual(out, {"x": ["e1"]})
+
+    def test_forced_x_terminal_failure_does_not_persist_force(self):
+        # No YouTube target → no link wait. A None here is terminal, not a deferral,
+        # so the force must NOT stick (else it would retry every tick forever).
+        self.write_config({
+            "youtube_channels": [{"id": "chan", "publish_per_day": 0}],
+            "x_accounts": [{"id": "acct", "publish_per_day": 0}],
+        })
+        e = self._entry()
+        e["youtube"] = {"enabled": False}
+        backend.pq.save_queue([e])
+        with mock.patch.object(backend, "_claim_and_post_x", return_value=None) as cpx:
+            backend._release_scheduled_publishes(force_id="e1")
+        self.assertFalse(cpx.call_args.kwargs.get("require_yt_link"))
+        q = {e["id"]: e for e in backend.pq.load_queue()}
+        self.assertFalse(q["e1"]["x"].get("force"))
+        self.assertEqual(q["e1"]["x"]["status"], "pending")
+
+
 if __name__ == "__main__":
     unittest.main()
