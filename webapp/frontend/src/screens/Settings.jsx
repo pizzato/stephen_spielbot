@@ -1156,7 +1156,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           <Card span={12} className="reveal reveal-d3">
             <span className="label-sm">Publishing schedule</span>
             <div className="field__hint" style={{ marginTop: 6 }}>
-              Needs auto-post (above) on. When enabled, finished videos enter a publish queue and are released on each channel/account's own cadence — set the per-channel and per-account <strong>Videos per day</strong> in the YouTube and X tabs. Review the queue under <strong>Schedule</strong>.
+              Needs auto-post (above) on. When enabled, finished videos enter a publish queue and are released on each channel/account's own cadence — set the per-channel and per-account <strong>Videos per day</strong> in the YouTube and X tabs. Review the queue under <strong>Publishing → Schedule</strong>.
             </div>
             <div className="stack gap-16 mt-16">
               <Check checked={!!cfg.publish_schedule_enabled} onChange={(v) => set('publish_schedule_enabled', v)}

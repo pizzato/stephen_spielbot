@@ -129,14 +129,6 @@ export default function PublishSchedule({ go, meta = {} }) {
 
   return (
     <div>
-      <div className="page-head">
-        <div className="page-head__intro">
-          <span className="label-sm reveal">Schedule</span>
-          <h1 className="display-md reveal reveal-d1">Publishing schedule</h1>
-        </div>
-        <Button variant="ghost" icon="gear" onClick={() => go('settings')}>Cadence settings</Button>
-      </div>
-
       <Banner tone="danger">{error}</Banner>
       {status && <Banner tone="ok">{status}</Banner>}
       {loaded && !data.enabled && (
@@ -160,6 +152,7 @@ export default function PublishSchedule({ go, meta = {} }) {
               </div>
             </div>
             <div className="row gap-10 row--wrap">
+              <Button variant="ghost" icon="gear" onClick={() => go('settings')}>Cadence settings</Button>
               <Button variant="primary" icon="magnifying-glass" disabled={!!busy}
                 onClick={() => run('scan', api.publishScan, (r) => setStatus(`Added ${r.added} video(s) to the publish queue.`))}>
                 {busy === 'scan' ? 'Scanning…' : 'Scan for unpublished'}
