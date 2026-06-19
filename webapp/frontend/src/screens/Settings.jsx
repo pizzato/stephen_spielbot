@@ -17,6 +17,16 @@ const AUTO_FLAGS = [
   'youtube_auto_post',
 ]
 
+// Live hint for the "Videos per day" cadence input: shows the even spacing it
+// implies (2/day → "≈ one every 12h"). 0 = no throttle.
+function cadenceHint(perDay) {
+  const n = Number(perDay) || 0
+  if (n <= 0) return 'No throttle — released as soon as the scheduler runs.'
+  const m = Math.round(1440 / n)
+  const span = m % 1440 === 0 ? `${m / 1440}d` : m >= 60 ? `${(m / 60).toFixed(m % 60 ? 1 : 0)}h` : `${m}m`
+  return `≈ one every ${span}.`
+}
+
 // Extract a short display name from a worker URL or hostname
 function shortHost(url) {
   try { return new URL(url).hostname } catch { return url }
@@ -279,7 +289,7 @@ function ChannelsCard({ onConfigChanged, onError }) {
   // immediately, like connect/disconnect.
   const toggleEng = (ch) => {
     if (expanded === ch.id) { setExpanded(''); return }
-    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond, video_category: ch.video_category || '', language: ch.language || 'en', upload_captions: ch.upload_captions !== false } }))
+    setEng((e) => ({ ...e, [ch.id]: { engagement_prompt: ch.engagement_prompt || '', auto_respond: !!ch.auto_respond, video_category: ch.video_category || '', language: ch.language || 'en', upload_captions: ch.upload_captions !== false, publish_per_day: ch.publish_per_day || 0 } }))
     setExpanded(ch.id)
   }
   const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
@@ -343,6 +353,15 @@ function ChannelsCard({ onConfigChanged, onError }) {
                 </Field>
                 <Check checked={eng[ch.id]?.upload_captions !== false} onChange={(v) => setEngField(ch.id, 'upload_captions', v)}
                   label="Attach subtitles from the script — uploads an accurate caption track instead of relying on YouTube's auto-captions" />
+                <Field label="Publishing cadence"
+                  hint="When scheduled publishing is on, this channel spaces its uploads evenly across the day. 0 = no throttle.">
+                  <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <label className="stack gap-8" style={{ fontSize: 12.5 }}><span className="muted">Videos per day</span>
+                      <input className="input" type="number" min={0} step="0.5" style={{ width: 120 }} value={eng[ch.id]?.publish_per_day ?? 0}
+                        onChange={(e) => setEngField(ch.id, 'publish_per_day', Number(e.target.value) || 0)} /></label>
+                    <span className="muted" style={{ fontSize: 12, paddingBottom: 8 }}>{cadenceHint(eng[ch.id]?.publish_per_day)}</span>
+                  </div>
+                </Field>
                 <Field label="Community engagement prompt"
                   hint="How this channel replies to non-request comments — its persona and what to do. Leave empty to disable engagement for this channel.">
                   <textarea className="textarea" rows={5} value={eng[ch.id]?.engagement_prompt || ''}
@@ -430,7 +449,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
 
   const toggleEng = (acc) => {
     if (expanded === acc.id) { setExpanded(''); return }
-    setEng((e) => ({ ...e, [acc.id]: { engagement_prompt: acc.engagement_prompt || '', auto_respond: !!acc.auto_respond, language: acc.language || 'en' } }))
+    setEng((e) => ({ ...e, [acc.id]: { engagement_prompt: acc.engagement_prompt || '', auto_respond: !!acc.auto_respond, language: acc.language || 'en', publish_per_day: acc.publish_per_day || 0 } }))
     setExpanded(acc.id)
   }
   const setEngField = (id, k, v) => setEng((e) => ({ ...e, [id]: { ...e[id], [k]: v } }))
@@ -573,6 +592,15 @@ function XAccountsCard({ onConfigChanged, onError }) {
                     onChange={(e) => setEngField(acc.id, 'language', e.target.value)}>
                     {Object.entries(LANGUAGES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
                   </select>
+                </Field>
+                <Field label="Publishing cadence"
+                  hint="When scheduled publishing is on, this account spaces its posts evenly across the day. 0 = no throttle.">
+                  <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <label className="stack gap-8" style={{ fontSize: 12.5 }}><span className="muted">Videos per day</span>
+                      <input className="input" type="number" min={0} step="0.5" style={{ width: 120 }} value={eng[acc.id]?.publish_per_day ?? 0}
+                        onChange={(e) => setEngField(acc.id, 'publish_per_day', Number(e.target.value) || 0)} /></label>
+                    <span className="muted" style={{ fontSize: 12, paddingBottom: 8 }}>{cadenceHint(eng[acc.id]?.publish_per_day)}</span>
+                  </div>
                 </Field>
                 <Field label="Community engagement prompt"
                   hint="How this account replies to mentions — its persona and what to do. Leave empty to disable engagement. (Reading mentions needs a paid X API tier.)">
@@ -1122,6 +1150,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={!!cfg.x_auto_fetch_evaluate} onChange={(v) => set('x_auto_fetch_evaluate', v)} label="Fetch & evaluate X mentions on a schedule (needs a paid X API tier)" />
               <Check checked={!!cfg.x_auto_approve_comments} onChange={(v) => set('x_auto_approve_comments', v)} label="Auto-approve X requests above the confidence threshold" />
               <Check checked={!!cfg.x_auto_post} onChange={(v) => set('x_auto_post', v)} label="Auto-post to X when a film finishes — uses the film's style X account; long videos fall back to the YouTube link on non-Premium" />
+            </div>
+          </Card>
+          {/* ── Publishing schedule — decouples publishing from rendering ── */}
+          <Card span={12} className="reveal reveal-d3">
+            <span className="label-sm">Publishing schedule</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              Needs auto-post (above) on. When enabled, finished videos enter a publish queue and are released on each channel/account's own cadence — set the per-channel and per-account <strong>Videos per day</strong> in the YouTube and X tabs. Review the queue under <strong>Publishing → Schedule</strong>.
+            </div>
+            <div className="stack gap-16 mt-16">
+              <Check checked={!!cfg.publish_schedule_enabled} onChange={(v) => set('publish_schedule_enabled', v)}
+                label="Schedule publishing instead of posting the moment a film finishes" />
+              <Check checked={cfg.publish_schedule_skip_comment_requests !== false} disabled={!cfg.publish_schedule_enabled}
+                onChange={(v) => set('publish_schedule_skip_comment_requests', v)}
+                label="Let comment-requested videos skip the schedule and post immediately" />
             </div>
           </Card>
         </>)}
