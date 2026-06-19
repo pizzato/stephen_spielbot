@@ -38,6 +38,7 @@ if str(REPO_ROOT) not in sys.path:
 import app as gapp  # noqa: E402
 import pipeline.youtube as yt  # noqa: E402
 import pipeline.x as xt  # noqa: E402
+import pipeline.publish_queue as pq  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
@@ -2156,6 +2157,8 @@ class ChannelSettingsBody(BaseModel):
     video_category: str = ""
     language: str = "en"
     upload_captions: bool = True
+    publish_interval_minutes: int = 0   # publish scheduler: min minutes between releases (0 = none)
+    publish_daily_cap: int = 0          # publish scheduler: max releases/day (0 = unlimited)
 
 
 @api.post("/api/youtube/channels/settings")
@@ -2174,6 +2177,8 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
     entry["video_category"] = body.video_category.strip()
     entry["language"] = body.language.strip() or "en"
     entry["upload_captions"] = bool(body.upload_captions)
+    entry["publish_interval_minutes"] = max(0, int(body.publish_interval_minutes))
+    entry["publish_daily_cap"] = max(0, int(body.publish_daily_cap))
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -2980,6 +2985,8 @@ class XAccountSettingsBody(BaseModel):
     engagement_prompt: str = ""
     auto_respond: bool = False
     language: str = "en"
+    publish_interval_minutes: int = 0   # publish scheduler: min minutes between releases (0 = none)
+    publish_daily_cap: int = 0          # publish scheduler: max releases/day (0 = unlimited)
 
 
 @api.post("/api/x/accounts/settings")
@@ -2993,6 +3000,8 @@ def x_account_settings(body: XAccountSettingsBody) -> dict:
     entry["engagement_prompt"] = body.engagement_prompt.strip()
     entry["auto_respond"] = bool(body.auto_respond)
     entry["language"] = body.language.strip() or "en"
+    entry["publish_interval_minutes"] = max(0, int(body.publish_interval_minutes))
+    entry["publish_daily_cap"] = max(0, int(body.publish_daily_cap))
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -3155,6 +3164,95 @@ def x_post_status(task_id: str) -> dict:
     if not task:
         raise HTTPException(404, "X post task not found.")
     return {"ok": True, **task}
+
+
+# ── Publish scheduler queue API (decoupled publishing) ────────────────────────
+
+def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict, dict]:
+    """Per channel/account cadence summary for the UI: configured interval/cap,
+    last release time, today's release count, and the next time a release is
+    allowed. Derived from the queue so it matches what the governor will do."""
+    last: dict[tuple, float] = {}
+    count: dict[tuple, int] = {}
+    for e in q:
+        for plat, keyf in (("youtube", "channel"), ("x", "account")):
+            sub = e.get(plat) or {}
+            ts = sub.get("released_at") or sub.get("published_at")
+            if sub.get("status") in ("publishing", "done") and ts:
+                k = (plat, sub.get(keyf) or "")
+                last[k] = max(last.get(k, 0.0), ts)
+                if _same_local_day(ts, now):
+                    count[k] = count.get(k, 0) + 1
+    lt = time.localtime(now)
+    next_midnight = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec) + 86400
+
+    def _summary(listed: str, plat: str) -> dict:
+        out: dict = {}
+        for c in (cfg.get(listed) or []):
+            key = c.get("id") or ""
+            interval = int(c.get("publish_interval_minutes") or 0)
+            cap = int(c.get("publish_daily_cap") or 0)
+            k = (plat, key)
+            l, cnt = last.get(k, 0.0), count.get(k, 0)
+            if cap and cnt >= cap:
+                nxt = next_midnight        # cap reached — resets at local midnight
+            elif interval and l:
+                nxt = max(now, l + interval * 60)
+            else:
+                nxt = now
+            out[key] = {"interval_minutes": interval, "daily_cap": cap,
+                        "last_released": l or None, "count_today": cnt, "next_eligible": nxt}
+        return out
+
+    return _summary("youtube_channels", "youtube"), _summary("x_accounts", "x")
+
+
+@api.get("/api/publish/queue")
+def publish_queue_list() -> dict:
+    cfg = gapp.load_config()
+    _reconcile_publish_queue()
+    q = pq.load_queue()
+    now = time.time()
+    chans, accts = _publish_cadence_status(cfg, q, now)
+    return {"items": q, "channels": chans, "accounts": accts,
+            "enabled": bool(cfg.get("publish_schedule_enabled")),
+            "skip_comment": bool(cfg.get("publish_schedule_skip_comment_requests", True)),
+            "now": now}
+
+
+@api.post("/api/publish/scan")
+def publish_scan() -> dict:
+    """Import the whole backlog of finished-but-unpublished videos (ignores the
+    recency window the automation tick uses). Entries the user removed stay out."""
+    return {"ok": True, "added": _enqueue_finished_for_publish(recent_only=False)}
+
+
+class PublishItemBody(BaseModel):
+    id: str
+    platform: str = ""   # "youtube" | "x" | "" (the whole entry)
+
+
+@api.post("/api/publish/remove")
+def publish_remove(body: PublishItemBody) -> dict:
+    """Drop an entry (or just one platform target) from the publish queue. The
+    work dir is remembered so a later scan won't re-add it."""
+    if body.platform in ("youtube", "x"):
+        e = next((x for x in pq.load_queue() if x.get("id") == body.id), None)
+        if e is None:
+            raise HTTPException(404, "Publish entry not found.")
+        sub = e.get(body.platform) or {}
+        sub.update(enabled=False, status="skipped")
+        pq.update_item(body.id, **{body.platform: sub})
+        return {"ok": True}
+    if not pq.remove_item(body.id):
+        raise HTTPException(404, "Publish entry not found.")
+    return {"ok": True}
+
+
+@api.post("/api/publish/now")
+def publish_now(body: PublishItemBody) -> dict:
+    """Release one entry immediately, ignoring its channel/account cadence."""
+    return {"ok": True, "released": _release_scheduled_publishes(force_id=body.id)}
 
 
 @api.get("/api/x/analytics")
@@ -4764,116 +4862,318 @@ def _auto_start_best() -> dict | None:
         return None
 
 
-def _auto_post_done() -> list[str]:
-    """Auto-post finished, queue-driven jobs that haven't been posted yet.
+def _claim_and_post_youtube(p: Path, jc: dict, cfg: dict) -> str | None:
+    """Atomically claim a finished job for YouTube and trigger its upload.
 
-    Each job is claimed on disk (_auto_post_triggered in job.json) before its
-    upload starts, so neither two overlapping web ticks nor the classic Gradio
-    app's auto-poster — a separate process that scans the same job dirs — can
-    upload the same video twice. The marker that closes the job permanently
-    (youtube_video_id) is only written after the slow upload finishes, which is
-    why a pre-upload claim is needed rather than relying on that marker alone.
+    The job is claimed on disk (_auto_post_triggered in job.json) before its
+    upload starts, so two overlapping web ticks can't upload the same video
+    twice. The marker that closes the job permanently (youtube_video_id) is only
+    written after the slow upload finishes, which is why a pre-upload claim is
+    needed rather than relying on that marker alone. Returns the upload task_id,
+    or None if the job was already claimed/posted/unfinished or it failed to
+    start. Used by both the immediate auto-poster and the scheduled governor.
     """
+    with gapp._auto_post_lock:
+        if str(p) in gapp._auto_post_triggered:
+            return None
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            return None
+        if (meta.get("status") != "done" or meta.get("youtube_video_id")
+                or meta.get("_auto_post_triggered")):
+            return None
+        gapp._auto_post_triggered.add(str(p))
+        gapp._write_job_meta(p, _auto_post_triggered=True)
+    try:
+        title = jc.get("video_title") or _video_title_for(p)
+        # The description was cached at script time; only generate if missing.
+        description = _cached_description(p) or _generate_and_cache_description(str(p), title)
+        channel = _channel_for_work_dir(p)
+        res = yt_post(PostBody(
+            work_dir=str(p), title=title,
+            description=description, category=_category_for_channel(cfg, channel),
+            privacy=cfg.get("youtube_post_privacy", "private"),
+            channel=channel,
+            # Shorts (portrait) don't take custom thumbnails — skip by default.
+            include_thumbnail=not _is_portrait_film(p)))
+        return res.get("task_id")
+    except Exception:
+        # Upload failed to start — release the claim so a later tick can retry.
+        with gapp._auto_post_lock:
+            gapp._auto_post_triggered.discard(str(p))
+        try:
+            gapp._write_job_meta(p, _auto_post_triggered=False)
+        except Exception:
+            pass
+        return None
+
+
+def _claim_and_post_x(p: Path, jc: dict, require_yt_link: bool) -> str | None:
+    """Atomically claim a finished job for X and trigger its post (issue #107).
+
+    A job is X-posted once (claimed via the ``_x_auto_post_triggered`` job-meta
+    marker; ``x_tweet_id`` is the permanent "already on X" marker). When
+    *require_yt_link* is set (the job also publishes to YouTube and that upload
+    isn't done yet), we wait so a non-Premium X post can fall back to the fresh
+    YouTube link. Returns the X post task_id, or None. Shared by the immediate
+    auto-poster and the scheduled governor.
+    """
+    with gapp._auto_post_lock:
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            return None
+        if (meta.get("status") != "done" or meta.get("x_tweet_id")
+                or meta.get("_x_auto_post_triggered")):
+            return None
+        if require_yt_link and not meta.get("youtube_video_id"):
+            return None  # let the YouTube upload finish first (link fallback)
+        acct = _x_account_for_work_dir(p)
+        # Claim it either way: with no X account there's nothing to post, and
+        # marking it avoids re-checking the same job every tick.
+        gapp._write_job_meta(p, _x_auto_post_triggered=True)
+    if not acct:
+        return None
+    try:
+        title = jc.get("video_title") or _video_title_for(p)
+        res = x_post(XPostBody(work_dir=str(p), title=title, account=acct))
+        return res.get("task_id")
+    except Exception:
+        # Posting failed to even start — release the claim so a later tick retries.
+        try:
+            gapp._write_job_meta(p, _x_auto_post_triggered=False)
+        except Exception:
+            pass
+        return None
+
+
+def _auto_post_done() -> list[str]:
+    """Auto-post finished, queue-driven jobs to YouTube that aren't posted yet.
+    Immediate path: posts the moment a render finishes (no cadence). Only acts
+    on videos that came from the queue."""
     cfg = gapp.load_config()
     posted: list[str] = []
     for _label, wd in gapp._list_recent_jobs(max_results=50):
         p = Path(wd)
-        jc: dict = {}
-        # Atomically claim the job: re-check state and stamp the claim under the
-        # lock so two ticks can't both pass the check before either writes.
-        with gapp._auto_post_lock:
-            if str(p) in gapp._auto_post_triggered:
-                continue
-            try:
-                meta = json.loads((p / "job.json").read_text())
-            except Exception:
-                continue
-            if (meta.get("status") != "done" or meta.get("youtube_video_id")
-                    or meta.get("_auto_post_triggered")):
-                continue
-            try:
-                jc = json.loads((p / "job_config.json").read_text())
-            except Exception:
-                jc = {}
-            if not jc.get("queue_item_id"):
-                continue  # only auto-post videos that came from the queue
-            gapp._auto_post_triggered.add(str(p))
-            gapp._write_job_meta(p, _auto_post_triggered=True)
         try:
-            title = jc.get("video_title") or _video_title_for(p)
-            # The description was cached at script time; only generate if missing.
-            description = _cached_description(p) or _generate_and_cache_description(str(p), title)
-            channel = _channel_for_work_dir(p)
-            res = yt_post(PostBody(
-                work_dir=str(p), title=title,
-                description=description, category=_category_for_channel(cfg, channel),
-                privacy=cfg.get("youtube_post_privacy", "private"),
-                channel=channel,
-                # Shorts (portrait) don't take custom thumbnails — skip by default.
-                include_thumbnail=not _is_portrait_film(p)))
-            if res.get("video_id"):
-                posted.append(res["video_id"])
+            jc = json.loads((p / "job_config.json").read_text())
         except Exception:
-            # Upload failed — release the claim so a later tick can retry.
-            with gapp._auto_post_lock:
-                gapp._auto_post_triggered.discard(str(p))
-            try:
-                gapp._write_job_meta(p, _auto_post_triggered=False)
-            except Exception:
-                pass
+            jc = {}
+        if not jc.get("queue_item_id"):
+            continue  # only auto-post videos that came from the queue
+        tid = _claim_and_post_youtube(p, jc, cfg)
+        if tid:
+            posted.append(tid)
     return posted
 
 
 def _auto_post_x_done() -> list[str]:
-    """Auto-post finished, queue-driven jobs to X (issue #107).
-
-    Mirrors _auto_post_done. A job is X-posted once (claimed via the
-    ``_x_auto_post_triggered`` job-meta marker; ``x_tweet_id`` is the permanent
-    "already on X" marker). When YouTube auto-post is ALSO on, we wait until the
-    YouTube upload finished (``youtube_video_id`` present) so a non-Premium X
-    post can fall back to the fresh YouTube link.
-    """
+    """Auto-post finished, queue-driven jobs to X (issue #107). Immediate path,
+    mirrors _auto_post_done. When YouTube auto-post is ALSO on, each job waits
+    for its YouTube upload so a non-Premium X post can use the fresh link."""
     cfg = gapp.load_config()
     yt_on = bool(cfg.get("youtube_auto_post"))
     posted: list[str] = []
     for _label, wd in gapp._list_recent_jobs(max_results=50):
         p = Path(wd)
-        jc: dict = {}
-        acct = ""
-        with gapp._auto_post_lock:
-            try:
-                meta = json.loads((p / "job.json").read_text())
-            except Exception:
-                continue
-            if (meta.get("status") != "done" or meta.get("x_tweet_id")
-                    or meta.get("_x_auto_post_triggered")):
-                continue
-            if yt_on and not meta.get("youtube_video_id"):
-                continue  # let the YouTube upload finish first (link fallback)
-            try:
-                jc = json.loads((p / "job_config.json").read_text())
-            except Exception:
-                jc = {}
-            if not jc.get("queue_item_id"):
-                continue  # only auto-post videos that came from the queue
-            acct = _x_account_for_work_dir(p)
-            # Claim it either way: with no X account there's nothing to post, and
-            # marking it avoids re-checking the same job every tick.
-            gapp._write_job_meta(p, _x_auto_post_triggered=True)
-        if not acct:
-            continue
         try:
-            title = jc.get("video_title") or _video_title_for(p)
-            res = x_post(XPostBody(work_dir=str(p), title=title, account=acct))
-            if res.get("task_id"):
-                posted.append(res["task_id"])
+            jc = json.loads((p / "job_config.json").read_text())
         except Exception:
-            # Posting failed to even start — release the claim so a later tick retries.
-            try:
-                gapp._write_job_meta(p, _x_auto_post_triggered=False)
-            except Exception:
-                pass
+            jc = {}
+        if not jc.get("queue_item_id"):
+            continue  # only auto-post videos that came from the queue
+        tid = _claim_and_post_x(p, jc, require_yt_link=yt_on)
+        if tid:
+            posted.append(tid)
     return posted
+
+
+# ── Publishing scheduler (decoupled publish queue) ────────────────────────────
+# When publish_schedule_enabled is on, finished videos are NOT posted the moment
+# they render. They enter publish_queue.json and are released on each
+# channel/account's own cadence (publish_interval_minutes / publish_daily_cap).
+# Comment-driven requests bypass the cadence so requesters get a prompt reply.
+# The release itself reuses the same claim helpers as the immediate path, so the
+# description caching, thumbnail rules and X→YouTube-link fallback all carry over.
+
+_PUBLISH_AUTOENQUEUE_WINDOW = 6 * 3600  # the tick only auto-adds jobs finished this recently
+
+
+def _same_local_day(a: float, b: float) -> bool:
+    la, lb = time.localtime(a), time.localtime(b)
+    return (la.tm_year, la.tm_yday) == (lb.tm_year, lb.tm_yday)
+
+
+def _publish_targets_for_job(p: Path, meta: dict) -> tuple[dict, dict]:
+    """Build the YouTube + X publish sub-states for a finished job from its
+    job.json meta. A platform is 'enabled' (needs publishing) only if it has a
+    target and isn't already posted; otherwise it starts done/skipped."""
+    channel = _channel_for_work_dir(p)
+    acct = _x_account_for_work_dir(p)
+    yt_done, x_done = meta.get("youtube_video_id"), meta.get("x_tweet_id")
+    youtube = {
+        "enabled": not yt_done, "channel": channel,
+        "status": "pending" if not yt_done else "done",
+        "video_id": yt_done, "url": meta.get("youtube_url"),
+        "released_at": None, "published_at": None, "error": None,
+    }
+    x = {
+        "enabled": bool(acct) and not x_done, "account": acct,
+        "status": ("pending" if (acct and not x_done) else ("done" if x_done else "skipped")),
+        "tweet_id": x_done, "url": meta.get("x_url"),
+        "released_at": None, "published_at": None, "error": None,
+    }
+    return youtube, x
+
+
+def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
+    """Add finished, unpublished videos to the publish queue. *recent_only* (the
+    automation-tick path) only adds jobs finished within the last few hours, so
+    turning scheduling on doesn't silently swallow the whole backlog; the
+    explicit 'Scan' button passes recent_only=False to import everything. An
+    entry that already exists for a work dir — including one the user removed —
+    is never re-added. Returns the count added."""
+    now = time.time()
+    added = 0
+    for _label, wd in gapp._list_recent_jobs(max_results=50):
+        p = Path(wd)
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            continue
+        if meta.get("status") != "done":
+            continue
+        if recent_only and (now - float(meta.get("updated_at") or 0)) > _PUBLISH_AUTOENQUEUE_WINDOW:
+            continue
+        if pq.item_by_work_dir(str(p)) is not None:
+            continue  # already queued (or explicitly removed) — never resurrect
+        youtube, x = _publish_targets_for_job(p, meta)
+        if not (youtube["enabled"] or x["enabled"]):
+            continue  # nothing left to publish
+        jc = _film_job_config(p)
+        item = _queue_item_by_id(jc.get("queue_item_id", "")) or {}
+        source = item.get("source") or ("comment" if item.get("comment_id") else "manual")
+        title = jc.get("video_title") or _video_title_for(p)
+        if pq.add_item(str(p), title=title, source=source,
+                       queue_item_id=jc.get("queue_item_id", ""),
+                       youtube=youtube, x=x):
+            added += 1
+    return added
+
+
+def _reconcile_publish_queue() -> None:
+    """Sync each entry's platform sub-state from job.json — the async upload
+    threads write youtube_video_id / x_tweet_id when they finish — and error out
+    entries whose work dir vanished so the governor stops retrying them."""
+    q = pq.load_queue()
+    changed = False
+    for e in q:
+        p = Path(e.get("work_dir", ""))
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            meta = None
+        yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
+        if meta is None:
+            for sub in (yt_sub, x_sub):
+                if sub.get("status") in ("pending", "publishing"):
+                    sub.update(status="error", error="work dir missing")
+                    changed = True
+            continue
+        if yt_sub.get("status") in ("pending", "publishing") and meta.get("youtube_video_id"):
+            yt_sub.update(status="done", video_id=meta.get("youtube_video_id"),
+                          url=meta.get("youtube_url"),
+                          published_at=yt_sub.get("released_at") or time.time())
+            changed = True
+        if x_sub.get("status") in ("pending", "publishing") and meta.get("x_tweet_id"):
+            x_sub.update(status="done", tweet_id=meta.get("x_tweet_id"),
+                         url=meta.get("x_url"),
+                         published_at=x_sub.get("released_at") or time.time())
+            changed = True
+    if changed:
+        pq.save_queue(q)
+
+
+def _cadence_for(cfg: dict, listed: str, key: str) -> tuple[int, int]:
+    """(interval_minutes, daily_cap) for a channel/account key; 0 = unbounded."""
+    entry = next((c for c in (cfg.get(listed) or []) if c.get("id") == key), None) or {}
+    return int(entry.get("publish_interval_minutes") or 0), int(entry.get("publish_daily_cap") or 0)
+
+
+def _release_scheduled_publishes(force_id: str = "") -> dict:
+    """Release due entries from the publish queue. Each platform target is gated
+    independently by its channel/account cadence, except comment-driven requests
+    (bypass) and an explicit *force_id* ('Publish now'), which ignore the cadence.
+    At most one entry per channel/account is released per call, so a no-throttle
+    backlog drains steadily rather than firing dozens of uploads at once.
+    Returns {"youtube": [ids], "x": [ids]} of what was triggered."""
+    _reconcile_publish_queue()
+    cfg = gapp.load_config()
+    q = pq.load_queue()
+    if not q:
+        return {}
+    now = time.time()
+    skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
+
+    # Seed per-key cadence tallies (last release time + today's count) from
+    # entries already released, so spacing/caps survive restarts.
+    last: dict[tuple, float] = {}
+    count: dict[tuple, int] = {}
+    for e in q:
+        for plat, keyf in (("youtube", "channel"), ("x", "account")):
+            sub = e.get(plat) or {}
+            ts = sub.get("released_at") or sub.get("published_at")
+            if sub.get("status") in ("publishing", "done") and ts:
+                k = (plat, sub.get(keyf) or "")
+                last[k] = max(last.get(k, 0.0), ts)
+                if _same_local_day(ts, now):
+                    count[k] = count.get(k, 0) + 1
+
+    def _eligible(k: tuple, interval_min: int, cap: int) -> bool:
+        if cap and count.get(k, 0) >= cap:
+            return False
+        if interval_min and last.get(k, 0.0) and (now - last[k]) < interval_min * 60:
+            return False
+        return True
+
+    released = {"youtube": [], "x": []}
+    fired: set = set()  # (plat, key) already released this call — one per key per call
+    for e in sorted(q, key=lambda e: e.get("created_at", 0)):
+        if force_id and e.get("id") != force_id:
+            continue
+        p = Path(e.get("work_dir", ""))
+        jc = _film_job_config(p)
+        bypass = bool(force_id) or (skip_comment and e.get("source") == "comment")
+        yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
+        if yt_sub.get("enabled") and yt_sub.get("status") == "pending":
+            key = yt_sub.get("channel") or ""
+            k = ("youtube", key)
+            interval_min, cap = _cadence_for(cfg, "youtube_channels", key)
+            if bypass or (k not in fired and _eligible(k, interval_min, cap)):
+                tid = _claim_and_post_youtube(p, jc, cfg)
+                if tid:
+                    yt_sub.update(status="publishing", released_at=now, task_id=tid)
+                    pq.update_item(e["id"], youtube=yt_sub)
+                    released["youtube"].append(e["id"])
+                    fired.add(k)
+                    last[k], count[k] = now, count.get(k, 0) + 1
+        if x_sub.get("enabled") and x_sub.get("status") == "pending":
+            key = x_sub.get("account") or ""
+            k = ("x", key)
+            interval_min, cap = _cadence_for(cfg, "x_accounts", key)
+            # Still wait for the YouTube link when this video also goes to YouTube
+            # (non-Premium long-video fallback) — bypass skips cadence, not this.
+            require_link = bool(yt_sub.get("enabled") and yt_sub.get("status") != "done")
+            if bypass or (k not in fired and _eligible(k, interval_min, cap)):
+                tid = _claim_and_post_x(p, jc, require_yt_link=require_link)
+                if tid:
+                    x_sub.update(status="publishing", released_at=now, task_id=tid)
+                    pq.update_item(e["id"], x=x_sub)
+                    released["x"].append(e["id"])
+                    fired.add(k)
+                    last[k], count[k] = now, count.get(k, 0) + 1
+    return {kk: v for kk, v in released.items() if v}
 
 
 def _ensure_descriptions() -> int:
@@ -4936,10 +5236,18 @@ def _automation_tick() -> dict:
                     out["x_fetch_error"] = str(e)[:120]
             if cfg.get("youtube_auto_start_job"):
                 out["started"] = _auto_start_best()
-            if cfg.get("youtube_auto_post"):
-                out["posted"] = _auto_post_done()
-            if cfg.get("x_auto_post"):
-                out["x_posted"] = _auto_post_x_done()
+            if cfg.get("youtube_auto_post") or cfg.get("x_auto_post"):
+                # Scheduled mode: finished videos flow into the publish queue and
+                # are released on each channel/account's cadence. Otherwise the
+                # immediate path posts the moment a render finishes (unchanged).
+                if cfg.get("publish_schedule_enabled"):
+                    out["enqueued"] = _enqueue_finished_for_publish(recent_only=True)
+                    out["released"] = _release_scheduled_publishes()
+                else:
+                    if cfg.get("youtube_auto_post"):
+                        out["posted"] = _auto_post_done()
+                    if cfg.get("x_auto_post"):
+                        out["x_posted"] = _auto_post_x_done()
         return out
     finally:
         _tick_lock.release()
