@@ -198,9 +198,9 @@ DEFAULT_CFG = {
     "description_suffix": "",
     # Publishing scheduler — decouples publishing from rendering. When on,
     # finished videos flow into a separate publish queue (publish_queue.json)
-    # and are released on each channel/account's own cadence
-    # (publish_interval_minutes / publish_daily_cap) instead of posting the
-    # moment a render finishes. Requires youtube_auto_post and/or x_auto_post.
+    # and are released on each channel/account's own cadence (publish_per_day,
+    # spaced evenly) instead of posting the moment a render finishes. Requires
+    # youtube_auto_post and/or x_auto_post.
     "publish_schedule_enabled": False,
     # Comment-driven requests skip the cadence and post immediately even when
     # scheduling is on, so requesters get a prompt reply.
@@ -332,6 +332,18 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     return cfg
 
 
+def _norm_per_day(v) -> float | int:
+    """Normalize a 'videos per day' cadence value: 0 (off/no limit) or a
+    positive number, kept as an int when whole so the YAML stays clean."""
+    try:
+        f = float(v or 0)
+    except (TypeError, ValueError):
+        return 0
+    if f <= 0:
+        return 0
+    return int(f) if f == int(f) else f
+
+
 def _ensure_channels(cfg: dict) -> dict:
     """Normalize the connected-channels list (issue #22) in place.
 
@@ -364,12 +376,11 @@ def _ensure_channels(cfg: dict) -> dict:
             # captions on (absent key → on, so existing channels keep captions).
             "language": str(c.get("language") or "").strip() or "en",
             "upload_captions": bool(c.get("upload_captions", True)),
-            # Publishing scheduler cadence (decoupled publish queue): minimum
-            # minutes between releases to this channel and the max releases per
-            # day. 0 = no throttle / unlimited. Only consulted when
+            # Publishing scheduler cadence (decoupled publish queue): how many
+            # videos per day this channel releases, spaced evenly (2/day → one
+            # every 12h). 0 = no throttle. Only consulted when
             # publish_schedule_enabled is on.
-            "publish_interval_minutes": int(c.get("publish_interval_minutes") or 0),
-            "publish_daily_cap": int(c.get("publish_daily_cap") or 0),
+            "publish_per_day": _norm_per_day(c.get("publish_per_day")),
         })
     if not channels and yt._token_path().exists():
         # Pre-#22 setups have one token at the legacy path — surface it as the
@@ -377,7 +388,7 @@ def _ensure_channels(cfg: dict) -> dict:
         channels = [{"id": yt.DEFAULT_CHANNEL_KEY, "name": "", "channel_id": "",
                      "engagement_prompt": "", "auto_respond": False,
                      "video_category": "", "language": "en", "upload_captions": True,
-                     "publish_interval_minutes": 0, "publish_daily_cap": 0}]
+                     "publish_per_day": 0}]
         seen = {yt.DEFAULT_CHANNEL_KEY}
     cfg["youtube_channels"] = channels
     for s in (cfg.get("styles") or []):
@@ -423,17 +434,14 @@ def _ensure_x_accounts(cfg: dict) -> dict:
             "engagement_prompt": str(a.get("engagement_prompt") or ""),
             "auto_respond": bool(a.get("auto_respond")),
             "language": str(a.get("language") or "").strip() or "en",
-            # Publishing scheduler cadence (mirror of YouTube channels): minimum
-            # minutes between releases to this account and max releases per day.
-            # 0 = no throttle / unlimited.
-            "publish_interval_minutes": int(a.get("publish_interval_minutes") or 0),
-            "publish_daily_cap": int(a.get("publish_daily_cap") or 0),
+            # Publishing scheduler cadence (mirror of YouTube channels): videos
+            # per day, spaced evenly. 0 = no throttle.
+            "publish_per_day": _norm_per_day(a.get("publish_per_day")),
         })
     if not accounts and xt._token_path().exists():
         accounts = [{"id": xt.DEFAULT_ACCOUNT_KEY, "name": "", "account_id": "",
                      "premium": False, "engagement_prompt": "", "auto_respond": False,
-                     "language": "en", "publish_interval_minutes": 0,
-                     "publish_daily_cap": 0}]
+                     "language": "en", "publish_per_day": 0}]
         seen = {xt.DEFAULT_ACCOUNT_KEY}
     cfg["x_accounts"] = accounts
     for s in (cfg.get("styles") or []):

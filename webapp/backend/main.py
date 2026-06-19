@@ -2157,8 +2157,7 @@ class ChannelSettingsBody(BaseModel):
     video_category: str = ""
     language: str = "en"
     upload_captions: bool = True
-    publish_interval_minutes: int = 0   # publish scheduler: min minutes between releases (0 = none)
-    publish_daily_cap: int = 0          # publish scheduler: max releases/day (0 = unlimited)
+    publish_per_day: float = 0          # publish scheduler: videos/day, spaced evenly (0 = no throttle)
 
 
 @api.post("/api/youtube/channels/settings")
@@ -2177,8 +2176,7 @@ def yt_channel_settings(body: ChannelSettingsBody) -> dict:
     entry["video_category"] = body.video_category.strip()
     entry["language"] = body.language.strip() or "en"
     entry["upload_captions"] = bool(body.upload_captions)
-    entry["publish_interval_minutes"] = max(0, int(body.publish_interval_minutes))
-    entry["publish_daily_cap"] = max(0, int(body.publish_daily_cap))
+    entry["publish_per_day"] = gapp._norm_per_day(body.publish_per_day)
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -2985,8 +2983,7 @@ class XAccountSettingsBody(BaseModel):
     engagement_prompt: str = ""
     auto_respond: bool = False
     language: str = "en"
-    publish_interval_minutes: int = 0   # publish scheduler: min minutes between releases (0 = none)
-    publish_daily_cap: int = 0          # publish scheduler: max releases/day (0 = unlimited)
+    publish_per_day: float = 0          # publish scheduler: videos/day, spaced evenly (0 = no throttle)
 
 
 @api.post("/api/x/accounts/settings")
@@ -3000,8 +2997,7 @@ def x_account_settings(body: XAccountSettingsBody) -> dict:
     entry["engagement_prompt"] = body.engagement_prompt.strip()
     entry["auto_respond"] = bool(body.auto_respond)
     entry["language"] = body.language.strip() or "en"
-    entry["publish_interval_minutes"] = max(0, int(body.publish_interval_minutes))
-    entry["publish_daily_cap"] = max(0, int(body.publish_daily_cap))
+    entry["publish_per_day"] = gapp._norm_per_day(body.publish_per_day)
     gapp.save_config(cfg)
     return {"ok": True}
 
@@ -3169,9 +3165,9 @@ def x_post_status(task_id: str) -> dict:
 # ── Publish scheduler queue API (decoupled publishing) ────────────────────────
 
 def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict, dict]:
-    """Per channel/account cadence summary for the UI: configured interval/cap,
-    last release time, today's release count, and the next time a release is
-    allowed. Derived from the queue so it matches what the governor will do."""
+    """Per channel/account cadence summary for the UI: configured videos/day and
+    the derived spacing, last release time, today's release count, and the next
+    time a release is allowed. Derived from the queue so it matches the governor."""
     last: dict[tuple, float] = {}
     count: dict[tuple, int] = {}
     for e in q:
@@ -3183,24 +3179,17 @@ def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict,
                 last[k] = max(last.get(k, 0.0), ts)
                 if _same_local_day(ts, now):
                     count[k] = count.get(k, 0) + 1
-    lt = time.localtime(now)
-    next_midnight = now - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec) + 86400
 
     def _summary(listed: str, plat: str) -> dict:
         out: dict = {}
         for c in (cfg.get(listed) or []):
             key = c.get("id") or ""
-            interval = int(c.get("publish_interval_minutes") or 0)
-            cap = int(c.get("publish_daily_cap") or 0)
+            per_day = float(c.get("publish_per_day") or 0)
+            interval = round(1440 / per_day) if per_day > 0 else 0
             k = (plat, key)
             l, cnt = last.get(k, 0.0), count.get(k, 0)
-            if cap and cnt >= cap:
-                nxt = next_midnight        # cap reached — resets at local midnight
-            elif interval and l:
-                nxt = max(now, l + interval * 60)
-            else:
-                nxt = now
-            out[key] = {"interval_minutes": interval, "daily_cap": cap,
+            nxt = max(now, l + interval * 60) if (interval and l) else now
+            out[key] = {"per_day": c.get("publish_per_day") or 0, "interval_minutes": interval,
                         "last_released": l or None, "count_today": cnt, "next_eligible": nxt}
         return out
 
@@ -5095,18 +5084,21 @@ def _reconcile_publish_queue() -> None:
         pq.save_queue(q)
 
 
-def _cadence_for(cfg: dict, listed: str, key: str) -> tuple[int, int]:
-    """(interval_minutes, daily_cap) for a channel/account key; 0 = unbounded."""
+def _interval_minutes_for(cfg: dict, listed: str, key: str) -> int:
+    """Minutes to space releases for a channel/account key, derived from its
+    publish_per_day (2/day → 720 min, evenly spaced). 0 = no throttle."""
     entry = next((c for c in (cfg.get(listed) or []) if c.get("id") == key), None) or {}
-    return int(entry.get("publish_interval_minutes") or 0), int(entry.get("publish_daily_cap") or 0)
+    per_day = float(entry.get("publish_per_day") or 0)
+    return round(1440 / per_day) if per_day > 0 else 0
 
 
 def _release_scheduled_publishes(force_id: str = "") -> dict:
     """Release due entries from the publish queue. Each platform target is gated
-    independently by its channel/account cadence, except comment-driven requests
-    (bypass) and an explicit *force_id* ('Publish now'), which ignore the cadence.
-    At most one entry per channel/account is released per call, so a no-throttle
-    backlog drains steadily rather than firing dozens of uploads at once.
+    independently by its channel/account cadence (publish_per_day → even
+    spacing), except comment-driven requests (bypass) and an explicit *force_id*
+    ('Publish now'), which ignore the cadence. At most one entry per
+    channel/account is released per call, so a no-throttle backlog drains
+    steadily rather than firing dozens of uploads at once.
     Returns {"youtube": [ids], "x": [ids]} of what was triggered."""
     _reconcile_publish_queue()
     cfg = gapp.load_config()
@@ -5116,10 +5108,9 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
     now = time.time()
     skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
 
-    # Seed per-key cadence tallies (last release time + today's count) from
-    # entries already released, so spacing/caps survive restarts.
+    # Seed each key's last release time from entries already released, so the
+    # spacing survives restarts.
     last: dict[tuple, float] = {}
-    count: dict[tuple, int] = {}
     for e in q:
         for plat, keyf in (("youtube", "channel"), ("x", "account")):
             sub = e.get(plat) or {}
@@ -5127,15 +5118,9 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
             if sub.get("status") in ("publishing", "done") and ts:
                 k = (plat, sub.get(keyf) or "")
                 last[k] = max(last.get(k, 0.0), ts)
-                if _same_local_day(ts, now):
-                    count[k] = count.get(k, 0) + 1
 
-    def _eligible(k: tuple, interval_min: int, cap: int) -> bool:
-        if cap and count.get(k, 0) >= cap:
-            return False
-        if interval_min and last.get(k, 0.0) and (now - last[k]) < interval_min * 60:
-            return False
-        return True
+    def _eligible(k: tuple, interval_min: int) -> bool:
+        return not (interval_min and last.get(k, 0.0) and (now - last[k]) < interval_min * 60)
 
     released = {"youtube": [], "x": []}
     fired: set = set()  # (plat, key) already released this call — one per key per call
@@ -5149,30 +5134,30 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
         if yt_sub.get("enabled") and yt_sub.get("status") == "pending":
             key = yt_sub.get("channel") or ""
             k = ("youtube", key)
-            interval_min, cap = _cadence_for(cfg, "youtube_channels", key)
-            if bypass or (k not in fired and _eligible(k, interval_min, cap)):
+            interval_min = _interval_minutes_for(cfg, "youtube_channels", key)
+            if bypass or (k not in fired and _eligible(k, interval_min)):
                 tid = _claim_and_post_youtube(p, jc, cfg)
                 if tid:
                     yt_sub.update(status="publishing", released_at=now, task_id=tid)
                     pq.update_item(e["id"], youtube=yt_sub)
                     released["youtube"].append(e["id"])
                     fired.add(k)
-                    last[k], count[k] = now, count.get(k, 0) + 1
+                    last[k] = now
         if x_sub.get("enabled") and x_sub.get("status") == "pending":
             key = x_sub.get("account") or ""
             k = ("x", key)
-            interval_min, cap = _cadence_for(cfg, "x_accounts", key)
+            interval_min = _interval_minutes_for(cfg, "x_accounts", key)
             # Still wait for the YouTube link when this video also goes to YouTube
             # (non-Premium long-video fallback) — bypass skips cadence, not this.
             require_link = bool(yt_sub.get("enabled") and yt_sub.get("status") != "done")
-            if bypass or (k not in fired and _eligible(k, interval_min, cap)):
+            if bypass or (k not in fired and _eligible(k, interval_min)):
                 tid = _claim_and_post_x(p, jc, require_yt_link=require_link)
                 if tid:
                     x_sub.update(status="publishing", released_at=now, task_id=tid)
                     pq.update_item(e["id"], x=x_sub)
                     released["x"].append(e["id"])
                     fired.add(k)
-                    last[k], count[k] = now, count.get(k, 0) + 1
+                    last[k] = now
     return {kk: v for kk, v in released.items() if v}
 
 

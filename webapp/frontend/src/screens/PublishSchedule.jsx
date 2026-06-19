@@ -76,7 +76,7 @@ export default function PublishSchedule({ go, meta = {} }) {
         <Icon name={icon} brand style={{ width: 16, color: 'var(--ink-3)' }} />
         <span className="muted" style={{ minWidth: 90 }}>{target}</span>
         <Chip tone={tone}>{label}</Chip>
-        {next && <span className="muted">{next}{cad.daily_cap ? ` · ${cad.count_today}/${cad.daily_cap} today` : ''}</span>}
+        {next && <span className="muted">{next}{cad.count_today ? ` · ${cad.count_today} today` : ''}</span>}
         {sub.url && <a href={sub.url} target="_blank" rel="noopener" className="muted">view ↗</a>}
         {sub.error && <span style={{ color: 'var(--danger)' }}>{sub.error}</span>}
       </div>
