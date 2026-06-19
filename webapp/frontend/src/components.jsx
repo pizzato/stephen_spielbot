@@ -194,7 +194,7 @@ function navIndicator(id, badges) {
       </span>
     )
   }
-  const counts = { queue: badges.queue, community: badges.youtube, publish: badges.youtube_publishable, library: badges.films }
+  const counts = { queue: badges.queue, community: badges.youtube_attention, publish: badges.youtube_publishable, library: badges.films }
   const n = counts[id]
   return n ? <span className="nav__badge nav__badge--attn">{n}</span> : null
 }
