@@ -175,6 +175,7 @@ const NAV = [
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'community', label: 'Community', icon: 'comments' },
   { id: 'publish', label: 'Publish', icon: 'upload' },
+  { id: 'schedule', label: 'Schedule', icon: 'clock' },
   { id: 'analytics', label: 'Analytics', icon: 'chart-simple' },
   { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },

@@ -139,6 +139,13 @@ export const api = {
   autoPost: () => req('POST', '/automation/post'),
   autoTick: () => req('POST', '/automation/tick'),
 
+  // publish scheduler — a publish queue decoupled from rendering. Finished
+  // videos are released to YouTube/X on each channel/account's own cadence.
+  publishQueue: () => req('GET', '/publish/queue'),
+  publishScan: () => req('POST', '/publish/scan'),
+  publishRemove: (id, platform) => req('POST', '/publish/remove', { id, platform: platform || '' }),
+  publishNow: (id) => req('POST', '/publish/now', { id }),
+
   ytAnalytics: (channel, refresh) => {
     const p = new URLSearchParams()
     if (channel) p.set('channel', channel)
