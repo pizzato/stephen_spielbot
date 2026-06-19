@@ -207,6 +207,10 @@ def get_config() -> dict:
         "pixel_tiers": [{"key": t["key"], "label": t["label"]} for t in gapp._PIXEL_TIERS],
         "default_orientation": gapp._DEFAULT_ORIENTATION,
         "default_pixels": gapp._DEFAULT_PIXELS,
+        # Small/Medium/Large size buckets and their fallback presets, so the
+        # Settings editor and AI-ideas screen can render a per-style size picker.
+        "size_buckets": list(gapp._SIZE_BUCKETS),
+        "default_size_presets": gapp.DEFAULT_CFG["default_size_presets"],
     }
 
 
