@@ -181,6 +181,10 @@ DEFAULT_CFG = {
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 6,
+    # When True, automation never invents AI ideas in this style while topping up
+    # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
+    # the manual AI ideas screen still offers the style. Mirrors the default style.
+    "default_auto_pick_exclude": False,
     # Mirror of the DEFAULT style's Small/Medium/Large size presets (see
     # _DEFAULT_SIZE_PRESETS). Per-style values live on each style; this flat key
     # tracks the default style like every other STYLE_FIELD_TO_FLAT mirror.
@@ -261,6 +265,8 @@ STYLE_FIELD_TO_FLAT = {
     "voice_robotic_amount": "default_voice_robotic_amount",
     "voice_speed":          "default_voice_speed",
     "n_scenes":             "default_n_scenes",
+    # Automation — exclude this style from auto-picked queue top-ups (opt-out)
+    "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
     "channel":              "youtube_channel",
     # Publishing (issue #107) — which connected X account this style posts to
@@ -1707,26 +1713,48 @@ def _channel_video_titles(cfg: dict, style_name: str = "") -> list[str]:
 
 
 
-def _auto_pick_suggestion(cfg: dict) -> dict | None:
-    """Pick the first unused suggestion (generating new ones if needed) and add it to the queue.
+def _auto_pick_styles(cfg: dict) -> list[str]:
+    """Style names eligible for auto-picked queue top-ups, in config order.
 
-    Returns the new pending queue item dict, or None on failure.
-    Called only when there are no pending user requests and auto-start is enabled.
-    """
-    suggestions = yt.load_suggestions()
-    unused = [s for s in suggestions if not s.get("used")]
+    A style opts out via ``auto_pick_exclude`` (Settings → style), so automation
+    only invents ideas for the styles left in the rotation. Manual idea
+    generation ignores this flag — it governs the automatic top-up only."""
+    return [s["name"] for s in (cfg.get("styles") or [])
+            if isinstance(s, dict) and str(s.get("name") or "").strip()
+            and not s.get("auto_pick_exclude")]
 
-    if not unused:
-        # Ask the LLM for a fresh batch of 5, steered by the default style —
-        # automation invents ideas for the channel's default persona.
-        logger.info("No unused suggestions — generating a new batch")
-        ss = style_settings(cfg)
-        existing_titles = _channel_video_titles(cfg)
-        new_data = generate_video_suggestions(existing_titles, cfg, style=ss)
-        if not new_data:
-            logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
-            return None
-        suggestions = [
+
+def _auto_pick_style_of(idea: dict, default_name: str) -> str:
+    """Which style an idea belongs to — legacy ideas (no stamp) are the default's."""
+    return str(idea.get("style_name") or "") or default_name
+
+
+def _last_auto_picked_style() -> str:
+    """Style of the most recently auto-picked queue item (by created_at), or ''.
+    Lets the next pick rotate onto a different style so top-ups mix styles."""
+    try:
+        picks = [q for q in yt.load_queue()
+                 if q.get("source") == "suggestion" and q.get("gen_style_name")]
+    except Exception:
+        return ""
+    if not picks:
+        return ""
+    return str(max(picks, key=lambda q: q.get("created_at", 0)).get("gen_style_name") or "")
+
+
+def _generate_mixed_suggestions(cfg: dict, style_names: list[str]) -> list[dict]:
+    """Generate a fresh batch of ideas for each style and interleave them, so the
+    saved pool alternates styles (A#1, B#1, … then A#2, B#2, …)."""
+    batches = []
+    for name in style_names:
+        ss = style_settings(cfg, name)
+        existing_titles = _channel_video_titles(cfg, style_name=name)
+        try:
+            new_data = generate_video_suggestions(existing_titles, cfg, style=ss)
+        except Exception as exc:
+            logger.warning("_generate_mixed_suggestions: generation failed for %r: %s", name, exc)
+            new_data = []
+        batches.append([
             {
                 "id": str(uuid.uuid4())[:8],
                 "title": s["title"],
@@ -1737,11 +1765,69 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
                 "used": False,
             }
             for s in new_data
-        ]
-        yt.save_suggestions(suggestions)
-        unused = suggestions
+        ])
+    merged = []
+    for i in range(max((len(b) for b in batches), default=0)):
+        for b in batches:
+            if i < len(b):
+                merged.append(b[i])
+    return merged
 
-    suggestion = unused[0]
+
+def _rotate_pick(unused: list[dict], eligible: list[str], last_style: str,
+                 default_name: str) -> dict | None:
+    """Pick the next idea so consecutive auto-picks rotate through the eligible
+    styles. Starts at the style after the last-picked one and walks the rotation
+    until it finds a style with an unused idea; falls back to the first unused."""
+    if not unused:
+        return None
+    by_style: dict[str, list[dict]] = {}
+    for s in unused:
+        by_style.setdefault(_auto_pick_style_of(s, default_name), []).append(s)
+    start = (eligible.index(last_style) + 1) % len(eligible) if last_style in eligible else 0
+    for k in range(len(eligible)):
+        name = eligible[(start + k) % len(eligible)]
+        if by_style.get(name):
+            return by_style[name][0]
+    return unused[0]
+
+
+def _auto_pick_suggestion(cfg: dict) -> dict | None:
+    """Pick an unused suggestion and add it to the queue, rotating through the
+    eligible styles so successive top-ups mix styles instead of always using the
+    default one (issue #117).
+
+    Generates a fresh mixed batch across the eligible styles when none is
+    waiting. Returns the new pending queue item dict, or None on failure. Called
+    only when there are no pending user requests and auto-start is enabled.
+    """
+    eligible = _auto_pick_styles(cfg)
+    if not eligible:
+        logger.info("_auto_pick_suggestion: every style is excluded from auto-pick — nothing to do")
+        return None
+    default_name = cfg.get("default_style", "")
+
+    suggestions = yt.load_suggestions()
+    unused = [s for s in suggestions
+              if not s.get("used") and _auto_pick_style_of(s, default_name) in eligible]
+
+    if not unused:
+        # No eligible idea waiting — invent a fresh mixed batch across the styles
+        # the user left in the rotation.
+        logger.info("No unused suggestions for eligible styles — generating a mixed batch")
+        merged = _generate_mixed_suggestions(cfg, eligible)
+        if not merged:
+            logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
+            return None
+        # Keep any other still-unused ideas (e.g. from the AI ideas screen); drop
+        # used ones so the pool doesn't grow without bound.
+        kept = [s for s in suggestions if not s.get("used")]
+        yt.save_suggestions(kept + merged)
+        unused = list(merged)  # eligible by construction
+
+    suggestion = _rotate_pick(unused, eligible, _last_auto_picked_style(), default_name)
+    if not suggestion:
+        return None
     suggestion["used"] = True
     # Persist the 'used' flag so this idea is closed and never re-picked. Match
     # by id, fall back to title, and never re-mark an already-used row — a
