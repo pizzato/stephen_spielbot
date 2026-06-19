@@ -133,8 +133,9 @@ export default function PublishSchedule({ go, meta = {} }) {
       {status && <Banner tone="ok">{status}</Banner>}
       {loaded && !data.enabled && (
         <Banner tone="info">
-          Scheduled publishing is off — finished videos still post immediately. Turn it on in
-          Settings → Publishing to release them on a cadence instead. You can still scan and review the queue here.
+          Scheduled publishing is off — finished videos collect here and post the moment they finish if auto-post is on,
+          otherwise they wait for you to publish them. Turn on scheduling in Settings → Publishing to release them on each
+          channel/account's cadence instead.
         </Banner>
       )}
 
