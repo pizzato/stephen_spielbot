@@ -695,12 +695,17 @@ def _attach_subtitles(auth: dict, video_media_id: str, srt_path: str,
 
 
 def _post_tweet(auth: dict, text: str, media_id: str | None = None,
-                reply_to: str | None = None, max_len: int = TWEET_TEXT_LIMIT) -> dict:
+                reply_to: str | None = None, max_len: int = TWEET_TEXT_LIMIT,
+                made_with_ai: bool = False) -> dict:
     body: dict[str, Any] = {"text": text[:max_len]}
     if media_id:
         body["media"] = {"media_ids": [media_id]}
     if reply_to:
         body["reply"] = {"in_reply_to_tweet_id": reply_to}
+    if made_with_ai:
+        # Top-level boolean on POST /2/tweets — X applies the "Made with AI" label
+        # to the post. Only set for posts carrying our AI-generated video.
+        body["made_with_ai"] = True
     r = _xreq("POST", f"{API_BASE}/tweets", auth, json=body, timeout=60)
     r.raise_for_status()
     return r.json().get("data", {})
@@ -788,7 +793,8 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                         except Exception:
                             detail = ""
                     logger.warning("Could not attach captions to X video: %s %s", cexc, detail)
-            data = _post_tweet(auth, text, media_id=media_id, max_len=limit)
+            data = _post_tweet(auth, text, media_id=media_id, max_len=limit,
+                               made_with_ai=True)
         except Exception as exc:
             # Fall back to the YouTube link when X rejects the native video for
             # length — either we already knew it was long, or X says so (our
