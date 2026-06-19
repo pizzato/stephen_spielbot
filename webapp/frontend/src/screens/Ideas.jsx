@@ -147,7 +147,6 @@ export default function Ideas({ go, meta = {} }) {
       await api.queueAdd(title, scenes, idea.reason || '', resolution, idea.style_name || effectiveStyle)
       await closeIdea(idea, 'used')
       setStatus('Added to queue.')
-      go('queue')
     } catch (e) {
       setError(e.message)
     }
