@@ -174,7 +174,7 @@ const NAV = [
   { sep: true },
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'community', label: 'Community', icon: 'comments' },
-  { id: 'publish', label: 'Publish', icon: 'upload' },
+  { id: 'publish', label: 'Publishing', icon: 'upload' },
   { id: 'analytics', label: 'Analytics', icon: 'chart-simple' },
   { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },
