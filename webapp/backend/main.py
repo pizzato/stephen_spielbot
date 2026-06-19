@@ -2680,6 +2680,7 @@ class PostBody(BaseModel):
     privacy: str = "private"
     include_thumbnail: bool = True
     channel: str = ""   # channel key override; empty → the film's style's channel
+    auto: bool = False  # set by the auto-poster/scheduler; a manual post (False) drops the film from the publish queue on success
 
 
 def _completion_reply_text(title: str, url: str) -> str:
@@ -2797,6 +2798,14 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
+        # Release a manual claim so the film can be retried / auto-published.
+        if not body_dict.get("auto"):
+            with gapp._auto_post_lock:
+                gapp._auto_post_triggered.discard(str(wd))
+            try:
+                gapp._write_job_meta(wd, _auto_post_triggered=False)
+            except Exception:
+                pass
         return
 
     video_id, url = "", ""
@@ -2821,6 +2830,11 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
             yt.update_queue_item(queue_item_id, status="posted", youtube_video_id=video_id, youtube_url=url)
     except Exception:
         pass
+
+    # A manual publish leaves the queue; the auto-poster/scheduler (auto=True)
+    # keeps its entry so reconciliation can record it as published.
+    if not body_dict.get("auto"):
+        _drop_from_publish_queue(wd)
 
     completion_reply = _post_completion_reply(queue_item_id, body_dict["title"], url)
     try:
@@ -2857,11 +2871,21 @@ def yt_post(body: PostBody) -> dict:
     task_id = uuid.uuid4().hex[:12]
     _upload_tasks[task_id] = {"status": "uploading"}
     channel = body.channel or _channel_for_work_dir(wd)
+    # A manual publish (auto=False) claims the job — the same claim
+    # _claim_and_post_youtube uses — so the scheduler/immediate auto-poster can't
+    # also post it while this upload is in flight. Released on failure below.
+    if not body.auto:
+        with gapp._auto_post_lock:
+            gapp._auto_post_triggered.add(str(wd))
+        try:
+            gapp._write_job_meta(wd, _auto_post_triggered=True)
+        except Exception:
+            pass
     threading.Thread(
         target=_run_upload_task,
         args=(task_id, {"title": body.title, "description": body.description,
                         "category": body.category, "privacy": body.privacy,
-                        "channel": channel}, wd, final, thumb),
+                        "channel": channel, "auto": body.auto}, wd, final, thumb),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": task_id}
@@ -3085,6 +3109,7 @@ class XPostBody(BaseModel):
     text: str = ""              # tweet text; defaults to the film title
     title: str = ""
     account: str = ""           # account key override; empty → the film's style's account
+    auto: bool = False          # set by the auto-poster/scheduler; a manual post (False) drops the film from the publish queue on success
 
 
 # In-memory store for background X post tasks {task_id -> {status, ...}}
@@ -3203,6 +3228,10 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
     except Exception:
         pass
 
+    # A manual post leaves the queue; the auto-poster/scheduler keeps its entry.
+    if not body_dict.get("auto"):
+        _drop_from_publish_queue(wd)
+
     msg = f"Posted to X — {url}" if url else "Posted to X."
     if result.get("fell_back_to_link"):
         msg = f"Video too long for X — posted the YouTube link instead: {url}"
@@ -3222,11 +3251,19 @@ def x_post(body: XPostBody) -> dict:
     task_id = uuid.uuid4().hex[:12]
     _x_post_tasks[task_id] = {"status": "posting"}
     account = body.account or _x_account_for_work_dir(wd)
+    # A manual post (auto=False) claims the job so the scheduler/immediate
+    # auto-poster won't also post it mid-upload (mirrors _claim_and_post_x;
+    # released on failure by _x_auto_release_on_failure inside the task).
+    if not body.auto:
+        try:
+            gapp._write_job_meta(wd, _x_auto_post_triggered=True)
+        except Exception:
+            pass
     # Pass text + title separately so the task can derive the description body
     # (and fall back to the title only when there's no description).
     threading.Thread(
         target=_run_x_post_task,
-        args=(task_id, {"text": body.text, "title": body.title, "account": account}, wd, final),
+        args=(task_id, {"text": body.text, "title": body.title, "account": account, "auto": body.auto}, wd, final),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": task_id}
@@ -4961,7 +4998,7 @@ def _claim_and_post_youtube(p: Path, jc: dict, cfg: dict) -> str | None:
             work_dir=str(p), title=title,
             description=description, category=_category_for_channel(cfg, channel),
             privacy=cfg.get("youtube_post_privacy", "private"),
-            channel=channel,
+            channel=channel, auto=True,
             # Shorts (portrait) don't take custom thumbnails — skip by default.
             include_thumbnail=not _is_portrait_film(p)))
         return res.get("task_id")
@@ -5004,7 +5041,7 @@ def _claim_and_post_x(p: Path, jc: dict, require_yt_link: bool) -> str | None:
         return None
     try:
         title = jc.get("video_title") or _video_title_for(p)
-        res = x_post(XPostBody(work_dir=str(p), title=title, account=acct))
+        res = x_post(XPostBody(work_dir=str(p), title=title, account=acct, auto=True))
         return res.get("task_id")
     except Exception:
         # Posting failed to even start — release the claim so a later tick retries.
@@ -5162,6 +5199,19 @@ def _reconcile_publish_queue() -> None:
         pq.save_queue(q)
 
 
+def _drop_from_publish_queue(work_dir) -> None:
+    """Remove a film's publish-queue entry — used when it's published manually,
+    so it leaves the queue. The auto-poster and the scheduled governor keep their
+    entry instead (reconciliation moves it to 'done' history); only manual posts
+    drop it. No-op if the film isn't queued."""
+    try:
+        entry = pq.item_by_work_dir(str(work_dir))
+        if entry:
+            pq.remove_item(entry["id"])
+    except Exception:
+        pass
+
+
 def _interval_minutes_for(cfg: dict, listed: str, key: str) -> int:
     """Minutes to space releases for a channel/account key, derived from its
     publish_per_day (2/day → 720 min, evenly spaced). 0 = no throttle."""
@@ -5299,18 +5349,19 @@ def _automation_tick() -> dict:
                     out["x_fetch_error"] = str(e)[:120]
             if cfg.get("youtube_auto_start_job"):
                 out["started"] = _auto_start_best()
-            if cfg.get("youtube_auto_post") or cfg.get("x_auto_post"):
-                # Scheduled mode: finished videos flow into the publish queue and
-                # are released on each channel/account's cadence. Otherwise the
-                # immediate path posts the moment a render finishes (unchanged).
-                if cfg.get("publish_schedule_enabled"):
-                    out["enqueued"] = _enqueue_finished_for_publish(recent_only=True)
-                    out["released"] = _release_scheduled_publishes()
-                else:
-                    if cfg.get("youtube_auto_post"):
-                        out["posted"] = _auto_post_done()
-                    if cfg.get("x_auto_post"):
-                        out["x_posted"] = _auto_post_x_done()
+            # Publishing. Finished videos are enqueued in the loop regardless of
+            # mode (the queue is the canonical inbox), so here we only *release*
+            # them. Scheduled mode spaces releases over each channel/account's
+            # cadence; immediate mode posts the moment a film finishes. The two
+            # are mutually exclusive (enforced in Settings; schedule wins here as
+            # a backstop so a stale config can never double-post).
+            if cfg.get("publish_schedule_enabled"):
+                out["released"] = _release_scheduled_publishes()
+            elif cfg.get("youtube_auto_post") or cfg.get("x_auto_post"):
+                if cfg.get("youtube_auto_post"):
+                    out["posted"] = _auto_post_done()
+                if cfg.get("x_auto_post"):
+                    out["x_posted"] = _auto_post_x_done()
         return out
     finally:
         _tick_lock.release()
@@ -5339,8 +5390,9 @@ def automation_tick_endpoint() -> dict:
     return _automation_tick()
 
 
-# Opt-in background loop: runs a tick periodically. Each step is gated by its own
-# config toggle, so with all toggles off (the default) this is a no-op heartbeat.
+# Opt-in background loop: runs a tick periodically. Each automation step is gated
+# by its own config toggle; with all toggles off it only keeps the publish queue
+# populated (finished videos always collect there for manual publishing).
 # The loop wakes often only to watch for a render finishing, so the next queue
 # item chains within seconds instead of waiting out the full interval — still ONE
 # engine, just an event-driven nudge on top of the scheduled cadence.
@@ -5378,9 +5430,17 @@ def _automation_loop():
                 pass
         try:
             cfg = gapp.load_config()
+            # The publish queue is the canonical inbox of finished videos — keep
+            # it populated regardless of automation flags, so manual users see
+            # their films there too. Idempotent; the 6h window caps the backlog
+            # (the "Scan" button imports everything).
+            try:
+                _enqueue_finished_for_publish(recent_only=True)
+            except Exception:
+                pass
             if any(cfg.get(k) for k in (
                     "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post",
-                    "x_auto_fetch_evaluate", "x_auto_post")):
+                    "x_auto_fetch_evaluate", "x_auto_post", "publish_schedule_enabled")):
                 _automation_tick()
         except Exception:
             pass
