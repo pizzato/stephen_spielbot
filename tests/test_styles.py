@@ -533,6 +533,74 @@ class StyleAwareIdeasTests(TempConfigCase):
         self.assertEqual(updates["q9"]["gen_style_name"], "B")
 
 
+class SizePresetsTests(TempConfigCase):
+    """Per-style Small/Medium/Large size presets: each bucket pairs a scene
+    count with a resolution, drives the AI-ideas one-tap size, and mirrors the
+    default style onto the flat default_size_presets key like every other field."""
+
+    def test_fresh_style_gets_default_size_presets(self):
+        cfg = app.load_config()
+        sp = cfg["styles"][0]["size_presets"]
+        self.assertEqual(set(sp), {"small", "medium", "large"})
+        self.assertEqual(sp["small"]["scenes"], 6)
+        self.assertEqual(sp["medium"]["scenes"], 12)
+        self.assertEqual(sp["large"]["scenes"], 20)
+        self.assertTrue(all(b["resolution"] in app._RESOLUTIONS for b in sp.values()))
+        # mirror: the default style's presets land on the flat key
+        self.assertEqual(cfg["default_size_presets"], sp)
+
+    def test_per_style_presets_persist_and_normalize(self):
+        self.write_config({
+            "styles": [
+                _style("A", size_presets={
+                    "small":  {"scenes": 3,   "resolution": "Portrait (480×832)"},
+                    "medium": {"scenes": 9999, "resolution": "bogus"},  # clamp + bad res
+                    "large":  {"scenes": 15,  "resolution": "Landscape FHD (1920×1080)"},
+                }),
+                _style("B"),
+            ],
+            "default_style": "A",
+        })
+        app.save_config(app.load_config())
+        on_disk = app.load_config()
+        a = next(s for s in on_disk["styles"] if s["name"] == "A")
+        self.assertEqual(a["size_presets"]["small"],
+                         {"scenes": 3, "resolution": "Portrait (480×832)"})
+        # 9999 clamps to MAX_SCENES; an unknown resolution falls back to the default
+        self.assertEqual(a["size_presets"]["medium"]["scenes"], app.MAX_SCENES)
+        self.assertEqual(a["size_presets"]["medium"]["resolution"],
+                         app._DEFAULT_SIZE_PRESETS["medium"]["resolution"])
+        self.assertEqual(a["size_presets"]["large"]["scenes"], 15)
+        # default style A mirrors onto the flat key
+        self.assertEqual(on_disk["default_size_presets"], a["size_presets"])
+
+    def test_missing_buckets_filled_from_defaults(self):
+        self.write_config({
+            "styles": [_style("A", size_presets={
+                "small": {"scenes": 4, "resolution": "Portrait (480×832)"}})],
+            "default_style": "A",
+        })
+        cfg = app.load_config()
+        sp = cfg["styles"][0]["size_presets"]
+        self.assertEqual(sp["small"], {"scenes": 4, "resolution": "Portrait (480×832)"})
+        self.assertEqual(sp["medium"], app._DEFAULT_SIZE_PRESETS["medium"])
+        self.assertEqual(sp["large"], app._DEFAULT_SIZE_PRESETS["large"])
+
+    def test_each_style_keeps_its_own_presets_object(self):
+        # A legacy-migrated config gives every style the built-in default; editing
+        # one must not bleed into another (no shared dict aliasing).
+        cfg = app.load_config()
+        cfg["styles"] = [_style("A"), _style("B")]
+        for s in cfg["styles"]:
+            s.pop("size_presets", None)
+        app.save_config(cfg)
+        cfg = app.load_config()
+        a, b = cfg["styles"]
+        a["size_presets"]["small"]["scenes"] = 1
+        self.assertEqual(b["size_presets"]["small"]["scenes"],
+                         app._DEFAULT_SIZE_PRESETS["small"]["scenes"])
+
+
 class ScriptGenerateTaskTests(unittest.TestCase):
     """The /api/script/generate endpoint kicks the (slow, multi-call) generation
     off in a background thread and returns a task id to poll — so a blip on the
