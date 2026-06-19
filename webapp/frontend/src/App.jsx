@@ -10,8 +10,7 @@ import Remix from './screens/Remix.jsx'
 import Queue from './screens/Queue.jsx'
 import Analytics from './screens/Analytics.jsx'
 import Community from './screens/Community.jsx'
-import Publish from './screens/Publish.jsx'
-import PublishSchedule from './screens/PublishSchedule.jsx'
+import Publishing from './screens/Publishing.jsx'
 import Ideas from './screens/Ideas.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
@@ -246,8 +245,7 @@ export default function App() {
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />
       case 'analytics': return <Analytics />
       case 'community': return <Community />
-      case 'publish': return <Publish initialWorkDir={publishWorkDir} go={go} />
-      case 'schedule': return <PublishSchedule go={go} meta={meta} />
+      case 'publish': return <Publishing go={go} meta={meta} initialWorkDir={publishWorkDir} />
       case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />

@@ -23,7 +23,6 @@ const ROUTES = {
   analytics: { seg: ['analytics'] },
   community: { seg: ['community'] },
   publish:  { seg: ['publish'],  name: true },
-  schedule: { seg: ['schedule'] },
   ideas:    { seg: ['ideas'] },
   library:  { seg: ['films'] },
   engagement: { seg: ['engagement'] },
