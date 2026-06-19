@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Segmented, Icon, Banner, composeResolution, resolutionTier } from '../components.jsx'
+import { Card, Chip, Button, Segmented, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
 function Stars({ value }) {
@@ -28,14 +28,13 @@ function IdeaReach({ idea, isShort }) {
   return <Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(r.predicted_views)}</Chip>
 }
 
-// Orientation follows the video length (short → portrait, else landscape); the
-// pixel/quality tier follows the configured default so AI-idea and audience
-// suggestions queue at the default resolution rather than a hardcoded 1080p.
-const LENGTH_PRESETS = {
-  short:  { scenes: 6,  orientation: 'Portrait' },
-  medium: { scenes: 12, orientation: 'Landscape' },
-  long:   { scenes: 20, orientation: 'Landscape' },
-}
+// Size presets (Small/Medium/Large) are configured per style in Settings; each
+// pairs a scene count with a resolution. The toggle below picks one per idea.
+const SIZE_ORDER = ['small', 'medium', 'large']
+const SIZE_LABELS = { small: 'Small', medium: 'Medium', large: 'Large' }
+// Ideas tagged before the rename used short/medium/long — map them across.
+const LEGACY_SIZE = { short: 'small', medium: 'medium', long: 'large' }
+const orientationOf = (resolution) => String(resolution || '').split(' ')[0]
 
 const DISMISSED_IDEAS_KEY = 'spielbot.dismissedIdeas'
 
@@ -105,13 +104,15 @@ export default function Ideas({ go, meta = {} }) {
     const title = idea?.title || idea?.final_title || idea
     setIdeas((arr) => arr.filter((it) => ideaKey(it) !== key && (it.title || it.final_title || it) !== title))
   }
-  // Per-idea video length: stored on the idea itself so each card keeps its own
-  // choice. New ideas have no length and default to 'short' (portrait, 6 scenes)
-  // until toggled.
-  const ideaLength = (idea) => idea?.length || 'short'
-  const setIdeaLength = (idea, length) => {
+  // Per-idea size: stored on the idea itself so each card keeps its own choice.
+  // New ideas have no size and default to 'small' until toggled.
+  const ideaSize = (idea) => {
+    const v = idea?.size || idea?.length || 'small'
+    return LEGACY_SIZE[v] || v
+  }
+  const setIdeaSize = (idea, size) => {
     const key = ideaKey(idea)
-    setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, length } : it)))
+    setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, size } : it)))
   }
   const closeIdea = async (idea, reason = 'dismissed') => {
     const title = idea.title || idea.final_title || idea
@@ -129,19 +130,16 @@ export default function Ideas({ go, meta = {} }) {
       setBusy('')
     }
   }
-  // Resolution = the selected style's pixel tier at the length's orientation.
-  // Length only chooses orientation; the quality tier follows the style's
-  // resolution, so AI-idea / suggestion videos no longer hardcode 1080p.
-  const presetResolution = (length) => {
-    const preset = LENGTH_PRESETS[length]
-    const styleObj = styleList.find((s) => s.name === effectiveStyle)
-    const configured = styleObj?.resolution || meta.config?.resolution || meta.default_resolution || ''
-    const tier = resolutionTier(meta, configured) || meta.default_pixels
-    return composeResolution(meta, preset.orientation, tier) || configured
+  // Scenes + resolution come straight from the idea's style size preset, so each
+  // size is exactly what that style configured in Settings.
+  const presetFor = (idea, size) => {
+    const styleObj = styleList.find((s) => s.name === (idea?.style_name || effectiveStyle))
+    const presets = styleObj?.size_presets || meta.default_size_presets || {}
+    return presets[size] || (meta.default_size_presets || {})[size]
+      || { scenes: 6, resolution: meta.default_resolution || '' }
   }
   const queueIdea = async (idea, title) => {
-    const { scenes } = LENGTH_PRESETS[ideaLength(idea)]
-    const resolution = presetResolution(ideaLength(idea))
+    const { scenes, resolution } = presetFor(idea, ideaSize(idea))
     setError('')
     try {
       await api.queueAdd(title, scenes, idea.reason || '', resolution, idea.style_name || effectiveStyle)
@@ -152,8 +150,7 @@ export default function Ideas({ go, meta = {} }) {
     }
   }
   const createIdea = async (idea, title) => {
-    const { scenes } = LENGTH_PRESETS[ideaLength(idea)]
-    const resolution = presetResolution(ideaLength(idea))
+    const { scenes, resolution } = presetFor(idea, ideaSize(idea))
     await closeIdea(idea, 'used')
     go('create', { title, description: idea.reason || '', scenes, resolution, styleName: idea.style_name || effectiveStyle })
   }
@@ -198,25 +195,22 @@ export default function Ideas({ go, meta = {} }) {
         </Card>
         {ideas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
-          const length = ideaLength(idea)
-          const { scenes, orientation } = LENGTH_PRESETS[length]
+          const size = ideaSize(idea)
+          const { scenes, resolution } = presetFor(idea, size)
           const key = ideaKey(idea) || `${title}-${i}`
           return (
             <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                <div className="row center gap-10"><IdeaReach idea={idea} isShort={length === 'short'} /><Stars value={idea.interestingness} /></div>
+                <div className="row center gap-10"><IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} /><Stars value={idea.interestingness} /></div>
               </div>
               {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
               <div className="row center mt-16">
-                <Segmented value={length} onChange={(v) => setIdeaLength(idea, v)} options={[
-                  { value: 'short',  label: 'Short' },
-                  { value: 'medium', label: 'Medium' },
-                  { value: 'long',   label: 'Long' },
-                ]} />
+                <Segmented value={size} onChange={(v) => setIdeaSize(idea, v)}
+                  options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
               </div>
               <div className="row center between mt-16 row--wrap gap-10">
-                <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientation}</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
                 <div className="row gap-10">
                   <Button variant="ghost" icon="xmark" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea)}>Close</Button>
                   <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title)}>Queue</Button>

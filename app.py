@@ -128,6 +128,17 @@ _DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
 
+# Per-style size presets: Small/Medium/Large buckets, each pairing a scene count
+# (≈ duration) with a resolution. The AI-ideas screen offers these as a one-tap
+# size that fits the style. Defaults mirror the old hardcoded Short/Medium/Long
+# lengths (6/12/20 scenes) — small portrait, medium/large landscape.
+_SIZE_BUCKETS = ("small", "medium", "large")
+_DEFAULT_SIZE_PRESETS = {
+    "small":  {"scenes": 6,  "resolution": compose_resolution("Portrait", _DEFAULT_PIXELS)},
+    "medium": {"scenes": 12, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
+    "large":  {"scenes": 20, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
+}
+
 
 DEFAULT_CFG = {
     "music_vol": 18,
@@ -170,6 +181,10 @@ DEFAULT_CFG = {
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 6,
+    # Mirror of the DEFAULT style's Small/Medium/Large size presets (see
+    # _DEFAULT_SIZE_PRESETS). Per-style values live on each style; this flat key
+    # tracks the default style like every other STYLE_FIELD_TO_FLAT mirror.
+    "default_size_presets": _DEFAULT_SIZE_PRESETS,
     "default_visual_style": "",
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
@@ -252,6 +267,8 @@ STYLE_FIELD_TO_FLAT = {
     "x_account":            "x_account",
     # Render quality
     "resolution":           "resolution",
+    # Small/Medium/Large size presets (scenes + resolution per bucket)
+    "size_presets":         "default_size_presets",
     "lora_strength":        "lora_strength",
     "first_pass_cfg":       "first_pass_cfg",
     "first_pass_steps":     "first_pass_steps",
@@ -282,6 +299,32 @@ def _style_from_flat(cfg: dict, name: str) -> dict:
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         style[field] = cfg.get(flat, DEFAULT_CFG.get(flat))
     return style
+
+
+def _norm_size_presets(value) -> dict:
+    """Normalize a style's Small/Medium/Large size presets into a complete,
+    valid {bucket: {scenes, resolution}} dict.
+
+    Missing buckets, non-numeric/out-of-range scene counts and unrecognized
+    resolution names fall back to the built-in defaults, so callers can rely on
+    every bucket being present and its resolution being a known name. Always
+    returns a fresh dict — never the shared default object."""
+    value = value if isinstance(value, dict) else {}
+    out = {}
+    for bucket in _SIZE_BUCKETS:
+        default = _DEFAULT_SIZE_PRESETS[bucket]
+        raw = value.get(bucket)
+        raw = raw if isinstance(raw, dict) else {}
+        try:
+            scenes = int(raw.get("scenes", default["scenes"]))
+        except (TypeError, ValueError):
+            scenes = default["scenes"]
+        scenes = max(1, min(MAX_SCENES, scenes))
+        resolution = raw.get("resolution")
+        if resolution not in _RESOLUTIONS:
+            resolution = default["resolution"]
+        out[bucket] = {"scenes": scenes, "resolution": resolution}
+    return out
 
 
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
@@ -326,6 +369,11 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         flat = STYLE_FIELD_TO_FLAT[field]
         if flat in cfg:
             normalized[default_idx][field] = cfg[flat]
+    # size_presets is a nested dict, not a scalar: coerce each style's copy into
+    # a complete, valid structure (and give every row its own object) before the
+    # mirror below snapshots the default style's onto the flat key.
+    for row in normalized:
+        row["size_presets"] = _norm_size_presets(row.get("size_presets"))
     default = normalized[default_idx]
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         cfg[flat] = default[field]
