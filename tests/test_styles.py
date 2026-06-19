@@ -533,6 +533,133 @@ class StyleAwareIdeasTests(TempConfigCase):
         self.assertEqual(updates["q9"]["gen_style_name"], "B")
 
 
+class AutoPickMixTests(TempConfigCase):
+    """Auto-picked queue top-ups rotate across the eligible styles to mix them,
+    a style opts out of the rotation via auto_pick_exclude (manual idea
+    generation ignores the flag), and the AI ideas screen can show / generate a
+    mix across every style (issue #117)."""
+
+    def _styles(self, *names, default=None, exclude=()):
+        styles = [_style(n) for n in names]
+        for s in styles:
+            if s["name"] in exclude:
+                s["auto_pick_exclude"] = True
+        self.write_config({"styles": styles, "default_style": default or names[0]})
+
+    # ── per-style opt-out field ──
+    def test_auto_pick_exclude_round_trips_and_defaults_false(self):
+        self._styles("A", "B", "C", exclude=("B",))
+        cfg = app.load_config()
+        by = {s["name"]: s for s in cfg["styles"]}
+        self.assertFalse(by["A"]["auto_pick_exclude"])
+        self.assertTrue(by["B"]["auto_pick_exclude"])
+        self.assertFalse(by["C"]["auto_pick_exclude"])
+        # mirror: the default style's flag lands on the flat key
+        self.assertEqual(cfg["default_auto_pick_exclude"], by["A"]["auto_pick_exclude"])
+        # eligible list, in config order, drops the excluded style
+        self.assertEqual(app._auto_pick_styles(cfg), ["A", "C"])
+
+    def test_every_style_excluded_means_no_auto_pick(self):
+        self._styles("A", "B", exclude=("A", "B"))
+        with mock.patch.object(app, "generate_video_suggestions") as gen:
+            self.assertIsNone(app._auto_pick_suggestion(app.load_config()))
+        gen.assert_not_called()
+
+    # ── mixing: generation + rotation across eligible styles ──
+    def _auto_pick(self, *, cached=None, queue=None, gen=None):
+        """Run _auto_pick_suggestion with the queue/suggestion IO mocked."""
+        mocks = [
+            mock.patch.object(app, "_channel_video_titles", return_value=[]),
+            mock.patch.object(app.yt, "load_suggestions",
+                              return_value=[dict(s) for s in (cached or [])]),
+            mock.patch.object(app.yt, "save_suggestions"),
+            mock.patch.object(app.yt, "load_queue", return_value=list(queue or [])),
+            mock.patch.object(app.yt, "add_to_queue", return_value={"id": "q9"}),
+            mock.patch.object(app.yt, "update_queue_item"),
+            mock.patch.object(app, "generate_video_prompt", return_value=""),
+        ]
+        if gen is not None:
+            mocks.append(mock.patch.object(app, "generate_video_suggestions", side_effect=gen))
+        for m in mocks:
+            m.start()
+            self.addCleanup(m.stop)
+        return app._auto_pick_suggestion(app.load_config())
+
+    @staticmethod
+    def _idea(style, used=False):
+        return {"id": f"{style}1", "title": f"{style}1", "reason": "r",
+                "interestingness": 0.7, "style_name": style, "used": used}
+
+    def test_auto_pick_generates_only_for_eligible_styles(self):
+        self._styles("A", "B", "C", exclude=("B",))
+        seen = []
+
+        def fake_gen(titles, cfg, style=None):
+            seen.append(style["name"])
+            return [{"title": f"{style['name']} idea", "reason": "r", "interestingness": 0.7}]
+
+        item = self._auto_pick(cached=[], gen=fake_gen)
+        self.assertEqual(set(seen), {"A", "C"})            # B is never generated
+        self.assertIn(item["gen_style_name"], {"A", "C"})
+
+    def test_auto_pick_rotates_to_next_style(self):
+        self._styles("A", "B", "C")
+        cached = [self._idea("A"), self._idea("B"), self._idea("C")]
+        # Last auto-picked style was A → the next pick rotates to B.
+        queue = [{"id": "q0", "source": "suggestion", "gen_style_name": "A", "created_at": 100.0}]
+        item = self._auto_pick(cached=cached, queue=queue)
+        self.assertEqual(item["gen_style_name"], "B")
+
+    def test_auto_pick_rotation_skips_styles_without_ideas(self):
+        # Last pick A, but only C has an unused idea → walk the rotation past B
+        # (which has none) to C, rather than falling back to A.
+        self._styles("A", "B", "C")
+        queue = [{"id": "q0", "source": "suggestion", "gen_style_name": "A", "created_at": 1.0}]
+        item = self._auto_pick(cached=[self._idea("C")], queue=queue)
+        self.assertEqual(item["gen_style_name"], "C")
+
+    def test_auto_pick_ignores_unused_idea_from_excluded_style(self):
+        # B is excluded; its waiting idea must NOT be picked — a fresh batch is
+        # generated for the eligible styles instead.
+        self._styles("A", "B", exclude=("B",))
+
+        def fake_gen(titles, cfg, style=None):
+            return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
+
+        item = self._auto_pick(cached=[self._idea("B")], gen=fake_gen)
+        self.assertEqual(item["gen_style_name"], "A")
+
+    # ── "All styles" AI ideas endpoint ──
+    def test_all_styles_endpoint_unions_cached(self):
+        self._styles("A", "B")
+        cached = [
+            {"id": "a1", "title": "A idea", "style_name": "A", "used": False},
+            {"id": "b1", "title": "B idea", "style_name": "B", "used": False},
+        ]
+        with mock.patch.object(backend.yt, "load_suggestions", return_value=cached):
+            out = backend.youtube_suggestions(guidance="", refresh=False, style_name=backend.ALL_STYLES)
+        self.assertTrue(out["cached"])
+        self.assertEqual(out["style_name"], backend.ALL_STYLES)
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"A idea", "B idea"})
+
+    def test_all_styles_endpoint_generates_across_styles(self):
+        self._styles("A", "B")
+        saved = {}
+
+        def fake_gen(titles, cfg, style=None):
+            return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
+
+        with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=[]), \
+             mock.patch.object(backend.yt, "save_suggestions", side_effect=lambda s: saved.update(items=list(s))):
+            out = backend.youtube_suggestions(guidance="", refresh=True, style_name=backend.ALL_STYLES)
+        self.assertFalse(out["cached"])
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"A fresh", "B fresh"})
+        self.assertEqual({s["style_name"] for s in out["suggestions"]}, {"A", "B"})
+        self.assertEqual({s["style_name"] for s in saved["items"]}, {"A", "B"})  # both persisted
+
+
 class SizePresetsTests(TempConfigCase):
     """Per-style Small/Medium/Large size presets: each bucket pairs a scene
     count with a resolution, drives the AI-ideas one-tap size, and mirrors the

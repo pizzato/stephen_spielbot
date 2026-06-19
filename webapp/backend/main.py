@@ -1703,6 +1703,78 @@ def _idea_style_key(idea: dict, default_name: str) -> str:
     return str(idea.get("style_name") or "") or default_name
 
 
+# AI ideas screen sentinel: generate/show a mix of ideas across every style.
+ALL_STYLES = "__all__"
+
+
+def _interleave(batches: list[list[dict]]) -> list[dict]:
+    """Round-robin merge of per-style batches so the result alternates styles."""
+    merged = []
+    for i in range(max((len(b) for b in batches), default=0)):
+        for b in batches:
+            if i < len(b):
+                merged.append(b[i])
+    return merged
+
+
+def _style_idea_batch(cfg: dict, ss: dict, g: str, previous: list[str]) -> list[dict]:
+    """Generate + stamp a batch of ideas for one resolved style profile."""
+    if g:
+        ideas = _guided_suggestions(g, previous, cfg, style=ss)
+    else:
+        ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg, style=ss))
+    return [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
+             "style_name": ss["name"], "created_at": time.time(),
+             "used": False, "dismissed": False}
+            for idea in ideas]
+
+
+def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
+    """AI ideas mixed across every style — the "All styles" option on the AI
+    ideas screen. Without guidance/refresh, returns the union of each style's
+    cached ideas; otherwise generates a fresh batch per style and interleaves
+    them so the user picks from a mix. Manual generation spans every style — the
+    per-style auto_pick_exclude flag only governs the automatic queue top-up."""
+    style_names = [s["name"] for s in (cfg.get("styles") or [])
+                   if isinstance(s, dict) and s.get("name")]
+    if not g and not refresh:
+        try:
+            cached = _visible_suggestions(yt.load_suggestions())
+        except Exception:
+            cached = []
+        if cached:
+            return {"suggestions": cached, "cached": True, "style_name": ALL_STYLES}
+
+    with _track_op("Generating suggestions", g or "all styles"):
+        batches = []
+        for name in style_names:
+            ss = gapp.style_settings(cfg, name)
+            try:
+                previous = gapp._channel_video_titles(cfg, style_name=name)
+            except Exception:
+                previous = []
+            try:
+                batches.append(_style_idea_batch(cfg, ss, g, previous))
+            except Exception as e:
+                raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
+    merged = _interleave(batches)
+
+    # Replace every current style's cached set with the new mix; keep ideas whose
+    # style no longer exists (orphans) so nothing is silently lost.
+    try:
+        names = set(style_names)
+        default_name = cfg.get("default_style", "")
+        others = [s for s in yt.load_suggestions()
+                  if _idea_style_key(s, default_name) not in names]
+    except Exception:
+        others = []
+    try:
+        yt.save_suggestions(others + merged)
+    except Exception:
+        pass
+    return {"suggestions": _visible_suggestions(merged), "cached": False, "style_name": ALL_STYLES}
+
+
 @api.get("/api/youtube/suggestions")
 def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
                         style_name: str = Query("")) -> dict:
@@ -1714,6 +1786,8 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
     is given."""
     cfg = gapp.load_config()
     g = guidance.strip()
+    if style_name == ALL_STYLES:
+        return _all_styles_suggestions(cfg, g, refresh)
     ss = gapp.style_settings(cfg, style_name)
     default_name = cfg.get("default_style", "")
     target = ss["name"] or default_name
