@@ -36,6 +36,10 @@ const SIZE_LABELS = { small: 'Small', medium: 'Medium', large: 'Large' }
 const LEGACY_SIZE = { short: 'small', medium: 'medium', long: 'large' }
 const orientationOf = (resolution) => String(resolution || '').split(' ')[0]
 
+// Sentinel style selection: show/generate a mix of ideas across every style.
+// Kept in sync with ALL_STYLES on the backend.
+const ALL_STYLES = '__all__'
+
 const DISMISSED_IDEAS_KEY = 'spielbot.dismissedIdeas'
 
 const normalizeIdeaTitle = (title) => String(title || '').trim().toLowerCase().replace(/\s+/g, ' ')
@@ -73,12 +77,17 @@ export default function Ideas({ go, meta = {} }) {
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
-  // gets children-story topics. '' = the default style (resolved server-side).
+  // gets children-story topics. '' = the default style (resolved server-side);
+  // ALL_STYLES = a mix of every style, shown together so you can pick across them.
   const [styleSel, setStyleSel] = useState('')
   const styleList = meta.config?.styles || []
+  const isAll = styleSel === ALL_STYLES
   const effectiveStyle = styleSel || meta.config?.default_style || ''
+  // The style an idea (and its size preset / queue entry) belongs to — its own
+  // stamp in the mix, otherwise the selected style.
+  const styleOf = (idea) => idea?.style_name || (isAll ? (meta.config?.default_style || '') : effectiveStyle)
   const byStyle = (arr) => (arr || []).filter(
-    (i) => !effectiveStyle || (i.style_name || meta.config?.default_style) === effectiveStyle)
+    (i) => isAll || !effectiveStyle || (i.style_name || meta.config?.default_style) === effectiveStyle)
 
   // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
   // 90s rock bands); blank = general ideas from the channel's gaps.
@@ -133,7 +142,7 @@ export default function Ideas({ go, meta = {} }) {
   // Scenes + resolution come straight from the idea's style size preset, so each
   // size is exactly what that style configured in Settings.
   const presetFor = (idea, size) => {
-    const styleObj = styleList.find((s) => s.name === (idea?.style_name || effectiveStyle))
+    const styleObj = styleList.find((s) => s.name === styleOf(idea))
     const presets = styleObj?.size_presets || meta.default_size_presets || {}
     return presets[size] || (meta.default_size_presets || {})[size]
       || { scenes: 6, resolution: meta.default_resolution || '' }
@@ -142,7 +151,7 @@ export default function Ideas({ go, meta = {} }) {
     const { scenes, resolution } = presetFor(idea, ideaSize(idea))
     setError('')
     try {
-      await api.queueAdd(title, scenes, idea.reason || '', resolution, idea.style_name || effectiveStyle)
+      await api.queueAdd(title, scenes, idea.reason || '', resolution, styleOf(idea))
       await closeIdea(idea, 'used')
       setStatus('Added to queue.')
     } catch (e) {
@@ -152,7 +161,7 @@ export default function Ideas({ go, meta = {} }) {
   const createIdea = async (idea, title) => {
     const { scenes, resolution } = presetFor(idea, ideaSize(idea))
     await closeIdea(idea, 'used')
-    go('create', { title, description: idea.reason || '', scenes, resolution, styleName: idea.style_name || effectiveStyle })
+    go('create', { title, description: idea.reason || '', scenes, resolution, styleName: styleOf(idea) })
   }
 
   return (
@@ -175,8 +184,9 @@ export default function Ideas({ go, meta = {} }) {
           </div>
           <div className="row gap-10 center mt-16" style={{ flexWrap: 'wrap' }}>
             {styleList.length > 0 && (
-              <select className="select" value={effectiveStyle} onChange={(e) => pickStyle(e.target.value)}
+              <select className="select" value={isAll ? ALL_STYLES : effectiveStyle} onChange={(e) => pickStyle(e.target.value)}
                 disabled={loadingIdeas} style={{ maxWidth: 220 }} title="Ideas are generated for this style">
+                {styleList.length > 1 && <option value={ALL_STYLES}>All styles (mix)</option>}
                 {styleList.map((s) => (
                   <option key={s.name} value={s.name}>
                     {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
@@ -202,7 +212,7 @@ export default function Ideas({ go, meta = {} }) {
             <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                <div className="row center gap-10"><IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} /><Stars value={idea.interestingness} /></div>
+                <div className="row center gap-10">{isAll && idea.style_name && <Chip>{idea.style_name}</Chip>}<IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} /><Stars value={idea.interestingness} /></div>
               </div>
               {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
               <div className="row center mt-16">

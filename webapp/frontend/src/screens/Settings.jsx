@@ -1014,6 +1014,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
                 </select>
               </Field>
+              <Check checked={!!st.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
+                label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
             </div>
           </Card>
 
