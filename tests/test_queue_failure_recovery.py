@@ -145,8 +145,10 @@ class AutoRetryFailedTests(TempConfigCase):
                            "youtube_auto_ai_ideas": ai_ideas})
 
     def _failed_item(self, qid, retry_count=0, **extra):
+        # approved=True: a failed item already passed through "creating", which
+        # stamps approved=True, so under the review gate it stays retry-eligible.
         return {"id": qid, "status": "failed", "final_title": qid,
-                "script_ready": True, "work_dir": f"/tmp/{qid}",
+                "script_ready": True, "approved": True, "work_dir": f"/tmp/{qid}",
                 "video_job_id": f"job-{qid}", "retry_count": retry_count, **extra}
 
     def _run(self, queue):
@@ -197,7 +199,9 @@ class AutoRetryFailedTests(TempConfigCase):
     def test_review_mode_only_retries_reviewed_scripts(self):
         self._config(approve=False)
         scriptless = {"id": "f1", "status": "failed", "final_title": "F"}
-        started, updates, _ = self._run([scriptless])
+        # script_ready and linked, but never Approved: the gate still skips it.
+        unapproved = dict(self._failed_item("f3"), approved=False)
+        started, updates, _ = self._run([scriptless, unapproved])
         self.assertEqual(started, [])
         self.assertEqual(updates, [])
         started, _, _ = self._run([scriptless, self._failed_item("f2")])
