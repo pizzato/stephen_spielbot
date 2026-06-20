@@ -48,8 +48,11 @@ class TempConfigCase(unittest.TestCase):
 
 
 def _ready_item(qid, title):
+    # script_ready AND approved: the review gate renders only items the user has
+    # explicitly Approved, not merely ones whose script is written.
     return {"id": qid, "status": "pending", "final_title": title,
-            "script_ready": True, "work_dir": f"/tmp/{qid}", "video_job_id": f"job-{qid}"}
+            "script_ready": True, "approved": True,
+            "work_dir": f"/tmp/{qid}", "video_job_id": f"job-{qid}"}
 
 
 def _scriptless_item(qid, title):
@@ -94,6 +97,18 @@ class AutoStartReviewModeTests(TempConfigCase):
                   "script_ready": True}
         with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
              mock.patch.object(backend.yt, "load_queue", return_value=[broken]), \
+             mock.patch.object(backend, "_start_queue_item") as start:
+            out = backend._auto_start_best()
+        self.assertIsNone(out)
+        start.assert_not_called()
+
+    def test_unapproved_ready_item_is_not_started(self):
+        # script_ready and fully linked, but the user hasn't Approved it: the
+        # review gate holds it back until the explicit Approve action. A written
+        # script is not enough — approval is a separate, deliberate step.
+        item = dict(_ready_item("q4", "Awaiting approval"), approved=False)
+        with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[item]), \
              mock.patch.object(backend, "_start_queue_item") as start:
             out = backend._auto_start_best()
         self.assertIsNone(out)
