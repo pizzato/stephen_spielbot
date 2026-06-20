@@ -172,6 +172,7 @@ export default function App() {
           music_desc: nextJob.music_desc || '',
           queue_item_id: choices.queueItemId || '',
           style_name: nextJob.style_name || '',
+          approved: true,  // auto-approve opt-in → render without parking for review
         })
         if (r.started) go('progress', { workDir: nextJob.work_dir })
         else go('queue')

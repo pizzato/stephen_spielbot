@@ -760,6 +760,10 @@ def add_to_queue(comment: dict, final_title: str, source: str = "",
         "interestingness": float(comment.get("interestingness", 0.5)),
         "source": source,
         "status": "pending",
+        # Explicit render approval, separate from script_ready: a script can be
+        # written/linked (script_ready) without yet being approved to render.
+        # Auto-start in review mode renders only approved items.
+        "approved": False,
         "created_at": time.time(),
         "video_job_id": None,
         "youtube_video_id": None,
