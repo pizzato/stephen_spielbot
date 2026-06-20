@@ -91,3 +91,32 @@ def remove_item(item_id: str) -> bool:
         return False
     save_queue(new_q)
     return True
+
+
+def _is_waiting(entry: dict) -> bool:
+    """True while an entry still has a target waiting to publish — the set the
+    manual order applies to (done/skipped entries are history)."""
+    return ((entry.get("youtube") or {}).get("status") == "pending"
+            or (entry.get("x") or {}).get("status") == "pending")
+
+
+def move_item(item_id: str, direction: int) -> bool:
+    """Move an entry up (direction=-1) or down (direction=1) among the entries
+    still waiting to publish, so the manual publish order can be hand-tuned.
+    Mirrors youtube.move_queue_item — the file order *is* the manual order."""
+    queue = load_queue()
+    waiting = [i for i, e in enumerate(queue) if _is_waiting(e)]
+    try:
+        item_idx = next(i for i, e in enumerate(queue) if e.get("id") == item_id)
+    except StopIteration:
+        return False
+    if item_idx not in waiting:
+        return False
+    pos = waiting.index(item_idx)
+    target = pos + direction
+    if target < 0 or target >= len(waiting):
+        return False
+    other_idx = waiting[target]
+    queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
+    save_queue(queue)
+    return True
