@@ -653,6 +653,10 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
             music_desc=music_desc,
             queue_item_id=body.queue_item_id,
             style_name=ss["name"],
+            # Auto-approve means the user opted to render without review; an
+            # in-place link from the Edit-script flow (queue_item_id only) just
+            # attaches the script and leaves it unapproved for review.
+            approved=bool(body.auto_approve),
         ))
         result.update({
             "auto_approved": bool(body.auto_approve),
@@ -4074,6 +4078,26 @@ def queue_update(body: QueueUpdateBody) -> dict:
     return {"ok": True, "queue": yt.load_queue()}
 
 
+class QueueApproveBody(BaseModel):
+    id: str
+    approved: bool = True
+
+
+@api.post("/api/queue/approve")
+def queue_approve(body: QueueApproveBody) -> dict:
+    """Approve (or un-approve) a pending queue item for rendering. With
+    auto-start on, the automation loop only renders approved items, so this is
+    the gate between "script written" and "okay to render". Only pending items
+    are gated; anything already rendering/finished is left untouched."""
+    item = next((q for q in yt.load_queue() if q.get("id") == body.id), None)
+    if not item:
+        raise HTTPException(404, "Queue item not found.")
+    if item.get("status") != "pending":
+        raise HTTPException(400, "Only queued (pending) items can be approved.")
+    yt.update_queue_item(body.id, approved=bool(body.approved))
+    return {"ok": True, "queue": yt.load_queue()}
+
+
 def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
     try:
         store = DurableStore.default()
@@ -4107,7 +4131,10 @@ def _start_queue_item(item: dict) -> dict:
         # failed/errored item may still be retried.
         if cur is not None and cur.get("status") in ("creating", "upload_pending", "posted", "done"):
             raise HTTPException(409, f"Queue item is already {cur.get('status')}.")
-        yt.update_queue_item(item_id, status="creating")
+        # Starting a render is itself an approval (manual "Render now" or an
+        # auto-start of an approved item) — stamp it so a later failed-retry
+        # still satisfies the review gate.
+        yt.update_queue_item(item_id, status="creating", approved=True)
     title = item.get("final_title", "")
     # The item's style profile (or the default style) supplies every setting
     # the queue item doesn't carry itself. An empty style_name is passed
@@ -4193,13 +4220,19 @@ class FromJobBody(BaseModel):
     music_desc: str = ""
     queue_item_id: str = ""
     style_name: str = ""
+    # True when the caller has reviewed the script and OKs it to render
+    # (Script-screen "Approve", or Create's auto-approve). Merely linking a
+    # script to a queued slot (Edit-script flow) leaves this False so the item
+    # waits for an explicit approval before auto-start picks it up.
+    approved: bool = False
 
 
 @api.post("/api/queue/from-job")
 def queue_from_job(body: FromJobBody) -> dict:
-    """Add an approved (already-generated) script to the queue. Does NOT render
-    unless 'auto-start next' (youtube_auto_start_job) is on and nothing is
-    currently rendering.
+    """Add an already-generated script to the queue. Does NOT render unless
+    'auto-start next' (youtube_auto_start_job) is on, the script is approved
+    (body.approved, or the global auto-approve mode), and nothing is currently
+    rendering. An unapproved script waits for the Queue's Approve action.
 
     If body.queue_item_id points at a still-pending slot, update THAT item in
     place (keeping its position) instead of appending a new entry. This is how
@@ -4222,6 +4255,7 @@ def queue_from_job(body: FromJobBody) -> dict:
 
     script_fields = dict(
         video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
+        approved=bool(body.approved),
         gen_style=body.style, gen_resolution=body.resolution,
         gen_voice=body.voice, gen_voice_robotic=body.voice_robotic, gen_music=body.music_desc,
         gen_style_name=body.style_name,
@@ -4255,7 +4289,12 @@ def queue_from_job(body: FromJobBody) -> dict:
     yt.update_queue_item(entry["id"], **script_fields)
 
     started = None
-    if cfg.get("youtube_auto_start_job") and not gapp._is_job_running():
+    # Only fire an immediate render when the script is explicitly approved (or
+    # the global auto-approve mode is on). In review mode an enqueued-but-
+    # unapproved script waits for the Queue's Approve action — enqueuing is not
+    # approving.
+    if (cfg.get("youtube_auto_start_job") and not gapp._is_job_running()
+            and (body.approved or cfg.get("youtube_auto_approve_script"))):
         item = next((q for q in yt.load_queue() if q.get("id") == entry["id"]), None)
         if item:
             try:
@@ -5010,9 +5049,10 @@ def _retryable_failed(cfg: dict) -> dict | None:
               if q.get("status") == "failed"
               and int(q.get("retry_count") or 0) < _MAX_AUTO_RETRIES]
     if not cfg.get("youtube_auto_approve_script"):
-        # Review gate on: only retry items whose script a human already saw —
-        # the same rule fresh starts follow.
-        failed = [q for q in failed if q.get("script_ready")
+        # Review gate on: only retry items the user approved — the same rule
+        # fresh starts follow. (A started render stamps approved=True, so any
+        # item that ran and failed already qualifies.)
+        failed = [q for q in failed if q.get("approved") and q.get("script_ready")
                   and q.get("work_dir") and q.get("video_job_id")]
     if not failed:
         return None
@@ -5033,13 +5073,13 @@ def _auto_start_best() -> dict | None:
         # writing the script first when the item doesn't have one.
         item = {**pending[0]} if pending else None  # fresh copy
     else:
-        # Review gate on: only render the next item whose script is already
-        # written (added from the Script screen or via the queue's Edit-script
-        # flow — i.e. a human has seen it). Never generate scripts here: an
-        # unreviewed script must not render itself, so script-less items wait
-        # for the user.
+        # Review gate on: only render the next item the user has explicitly
+        # approved (and that has a written script). A script being present is
+        # not enough — approval is a separate, deliberate action, so a freshly
+        # written/linked script waits until the user Approves it. Never generate
+        # scripts here either; script-less items wait for the user.
         item = next((q for q in pending
-                     if q.get("script_ready")
+                     if q.get("approved") and q.get("script_ready")
                      and q.get("work_dir") and q.get("video_job_id")), None)
     if not item:
         # Nothing fresh to start — retry a failed item before inventing new work.
