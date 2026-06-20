@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, RegenLabel } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 function SceneCard({
@@ -18,6 +18,8 @@ function SceneCard({
   const [taskStatus, setTaskStatus] = useState(null)
   const [error, setError] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
+  const [history, setHistory] = useState(scene.history)
+  const [selecting, setSelecting] = useState(false)
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
@@ -105,6 +107,23 @@ function SceneCard({
     }
   }, [initialTask, startPolling])
 
+  // Keep local history in sync when the parent reloads scenes (e.g. after an
+  // image re-render adds a new version).
+  useEffect(() => { setHistory(scene.history) }, [scene.history])
+
+  const selectVersion = async (versionId) => {
+    setSelecting(true)
+    setError('')
+    try {
+      const r = await api.selectFilmPreview(workDir, scene.id, versionId)
+      setHistory(r.history)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSelecting(false)
+    }
+  }
+
   const rerender = async (component) => {
     await persist()
     setBusy(component)
@@ -126,7 +145,11 @@ function SceneCard({
   }
 
   const isRendering = !!busy || !!taskId
-  const previewUrl = scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : '')
+  // Prefer the selected kept version (each has a unique URL, so switching updates
+  // the frame instantly without cache-busting); fall back to the canonical preview.
+  const selectedVersion = history?.versions?.find((v) => v.id === history.selected)
+  const previewUrl = selectedVersion ? fileUrl(selectedVersion.path)
+    : (scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : ''))
   const videoUrl = scene.video_url
   // Match the panels to the film's real orientation so portrait frames aren't
   // cropped into a landscape box. Derived from the resolution name (e.g.
@@ -313,6 +336,9 @@ function SceneCard({
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering} onClick={() => setConfirmDel(true)}>Delete</Button>
               )}
             </div>
+
+            <VersionStrip versions={history?.versions} selected={history?.selected}
+              onSelect={selectVersion} aspect={aspect} busy={selecting || isRendering} />
           </div>
         </div>
       </Card>

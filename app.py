@@ -59,6 +59,7 @@ from pipeline.comfyui import (
 from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
+from pipeline import image_history
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -1381,6 +1382,8 @@ def _generate_active_scene_preview(
         raise RuntimeError("No cluster workers reachable for scene preview generation.")
 
     out = work_dir / f"scene_{sid:02d}_preview.png"
+    # Preserve the image we're about to overwrite so the user can return to it.
+    image_history.seed_if_empty(work_dir, sid, out)
     flux_model = cfg.get("flux_model", "flux1-schnell-fp8.safetensors")
     flux_clip_t5 = cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors")
     flux_clip_l = cfg.get("flux_clip_l", "clip_l.safetensors")
@@ -1416,6 +1419,7 @@ def _generate_active_scene_preview(
             store.update_scene_preview(job_id, sid, out)
         finally:
             store.close()
+        image_history.record(work_dir, sid, out)
         return out
     finally:
         worker_pool.release(url)

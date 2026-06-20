@@ -1,6 +1,8 @@
 // Reusable primitives for the redesign — ported from the design system's
 // components.jsx / App.jsx into ES modules.
 
+import { fileUrl } from './api'
+
 export function Icon({ name, brand, style, spin }) {
   return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
 }
@@ -151,6 +153,49 @@ export function Thumb({ variant = 0, loading, label, src, aspect }) {
         : <div className={`gfill ${loading ? 'skel' : 'g' + (variant % 6)}`}></div>}
       {label ? <span className="scene__no">{label}</span> : null}
       {loading ? <div className="scene__state">rendering…</div> : null}
+    </div>
+  )
+}
+
+// Browse kept image regenerations and click to pick the one in use. Hidden when
+// there's nothing to compare (fewer than two versions). `versions` items are
+// { id, path }; `selected` is the id currently in use; `onSelect(id)` switches.
+export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy }) {
+  if (!versions || versions.length < 2) return null
+  return (
+    <div className="mt-16">
+      <span className="label-sm">Versions <span className="muted">· click to use</span></span>
+      <div className="row gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
+        {versions.map((v) => {
+          const isSel = v.id === selected
+          return (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
+              disabled={busy}
+              title={isSel ? 'Current image' : 'Use this image'}
+              style={{
+                position: 'relative', padding: 0, width: 60, aspectRatio: aspect,
+                borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--paper-2)',
+                cursor: isSel ? 'default' : 'pointer',
+                border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
+                opacity: busy && !isSel ? 0.5 : 1,
+              }}>
+              <img src={fileUrl(v.path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              {isSel && (
+                <span style={{
+                  position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
+                  background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Icon name="check" />
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }

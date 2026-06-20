@@ -45,6 +45,7 @@ from pipeline.llm import generate_script, generate_video_suggestions, Scene  # n
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
+from pipeline import image_history  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -138,11 +139,11 @@ def _safe_under(path: Path, *roots: Path) -> bool:
     return False
 
 
-def _scene_to_json(row: dict) -> dict:
+def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     sid = int(row["id"])
     preview = row.get("preview_path") or ""
     has_preview = bool(preview and Path(preview).exists())
-    return {
+    out = {
         "id": sid,
         "title": row.get("title", ""),
         "image_prompt": row.get("image_prompt", ""),
@@ -151,6 +152,9 @@ def _scene_to_json(row: dict) -> dict:
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
+    if wd is not None:
+        out["history"] = image_history.history(wd, sid)
+    return out
 
 
 # ── activity tracker ─────────────────────────────────────────────────────────
@@ -633,7 +637,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "style": style,
         "style_name": ss["name"],
         "music_desc": music_desc,
-        "scenes": [_scene_to_json(s) for s in scenes_list],
+        "scenes": [_scene_to_json(s, work_dir) for s in scenes_list],
     }
     # Attach the script to the queue. Auto-approve enqueues a fresh slot (and may
     # auto-start a render). Editing a queued request (queue_item_id set) links the
@@ -746,7 +750,7 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
         "voice": ss.get("voice", ""),
         "voice_robotic": bool(ss.get("voice_robotic", False)),
         "resolution": ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
-        "scenes": [_scene_to_json(r) for r in rows],
+        "scenes": [_scene_to_json(r, wd) for r in rows],
     }
 
 
@@ -823,7 +827,7 @@ def job_scenes(job_id: str) -> dict:
         rows = store.scene_rows(job_id)
     finally:
         store.close()
-    return {"scenes": [_scene_to_json(r) for r in rows]}
+    return {"scenes": [_scene_to_json(r, gapp._job_work_dir(job_id)) for r in rows]}
 
 
 class SceneUpdate(BaseModel):
@@ -852,7 +856,9 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
             )
     except Exception as e:
         raise HTTPException(503, f"Preview failed: {str(e).splitlines()[0][:200]}")
-    return {"ok": True, "preview_path": str(out)}
+    wd = gapp._job_work_dir(job_id)
+    hist = image_history.history(wd, int(scene_id)) if wd else None
+    return {"ok": True, "preview_path": str(out), "history": hist}
 
 
 @api.post("/api/jobs/{job_id}/previews")
@@ -895,8 +901,32 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         finally:
             store.close()
 
-    return {"scenes": [_scene_to_json(r) for r in rows],
+    wd = gapp._job_work_dir(job_id)
+    return {"scenes": [_scene_to_json(r, wd) for r in rows],
             "generated": len(to_generate) - len(failed), "failed": failed}
+
+
+class PreviewSelectBody(BaseModel):
+    version_id: int
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview-select")
+def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) -> dict:
+    """Make a previously-kept image version the selected one for this scene."""
+    wd = gapp._job_work_dir(job_id)
+    if wd is None:
+        raise HTTPException(404, "No work directory for this job.")
+    try:
+        out = image_history.select(wd, int(scene_id), int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
+    store = DurableStore.default()
+    try:
+        store.update_scene_preview(job_id, int(scene_id), out)
+    finally:
+        store.close()
+    return {"ok": True, "preview_path": str(out),
+            "history": image_history.history(wd, int(scene_id))}
 
 
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
@@ -4549,7 +4579,7 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
     result = []
     for r in ordered:
         sid = int(r.get("id") or r.get("scene_id") or 0)
-        result.append({**_scene_to_json(r), **_film_scene_files(wd, sid)})
+        result.append({**_scene_to_json(r, wd), **_film_scene_files(wd, sid)})
 
     jc = _film_job_config(wd)
     title = ""
@@ -4794,6 +4824,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
         if first_frame.exists():
             shutil.copy2(first_frame, preview)
+            image_history.record(wd, sid, preview)
 
         preview_mtime = int(preview.stat().st_mtime) if preview.exists() else int(time.time())
         preview_url = f"/api/file?path={preview}&t={preview_mtime}" if preview.exists() else ""
@@ -4985,6 +5016,11 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         for f in [f"scene_{sid:02d}_narration.wav", f"scene_{sid:02d}_final.mp4"]:
             (wd / f).unlink(missing_ok=True)
     elif body.component == "image":
+        # Preserve the current image before deleting it so the user can return to it.
+        cur = wd / f"scene_{sid:02d}_preview.png"
+        if not cur.exists():
+            cur = wd / f"scene_{sid:02d}_first_frame.png"
+        image_history.seed_if_empty(wd, sid, cur)
         for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
             (wd / f).unlink(missing_ok=True)
     elif body.component == "video":
@@ -5012,6 +5048,31 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+class FilmPreviewSelectBody(BaseModel):
+    work_dir: str
+    version_id: int
+
+
+@api.post("/api/films/scenes/{scene_id}/preview-select")
+def select_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
+    """Make a previously-kept image version the selected one for a film scene."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        out = image_history.select(wd, int(scene_id), int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        store.update_scene_preview(job_id, int(scene_id), out)
+    finally:
+        store.close()
+    return {"ok": True, "preview_path": str(out),
+            "history": image_history.history(wd, int(scene_id))}
 
 
 @api.get("/api/films/task")
