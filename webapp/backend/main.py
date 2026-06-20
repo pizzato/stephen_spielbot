@@ -666,34 +666,27 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     return result
 
 
-@api.get("/api/scripts/load")
-def load_script(work_dir: str = Query("")) -> dict:
-    if not work_dir:
-        raise HTTPException(400, "Choose a saved script.")
-    wd = Path(work_dir)
-    if not _safe_under(wd, gapp.OUTPUT_DIR):
-        raise HTTPException(400, "Script path is outside the output folder.")
+def _read_script_scenes(wd: Path) -> list:
+    """Read and validate the saved script.json from `wd`, or raise HTTPException."""
     script_path = wd / "script.json"
     if not script_path.exists():
         raise HTTPException(404, "No script found in the selected folder.")
-
     try:
         scenes_list = json.loads(script_path.read_text())
     except Exception as e:
         raise HTTPException(500, f"Could not read script: {str(e).splitlines()[0][:200]}")
     if not isinstance(scenes_list, list):
         raise HTTPException(400, "Saved script has an unexpected format.")
+    return scenes_list
 
-    job_id = job_id_from_work_dir(wd)
-    fallback_title = wd.name.replace("-", " ").title()
-    video_title = fallback_title
-    style = ""
-    music_desc = ""
-    style_name = ""
 
+def _script_source_meta(src_job_id: str, fallback_title: str) -> tuple[str, str, str, str]:
+    """Resolve (video_title, style, music_desc, style_name) for an existing job
+    from the durable store, falling back to the folder-derived title."""
+    video_title, style, music_desc, style_name = fallback_title, "", "", ""
     store = DurableStore.default()
     try:
-        job = store.get_job(job_id)
+        job = store.get_job(src_job_id)
         if job:
             d = _row_to_dict(job)
             cfg = json.loads(d.get("config_json") or "{}")
@@ -702,6 +695,21 @@ def load_script(work_dir: str = Query("")) -> dict:
             style = meta.get("style", "")
             music_desc = meta.get("music_desc", "")
             style_name = cfg.get("style_name", "")
+    finally:
+        store.close()
+    return video_title, style, music_desc, style_name
+
+
+def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
+                          style: str, music_desc: str, style_name: str) -> dict:
+    """Register `scenes_list` as the script of work dir `wd` (a reload of its own
+    folder, or a fresh duplicate) and return the Script-editor payload. Back-fills
+    each scene's preview_path from any matching image already in `wd`, so a first
+    frame produced by an earlier render (or copied from a source script) is reused
+    instead of regenerated. Shared by /scripts/load and /scripts/duplicate."""
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
         store.create_or_update_job(
             job_id, wd, video_title,
             config={"video_title": video_title, "phase": "script_review",
@@ -740,6 +748,72 @@ def load_script(work_dir: str = Query("")) -> dict:
         "resolution": ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
         "scenes": [_scene_to_json(r) for r in rows],
     }
+
+
+@api.get("/api/scripts/load")
+def load_script(work_dir: str = Query("")) -> dict:
+    if not work_dir:
+        raise HTTPException(400, "Choose a saved script.")
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Script path is outside the output folder.")
+    scenes_list = _read_script_scenes(wd)
+    fallback_title = wd.name.replace("-", " ").title()
+    video_title, style, music_desc, style_name = _script_source_meta(
+        job_id_from_work_dir(wd), fallback_title)
+    return _register_script_into(wd, scenes_list, video_title=video_title,
+                                 style=style, music_desc=music_desc, style_name=style_name)
+
+
+class DuplicateScriptBody(BaseModel):
+    work_dir: str
+    title: str = ""
+
+
+@api.post("/api/scripts/duplicate")
+def duplicate_script(body: DuplicateScriptBody) -> dict:
+    """Copy an existing script into a brand-new work dir so it can be rendered
+    again without touching the original. The job id is derived from the folder
+    path, so a fresh folder is a fresh job with a fresh final video
+    (~/videos/<new-folder>.mp4) — the source film's scenes and output stay intact.
+    Cached scene first-frames, the description and cover are copied across too, so
+    the editor is pre-filled and the re-render reuses the images (a new LTX pass
+    still yields a different take). Returns the same payload as /scripts/load, so
+    the duplicate opens straight in the Script editor for review."""
+    import shutil
+    src = Path(body.work_dir)
+    if not _safe_under(src, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Script path is outside the output folder.")
+    scenes_list = _read_script_scenes(src)
+
+    fallback_title = src.name.replace("-", " ").title()
+    src_title, style, music_desc, style_name = _script_source_meta(
+        job_id_from_work_dir(src), fallback_title)
+    title = (body.title or "").strip() or src_title
+
+    new_wd = gapp._script_work_dir(title)
+    gapp._persist_script_snapshot(new_wd, scenes_list)
+    # Carry cached scene first-frames over so the render reuses them, plus the
+    # description/cover so the editor's Cover tab is pre-filled. Best-effort —
+    # a source without these just regenerates them on demand.
+    for s in scenes_list:
+        try:
+            sid = int(s.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        if sid <= 0:
+            continue
+        for suffix in (f"scene_{sid:02d}_preview.png", f"scene_{sid:02d}_first_frame.png"):
+            sp = src / suffix
+            if sp.exists():
+                shutil.copy2(sp, new_wd / suffix)
+    for extra in ("description.txt", "cover.png"):
+        sp = src / extra
+        if sp.exists():
+            shutil.copy2(sp, new_wd / extra)
+
+    return _register_script_into(new_wd, scenes_list, video_title=title,
+                                 style=style, music_desc=music_desc, style_name=style_name)
 
 
 @api.get("/api/jobs/{job_id}/scenes")

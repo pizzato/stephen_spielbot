@@ -72,6 +72,9 @@ export const api = {
   improveBrief: (field, title, direction, styleName) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
+  // Copy an existing script into a fresh work dir to render again, leaving the
+  // original render intact. Returns the same payload as loadScript.
+  duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
   regenPreview: (jobId, sceneId, resolution, style) =>
