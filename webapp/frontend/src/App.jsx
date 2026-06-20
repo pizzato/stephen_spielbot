@@ -202,6 +202,20 @@ export default function App() {
     go('script', { workDir })
   }, [go, meta])
 
+  // Library/Films → Script: copy an already-rendered film's script into a fresh
+  // work dir and open the copy, so the user can tweak and render another film
+  // without touching the original. Throws so the caller can surface the error.
+  const onNewVersion = useCallback(async (workDir) => {
+    const loaded = await api.duplicateScript(workDir)
+    setJob({
+      ...loaded,
+      voice: loaded.voice || meta.config?.default_voice || '',
+      voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
+      resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
+    })
+    go('script', { workDir: loaded.work_dir })
+  }, [go, meta])
+
   // Queue → Script/Create: edit the script behind a pending queue item, linked
   // to its slot so "Approve → queue" updates it in place (issue #43). Items that
   // already have a ready script open straight in the Script tab; script-less
@@ -248,7 +262,7 @@ export default function App() {
       case 'community': return <Community />
       case 'publish': return <Publishing go={go} meta={meta} initialWorkDir={publishWorkDir} />
       case 'ideas': return <Ideas go={go} meta={meta} />
-      case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} />
+      case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} onNewVersion={onNewVersion} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} />
       case 'engagement': return <Engagement meta={meta} go={go} />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} />
