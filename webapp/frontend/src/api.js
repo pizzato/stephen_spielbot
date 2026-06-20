@@ -145,6 +145,7 @@ export const api = {
   publishScan: () => req('POST', '/publish/scan'),
   publishRemove: (id, platform) => req('POST', '/publish/remove', { id, platform: platform || '' }),
   publishNow: (id) => req('POST', '/publish/now', { id }),
+  publishMove: (id, direction) => req('POST', '/publish/move', { id, direction }),
 
   ytAnalytics: (channel, refresh) => {
     const p = new URLSearchParams()
