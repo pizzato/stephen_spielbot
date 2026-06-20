@@ -3311,6 +3311,57 @@ def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict,
     return _summary("youtube_channels", "youtube"), _summary("x_accounts", "x")
 
 
+def _publish_entry_scores(e: dict, cfg: dict) -> tuple[float, float | None]:
+    """(predicted_views, interestingness) for a publish-queue entry, cached on the
+    entry after first computation so polling/ticks don't re-run the model. Returns
+    predicted_views=-1.0 / interestingness=None when unavailable. Mirrors the
+    Queue page's scoring: prefer the linked render-queue item (carries the exact
+    gen_* inputs and the interestingness rating), else fall back to the rendered
+    film's job_config."""
+    if "predicted_views" in e and "interestingness" in e:
+        pv = e.get("predicted_views")
+        return (float(pv) if pv is not None else -1.0), e.get("interestingness")
+    item = _queue_item_by_id(e.get("queue_item_id", "")) or {}
+    interest = item.get("interestingness")
+    if item:
+        pv = _predicted_views_for_item(item, cfg)
+    else:
+        p = Path(e.get("work_dir", ""))
+        jc = _film_job_config(p)
+        try:
+            r = eng.predict(jc.get("video_title") or e.get("title") or "",
+                            jc.get("video_prompt") or jc.get("description") or "",
+                            _is_portrait_film(p),
+                            channel=_engagement_channel("", jc.get("gen_style_name") or ""))
+            pv = float(r.get("predicted_views") or 0) if r.get("available") else -1.0
+        except Exception:
+            pv = -1.0
+    pq.update_item(e["id"], predicted_views=pv, interestingness=interest)
+    e["predicted_views"], e["interestingness"] = pv, interest
+    return float(pv if pv is not None else -1.0), interest
+
+
+def _ordered_publish_queue(cfg: dict, q: list[dict]) -> list[dict]:
+    """Publish-queue entries in release order — the publish_sort_order chosen on
+    the Publishing page. "queue" (default) and unknown values keep the manual
+    file order; sorts are stable so ties fall back to it. The scheduler consumes
+    this same order, so the top waiting entry for each channel is genuinely next."""
+    mode = cfg.get("publish_sort_order") or "queue"
+    items = list(q)
+    if mode in ("interest", "views"):
+        for e in items:
+            _publish_entry_scores(e, cfg)
+    if mode == "newest":
+        items.sort(key=lambda e: -(e.get("created_at") or 0))
+    elif mode == "oldest":
+        items.sort(key=lambda e: e.get("created_at") or 0)
+    elif mode == "interest":
+        items.sort(key=lambda e: -(e["interestingness"] if e.get("interestingness") is not None else -1.0))
+    elif mode == "views":
+        items.sort(key=lambda e: -(e["predicted_views"] if e.get("predicted_views") is not None else -1.0))
+    return items
+
+
 @api.get("/api/publish/queue")
 def publish_queue_list() -> dict:
     cfg = gapp.load_config()
@@ -3318,9 +3369,42 @@ def publish_queue_list() -> dict:
     q = pq.load_queue()
     now = time.time()
     chans, accts = _publish_cadence_status(cfg, q, now)
-    return {"items": q, "channels": chans, "accounts": accts,
+    skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
+    ordered = _ordered_publish_queue(cfg, q)
+    for e in ordered:          # ensure interest/views chips render for every entry
+        _publish_entry_scores(e, cfg)
+    # Project a concrete release time per waiting target: the j-th still-waiting
+    # entry for a channel/account posts j cadence-steps after that key's next
+    # eligible time. Comment requests that bypass the schedule go on the next
+    # tick. Tag the single earliest entry as the next to publish. These fields are
+    # response-only (added to the in-memory copy, never saved).
+    cad = {("youtube", k): v for k, v in chans.items()}
+    cad.update({("x", k): v for k, v in accts.items()})
+    counters: dict = {}
+    best: tuple | None = None  # (projected_at, entry)
+    for e in ordered:
+        bypass = skip_comment and e.get("source") == "comment"
+        for plat, keyf in (("youtube", "channel"), ("x", "account")):
+            sub = e.get(plat) or {}
+            if sub.get("status") != "pending":
+                continue
+            k = (plat, sub.get(keyf) or "")
+            info = cad.get(k) or {}
+            iv = int(info.get("interval_minutes") or 0)
+            base = info.get("next_eligible") or now
+            j = counters.get(k, 0)
+            counters[k] = j + 1
+            proj = now if bypass else (base + j * iv * 60)
+            sub["projected_at"] = proj
+            sub["position"] = j + 1
+            if best is None or proj < best[0]:
+                best = (proj, e)
+    if best is not None:
+        best[1]["is_next"] = True
+    return {"items": ordered, "channels": chans, "accounts": accts,
             "enabled": bool(cfg.get("publish_schedule_enabled")),
-            "skip_comment": bool(cfg.get("publish_schedule_skip_comment_requests", True)),
+            "skip_comment": skip_comment,
+            "sort": cfg.get("publish_sort_order") or "queue",
             "now": now}
 
 
@@ -3334,6 +3418,11 @@ def publish_scan() -> dict:
 class PublishItemBody(BaseModel):
     id: str
     platform: str = ""   # "youtube" | "x" | "" (the whole entry)
+
+
+class PublishMoveBody(BaseModel):
+    id: str
+    direction: int = -1   # -1 = up (sooner), 1 = down (later)
 
 
 @api.post("/api/publish/remove")
@@ -3357,6 +3446,12 @@ def publish_remove(body: PublishItemBody) -> dict:
 def publish_now(body: PublishItemBody) -> dict:
     """Release one entry immediately, ignoring its channel/account cadence."""
     return {"ok": True, "released": _release_scheduled_publishes(force_id=body.id)}
+
+
+@api.post("/api/publish/move")
+def publish_move(body: PublishMoveBody) -> dict:
+    """Reorder a waiting entry by hand (only meaningful in 'queue'/manual sort)."""
+    return {"ok": pq.move_item(body.id, body.direction)}
 
 
 @api.get("/api/x/analytics")
@@ -5252,7 +5347,7 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
 
     released = {"youtube": [], "x": []}
     fired: set = set()  # (plat, key) already released this call — one per key per call
-    for e in sorted(q, key=lambda e: e.get("created_at", 0)):
+    for e in _ordered_publish_queue(cfg, q):
         if force_id and e.get("id") != force_id:
             continue
         p = Path(e.get("work_dir", ""))
