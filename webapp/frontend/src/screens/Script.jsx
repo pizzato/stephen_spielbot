@@ -261,6 +261,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         music_desc: job.music_desc || '',
         queue_item_id: job.queue_item_id || '',
         style_name: job.style_name || '',
+        // Approving from the Script screen means the user reviewed these scenes
+        // — release it to render (auto-start) rather than parking it for review.
+        approved: true,
       })
       setJob({ ...job, scenes, style })
       if (r.started) onGenerate(job.work_dir)
