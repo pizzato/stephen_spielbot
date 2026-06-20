@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, VersionStrip } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
@@ -84,7 +84,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       .then((r) => {
         if (r.scenes) setScenes((prev) => prev.map((s) => {
           const u = r.scenes.find((x) => x.id === s.id)
-          return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview } : s
+          return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview, history: u.history } : s
         }))
       })
       .catch((e) => setError(e.message))
@@ -198,7 +198,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const r = await api.regenAllPreviews(job.job_id, resolution, style)
       if (r.scenes) setScenes((prev) => prev.map((s) => {
         const u = r.scenes.find((x) => x.id === s.id)
-        return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview, cb: Date.now() } : s
+        return u ? { ...s, preview_path: u.preview_path, has_preview: u.has_preview, history: u.history, cb: Date.now() } : s
       }))
       const generated = r.generated ?? 0
       const failedCount = r.failed?.length ?? 0
@@ -258,7 +258,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       await persist(cur)
       const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style)
-      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, cb: Date.now() } : s))
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const selectVersion = async (versionId) => {
+    setBusy('preview'); setError('')
+    try {
+      const r = await api.selectPreview(job.job_id, scenes[cur].id, versionId)
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -497,6 +505,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 </div>
                 <Button variant="ghost" block icon="rotate-right" disabled={busy === 'preview'} onClick={regen}>
                   {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
+                <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
+                  onSelect={selectVersion} aspect={aspect} busy={busy === 'preview'} />
               </Card>
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">

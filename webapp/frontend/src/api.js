@@ -83,6 +83,8 @@ export const api = {
     req('POST', `/jobs/${jobId}/previews?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
   regenAllPreviews: (jobId, resolution, style) =>
     req('POST', `/jobs/${jobId}/previews?force=true&resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
+  selectPreview: (jobId, sceneId, versionId) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-select`, { version_id: versionId }),
   regenField: (jobId, sceneId, field, body) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-field?field=${encodeURIComponent(field)}`, body),
 
@@ -207,6 +209,7 @@ export const api = {
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
   rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
+  selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
