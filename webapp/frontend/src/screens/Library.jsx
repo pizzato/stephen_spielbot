@@ -2,15 +2,25 @@ import { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit }) {
+export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, onNewVersion }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [confirmDel, setConfirmDel] = useState('')   // work_dir pending delete confirm
   const [busyDel, setBusyDel] = useState('')
+  const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
 
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
+
+  // Copy a finished film's script into a fresh work dir and open the editor on it.
+  // On success onNewVersion navigates away (this screen unmounts), so busy is only
+  // cleared on error.
+  const newVersion = async (wd) => {
+    setBusyNew(wd); setError('')
+    try { await onNewVersion(wd) }
+    catch (e) { setError(e.message); setBusyNew('') }
+  }
 
   // Delete a partial render / unfinished job and its files (cancels it first if running).
   const del = async (wd) => {
@@ -77,9 +87,12 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit })
             </div>
             <div style={{ padding: '14px 18px 16px' }}>
               <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.label}</div>
-              <div className="row gap-10 mt-16">
+              <div className="row gap-10 mt-16 row--wrap">
                 <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
                 <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
+                <Button variant="ghost" icon="copy" disabled={busyNew === f.work_dir} onClick={(e) => { e.stopPropagation(); newVersion(f.work_dir) }}>
+                  {busyNew === f.work_dir ? 'Copying…' : 'New version'}
+                </Button>
                 <Button variant="primary" icon="upload" onClick={(e) => { e.stopPropagation(); go('publish', { publishWorkDir: f.work_dir }) }}>Publish</Button>
               </div>
             </div>

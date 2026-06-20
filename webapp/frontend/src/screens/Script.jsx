@@ -92,16 +92,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }, [job?.job_id])
 
   // ── Scripts tab ──────────────────────────────────────────────────────────────
+  // Drop a loaded/duplicated script into the editor (fills voice/resolution
+  // defaults the render needs). The job-id effect above switches to the Cover tab.
+  const applyLoaded = (loaded) => setJob({
+    ...loaded,
+    voice: loaded.voice || meta.config?.default_voice || '',
+    voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
+    resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
+  })
+
   const loadScript = async (workDir) => {
     setBusy('load:' + workDir); setError('')
+    try { applyLoaded(await api.loadScript(workDir)) }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  // Copy this script into a fresh work dir and open the copy, so rendering it
+  // again produces a new film without overwriting the original.
+  const duplicateScript = async (workDir) => {
+    setBusy('dup:' + workDir); setError('')
     try {
-      const loaded = await api.loadScript(workDir)
-      setJob({
-        ...loaded,
-        voice: loaded.voice || meta.config?.default_voice || '',
-        voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
-        resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
-      })
+      applyLoaded(await api.duplicateScript(workDir))
+      await refreshScripts()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -339,6 +351,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row gap-10 mt-16 row--wrap">
                 <Button variant="primary" icon="folder-open" disabled={!!busy} onClick={() => loadScript(s.work_dir)}>
                   {busy === 'load:' + s.work_dir ? 'Loading…' : job?.work_dir === s.work_dir ? 'Reload' : 'Load'}
+                </Button>
+                <Button variant="ghost" icon="copy" disabled={!!busy} onClick={() => duplicateScript(s.work_dir)}>
+                  {busy === 'dup:' + s.work_dir ? 'Duplicating…' : 'Duplicate'}
                 </Button>
                 {confirmDel === s.work_dir ? (
                   <>
