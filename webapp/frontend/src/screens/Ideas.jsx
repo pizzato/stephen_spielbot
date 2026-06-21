@@ -83,11 +83,16 @@ export default function Ideas({ go, meta = {} }) {
   const styleList = meta.config?.styles || []
   const isAll = styleSel === ALL_STYLES
   const effectiveStyle = styleSel || meta.config?.default_style || ''
+  // Styles opted out of auto-picked ideas stay out of the "All styles" mix
+  // (reach them by selecting the style itself), mirroring the backend.
+  const excludedStyles = new Set(styleList.filter((s) => s.auto_pick_exclude).map((s) => s.name))
   // The style an idea (and its size preset / queue entry) belongs to — its own
   // stamp in the mix, otherwise the selected style.
   const styleOf = (idea) => idea?.style_name || (isAll ? (meta.config?.default_style || '') : effectiveStyle)
-  const byStyle = (arr) => (arr || []).filter(
-    (i) => isAll || !effectiveStyle || (i.style_name || meta.config?.default_style) === effectiveStyle)
+  const byStyle = (arr) => (arr || []).filter((i) => {
+    const sn = i.style_name || meta.config?.default_style
+    return isAll ? !excludedStyles.has(sn) : (!effectiveStyle || sn === effectiveStyle)
+  })
 
   // The text box steers generation (e.g. "Rock bands of the 90s" → ideas about
   // 90s rock bands); blank = general ideas from the channel's gaps.
