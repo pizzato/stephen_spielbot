@@ -535,9 +535,9 @@ class StyleAwareIdeasTests(TempConfigCase):
 
 class AutoPickMixTests(TempConfigCase):
     """Auto-picked queue top-ups rotate across the eligible styles to mix them,
-    a style opts out of the rotation via auto_pick_exclude (manual idea
-    generation ignores the flag), and the AI ideas screen can show / generate a
-    mix across every style (issue #117)."""
+    a style opts out of the rotation via auto_pick_exclude (which also drops it
+    from the AI ideas "All styles" mix, while it stays reachable on its own
+    style page), and the AI ideas screen can show / generate that mix (#117)."""
 
     def _styles(self, *names, default=None, exclude=()):
         styles = [_style(n) for n in names]
@@ -658,6 +658,51 @@ class AutoPickMixTests(TempConfigCase):
         self.assertEqual({s["title"] for s in out["suggestions"]}, {"A fresh", "B fresh"})
         self.assertEqual({s["style_name"] for s in out["suggestions"]}, {"A", "B"})
         self.assertEqual({s["style_name"] for s in saved["items"]}, {"A", "B"})  # both persisted
+
+    def test_all_styles_mix_drops_excluded_from_cached(self):
+        # B is opted out → its cached idea must not surface in the "All styles"
+        # mix, even though A's (eligible) does.
+        self._styles("A", "B", exclude=("B",))
+        cached = [
+            {"id": "a1", "title": "A idea", "style_name": "A", "used": False},
+            {"id": "b1", "title": "B idea", "style_name": "B", "used": False},
+        ]
+        with mock.patch.object(backend.yt, "load_suggestions", return_value=cached):
+            out = backend.youtube_suggestions(guidance="", refresh=False, style_name=backend.ALL_STYLES)
+        self.assertTrue(out["cached"])
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"A idea"})
+
+    def test_all_styles_mix_generates_only_for_eligible_and_keeps_excluded_cache(self):
+        # B is opted out → the mix generates for A only; B's previously cached
+        # idea survives in the pool so its own style page can still show it.
+        self._styles("A", "B", exclude=("B",))
+        saved, seen = {}, []
+
+        def fake_gen(titles, cfg, style=None):
+            seen.append(style["name"])
+            return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
+
+        existing = [{"id": "b1", "title": "B idea", "style_name": "B", "used": False}]
+        with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=existing), \
+             mock.patch.object(backend.yt, "save_suggestions", side_effect=lambda s: saved.update(items=list(s))):
+            out = backend.youtube_suggestions(guidance="", refresh=True, style_name=backend.ALL_STYLES)
+        self.assertEqual(seen, ["A"])                                  # B is never generated
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"A fresh"})
+        # B's cached idea is preserved alongside the freshly generated A idea.
+        self.assertEqual({s["title"] for s in saved["items"]}, {"B idea", "A fresh"})
+
+    def test_excluded_style_still_pickable_on_its_own_page(self):
+        # Selecting the opted-out style directly still returns its ideas — the
+        # exclusion only hides it from the mix, not from manual selection.
+        self._styles("A", "B", exclude=("B",))
+        cached = [{"id": "b1", "title": "B idea", "style_name": "B", "used": False}]
+        with mock.patch.object(backend.yt, "load_suggestions", return_value=cached):
+            out = backend.youtube_suggestions(guidance="", refresh=False, style_name="B")
+        self.assertTrue(out["cached"])
+        self.assertEqual(out["style_name"], "B")
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"B idea"})
 
 
 class SizePresetsTests(TempConfigCase):
