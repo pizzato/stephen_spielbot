@@ -15,9 +15,11 @@ import base64
 import hashlib
 import json
 import re
+import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -489,6 +491,60 @@ def workers_status() -> dict:
         "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
+
+
+_WORKER_ACTIONS = {"start", "stop", "restart"}
+
+
+def _host_of(entry: str) -> str:
+    """SSH hostname for a worker entry: http://HOST:PORT → HOST, host:port → host."""
+    e = (entry or "").strip()
+    if "://" in e:
+        return urllib.parse.urlparse(e).hostname or ""
+    return e.split("/")[0].split(":")[0]
+
+
+def _worker_hosts(cfg: dict) -> list[str]:
+    """Unique SSH hosts for the fleet, from the configured comfy/tts worker URLs.
+    Each host runs one docker compose stack (ComfyUI + F5-TTS) that
+    scripts/worker.sh controls over SSH — same hosts `make stop W=<host>` uses."""
+    hosts: list[str] = []
+    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []):
+        h = _host_of(entry)
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
+class WorkerControl(BaseModel):
+    host: str
+    action: str
+
+
+@api.post("/api/workers/control")
+def workers_control(body: WorkerControl) -> dict:
+    """Start/stop/restart one host's worker containers (ComfyUI + F5-TTS) over
+    SSH, via scripts/worker.sh — the same path as `make start/stop W=<host>`.
+    The machine stays powered on; this only toggles the docker compose stack.
+    `host` must be one of the configured workers (no arbitrary SSH targets)."""
+    action = (body.action or "").strip().lower()
+    host = (body.host or "").strip()
+    if action not in _WORKER_ACTIONS:
+        raise HTTPException(400, f"action must be one of {sorted(_WORKER_ACTIONS)}")
+    if host not in _worker_hosts(gapp.load_config()):
+        raise HTTPException(400, f"unknown worker host: {host!r}")
+    script = REPO_ROOT / "scripts" / "worker.sh"
+    try:
+        proc = subprocess.run(
+            ["bash", str(script), action, host],
+            cwd=str(REPO_ROOT), capture_output=True, text=True, timeout=90,
+        )
+    except subprocess.TimeoutExpired:
+        raise HTTPException(504, f"{action} {host} timed out (host unreachable?)")
+    output = (proc.stdout + proc.stderr).strip()
+    if proc.returncode != 0:
+        raise HTTPException(500, output or f"{action} {host} failed (exit {proc.returncode})")
+    return {"ok": True, "host": host, "action": action, "output": output}
 
 
 @api.get("/api/ui/worker")
