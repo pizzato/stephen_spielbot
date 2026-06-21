@@ -238,8 +238,11 @@ video_suggestions:
   user: |
     Recommend 5 video topics that would make great new additions to my documentary YouTube channel.
     ${style_context}
-    Previous videos I have already made:
+    Videos already made, in production, or already on my idea list — do NOT repeat or closely overlap any of these:
     ${titles_list}
+
+    Topics I have already considered and deliberately discarded — do NOT suggest these or close variations again:
+    ${discarded_list}
 
     Suggest topics that are complementary but clearly distinct — different eras, regions, or subject areas that would round out the library and attract new viewers. Avoid anything too similar to the existing list.
 

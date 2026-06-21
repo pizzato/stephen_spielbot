@@ -35,6 +35,10 @@ COMMENTS_CACHE_PATH = _CONFIG_DIR / "youtube_comments.json"
 ANALYTICS_CACHE_PATH = _CONFIG_DIR / "youtube_analytics.json"
 QUEUE_PATH = _CONFIG_DIR / "youtube_queue.json"
 SUGGESTIONS_PATH = _CONFIG_DIR / "youtube_suggestions.json"
+# Persistent cache of channel video titles so idea generation can dedup against
+# the published library without hitting the YouTube API on every call.
+VIDEO_TITLES_CACHE_PATH = _CONFIG_DIR / "youtube_video_titles.json"
+_VIDEO_TITLES_TTL = 6 * 3600.0  # seconds before a channel's title list is re-fetched
 
 # Reserved channel key for the pre-multi-channel login: its token lives at the
 # legacy youtube_token.json path, so existing setups keep working unchanged.
@@ -1281,3 +1285,40 @@ def fetch_channel_video_titles(client_secrets_path: str, max_results: int = 50, 
     except Exception as exc:
         logger.warning("fetch_channel_video_titles failed: %s", exc)
         return []
+
+
+def load_video_titles_cache() -> dict:
+    try:
+        data = json.loads(VIDEO_TITLES_CACHE_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_video_titles_cache(data: dict) -> None:
+    VIDEO_TITLES_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VIDEO_TITLES_CACHE_PATH.write_text(json.dumps(data, indent=2))
+
+
+def cached_channel_video_titles(client_secrets_path: str, channel: str = "",
+                                max_results: int = 500,
+                                max_age: float = _VIDEO_TITLES_TTL,
+                                force: bool = False) -> list[str]:
+    """Channel video titles backed by a persistent per-channel cache, so idea
+    generation doesn't re-query the YouTube API on every call. Re-fetches only
+    when the cached entry is older than ``max_age`` (or ``force``); on a fetch
+    failure it falls back to the last-known list so callers degrade gracefully."""
+    key = channel or DEFAULT_CHANNEL_KEY
+    cache = load_video_titles_cache()
+    entry = cache.get(key) if isinstance(cache.get(key), dict) else None
+    if entry and not force:
+        age = time.time() - float(entry.get("fetched_at", 0) or 0)
+        if age < max_age:
+            return list(entry.get("titles", []))
+    titles = fetch_channel_video_titles(client_secrets_path, max_results=max_results, channel=channel)
+    if not titles and entry:
+        # Fetch failed or returned nothing — keep serving the last good list.
+        return list(entry.get("titles", []))
+    cache[key] = {"titles": titles, "fetched_at": time.time(), "count": len(titles)}
+    save_video_titles_cache(cache)
+    return titles

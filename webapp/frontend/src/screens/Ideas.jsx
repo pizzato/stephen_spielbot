@@ -73,11 +73,22 @@ const writeDismissedIdea = (idea, reason = 'dismissed') => {
   if (titleKey) data[titleKey] = record
   window.localStorage.setItem(DISMISSED_IDEAS_KEY, JSON.stringify(data))
 }
+const clearDismissedIdea = (idea) => {
+  const title = idea?.title || idea?.final_title || idea
+  const data = readDismissedIdeas()
+  if (idea?.id) delete data[idea.id]
+  const titleKey = normalizeIdeaTitle(title)
+  if (titleKey) delete data[titleKey]
+  window.localStorage.setItem(DISMISSED_IDEAS_KEY, JSON.stringify(data))
+}
 const isDismissedIdea = (idea) => {
   const title = idea?.title || idea?.final_title || idea
   const data = readDismissedIdeas()
   return Boolean((idea?.id && data[idea.id]) || data[normalizeIdeaTitle(title)])
 }
+const sameIdea = (a, b) =>
+  (a?.id && b?.id && a.id === b.id) ||
+  normalizeIdeaTitle(a?.title || a?.final_title || a) === normalizeIdeaTitle(b?.title || b?.final_title || b)
 const visibleIdeas = (ideas) => (ideas || []).filter((idea) => !isDismissedIdea(idea))
 
 export default function Ideas({ go, meta = {} }) {
@@ -89,6 +100,8 @@ export default function Ideas({ go, meta = {} }) {
   const [busy, setBusy] = useState('')          // action key currently running
   const [sortBy, setSortBy] = useState('newest')
   const [preds, setPreds] = useState({})        // ideaKey -> engagement prediction, for the "Predicted views" sort
+  const [discarded, setDiscarded] = useState([]) // ideas the user closed — kept out of suggestions, revivable
+  const [showDiscarded, setShowDiscarded] = useState(false)
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
@@ -118,13 +131,22 @@ export default function Ideas({ go, meta = {} }) {
       setIdeas(visibleIdeas(d.suggestions || []))
     } catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
+  // Discarded ideas for the current style ('' style → its default; All styles → every discard).
+  const discardStyleArg = (sel) => (sel === ALL_STYLES ? '' : (sel || meta.config?.default_style || ''))
+  const loadDiscarded = async (sel = styleSel) => {
+    try {
+      const d = await api.getDiscarded(discardStyleArg(sel))
+      setDiscarded(d.discarded || [])
+    } catch { /* non-fatal — the discard list is supplementary */ }
+  }
   // First visit loads the cached set (no LLM call); only regenerates if empty.
-  useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false) }, [])
+  useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded() }, [])
   // Switching style swaps to that style's cached ideas (generates when empty).
   const pickStyle = (name) => {
     setStyleSel(name)
     setIdeas([])
     loadIdeas(guidance, false, name)
+    loadDiscarded(name)
   }
 
   const ideaKey = (idea) => idea?.id || idea?.title || idea?.final_title || ''
@@ -152,6 +174,7 @@ export default function Ideas({ go, meta = {} }) {
     try {
       const r = await api.dismissSuggestion({ id: idea.id || '', title, reason })
       if (Array.isArray(r.suggestions)) setIdeas(byStyle(visibleIdeas(r.suggestions)))
+      if (reason !== 'used') loadDiscarded()   // a real close — surface it under "Discarded"
       setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
     } catch (e) {
       setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
@@ -182,6 +205,28 @@ export default function Ideas({ go, meta = {} }) {
     const { scenes, resolution } = presetFor(idea, ideaSize(idea))
     await closeIdea(idea, 'used')
     go('create', { title, description: idea.reason || '', scenes, resolution, styleName: styleOf(idea) })
+  }
+  // Bring a discarded idea back into the active list. Clear the local hide too,
+  // otherwise visibleIdeas would re-filter it straight back out.
+  const reviveIdea = async (rec) => {
+    setError('')
+    clearDismissedIdea(rec)
+    setDiscarded((arr) => arr.filter((r) => !sameIdea(r, rec)))
+    try {
+      await api.reviveSuggestion({ id: rec.id || '', title: rec.title || '' })
+      await loadIdeas(guidance, false)
+      setStatus('Idea revived.')
+    } catch (e) { setError(e.message); loadDiscarded() }
+  }
+  // Forget a discarded idea for good — drops it from the discard list (it may
+  // resurface organically in a future generation).
+  const forgetIdea = async (rec) => {
+    setError('')
+    setDiscarded((arr) => arr.filter((r) => !sameIdea(r, rec)))
+    try {
+      await api.forgetSuggestion({ id: rec.id || '', title: rec.title || '' })
+      setStatus('Idea forgotten.')
+    } catch (e) { setError(e.message); loadDiscarded() }
   }
 
   // Sort is view-only — it reorders the cards, it never drops an idea (ideas
@@ -270,6 +315,37 @@ export default function Ideas({ go, meta = {} }) {
             </Card>
           )
         })}
+        {discarded.length > 0 && (
+          <Card span={12} well className="reveal">
+            <div className="row center between" style={{ cursor: 'pointer' }} onClick={() => setShowDiscarded((v) => !v)}>
+              <div className="row center gap-10">
+                <span className="stream-ico" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}><Icon name="trash-can" /></span>
+                <div>
+                  <div style={{ fontWeight: 600 }}>Discarded ideas ({discarded.length})</div>
+                  <div className="muted" style={{ fontSize: 12.5 }}>Kept out of new suggestions. Revive one to bring it back, or forget it for good.</div>
+                </div>
+              </div>
+              <Icon name={showDiscarded ? 'chevron-up' : 'chevron-down'} />
+            </div>
+            {showDiscarded && (
+              <div className="mt-16">
+                {discarded.map((rec) => (
+                  <div key={rec.id || rec.title} className="row center between row--wrap gap-10"
+                    style={{ padding: '10px 0', borderTop: '1px solid var(--line)' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>{rec.title}{isAll && rec.style_name ? <span style={{ marginLeft: 8 }}><Chip>{rec.style_name}</Chip></span> : null}</div>
+                      {rec.reason && <div className="muted" style={{ fontSize: 12.5, fontStyle: 'italic' }}>{rec.reason}</div>}
+                    </div>
+                    <div className="row gap-10">
+                      <Button variant="ghost" icon="rotate-left" onClick={() => reviveIdea(rec)}>Revive</Button>
+                      <Button variant="ghost" icon="trash-can" onClick={() => forgetIdea(rec)}>Forget</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        )}
       </div>
     </div>
   )

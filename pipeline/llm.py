@@ -737,12 +737,15 @@ def style_suggestion_context(style: dict | None) -> str:
 
 
 def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None,
-                               style: dict | None = None) -> list[dict]:
+                               style: dict | None = None,
+                               discarded_titles: list[str] | None = None) -> list[dict]:
     """Generate 5 video topic suggestions complementary to the channel's existing content.
 
     ``style`` (optional) is a style profile dict (name/description/visual_style)
     whose character steers the ideas — a children-story style should yield
-    children-story topics. Returns a list of dicts with keys: title, reason,
+    children-story topics. ``discarded_titles`` (optional) are topics the user
+    deliberately threw away; they're shown to the model as a 'do not suggest
+    again' list. Returns a list of dicts with keys: title, reason,
     interestingness.
     """
     if cfg is None:
@@ -752,8 +755,14 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
         if previous_titles
         else "(no previous videos yet — suggest a varied starting set)"
     )
+    discarded_list = (
+        "\n".join(f'- "{t}"' for t in discarded_titles)
+        if discarded_titles
+        else "(none — nothing has been discarded yet)"
+    )
     sys_msg = _prompts.system("video_suggestions")
     user_msg = _prompts.user("video_suggestions", titles_list=titles_list,
+                             discarded_list=discarded_list,
                              style_context=style_suggestion_context(style))
     backend = cfg.get("llm_backend", "local")
     try:
