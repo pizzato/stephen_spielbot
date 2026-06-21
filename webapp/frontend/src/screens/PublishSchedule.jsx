@@ -118,7 +118,7 @@ export default function PublishSchedule({ go, meta = {} }) {
   const entryRow = (e, idx, list, noMove) => {
     const pendingAny = e.youtube?.status === 'pending' || e.x?.status === 'pending'
     return (
-      <div key={e.id} className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: idx < list.length - 1 ? '1px solid var(--line)' : 'none' }}>
+      <div key={e.id} className="row center qrow" style={{ gap: 14, padding: '14px 22px', borderBottom: idx < list.length - 1 ? '1px solid var(--line)' : 'none' }}>
         <div className="stack" style={{ gap: 2 }} title={noMove ? 'Switch to Manual order to reorder' : undefined}>
           <button className="qmove" disabled={!pendingAny || !!busy || noMove} onClick={() => run('mu' + e.id, () => api.publishMove(e.id, -1))}><Icon name="chevron-up" /></button>
           <button className="qmove" disabled={!pendingAny || !!busy || noMove} onClick={() => run('md' + e.id, () => api.publishMove(e.id, 1))}><Icon name="chevron-down" /></button>
@@ -137,7 +137,7 @@ export default function PublishSchedule({ go, meta = {} }) {
             {platformRow(e, 'x', data.accounts || {})}
           </div>
         </div>
-        <div className="row gap-10 row--wrap" style={{ justifyContent: 'flex-end' }}>
+        <div className="row gap-10 row--wrap qrow__actions" style={{ justifyContent: 'flex-end' }}>
           {pendingAny && (
             <Button variant="ghost" icon="bolt" disabled={!!busy}
               onClick={() => run('now' + e.id, () => api.publishNow(e.id), () => setStatus('Releasing now…'))}>
@@ -155,7 +155,7 @@ export default function PublishSchedule({ go, meta = {} }) {
 
   const section = (title, hint, list, empty, opts = {}) => (
     <Card span={12} className="reveal reveal-d2" style={{ padding: 0, overflow: 'hidden' }}>
-      <div className="row center between gap-10 row--wrap" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+      <div className="row center between gap-10 row--wrap qrow-head" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
         <div>
           <span className="label-sm">{title}</span>
           {hint ? <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>{hint}</span> : null}

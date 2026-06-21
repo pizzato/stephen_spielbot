@@ -182,7 +182,7 @@ export default function Community() {
             <p className="body-1" style={{ fontSize: 14, margin: '10px 0 0' }}>{c.text}</p>
 
             {(c.replies?.length > 0) && (
-              <div className="stack gap-6" style={{ marginTop: 10, paddingLeft: 12, borderLeft: '2px solid var(--border)' }}>
+              <div className="stack gap-6" style={{ marginTop: 10, paddingLeft: 12, borderLeft: '2px solid var(--line)' }}>
                 {c.replies.map((r, ri) => (
                   <p key={r.reply_id || ri} style={{ fontSize: 13, margin: 0 }}>
                     <span style={{ fontWeight: 600 }}>{r.is_owner ? (targetName(c.channel) || 'You') : (adapter.prefix + (r.commenter || 'viewer'))}</span>

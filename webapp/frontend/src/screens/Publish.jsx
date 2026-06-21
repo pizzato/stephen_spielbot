@@ -22,14 +22,18 @@ function BestTimesCard({ data }) {
     <Card className="reveal reveal-d3">
       <span className="label-sm">Best time to post</span>
       {best && <div className="mt-8" style={{ fontSize: 13 }}>Try <strong>{DOW[best.weekday]} {fmtHour(best.hour)}</strong> · ~{fmtNum(best.predicted_views)} views</div>}
-      <div className="mt-16" style={{ display: 'grid', gridTemplateColumns: '30px repeat(24, 1fr)', gap: 2 }}>
-        {DOW.flatMap((d, wd) => [
-          <span key={`l${wd}`} className="muted" style={{ fontSize: 10, alignSelf: 'center' }}>{d}</span>,
-          ...Array.from({ length: 24 }, (_, h) => (
-            <div key={`${wd}-${h}`} title={`${d} ${fmtHour(h)} · ~${fmtNum(at(wd, h))} views`}
-              style={{ aspectRatio: '1', borderRadius: 2, background: 'var(--accent)', opacity: 0.1 + 0.9 * (at(wd, h) / max) }} />
-          )),
-        ])}
+      {/* Scrolls horizontally on a narrow phone (minmax keeps cells tappable)
+          instead of squeezing 24 hourly columns into unreadable slivers. */}
+      <div className="mt-16" style={{ overflowX: 'auto' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '30px repeat(24, minmax(14px, 1fr))', gap: 2 }}>
+          {DOW.flatMap((d, wd) => [
+            <span key={`l${wd}`} className="muted" style={{ fontSize: 10, alignSelf: 'center' }}>{d}</span>,
+            ...Array.from({ length: 24 }, (_, h) => (
+              <div key={`${wd}-${h}`} title={`${d} ${fmtHour(h)} · ~${fmtNum(at(wd, h))} views`}
+                style={{ aspectRatio: '1', borderRadius: 2, background: 'var(--accent)', opacity: 0.1 + 0.9 * (at(wd, h) / max) }} />
+            )),
+          ])}
+        </div>
       </div>
       <div className="muted" style={{ fontSize: 11, marginTop: 10 }}>
         {data.reliability && data.reliability !== 'ok' ? 'Rough guidance — ' : 'Advisory — '}

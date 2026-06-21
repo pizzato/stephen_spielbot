@@ -191,8 +191,9 @@ function SceneCard({
 
       <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
         <div>
-          {/* Media: initial frame + film, side by side, equal width */}
-          <div style={{ display: 'flex', gap: 1, background: 'var(--line)' }}>
+          {/* Media: initial frame + film, side by side, equal width
+              (stacks on mobile via .film-media). */}
+          <div className="film-media" style={{ display: 'flex', gap: 1, background: 'var(--line)' }}>
             {/* Initial frame */}
             <div
               onClick={() => previewUrl && setLightbox(true)}
