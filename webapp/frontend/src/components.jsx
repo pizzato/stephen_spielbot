@@ -8,7 +8,7 @@ export function Icon({ name, brand, style, spin }) {
 }
 
 export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button' }) {
-  const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : '', block ? 'btn--block' : '']
+  const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : size === 'sm' ? 'btn--sm' : '', block ? 'btn--block' : '']
     .filter(Boolean).join(' ')
   return (
     <button type={type} className={cls} onClick={onClick} disabled={disabled}>

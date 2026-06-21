@@ -87,7 +87,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
             {traffic.map((ts) => (
               <div key={ts.source}>
                 <div className="row center between" style={{ fontSize: 13, marginBottom: 4 }}><span>{ts.label}</span><span className="muted">{fmtNum(ts.views)} <span style={{ fontSize: 11 }}>({ts.pct}%)</span></span></div>
-                <div style={{ height: 4, background: 'var(--border)', borderRadius: 2 }}><div style={{ height: '100%', width: `${ts.pct}%`, background: 'var(--accent)', borderRadius: 2 }} /></div>
+                <div style={{ height: 4, background: 'var(--line)', borderRadius: 2 }}><div style={{ height: '100%', width: `${ts.pct}%`, background: 'var(--accent)', borderRadius: 2 }} /></div>
               </div>
             ))}
           </div>
@@ -100,7 +100,7 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
             {countries.map((c) => (
               <div key={c.country}>
                 <div className="row center between" style={{ fontSize: 13, marginBottom: 4 }}><span style={{ fontWeight: 500 }}>{c.country}</span><span className="muted">{fmtNum(c.views)} <span style={{ fontSize: 11 }}>({c.pct}%)</span></span></div>
-                <div style={{ height: 4, background: 'var(--border)', borderRadius: 2 }}><div style={{ height: '100%', width: `${c.pct}%`, background: 'var(--accent)', borderRadius: 2, opacity: 0.7 }} /></div>
+                <div style={{ height: 4, background: 'var(--line)', borderRadius: 2 }}><div style={{ height: '100%', width: `${c.pct}%`, background: 'var(--accent)', borderRadius: 2, opacity: 0.7 }} /></div>
               </div>
             ))}
           </div>
@@ -110,26 +110,26 @@ function YouTubeAnalytics({ analytics, loading, onRefresh }) {
         <Card span={12} className="reveal reveal-d2">
           <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent videos</div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <table style={{ width: '100%', minWidth: 820, borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
                 {['', 'Title', 'Duration', 'Views', 'Watch time', 'Avg duration', 'Retention', 'Impressions', 'CTR', 'Likes', 'Published'].map((h, i) => (
-                  <th key={i} style={{ textAlign: i <= 1 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={i} style={{ textAlign: i <= 1 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {analytics.videos.map((v) => (
-                  <tr key={v.video_id} style={{ borderBottom: '1px solid var(--border-subtle, var(--border))' }}>
+                  <tr key={v.video_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px 8px 0' }}>{v.thumbnail_url ? <img src={v.thumbnail_url} alt="" style={{ width: 48, height: 27, objectFit: 'cover', borderRadius: 4, display: 'block' }} /> : <div style={{ width: 48, height: 27, background: 'var(--surface-2)', borderRadius: 4 }} />}</td>
                     <td style={{ padding: '8px 10px' }}><a href={`https://www.youtube.com/watch?v=${v.video_id}`} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.title}</a></td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{v.duration || '—'}</td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.view_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDuration(v.avg_view_duration_secs)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{v.avg_view_pct != null ? `${v.avg_view_pct}%` : '—'}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.impressions)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{v.ctr != null ? fmtPct(v.ctr) : '—'}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.like_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtWatchTime(v.watch_time_minutes)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDuration(v.avg_view_duration_secs)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.avg_view_pct != null ? `${v.avg_view_pct}%` : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.impressions)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{v.ctr != null ? fmtPct(v.ctr) : '—'}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 0 8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.published_at)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -161,21 +161,21 @@ function XAnalytics({ analytics, loading, onRefresh }) {
         <Card span={12} className="reveal reveal-d2">
           <div style={{ fontWeight: 600, marginBottom: 14 }}>Recent posts</div>
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-              <thead><tr style={{ borderBottom: '1px solid var(--border)' }}>
+            <table style={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 13 }}>
+              <thead><tr style={{ borderBottom: '1px solid var(--line)' }}>
                 {['Post', 'Impressions', 'Likes', 'Reposts', 'Replies', 'Posted'].map((h, i) => (
-                  <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{h}</th>
+                  <th key={i} style={{ textAlign: i === 0 ? 'left' : 'right', padding: '6px 10px', fontWeight: 600, color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{h}</th>
                 ))}
               </tr></thead>
               <tbody>
                 {vids.map((v) => (
-                  <tr key={v.tweet_id} style={{ borderBottom: '1px solid var(--border-subtle, var(--border))' }}>
+                  <tr key={v.tweet_id} style={{ borderBottom: '1px solid var(--line)' }}>
                     <td style={{ padding: '8px 10px', maxWidth: 360 }}><a href={v.url} target="_blank" rel="noreferrer" style={{ color: 'inherit', textDecoration: 'none', fontWeight: 500 }}>{v.text || '(no text)'}</a></td>
                     <td style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600 }}>{fmtNum(v.impression_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.like_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.retweet_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)' }}>{fmtNum(v.reply_count)}</td>
-                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--muted)', whiteSpace: 'nowrap' }}>{fmtDate(v.created_at)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.like_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.retweet_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)' }}>{fmtNum(v.reply_count)}</td>
+                    <td style={{ textAlign: 'right', padding: '8px 10px', color: 'var(--ink-3)', whiteSpace: 'nowrap' }}>{fmtDate(v.created_at)}</td>
                   </tr>
                 ))}
               </tbody>
