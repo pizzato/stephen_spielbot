@@ -200,6 +200,8 @@ body {
 .btn--danger { background: transparent; color: var(--danger); border-color: var(--danger); }
 .btn--danger:hover:not(:disabled) { background: var(--danger-soft); }
 .btn--lg { padding: 15px 24px; font-size: 16px; }
+.btn--sm { padding: 7px 12px; font-size: 13px; gap: 7px; }
+.btn--sm i { font-size: 12px; }
 .btn--block { width: 100%; }
 
 /* ── Connect pills (circular icon buttons, from the site) ── */
@@ -248,8 +250,11 @@ body {
 .slider::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; box-shadow: var(--shadow-sm); cursor: pointer; }
 .slider::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--accent); border: 3px solid #fff; cursor: pointer; }
 
-.seg { display: inline-flex; background: var(--paper-2); border-radius: var(--r-pill); padding: 4px; gap: 2px; }
-.seg__opt { border: 0; background: transparent; padding: 7px 14px; border-radius: var(--r-pill); font: 600 13px/1 var(--font); color: var(--ink-2); cursor: pointer; transition: all .15s; }
+/* max-width + scroll so a long tab bar (e.g. Settings' 5 tabs) scrolls within
+   itself on a narrow phone instead of pushing the whole page wider. */
+.seg { display: inline-flex; max-width: 100%; overflow-x: auto; background: var(--paper-2); border-radius: var(--r-pill); padding: 4px; gap: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
+.seg__opt { flex: 0 0 auto; white-space: nowrap; border: 0; background: transparent; padding: 7px 14px; border-radius: var(--r-pill); font: 600 13px/1 var(--font); color: var(--ink-2); cursor: pointer; transition: all .15s; }
 .seg__opt.is-active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
 
 .check { display: inline-flex; align-items: center; gap: 10px; font-size: 14px; color: var(--ink-2); cursor: pointer; }
@@ -383,4 +388,21 @@ body {
 
   .main { padding: 22px 18px 60px; }
   .bento > * { grid-column: span 12 !important; }
+
+  /* Tighter card padding reclaims width on a narrow screen. */
+  .card { padding: 16px; }
+  .card--pad-lg { padding: 18px; }
+
+  /* Dense list rows (Queue, Publish schedule): keep the title beside the
+     reorder arrows, but drop the action buttons onto their own full-width
+     line instead of cramming them next to a crushed title. */
+  .qrow { flex-wrap: wrap; padding-left: 14px !important; padding-right: 14px !important; }
+  .qrow__actions { width: 100%; justify-content: flex-start !important; }
+  .qrow-head { padding-left: 14px !important; padding-right: 14px !important; }
+
+  /* Edit Film: stack the initial-frame and film panes instead of squeezing
+     two (often portrait) videos side by side. The panes carry an inline
+     flex:1, so reset it explicitly for the column layout. */
+  .film-media { flex-direction: column; }
+  .film-media > div { flex: 0 0 auto !important; width: 100%; }
 }
