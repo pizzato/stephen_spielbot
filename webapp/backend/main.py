@@ -1807,6 +1807,38 @@ def _suggestion_key(title: str) -> str:
     return " ".join((title or "").strip().lower().split())
 
 
+def _suggestion_title(s: dict) -> str:
+    return _suggestion_key(str(s.get("title") or s.get("final_title") or ""))
+
+
+def _merge_suggestions(existing: list[dict], fresh: list[dict]) -> list[dict]:
+    """Append freshly generated ideas after the existing ones, dropping any
+    fresh idea whose title duplicates one already present (case/space
+    insensitive). Lets "Generate more" grow the list instead of replacing it —
+    an idea only leaves once the user closes, queues, or creates it."""
+    seen = {_suggestion_title(s) for s in existing}
+    out = list(existing)
+    for s in fresh:
+        key = _suggestion_title(s)
+        if key and key not in seen:
+            out.append(s)
+            seen.add(key)
+    return out
+
+
+def _existing_idea_titles(cfg: dict, target: str) -> list[str]:
+    """Titles of the ideas already shown for a style, so 'Generate more' can
+    steer the LLM away from re-suggesting them (otherwise the fresh batch is
+    mostly deduped away and few genuinely new ideas surface)."""
+    default_name = cfg.get("default_style", "")
+    try:
+        return [str(s.get("title") or "")
+                for s in _visible_suggestions(yt.load_suggestions())
+                if _idea_style_key(s, default_name) == target and s.get("title")]
+    except Exception:
+        return []
+
+
 def _load_dismissed_suggestions() -> dict:
     try:
         data = json.loads(DISMISSED_SUGGESTIONS_FILE.read_text())
@@ -1920,25 +1952,29 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
                 previous = gapp._channel_video_titles(cfg, style_name=name)
             except Exception:
                 previous = []
+            previous = list(previous) + _existing_idea_titles(cfg, name)
             try:
                 batches.append(_style_idea_batch(cfg, ss, g, previous))
             except Exception as e:
                 raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
     merged = _interleave(batches)
 
-    # Replace the mixed styles' cached set with the new batch; keep ideas from
-    # opted-out styles and from styles that no longer exist (orphans) so nothing
-    # a user generated on a style's own page is silently lost.
+    # Append the fresh batch to the eligible styles' existing ideas so "Generate
+    # more" grows the mix instead of replacing it; ideas from opted-out and
+    # orphaned styles are kept untouched so nothing is silently lost.
+    others, combined = [], merged
     try:
-        others = [s for s in yt.load_suggestions()
-                  if _idea_style_key(s, default_name) not in eligible]
+        all_cached = yt.load_suggestions()
+        others = [s for s in all_cached if _idea_style_key(s, default_name) not in eligible]
+        existing = [s for s in all_cached if _idea_style_key(s, default_name) in eligible]
+        combined = _merge_suggestions(existing, merged)
     except Exception:
-        others = []
+        others, combined = [], merged
     try:
-        yt.save_suggestions(others + merged)
+        yt.save_suggestions(others + combined)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(merged), "cached": False, "style_name": ALL_STYLES}
+    return {"suggestions": _visible_suggestions(combined), "cached": False, "style_name": ALL_STYLES}
 
 
 @api.get("/api/youtube/suggestions")
@@ -1979,6 +2015,12 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
                 if label.lower() not in seen:
                     previous.append(label)
                     seen.add(label.lower())
+            # Avoid re-suggesting ideas already waiting in this style's list, so
+            # "Generate more" adds genuinely new ones rather than near-duplicates.
+            for t in _existing_idea_titles(cfg, target):
+                if t.lower() not in seen:
+                    previous.append(t)
+                    seen.add(t.lower())
         except Exception:
             previous = []
         try:
@@ -1989,21 +2031,26 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
         except Exception as e:
             raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
+    ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
+              "style_name": target,
+              "created_at": time.time(), "used": False, "dismissed": False}
+             for idea in ideas]
+    # Cache per style: append the new ideas to this style's existing set (other
+    # styles untouched) so "Generate more" grows the list — an idea only leaves
+    # once it's closed, queued, or created. Duplicate titles are dropped.
+    others, combined = [], ideas
     try:
-        ideas = [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
-                  "style_name": target,
-                  "created_at": time.time(), "used": False, "dismissed": False}
-                 for idea in ideas]
-        # Cache per style: replace this style's set, keep the other styles'.
-        try:
-            others = [s for s in yt.load_suggestions()
-                      if _idea_style_key(s, default_name) != target]
-        except Exception:
-            others = []
-        yt.save_suggestions(others + ideas)
+        all_cached = yt.load_suggestions()
+        others = [s for s in all_cached if _idea_style_key(s, default_name) != target]
+        existing = [s for s in all_cached if _idea_style_key(s, default_name) == target]
+        combined = _merge_suggestions(existing, ideas)
+    except Exception:
+        others, combined = [], ideas
+    try:
+        yt.save_suggestions(others + combined)
     except Exception:
         pass
-    return {"suggestions": _visible_suggestions(ideas), "cached": False, "style_name": target}
+    return {"suggestions": _visible_suggestions(combined), "cached": False, "style_name": target}
 
 
 class SuggestionDismissBody(BaseModel):
