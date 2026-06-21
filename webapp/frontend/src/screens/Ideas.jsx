@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Chip, Button, Segmented, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
@@ -16,17 +16,30 @@ function fmtNum(n) {
 // Per-idea predicted 3-day reach (issue #50). Renders nothing until an
 // engagement model has been built, so it's a graceful no-op by default.
 // Re-estimates when the chosen video length flips Short ↔ long-form.
-function IdeaReach({ idea, isShort }) {
+function IdeaReach({ idea, isShort, onResult }) {
   const [r, setR] = useState(null)
+  // Report the prediction up so the list can sort by predicted views, without
+  // re-fetching when the (per-render) callback identity changes.
+  const report = useRef(onResult)
+  report.current = onResult
   useEffect(() => {
     let live = true
     api.engagementPredict({ title: idea.title || idea.final_title || '', description: idea.reason || '', is_short: isShort, style_name: idea.style_name || '' })
-      .then((d) => { if (live) setR(d) }).catch(() => {})
+      .then((d) => { if (live) { setR(d); report.current?.(d) } }).catch(() => {})
     return () => { live = false }
   }, [idea, isShort])
   if (!r?.available) return null
   return <Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(r.predicted_views)}</Chip>
 }
+
+// AI-ideas sort options. Predicted views falls back to newest when a model
+// hasn't produced a value for an idea yet (predictions arrive asynchronously).
+const SORT_OPTIONS = [
+  { value: 'newest', label: 'Newest first' },
+  { value: 'oldest', label: 'Oldest first' },
+  { value: 'interesting', label: 'Most interesting' },
+  { value: 'views', label: 'Predicted views' },
+]
 
 // Size presets (Small/Medium/Large) are configured per style in Settings; each
 // pairs a scene count with a resolution. The toggle below picks one per idea.
@@ -74,6 +87,8 @@ export default function Ideas({ go, meta = {} }) {
   const [loadingIdeas, setLoadingIdeas] = useState(false)
   const [guidance, setGuidance] = useState('')
   const [busy, setBusy] = useState('')          // action key currently running
+  const [sortBy, setSortBy] = useState('newest')
+  const [preds, setPreds] = useState({})        // ideaKey -> engagement prediction, for the "Predicted views" sort
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
@@ -169,6 +184,21 @@ export default function Ideas({ go, meta = {} }) {
     go('create', { title, description: idea.reason || '', scenes, resolution, styleName: styleOf(idea) })
   }
 
+  // Sort is view-only — it reorders the cards, it never drops an idea (ideas
+  // leave only on Close/Queue/Create). Predicted views read from the per-card
+  // reach lookups; ideas with no prediction yet fall back to newest.
+  const sortedIdeas = useMemo(() => {
+    const pv = (idea) => preds[ideaKey(idea)]?.predicted_views
+    const byNewest = (a, b) => (b.created_at || 0) - (a.created_at || 0)
+    const cmp = {
+      newest: byNewest,
+      oldest: (a, b) => (a.created_at || 0) - (b.created_at || 0),
+      interesting: (a, b) => (b.interestingness || 0) - (a.interestingness || 0),
+      views: (a, b) => ((pv(b) ?? -1) - (pv(a) ?? -1)) || byNewest(a, b),
+    }[sortBy] || byNewest
+    return [...ideas].sort(cmp)
+  }, [ideas, sortBy, preds])
+
   return (
     <div>
       <div className="page-head">
@@ -199,6 +229,10 @@ export default function Ideas({ go, meta = {} }) {
                 ))}
               </select>
             )}
+            <select className="select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+              style={{ maxWidth: 180 }} title="Sort the ideas">
+              {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
             <div className="grow">
               <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
                 value={guidance} onChange={(e) => setGuidance(e.target.value)}
@@ -208,16 +242,17 @@ export default function Ideas({ go, meta = {} }) {
               {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
           </div>
         </Card>
-        {ideas.map((idea, i) => {
+        {sortedIdeas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
           const size = ideaSize(idea)
           const { scenes, resolution } = presetFor(idea, size)
           const key = ideaKey(idea) || `${title}-${i}`
+          const pk = ideaKey(idea)
           return (
             <Card key={key} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{title}</span>
-                <div className="row center gap-10">{isAll && idea.style_name && <Chip>{idea.style_name}</Chip>}<IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} /><Stars value={idea.interestingness} /></div>
+                <div className="row center gap-10">{isAll && idea.style_name && <Chip>{idea.style_name}</Chip>}<IdeaReach idea={idea} isShort={orientationOf(resolution) === 'Portrait'} onResult={(d) => setPreds((m) => ({ ...m, [pk]: d }))} /><Stars value={idea.interestingness} /></div>
               </div>
               {idea.reason && <p className="muted" style={{ fontSize: 13, margin: '10px 0 0', fontStyle: 'italic' }}>{idea.reason}</p>}
               <div className="row center mt-16">
