@@ -516,6 +516,61 @@ class StyleAwareIdeasTests(TempConfigCase):
         self.assertEqual({s["title"] for s in out_a["suggestions"]}, {"A idea", "Legacy idea"})
         self.assertEqual({s["title"] for s in out_b["suggestions"]}, {"B idea"})
 
+    def test_generate_appends_to_existing_style_cache(self):
+        # "Generate more" grows the list: the existing idea survives and the
+        # fresh one is appended, rather than replacing the set.
+        self._two_styles()
+        existing = [{"id": "a0", "title": "Old A", "style_name": "A",
+                     "used": False, "created_at": 1.0}]
+        raw = [{"title": "New A", "reason": "r", "interestingness": 0.7}]
+        saved = {}
+        with mock.patch.object(backend, "generate_video_suggestions", return_value=raw), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.gapp, "_list_recent_jobs", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=list(existing)), \
+             mock.patch.object(backend.yt, "save_suggestions",
+                               side_effect=lambda v: saved.setdefault("v", list(v))):
+            out = backend.youtube_suggestions(guidance="", refresh=True, style_name="A")
+        self.assertEqual([s["title"] for s in out["suggestions"]], ["Old A", "New A"])
+        self.assertEqual({s["title"] for s in saved["v"]}, {"Old A", "New A"})
+
+    def test_generate_dedups_repeated_titles(self):
+        # A regenerated title that already exists (case/space-insensitive) is
+        # dropped, so repeated "Generate more" clicks don't pile up duplicates.
+        self._two_styles()
+        existing = [{"id": "a0", "title": "Dragon Tale", "style_name": "A", "used": False}]
+        raw = [{"title": "  dragon   tale ", "reason": "r", "interestingness": 0.7},
+               {"title": "Fresh One", "reason": "r", "interestingness": 0.8}]
+        saved = {}
+        with mock.patch.object(backend, "generate_video_suggestions", return_value=raw), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.gapp, "_list_recent_jobs", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=list(existing)), \
+             mock.patch.object(backend.yt, "save_suggestions",
+                               side_effect=lambda v: saved.setdefault("v", list(v))):
+            out = backend.youtube_suggestions(guidance="", refresh=True, style_name="A")
+        self.assertEqual([s["title"] for s in out["suggestions"]], ["Dragon Tale", "Fresh One"])
+
+    def test_generate_more_hands_existing_titles_to_the_generator(self):
+        # Existing idea titles (and channel titles) are passed to the LLM so
+        # "Generate more" produces new ideas instead of re-suggesting the list.
+        self._two_styles()
+        existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
+        captured = {}
+
+        def fake_gen(prev, cfg, style=None):
+            captured["previous"] = list(prev)
+            return [{"title": "New A", "reason": "r", "interestingness": 0.7}]
+
+        with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=["Channel vid"]), \
+             mock.patch.object(backend.gapp, "_list_recent_jobs", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=list(existing)), \
+             mock.patch.object(backend.yt, "save_suggestions"):
+            backend.youtube_suggestions(guidance="", refresh=True, style_name="A")
+        self.assertIn("Old A", captured["previous"])
+        self.assertIn("Channel vid", captured["previous"])
+
     def test_auto_pick_carries_idea_style_onto_queue_item(self):
         self._two_styles()
         suggestion = {"id": "s1", "title": "Sleepy Dragon", "reason": "fits",
@@ -703,6 +758,25 @@ class AutoPickMixTests(TempConfigCase):
         self.assertTrue(out["cached"])
         self.assertEqual(out["style_name"], "B")
         self.assertEqual({s["title"] for s in out["suggestions"]}, {"B idea"})
+
+    def test_all_styles_mix_appends_to_existing(self):
+        # Generating the mix keeps the eligible styles' existing ideas and
+        # appends the fresh batch — the mix grows instead of being replaced.
+        self._styles("A", "B")
+        existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
+        saved = {}
+
+        def fake_gen(titles, cfg, style=None):
+            return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
+
+        with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
+             mock.patch.object(backend.gapp, "_channel_video_titles", return_value=[]), \
+             mock.patch.object(backend.yt, "load_suggestions", return_value=list(existing)), \
+             mock.patch.object(backend.yt, "save_suggestions",
+                               side_effect=lambda v: saved.setdefault("v", list(v))):
+            out = backend.youtube_suggestions(guidance="", refresh=True, style_name=backend.ALL_STYLES)
+        self.assertEqual({s["title"] for s in out["suggestions"]}, {"Old A", "A fresh", "B fresh"})
+        self.assertEqual({s["title"] for s in saved["v"]}, {"Old A", "A fresh", "B fresh"})
 
 
 class SizePresetsTests(TempConfigCase):
