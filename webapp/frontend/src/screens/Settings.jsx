@@ -73,6 +73,40 @@ function UiWorkerStatus({ ui }) {
   return <div className="row gap-6 row--wrap" style={{ marginTop: 6 }}>{chip}</div>
 }
 
+// Per-host container power: start/stop/restart each worker's ComfyUI + TTS
+// docker stack over SSH (the same path as `make start/stop W=<host>`). The
+// machine stays on — only the containers toggle. Hosts are the union of the
+// configured comfy + tts workers; the chip mirrors the host's render state.
+function WorkerControls({ workers, busyHost, onAction }) {
+  const comfy = workers?.comfy || []
+  const hosts = Array.from(new Set([...comfy, ...(workers?.tts || [])].map((w) => shortHost(w.endpoint))))
+  if (!hosts.length) return null
+  return (
+    <Field label="Container power" hint="Start or stop each host's ComfyUI + TTS containers over SSH. The machine stays on; only the docker stack toggles. Stopping a busy worker interrupts its render.">
+      <div className="stack gap-10 mt-6">
+        {hosts.map((h) => {
+          const c = comfy.find((w) => shortHost(w.endpoint) === h)
+          const [tone, label] = !c ? ['neutral', '—'] : !c.up ? ['danger', 'off'] : c.busy ? ['warn', 'busy'] : ['ok', 'idle']
+          const acting = busyHost === h
+          return (
+            <div key={h} className="row center between gap-10">
+              <div className="row center gap-10" style={{ minWidth: 0 }}>
+                <span style={{ fontSize: 13, fontWeight: 500 }}>{h}</span>
+                <Chip tone={tone} dot>{label}</Chip>
+              </div>
+              <div className="row gap-6">
+                <Button variant="ghost" disabled={acting} onClick={() => onAction(h, 'start')}>{acting ? '…' : 'Start'}</Button>
+                <Button variant="ghost" disabled={acting} onClick={() => onAction(h, 'stop')}>Stop</Button>
+                <Button variant="ghost" disabled={acting} onClick={() => onAction(h, 'restart')}>Restart</Button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </Field>
+  )
+}
+
 // Read a File into a data-URL string (base64) so it can ride in a JSON body.
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
@@ -638,6 +672,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [restoring, setRestoring] = useState(false)  // a backup restore is in flight
   const restoreRef = useRef(null)
   const [workers, setWorkers] = useState(null)
+  const [workerBusy, setWorkerBusy] = useState('')  // host with a start/stop action in flight
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
   const [newOpen, setNewOpen] = useState(false)
@@ -673,7 +708,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     }
   }, [leaveGuardRef])
 
-  // Poll live cluster status (read-only). Start/stop is via `make start`/`stop`.
+  // Poll live cluster status; the Container power controls below act on it.
   useEffect(() => {
     let alive = true
     const tick = () => api.workerStatus().then((w) => { if (alive) setWorkers(w) }).catch(() => {})
@@ -681,6 +716,24 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     const id = setInterval(tick, 5000)
     return () => { alive = false; clearInterval(id) }
   }, [])
+
+  // Start/stop/restart a host's worker containers over SSH. Stopping a worker
+  // mid-render kills that render, so confirm first when it's busy.
+  const controlWorker = async (host, action) => {
+    const c = (workers?.comfy || []).find((w) => shortHost(w.endpoint) === host)
+    if ((action === 'stop' || action === 'restart') && c?.busy &&
+      !window.confirm(`${host} is rendering. ${action === 'stop' ? 'Stopping' : 'Restarting'} it will interrupt that render. Continue?`)) return
+    setError(''); setStatus(''); setWorkerBusy(host)
+    try {
+      await api.controlWorker(host, action)
+      setStatus(`${host}: containers ${action === 'start' ? 'started' : action === 'stop' ? 'stopped' : 'restarted'}.`)
+      api.workerStatus().then(setWorkers).catch(() => {})
+    } catch (e) {
+      setError(`${host}: ${action} failed — ${e.message}`)
+    } finally {
+      setWorkerBusy('')
+    }
+  }
 
   const set = (k, v) => editCfg((c) => {
     const next = { ...c, [k]: v }
@@ -885,7 +938,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           <Card span={6} className="reveal reveal-d1">
             <div className="row center between">
               <span className="label-sm">Infrastructure</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>start/stop via <code>make start</code></span>
+              <span className="muted" style={{ fontSize: 11.5 }}>containers toggle below · full stack via <code>make start</code></span>
             </div>
             <div className="stack gap-22 mt-16">
               <Field label="ComfyUI workers" hint="One URL per line. idle = free for the UI (the reserved worker during a render); busy = rendering.">
@@ -896,6 +949,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
                 <WorkerStatus items={workers?.tts} />
               </Field>
+              <WorkerControls workers={workers} busyHost={workerBusy} onAction={controlWorker} />
               <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">
                 <input className="input" type="number" min={1} step={1}
                   value={Math.max(1, Math.round((cfg.ui_idle_timeout_seconds ?? 300) / 60))}

@@ -36,6 +36,8 @@ export const api = {
   getConfig: () => req('GET', '/config'),
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
+  // Start/stop/restart one host's worker containers over SSH (action: start|stop|restart).
+  controlWorker: (host, action) => req('POST', '/workers/control', { host, action }),
 
   // settings backup / restore (issue #106). Backup downloads straight from the
   // browser via an <a download> hitting backupUrl(); restore POSTs the zip as
