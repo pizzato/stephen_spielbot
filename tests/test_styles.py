@@ -558,7 +558,7 @@ class StyleAwareIdeasTests(TempConfigCase):
         existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
         captured = {}
 
-        def fake_gen(prev, cfg, style=None):
+        def fake_gen(prev, cfg, style=None, discarded_titles=None):
             captured["previous"] = list(prev)
             return [{"title": "New A", "reason": "r", "interestingness": 0.7}]
 
@@ -649,7 +649,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B", "C", exclude=("B",))
         seen = []
 
-        def fake_gen(titles, cfg, style=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None):
             seen.append(style["name"])
             return [{"title": f"{style['name']} idea", "reason": "r", "interestingness": 0.7}]
 
@@ -678,7 +678,7 @@ class AutoPickMixTests(TempConfigCase):
         # generated for the eligible styles instead.
         self._styles("A", "B", exclude=("B",))
 
-        def fake_gen(titles, cfg, style=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         item = self._auto_pick(cached=[self._idea("B")], gen=fake_gen)
@@ -701,7 +701,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B")
         saved = {}
 
-        def fake_gen(titles, cfg, style=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
@@ -733,7 +733,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B", exclude=("B",))
         saved, seen = {}, []
 
-        def fake_gen(titles, cfg, style=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None):
             seen.append(style["name"])
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
@@ -766,7 +766,7 @@ class AutoPickMixTests(TempConfigCase):
         existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
         saved = {}
 
-        def fake_gen(titles, cfg, style=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \

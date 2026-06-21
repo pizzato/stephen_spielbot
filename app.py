@@ -1697,10 +1697,10 @@ def _channel_video_titles(cfg: dict, style_name: str = "") -> list[str]:
     secrets = cfg.get("youtube_client_secrets", "")
     titles: list[str] = []
     try:
-        titles = yt.fetch_channel_video_titles(
+        titles = yt.cached_channel_video_titles(
             secrets, max_results=500, channel=channel_for_style(cfg, style_name))
     except Exception as exc:
-        logger.warning("fetch_channel_video_titles error: %s", exc)
+        logger.warning("cached_channel_video_titles error: %s", exc)
     # Supplement with posted queue items in case the API call failed or is partial
     try:
         queue = yt.load_queue()
@@ -1746,15 +1746,19 @@ def _last_auto_picked_style() -> str:
     return str(max(picks, key=lambda q: q.get("created_at", 0)).get("gen_style_name") or "")
 
 
-def _generate_mixed_suggestions(cfg: dict, style_names: list[str]) -> list[dict]:
+def _generate_mixed_suggestions(cfg: dict, style_names: list[str],
+                                discarded: list[str] | None = None) -> list[dict]:
     """Generate a fresh batch of ideas for each style and interleave them, so the
-    saved pool alternates styles (A#1, B#1, … then A#2, B#2, …)."""
+    saved pool alternates styles (A#1, B#1, … then A#2, B#2, …). ``discarded``
+    topics are passed to the LLM so automation never re-suggests a thrown-away
+    idea."""
     batches = []
     for name in style_names:
         ss = style_settings(cfg, name)
         existing_titles = _channel_video_titles(cfg, style_name=name)
         try:
-            new_data = generate_video_suggestions(existing_titles, cfg, style=ss)
+            new_data = generate_video_suggestions(existing_titles, cfg, style=ss,
+                                                  discarded_titles=discarded)
         except Exception as exc:
             logger.warning("_generate_mixed_suggestions: generation failed for %r: %s", name, exc)
             new_data = []
@@ -1796,14 +1800,15 @@ def _rotate_pick(unused: list[dict], eligible: list[str], last_style: str,
     return unused[0]
 
 
-def _auto_pick_suggestion(cfg: dict) -> dict | None:
+def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict | None:
     """Pick an unused suggestion and add it to the queue, rotating through the
     eligible styles so successive top-ups mix styles instead of always using the
     default one (issue #117).
 
     Generates a fresh mixed batch across the eligible styles when none is
-    waiting. Returns the new pending queue item dict, or None on failure. Called
-    only when there are no pending user requests and auto-start is enabled.
+    waiting (steering the LLM away from ``discarded`` topics). Returns the new
+    pending queue item dict, or None on failure. Called only when there are no
+    pending user requests and auto-start is enabled.
     """
     eligible = _auto_pick_styles(cfg)
     if not eligible:
@@ -1819,7 +1824,7 @@ def _auto_pick_suggestion(cfg: dict) -> dict | None:
         # No eligible idea waiting — invent a fresh mixed batch across the styles
         # the user left in the rotation.
         logger.info("No unused suggestions for eligible styles — generating a mixed batch")
-        merged = _generate_mixed_suggestions(cfg, eligible)
+        merged = _generate_mixed_suggestions(cfg, eligible, discarded=discarded)
         if not merged:
             logger.warning("_auto_pick_suggestion: LLM suggestion generation failed")
             return None
