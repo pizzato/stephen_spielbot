@@ -1838,16 +1838,19 @@ def _style_idea_batch(cfg: dict, ss: dict, g: str, previous: list[str]) -> list[
 
 
 def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
-    """AI ideas mixed across every style — the "All styles" option on the AI
-    ideas screen. Without guidance/refresh, returns the union of each style's
-    cached ideas; otherwise generates a fresh batch per style and interleaves
-    them so the user picks from a mix. Manual generation spans every style — the
-    per-style auto_pick_exclude flag only governs the automatic queue top-up."""
-    style_names = [s["name"] for s in (cfg.get("styles") or [])
-                   if isinstance(s, dict) and s.get("name")]
+    """AI ideas mixed across the auto-pick styles — the "All styles" option on
+    the AI ideas screen. Without guidance/refresh, returns the union of each
+    style's cached ideas; otherwise generates a fresh batch per style and
+    interleaves them so the user picks from a mix. Styles opted out via
+    auto_pick_exclude are dropped from the mix (it follows the same rotation as
+    automation), but stay reachable by selecting that style on its own."""
+    default_name = cfg.get("default_style", "")
+    style_names = gapp._auto_pick_styles(cfg)   # config order, drops opted-out styles
+    eligible = set(style_names)
     if not g and not refresh:
         try:
-            cached = _visible_suggestions(yt.load_suggestions())
+            cached = [s for s in _visible_suggestions(yt.load_suggestions())
+                      if _idea_style_key(s, default_name) in eligible]
         except Exception:
             cached = []
         if cached:
@@ -1867,13 +1870,12 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
                 raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
     merged = _interleave(batches)
 
-    # Replace every current style's cached set with the new mix; keep ideas whose
-    # style no longer exists (orphans) so nothing is silently lost.
+    # Replace the mixed styles' cached set with the new batch; keep ideas from
+    # opted-out styles and from styles that no longer exist (orphans) so nothing
+    # a user generated on a style's own page is silently lost.
     try:
-        names = set(style_names)
-        default_name = cfg.get("default_style", "")
         others = [s for s in yt.load_suggestions()
-                  if _idea_style_key(s, default_name) not in names]
+                  if _idea_style_key(s, default_name) not in eligible]
     except Exception:
         others = []
     try:
