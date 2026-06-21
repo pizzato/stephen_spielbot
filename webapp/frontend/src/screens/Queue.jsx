@@ -202,7 +202,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     const needsApproval = isPending && it.script_ready && !it.approved && autoStartOn
     return (
       <Fragment key={it.id || idx}>
-        <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
+        <div className="row center qrow" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
           <div className="stack" style={{ gap: 2 }} title={noMove ? 'Switch sort to Queue order to reorder' : undefined}>
             <button className="qmove" disabled={!isPending || !!busy || noMove} onClick={() => run('m' + it.id, () => api.queueMove(it.id, -1))}><Icon name="chevron-up" /></button>
             <button className="qmove" disabled={!isPending || !!busy || noMove} onClick={() => run('m' + it.id, () => api.queueMove(it.id, 1))}><Icon name="chevron-down" /></button>
@@ -223,7 +223,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             ? <Chip tone="ok" dot>Script ready</Chip>
             : <Chip tone={it.approved ? 'ok' : 'warn'} dot>{it.approved ? 'Approved' : 'Needs review'}</Chip>)}
           <Chip tone={tone} dot>{label}</Chip>
-          <div className="row gap-6 row--wrap">
+          <div className="row gap-6 row--wrap qrow__actions">
             {isPending && it.script_ready && <Button variant="ghost" icon="feather-pointed" disabled={!!busy} onClick={() => openScript(it)}>{busy === 'e' + it.id ? 'Opening…' : 'Edit script'}</Button>}
             {isPending && !it.script_ready && <Button variant="ghost" icon="pencil" disabled={!!busy} onClick={() => editing ? setEditId('') : startEdit(it)}>Edit</Button>}
             {needsApproval && <Button variant="primary" icon="check" disabled={!!busy} onClick={() => run('a' + it.id, () => api.queueApprove(it.id), () => setStatus('Approved — it will render shortly.'))}>{busy === 'a' + it.id ? 'Approving…' : 'Approve'}</Button>}
@@ -245,7 +245,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     const { extra, ...rowOpts } = opts
     return (
       <Card span={12} className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
-        <div className="row center between gap-10 row--wrap" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+        <div className="row center between gap-10 row--wrap qrow-head" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
           <div>
             <span className="label-sm">{title}</span>
             {hint ? <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>{hint}</span> : null}
@@ -303,12 +303,12 @@ export default function Queue({ go, onEditScript, meta = {} }) {
 
         {(renderActive || renderingItems.length > 0) && (
           <Card span={12} className="reveal reveal-d2" style={{ padding: 0, overflow: 'hidden' }}>
-            <div style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
+            <div className="qrow-head" style={{ padding: '16px 22px', borderBottom: '1px solid var(--line)' }}>
               <span className="label-sm">Rendering now</span>
               <span className="muted" style={{ fontSize: 12.5, marginLeft: 10 }}>Active work, not the waiting queue.</span>
             </div>
             {renderActive && !hasRenderQueueItem && (
-              <div className="row center" style={{ gap: 14, padding: '14px 22px', borderBottom: renderingItems.length ? '1px solid var(--line)' : 'none' }}>
+              <div className="row center qrow" style={{ gap: 14, padding: '14px 22px', borderBottom: renderingItems.length ? '1px solid var(--line)' : 'none' }}>
                 <div className="grow">
                   <div style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{progress.title || 'Rendering'}</div>
                   <div className="muted mt-8" style={{ fontSize: 12.5 }}>{Math.round(progress.pct || 0)}% · {progress.msg || 'Running'}{progress.eta?.eta_text ? ` · ${progress.eta.eta_text} left` : ''}</div>

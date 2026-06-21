@@ -39,7 +39,7 @@ function Scatter({ samples }) {
   const fy = (v) => (S - pad) - (Math.log1p(Math.max(0, v)) / lm) * plot
   return (
     <svg viewBox={`0 0 ${S} ${S}`} style={{ width: '100%', maxWidth: 360, display: 'block' }}>
-      <rect x={pad} y={pad} width={plot} height={plot} fill="none" stroke="var(--border)" />
+      <rect x={pad} y={pad} width={plot} height={plot} fill="none" stroke="var(--line)" />
       <line x1={fx(0)} y1={fy(0)} x2={fx(max)} y2={fy(max)} stroke="var(--ink-3)" strokeDasharray="4 4" />
       {samples.map((s) => (
         <circle key={s.video_id} cx={fx(s.actual)} cy={fy(s.predicted)} r="4"
@@ -47,8 +47,8 @@ function Scatter({ samples }) {
           <title>{`${s.title}\nactual ${s.actual} · predicted ${s.predicted}`}</title>
         </circle>
       ))}
-      <text x={pad + plot / 2} y={S - 4} textAnchor="middle" fontSize="11" fill="var(--muted)">actual 3-day views →</text>
-      <text x={12} y={pad + plot / 2} textAnchor="middle" fontSize="11" fill="var(--muted)"
+      <text x={pad + plot / 2} y={S - 4} textAnchor="middle" fontSize="11" fill="var(--ink-3)">actual 3-day views →</text>
+      <text x={12} y={pad + plot / 2} textAnchor="middle" fontSize="11" fill="var(--ink-3)"
         transform={`rotate(-90 12 ${pad + plot / 2})`}>predicted ↑</text>
     </svg>
   )
