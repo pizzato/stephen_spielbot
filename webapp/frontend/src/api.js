@@ -118,6 +118,10 @@ export const api = {
     return req('GET', '/youtube/suggestions' + (qs ? `?${qs}` : ''))
   },
   dismissSuggestion: (body) => req('POST', '/youtube/suggestions/dismiss', body),
+  // Discarded ideas: list them, bring one back, or forget it for good.
+  getDiscarded: (styleName) => req('GET', '/youtube/suggestions/discarded' + (styleName ? `?style_name=${encodeURIComponent(styleName)}` : '')),
+  reviveSuggestion: (body) => req('POST', '/youtube/suggestions/revive', body),
+  forgetSuggestion: (body) => req('POST', '/youtube/suggestions/forget', body),
 
   // comment actions
   fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),
