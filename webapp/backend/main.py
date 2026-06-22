@@ -1767,12 +1767,14 @@ def youtube_comments() -> dict:
 
 
 def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6,
-                        style: dict | None = None) -> list[dict]:
+                        style: dict | None = None,
+                        discarded: list[str] | None = None) -> list[dict]:
     """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
-    the 90s') and, optionally, a style profile. Uses the configured LLM
-    backend via _llm_complete."""
+    the 90s') and, optionally, a style profile. ``discarded`` topics are shown
+    as a do-not-suggest list. Uses the configured LLM backend via _llm_complete."""
     import re
     avoid = "; ".join(previous)
+    rejected = "; ".join(discarded or [])
     system = ("You are a content strategist for an educational/documentary YouTube channel. "
               "Return ONLY a JSON array, no prose.")
     user = (
@@ -1780,6 +1782,7 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
         f"Each must be a concrete documentary topic that clearly fits the theme.\n"
         + llm.style_suggestion_context(style)
         + (f"Avoid duplicating these existing titles: {avoid}\n" if avoid else "")
+        + (f"Never suggest these previously discarded ideas or close variations: {rejected}\n" if rejected else "")
         + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
         '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
     )
@@ -1899,6 +1902,133 @@ def _idea_style_key(idea: dict, default_name: str) -> str:
     return str(idea.get("style_name") or "") or default_name
 
 
+def _inflight_video_titles() -> list[str]:
+    """Titles of videos already in the pipeline but not yet on the channel —
+    queued to be made, rendering, or finished and awaiting publish. Idea
+    generation must treat these as 'already covered' so it never suggests a
+    topic that's already on its way."""
+    titles: list[str] = []
+    try:
+        for q in yt.load_queue():
+            if str(q.get("status") or "") == "posted":
+                continue  # already published — counted via the channel title list
+            t = str(q.get("final_title") or q.get("title") or "").strip()
+            if t:
+                titles.append(t)
+    except Exception:
+        pass
+    try:
+        for item in pq.load_queue():
+            t = str(item.get("title") or "").strip()
+            if t:
+                titles.append(t)
+    except Exception:
+        pass
+    return titles
+
+
+def _already_made_titles(cfg: dict, target: str) -> list[str]:
+    """Every title idea generation should dedup against: published on the
+    channel (cached), queued/rendering/awaiting-publish, finished locally, and
+    the style's still-open ideas. ``target`` is the resolved style name."""
+    titles: list[str] = []
+    seen: set[str] = set()
+
+    def add(t: str) -> None:
+        t = (t or "").strip()
+        k = t.lower()
+        if t and k not in seen:
+            titles.append(t)
+            seen.add(k)
+
+    try:
+        for t in gapp._channel_video_titles(cfg, style_name=target):
+            add(t)
+    except Exception:
+        pass
+    for t in _inflight_video_titles():
+        add(t)
+    try:
+        for label, _ in gapp._list_recent_jobs(max_results=500):
+            add(label)
+    except Exception:
+        pass
+    for t in _existing_idea_titles(cfg, target):
+        add(t)
+    return titles
+
+
+def _is_real_discard(reason: str) -> bool:
+    """A discard the user made on purpose (the Close action), as opposed to the
+    'used' marker the Queue/Create actions reuse — those become videos and are
+    tracked via the queue, not the discard list."""
+    return (reason or "").strip().lower() not in ("used", "queued", "created")
+
+
+def _discarded_records(cfg: dict, target: str = "") -> list[dict]:
+    """Ideas the user deliberately discarded, newest first. Rich data comes from
+    the suggestions store (title/reason/scene count/style); the dismissed-log
+    supplements any discard not represented there. ``target`` filters to a
+    style (legacy/unstamped discards fall under the default style)."""
+    default_name = cfg.get("default_style", "")
+    by_title: dict[str, dict] = {}
+
+    def consider(rec: dict, *, rich: bool) -> None:
+        title = str(rec.get("title") or rec.get("final_title") or "").strip()
+        if not title:
+            return
+        reason = str(rec.get("dismissed_reason") or rec.get("reason") or "dismissed")
+        if not _is_real_discard(reason):
+            return
+        key = _suggestion_key(title)
+        prev = by_title.get(key)
+        if prev is not None and (prev.get("_rich") or not rich):
+            return  # keep the richer / first record
+        sc = rec.get("suggested_scene_count") or rec.get("n_scenes") or 12
+        by_title[key] = {
+            "id": str(rec.get("id") or title),
+            "title": title,
+            "reason": str(rec.get("reason") or ""),
+            "style_name": str(rec.get("style_name") or ""),
+            "suggested_scene_count": max(6, min(50, int(sc or 12))),
+            "interestingness": float(rec.get("interestingness", 0.7) or 0.7),
+            "dismissed_at": float(rec.get("dismissed_at") or rec.get("created_at") or 0),
+            "_rich": rich,
+        }
+
+    try:
+        for s in yt.load_suggestions():
+            if isinstance(s, dict) and s.get("dismissed"):
+                consider(s, rich=True)
+    except Exception:
+        pass
+    try:
+        for rec in _load_dismissed_suggestions().values():
+            if isinstance(rec, dict):
+                consider(rec, rich=False)
+    except Exception:
+        pass
+
+    out = [{k: v for k, v in r.items() if k != "_rich"} for r in by_title.values()]
+    if target:
+        out = [r for r in out if (r["style_name"] or default_name) == target]
+    out.sort(key=lambda r: r.get("dismissed_at", 0), reverse=True)
+    return out
+
+
+def _discarded_idea_titles(cfg: dict) -> list[str]:
+    """Titles the user has deliberately discarded — passed to the LLM as a 'do
+    not suggest again' list. Global (a thrown-away topic stays out of every
+    style) since the discard log isn't reliably style-stamped."""
+    return [r["title"] for r in _discarded_records(cfg)]
+
+
+def _suggestion_matches(s: dict, key: str, title_key: str) -> bool:
+    sid = str(s.get("id") or "").strip()
+    stitle = _suggestion_key(str(s.get("title") or s.get("final_title") or ""))
+    return bool((key and sid == key) or (title_key and stitle == title_key))
+
+
 # AI ideas screen sentinel: generate/show a mix of ideas across every style.
 ALL_STYLES = "__all__"
 
@@ -1913,12 +2043,14 @@ def _interleave(batches: list[list[dict]]) -> list[dict]:
     return merged
 
 
-def _style_idea_batch(cfg: dict, ss: dict, g: str, previous: list[str]) -> list[dict]:
+def _style_idea_batch(cfg: dict, ss: dict, g: str, previous: list[str],
+                      discarded: list[str] | None = None) -> list[dict]:
     """Generate + stamp a batch of ideas for one resolved style profile."""
     if g:
-        ideas = _guided_suggestions(g, previous, cfg, style=ss)
+        ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded)
     else:
-        ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg, style=ss))
+        ideas = _normalize_suggestions(
+            generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded))
     return [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
              "style_name": ss["name"], "created_at": time.time(),
              "used": False, "dismissed": False}
@@ -1944,17 +2076,17 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
         if cached:
             return {"suggestions": cached, "cached": True, "style_name": ALL_STYLES}
 
+    discarded = _discarded_idea_titles(cfg)
     with _track_op("Generating suggestions", g or "all styles"):
         batches = []
         for name in style_names:
             ss = gapp.style_settings(cfg, name)
             try:
-                previous = gapp._channel_video_titles(cfg, style_name=name)
+                previous = _already_made_titles(cfg, name)
             except Exception:
                 previous = []
-            previous = list(previous) + _existing_idea_titles(cfg, name)
             try:
-                batches.append(_style_idea_batch(cfg, ss, g, previous))
+                batches.append(_style_idea_batch(cfg, ss, g, previous, discarded))
             except Exception as e:
                 raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
     merged = _interleave(batches)
@@ -2006,28 +2138,21 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
 
     with _track_op("Generating suggestions", g or target):
         try:
-            # Channel titles (YouTube API + posted queue) come first; supplement with
-            # any local completed jobs not yet published to the channel. Titles come
-            # from the channel this style publishes to (issue #22).
-            previous = gapp._channel_video_titles(cfg, style_name=target)
-            seen = {t.lower() for t in previous}
-            for label, _ in gapp._list_recent_jobs(max_results=500):
-                if label.lower() not in seen:
-                    previous.append(label)
-                    seen.add(label.lower())
-            # Avoid re-suggesting ideas already waiting in this style's list, so
-            # "Generate more" adds genuinely new ones rather than near-duplicates.
-            for t in _existing_idea_titles(cfg, target):
-                if t.lower() not in seen:
-                    previous.append(t)
-                    seen.add(t.lower())
+            # Everything already covered (published on the channel, queued/
+            # rendering/awaiting-publish, finished locally, or still open as an
+            # idea) plus topics the user deliberately discarded — both lists go
+            # to the LLM so it neither repeats the library nor revives a
+            # thrown-away idea.
+            previous = _already_made_titles(cfg, target)
+            discarded = _discarded_idea_titles(cfg)
         except Exception:
-            previous = []
+            previous, discarded = [], []
         try:
             if g:
-                ideas = _guided_suggestions(g, previous, cfg, style=ss)
+                ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded)
             else:
-                ideas = _normalize_suggestions(generate_video_suggestions(previous, cfg, style=ss))
+                ideas = _normalize_suggestions(
+                    generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded))
         except Exception as e:
             raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
@@ -2094,6 +2219,76 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
     if changed:
         yt.save_suggestions(suggestions)
     return {"ok": bool(dismiss_keys), "suggestions": _visible_suggestions(suggestions)}
+
+
+@api.get("/api/youtube/suggestions/discarded")
+def discarded_suggestions(style_name: str = Query("")) -> dict:
+    """Ideas the user deliberately discarded, so they can be reviewed, revived,
+    or forgotten. Filtered to a style when one is given (the 'All styles' /
+    blank selection returns every discard)."""
+    cfg = gapp.load_config()
+    target = ""
+    if style_name and style_name != ALL_STYLES:
+        ss = gapp.style_settings(cfg, style_name)
+        target = ss["name"] or cfg.get("default_style", "")
+    return {"discarded": _discarded_records(cfg, target)}
+
+
+class SuggestionReviveBody(BaseModel):
+    id: str = ""
+    title: str = ""
+
+
+@api.post("/api/youtube/suggestions/revive")
+def revive_suggestion(body: SuggestionReviveBody) -> dict:
+    """Bring a discarded idea back as an active suggestion: drop it from the
+    discard log and clear its dismissed flags so it shows again and is no
+    longer fed to the LLM as a rejected topic."""
+    key = (body.id or "").strip()
+    title_key = _suggestion_key(body.title)
+    dismissed = _load_dismissed_suggestions()
+    pruned = {k: v for k, v in dismissed.items()
+              if not _suggestion_matches({"id": (v or {}).get("id"),
+                                          "title": (v or {}).get("title") or k},
+                                         key, title_key)}
+    if len(pruned) != len(dismissed):
+        _save_dismissed_suggestions(pruned)
+
+    suggestions = yt.load_suggestions()
+    revived = False
+    for s in suggestions:
+        if _suggestion_matches(s, key, title_key):
+            s["used"] = False
+            s["dismissed"] = False
+            s.pop("dismissed_reason", None)
+            s.pop("dismissed_at", None)
+            revived = True
+    if revived:
+        yt.save_suggestions(suggestions)
+    return {"ok": True, "suggestions": _visible_suggestions(suggestions)}
+
+
+@api.post("/api/youtube/suggestions/forget")
+def forget_suggestion(body: SuggestionReviveBody) -> dict:
+    """Permanently forget a discarded idea — remove it from both the discard log
+    and the suggestions store. It no longer appears anywhere and stops being
+    fed to the LLM (so it may resurface organically in a future generation)."""
+    key = (body.id or "").strip()
+    title_key = _suggestion_key(body.title)
+    dismissed = _load_dismissed_suggestions()
+    pruned = {k: v for k, v in dismissed.items()
+              if not _suggestion_matches({"id": (v or {}).get("id"),
+                                          "title": (v or {}).get("title") or k},
+                                         key, title_key)}
+    if len(pruned) != len(dismissed):
+        _save_dismissed_suggestions(pruned)
+
+    suggestions = yt.load_suggestions()
+    kept = [s for s in suggestions if not _suggestion_matches(s, key, title_key)]
+    if len(kept) != len(suggestions):
+        yt.save_suggestions(kept)
+    cfg = gapp.load_config()
+    return {"ok": True, "discarded": _discarded_records(cfg)}
 
 
 # ── sidebar badges ("needs attention" counts) ────────────────────────────────
@@ -5478,7 +5673,7 @@ def _auto_start_best() -> dict | None:
         # (so it's closed and never re-picked), and generates a fresh batch
         # when none remain.
         try:
-            item = gapp._auto_pick_suggestion(cfg)
+            item = gapp._auto_pick_suggestion(cfg, discarded=_discarded_idea_titles(cfg))
         except Exception:
             item = None
     if not item:
