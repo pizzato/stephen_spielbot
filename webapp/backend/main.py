@@ -2736,6 +2736,10 @@ def _describe_in_background(work_dir: str, title: str) -> None:
             _generate_and_cache_description(work_dir, title)
     except Exception:
         gapp.logger.warning("Background description generation failed for %s", work_dir, exc_info=True)
+    try:
+        _generate_and_cache_tags(work_dir, title)
+    except Exception:
+        gapp.logger.warning("Background tag generation failed for %s", work_dir, exc_info=True)
 
 
 # ── Keyword tags (YouTube tags field + X hashtags) ───────────────────────────
@@ -2784,12 +2788,15 @@ def _generate_youtube_tags(work_dir: str = "", title: str = "") -> list[str]:
 
 
 def _generate_and_cache_tags(work_dir: str, title: str = "") -> list[str]:
-    """Generate topic tags, save them to tags.json, and return them."""
+    """Generate topic tags and cache them in tags.json. Empty results are NOT
+    cached, so a transient LLM failure is retried later rather than poisoning the
+    cache with no tags (a publish still appends style/narrator regardless)."""
     tags = _generate_youtube_tags(work_dir, title)
-    try:
-        _tags_path(Path(work_dir)).write_text(json.dumps(tags))
-    except Exception:
-        pass
+    if tags:
+        try:
+            _tags_path(Path(work_dir)).write_text(json.dumps(tags))
+        except Exception:
+            pass
     return tags
 
 
@@ -5847,6 +5854,48 @@ def _ensure_descriptions() -> int:
     return count
 
 
+def _ensure_tags() -> int:
+    """Cache keyword tags (tags.json) for queued/recent jobs that lack them, so a
+    publish never has to wait on tag generation. Runs server-side from the
+    automation loop. The publish queue (imminent videos) is warmed first, then
+    recent jobs; on-demand generation at publish time is the backstop for
+    anything not yet warmed."""
+    cfg = gapp.load_config()
+    backend = cfg.get("llm_backend", "local")
+    if backend == "claude" and not cfg.get("claude_api_key", ""):
+        return 0
+    seen: set[str] = set()
+    candidates: list[str] = []
+    try:
+        for e in pq.load_queue():
+            wd_str = str(e.get("work_dir") or "")
+            if wd_str and wd_str not in seen:
+                seen.add(wd_str)
+                candidates.append(wd_str)
+    except Exception:
+        pass
+    try:
+        for _label, wd_str in gapp._list_recent_jobs(max_results=50):
+            if wd_str and wd_str not in seen:
+                seen.add(wd_str)
+                candidates.append(wd_str)
+    except Exception:
+        pass
+    count = 0
+    for wd_str in candidates:
+        wd = Path(wd_str)
+        if not wd.exists() or _tags_path(wd).exists():
+            continue
+        try:
+            if _generate_and_cache_tags(wd_str):
+                count += 1
+                if count >= 5:  # cap per tick to avoid long blocking
+                    break
+        except Exception:
+            pass
+    return count
+
+
 def _automation_tick() -> dict:
     # One tick at a time: the scheduled loop, the render-finished trigger and the
     # manual endpoint can all fire one, and a tick can block for minutes on an
@@ -5958,6 +6007,14 @@ def _automation_loop():
                 if not any(t.name == "ensure_descriptions" for t in threading.enumerate()):
                     threading.Thread(target=_ensure_descriptions, daemon=True,
                                      name="ensure_descriptions").start()
+            except Exception:
+                pass
+            # Same idea for keyword tags — warm the queue/backlog server-side so
+            # publishes (especially the queued ones) don't wait on tag generation.
+            try:
+                if not any(t.name == "ensure_tags" for t in threading.enumerate()):
+                    threading.Thread(target=_ensure_tags, daemon=True,
+                                     name="ensure_tags").start()
             except Exception:
                 pass
         try:
