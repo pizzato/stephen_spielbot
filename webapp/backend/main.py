@@ -2736,6 +2736,148 @@ def _describe_in_background(work_dir: str, title: str) -> None:
             _generate_and_cache_description(work_dir, title)
     except Exception:
         gapp.logger.warning("Background description generation failed for %s", work_dir, exc_info=True)
+    try:
+        _generate_and_cache_tags(work_dir, title)
+    except Exception:
+        gapp.logger.warning("Background tag generation failed for %s", work_dir, exc_info=True)
+
+
+# ── Keyword tags (YouTube tags field + X hashtags) ───────────────────────────
+# Topic tags are LLM-generated from the script and cached in tags.json; the
+# narrator/style are folded in only at upload time so they never leak into the
+# X hashtags (narrator is a YouTube keyword tag only, by user preference).
+
+def _tags_path(wd: Path) -> Path:
+    return wd / "tags.json"
+
+
+def _cached_tags(wd: Path) -> list[str]:
+    """Saved topic tags for a work dir, or empty list."""
+    p = _tags_path(wd)
+    try:
+        if p.exists():
+            data = json.loads(p.read_text())
+            if isinstance(data, list):
+                return [str(t).strip() for t in data if str(t).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _generate_youtube_tags(work_dir: str = "", title: str = "") -> list[str]:
+    """LLM topic tags from the script's narrations. Best-effort — returns []."""
+    cfg = gapp.load_config()
+    wd = Path(work_dir) if work_dir else None
+    title = title or (_video_title_for(wd) if wd else "")
+    scenes = []
+    if wd and wd.exists():
+        try:
+            scenes = gapp._load_scenes_for_work_dir(wd)
+        except Exception:
+            scenes = []
+    try:
+        tags = _call_matching(
+            llm.generate_youtube_tags,
+            title=title, video_title=title, topic=title,
+            scenes=scenes, script=scenes, n_scenes=len(scenes),
+            cfg=cfg, config=cfg,
+        )
+    except Exception:
+        return []
+    return [str(t).strip() for t in (tags or []) if str(t).strip()]
+
+
+def _generate_and_cache_tags(work_dir: str, title: str = "") -> list[str]:
+    """Generate topic tags and cache them in tags.json. Empty results are NOT
+    cached, so a transient LLM failure is retried later rather than poisoning the
+    cache with no tags (a publish still appends style/narrator regardless)."""
+    tags = _generate_youtube_tags(work_dir, title)
+    if tags:
+        try:
+            _tags_path(Path(work_dir)).write_text(json.dumps(tags))
+        except Exception:
+            pass
+    return tags
+
+
+def _dedupe_cap_tags(tags: list[str], max_count: int = 15, max_chars: int = 480) -> list[str]:
+    """De-dupe (case-insensitive), drop empties, and keep within YouTube's tag
+    budget (~500 chars total across all tags, commas counted)."""
+    out: list[str] = []
+    seen: set[str] = set()
+    used = 0
+    for t in tags:
+        t = str(t).strip()
+        if not t:
+            continue
+        k = t.lower()
+        if k in seen:
+            continue
+        cost = len(t) + (1 if out else 0)
+        if len(out) >= max_count or used + cost > max_chars:
+            continue
+        seen.add(k)
+        out.append(t)
+        used += cost
+    return out
+
+
+def _youtube_tags_for(wd: Path | None, cfg: dict) -> list[str]:
+    """Keyword tags for a YouTube upload: LLM topic tags (cached, generated on
+    demand) followed by the style name and the narrator (the style's voice
+    name). De-duped and capped. Best-effort — returns [] rather than blocking."""
+    if wd is None:
+        return []
+    try:
+        topics = _cached_tags(wd) or _generate_and_cache_tags(str(wd))
+        style_name = _work_dir_style_name(wd)
+        ss = gapp.style_settings(cfg, style_name)
+        extra = []
+        if style_name:
+            extra.append(style_name)
+        voice = str(ss.get("voice") or "").strip()
+        if voice and voice != gapp.F5TTS_DEFAULT_OPTION:
+            extra.append(voice)
+        return _dedupe_cap_tags(topics + extra)
+    except Exception:
+        return []
+
+
+def _hashtagify(phrase: str) -> str:
+    """Turn a keyword phrase into one hashtag token (alnum only; PascalCase for
+    multi-word phrases, single words kept as-is to preserve acronyms)."""
+    words = re.findall(r"[A-Za-z0-9]+", phrase or "")
+    if not words:
+        return ""
+    if len(words) == 1:
+        return words[0]
+    return "".join(w[:1].upper() + w[1:] for w in words)
+
+
+def _x_hashtags_for(wd: Path | None, cfg: dict, limit: int = 3) -> str:
+    """Up to `limit` hashtags for an X post, from the cached topic tags. The
+    narrator is intentionally excluded (it's a YouTube keyword tag only). Returns
+    e.g. '#AncientRome #History' or '' — best-effort, never blocks a post."""
+    if wd is None:
+        return ""
+    try:
+        tags = _cached_tags(wd) or _generate_and_cache_tags(str(wd))
+    except Exception:
+        return ""
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in tags:
+        h = _hashtagify(t)
+        if not h or len(h) > 30:
+            continue
+        k = h.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append("#" + h)
+        if len(out) >= limit:
+            break
+    return " ".join(out)
 
 
 class CoverBody(BaseModel):
@@ -2993,6 +3135,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 caption_file = str(_srt) if _srt else None
             except Exception:
                 caption_file = None
+        # Keyword tags (topic tags + style + narrator); best-effort.
+        yt_tags = _youtube_tags_for(wd, gapp.load_config())
         # Track around the actual upload (the slow part) so it shows as
         # in-progress in the Activity panel and lands in the recent log.
         with _track_op("Uploading to YouTube", body_dict["title"]):
@@ -3005,7 +3149,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 category=body_dict["category"], category_id=body_dict["category"], categoryId=body_dict["category"],
                 privacy=body_dict["privacy"], privacy_status=body_dict["privacy"], privacyStatus=body_dict["privacy"],
                 thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
-                channel=channel,
+                channel=channel, tags=yt_tags, keywords=yt_tags,
                 captions_path=caption_file, captions=caption_file,
                 default_language=language, default_audio_language=language,
             )
@@ -3392,6 +3536,10 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         suffix = str(cfg.get("x_post_default_text", "") or "").strip()
         if suffix:
             text = f"{text}\n{suffix}".strip()
+        # X has no tags field — append a couple of topic hashtags (no narrator).
+        hashtags = _x_hashtags_for(wd, cfg)
+        if hashtags:
+            text = f"{text}\n\n{hashtags}".strip()
         # Premium gates long-video posting; check_auth_status reads it live.
         st = xt.check_auth_status(cid, secret, account=account)
         premium = bool(st.get("premium"))
@@ -5706,6 +5854,48 @@ def _ensure_descriptions() -> int:
     return count
 
 
+def _ensure_tags() -> int:
+    """Cache keyword tags (tags.json) for queued/recent jobs that lack them, so a
+    publish never has to wait on tag generation. Runs server-side from the
+    automation loop. The publish queue (imminent videos) is warmed first, then
+    recent jobs; on-demand generation at publish time is the backstop for
+    anything not yet warmed."""
+    cfg = gapp.load_config()
+    backend = cfg.get("llm_backend", "local")
+    if backend == "claude" and not cfg.get("claude_api_key", ""):
+        return 0
+    seen: set[str] = set()
+    candidates: list[str] = []
+    try:
+        for e in pq.load_queue():
+            wd_str = str(e.get("work_dir") or "")
+            if wd_str and wd_str not in seen:
+                seen.add(wd_str)
+                candidates.append(wd_str)
+    except Exception:
+        pass
+    try:
+        for _label, wd_str in gapp._list_recent_jobs(max_results=50):
+            if wd_str and wd_str not in seen:
+                seen.add(wd_str)
+                candidates.append(wd_str)
+    except Exception:
+        pass
+    count = 0
+    for wd_str in candidates:
+        wd = Path(wd_str)
+        if not wd.exists() or _tags_path(wd).exists():
+            continue
+        try:
+            if _generate_and_cache_tags(wd_str):
+                count += 1
+                if count >= 5:  # cap per tick to avoid long blocking
+                    break
+        except Exception:
+            pass
+    return count
+
+
 def _automation_tick() -> dict:
     # One tick at a time: the scheduled loop, the render-finished trigger and the
     # manual endpoint can all fire one, and a tick can block for minutes on an
@@ -5817,6 +6007,14 @@ def _automation_loop():
                 if not any(t.name == "ensure_descriptions" for t in threading.enumerate()):
                     threading.Thread(target=_ensure_descriptions, daemon=True,
                                      name="ensure_descriptions").start()
+            except Exception:
+                pass
+            # Same idea for keyword tags — warm the queue/backlog server-side so
+            # publishes (especially the queued ones) don't wait on tag generation.
+            try:
+                if not any(t.name == "ensure_tags" for t in threading.enumerate()):
+                    threading.Thread(target=_ensure_tags, daemon=True,
+                                     name="ensure_tags").start()
             except Exception:
                 pass
         try:
