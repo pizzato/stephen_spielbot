@@ -86,6 +86,31 @@ class IdeaHistoryCase(unittest.TestCase):
         self.assertIn("Already Posted", titles)
         self.assertEqual(len(titles), len(set(t.lower() for t in titles)))  # deduped
 
+    # ── channel-pooled open ideas ────────────────────────────────────────────
+    def test_existing_ideas_pooled_across_styles_on_same_channel(self):
+        # doc + history publish to ch1; kids publishes to ch2.
+        cfg = {
+            "default_style": "doc",
+            "youtube_channels": [{"id": "ch1"}, {"id": "ch2"}],
+            "styles": [
+                {"name": "doc", "channel": "ch1"},
+                {"name": "history", "channel": "ch1"},
+                {"name": "kids", "channel": "ch2"},
+            ],
+        }
+        self.write(self.suggestions, [
+            {"id": "1", "title": "Doc Idea", "style_name": "doc"},
+            {"id": "2", "title": "History Idea", "style_name": "history"},
+            {"id": "3", "title": "Kids Idea", "style_name": "kids"},
+        ])
+        self.write(self.dismissed, {})
+        # Generating for doc sees its channel-mate history's open idea too...
+        self.assertEqual(set(backend._existing_idea_titles(cfg, "doc")),
+                         {"Doc Idea", "History Idea"})
+        # ...but not the other channel's.
+        self.assertEqual(backend._existing_idea_titles(cfg, "kids"), ["Kids Idea"])
+        self.assertEqual(backend._styles_sharing_channel(cfg, "doc"), {"doc", "history"})
+
     # ── revive / forget ──────────────────────────────────────────────────────
     def test_revive_unhides_and_clears_log(self):
         self.write(self.suggestions, [
