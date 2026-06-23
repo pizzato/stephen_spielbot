@@ -54,12 +54,14 @@ import pipeline.youtube as yt
 import pipeline.x as xt
 from pipeline.comfyui import (
     generate_scene_image,
+    generate_with_engine,
     ltx_dimensions,
 )
 from pipeline.orchestrator import DurableStore
 from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
+from pipeline import engines
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -166,6 +168,14 @@ DEFAULT_CFG = {
     "flux_clip_l":   "clip_l.safetensors",
     "flux_vae":      "ae.safetensors",
     "flux_steps":    4,
+    # Image engine per style (see pipeline/engines.py): which model bundle does
+    # scene generation vs the "Edit image" inpaint. Flat keys mirror the DEFAULT
+    # style like every other STYLE_FIELD_TO_FLAT entry.
+    "default_image_engine": "flux1-schnell",
+    "default_edit_engine":  "flux1-schnell",
+    # Hugging Face token (with the gated FLUX licenses accepted) used to
+    # auto-download engine model weights onto the workers. Set in Settings.
+    "hf_token": "",
     "voices": [],
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
@@ -272,6 +282,9 @@ STYLE_FIELD_TO_FLAT = {
     "channel":              "youtube_channel",
     # Publishing (issue #107) — which connected X account this style posts to
     "x_account":            "x_account",
+    # Image engine selection (generation vs edit) — see pipeline/engines.py
+    "image_engine":         "default_image_engine",
+    "edit_engine":          "default_edit_engine",
     # Render quality
     "resolution":           "resolution",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
@@ -334,6 +347,14 @@ def _norm_size_presets(value) -> dict:
     return out
 
 
+def _norm_engine(value, slot: str) -> str:
+    """Coerce an engine key to a valid one for *slot* ('generate' or 'edit'),
+    falling back to the default engine when unknown or not capable of that slot."""
+    eng = engines.get(value)
+    ok = eng and (eng["can_generate"] if slot == "generate" else eng["can_edit"])
+    return value if ok else engines.DEFAULT_ENGINE
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -381,6 +402,8 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     # mirror below snapshots the default style's onto the flat key.
     for row in normalized:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
+        row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
+        row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
     default = normalized[default_idx]
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         cfg[flat] = default[field]
@@ -1384,11 +1407,8 @@ def _generate_active_scene_preview(
     out = work_dir / f"scene_{sid:02d}_preview.png"
     # Preserve the image we're about to overwrite so the user can return to it.
     image_history.seed_if_empty(work_dir, sid, out)
-    flux_model = cfg.get("flux_model", "flux1-schnell-fp8.safetensors")
-    flux_clip_t5 = cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors")
-    flux_clip_l = cfg.get("flux_clip_l", "clip_l.safetensors")
-    flux_vae = cfg.get("flux_vae", "ae.safetensors")
-    flux_steps = int(cfg.get("flux_steps", 4))
+    # Which model bundle generates this style's scenes (defaults to flux1-schnell).
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
     img_width, img_height = _RESOLUTIONS.get(
         resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
         (1024, 576),
@@ -1402,16 +1422,12 @@ def _generate_active_scene_preview(
 
     url = worker_pool.acquire()
     try:
-        generate_scene_image(
+        generate_with_engine(
+            engine,
             prompt,
             out,
             width=img_width,
             height=img_height,
-            steps=flux_steps,
-            flux_model=flux_model,
-            clip_t5=flux_clip_t5,
-            clip_l=flux_clip_l,
-            flux_vae=flux_vae,
             comfy_url=url,
         )
         store = DurableStore.default()

@@ -1002,15 +1002,16 @@ def _decode_data_url(data: str) -> bytes:
 
 
 def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: str, job_id: str,
-                       denoise: float | None = None) -> dict:
-    """Run a FLUX masked edit on a scene image and record it as a new version.
+                       engine: dict, denoise: float | None = None) -> dict:
+    """Run a masked image edit on a scene image and record it as a new version.
 
-    Shared by the Script and Film inpaint endpoints. *base* is the image to edit;
-    the result overwrites the canonical preview (and the first frame, if one
-    exists) and becomes the selected image-history version. *denoise* is the edit
-    strength (lower keeps more of the original); ``None`` uses a sensible default."""
+    Shared by the Script and Film inpaint endpoints. *engine* is the resolved edit
+    engine (see pipeline/engines.py). *base* is the image to edit; the result
+    overwrites the canonical preview (and the first frame, if one exists) and
+    becomes the selected image-history version. *denoise* is the edit strength
+    (lower keeps more of the original); ``None`` uses the engine's default."""
     import shutil
-    from pipeline.comfyui import inpaint_scene_image
+    from pipeline.comfyui import edit_with_engine
 
     mask_bytes = _decode_data_url(mask_data)
     if not mask_bytes:
@@ -1020,12 +1021,11 @@ def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: s
     if not worker_urls:
         raise HTTPException(503, "No reachable workers for image editing.")
 
-    # Keep the prompt bounded — a very long prompt blows up T5's activation memory
-    # on a contended GPU. ~1000 chars is plenty to describe a localized edit.
+    # Keep the prompt bounded — a very long prompt blows up the text encoder's
+    # activation memory on a contended GPU. ~1000 chars is plenty for a local edit.
     prompt = (prompt or "").strip()[:1000]
-    dn = 0.85 if not denoise else max(0.3, min(1.0, float(denoise)))
+    dn = None if denoise is None else max(0.3, min(1.0, float(denoise)))
 
-    cfg = gapp.load_config()
     # Preserve the current image so the user can return to it (mirrors regen/rerender).
     image_history.seed_if_empty(wd, sid, base)
 
@@ -1036,16 +1036,7 @@ def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: s
     pool = gapp.WorkerPool(worker_urls)
     url = pool.acquire()
     try:
-        inpaint_scene_image(
-            prompt, base, mask_tmp, out,
-            denoise=dn,
-            steps=int(cfg.get("flux_steps", 4)),
-            flux_model=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-            clip_t5=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-            clip_l=cfg.get("flux_clip_l", "clip_l.safetensors"),
-            flux_vae=cfg.get("flux_vae", "ae.safetensors"),
-            comfy_url=url,
-        )
+        edit_with_engine(engine, prompt, base, mask_tmp, out, denoise=dn, comfy_url=url)
     finally:
         pool.release(url)
         mask_tmp.unlink(missing_ok=True)
@@ -1096,14 +1087,123 @@ def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict
     combined_style = gapp._compose_visual_style("", cfg, style_name)
     # Lead with the edit (it gets the most weight) and trail the style for coherence.
     prompt = f"{edit}. {combined_style}" if combined_style else edit
+    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, style_name).get("edit_engine"))
 
     try:
-        with _track_op("Editing image", f"scene {sid}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, denoise=body.denoise)
+        with _track_op("Editing image", f"scene {sid} · {engine['key']}"):
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine, denoise=body.denoise)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:300]}")
+
+
+# ── image engines: list, availability, and automated model install ───────────
+
+_model_install_tasks: dict[str, dict] = {}
+_model_install_lock = threading.Lock()
+
+
+def _comfy_hosts(cfg: dict) -> list[str]:
+    """Unique SSH hosts running ComfyUI workers (where model files must land)."""
+    hosts: list[str] = []
+    for entry in cfg.get("comfy_workers", []) or []:
+        h = _host_of(entry)
+        if h and h not in hosts:
+            hosts.append(h)
+    return hosts
+
+
+@api.get("/api/models/engines")
+def list_engines() -> dict:
+    """Engine registry for the Settings picker, plus best-effort availability
+    (probed on a representative reachable worker via ComfyUI /object_info)."""
+    from pipeline import engines as eng
+    from pipeline.comfyui import engine_model_present
+    from pipeline.worker_pool import queue_depth
+    cfg = gapp.load_config()
+    probe_url = next((u for u in (cfg.get("comfy_workers") or []) if queue_depth(u, timeout=3) >= 0), None)
+    availability = {k: (engine_model_present(probe_url, e.get("probe")) if probe_url else None)
+                    for k, e in eng.ENGINES.items()}
+    return {
+        "engines": eng.public_list(),
+        "availability": availability,
+        "default_engine": eng.DEFAULT_ENGINE,
+        "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
+        "probed": probe_url,
+    }
+
+
+def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_token: str) -> None:
+    """Background: download an engine's model files onto each ComfyUI host over SSH.
+
+    Builds a small idempotent bash script (skip files already present) from the
+    engine's model specs and pipes it to `ssh host bash -s`, downloading via the
+    `hf` CLI into ~/github/ComfyUI/models/<subdir>. Long-running (weights are GBs)."""
+    import shlex
+    from pipeline import engines as eng
+    e = eng.get(engine_key) or {}
+    comfy = "$HOME/github/ComfyUI"
+    results: dict[str, dict] = {}
+    for host in hosts:
+        steps = ["set -e",
+                 'HF=$(command -v hf || command -v huggingface-cli || true)',
+                 '[ -z "$HF" ] && { echo NO_HF_CLI; exit 3; }']
+        tok = f"--token {shlex.quote(hf_token)} " if hf_token else ""
+        for m in e.get("models", []):
+            dest = f'{comfy}/models/{m["dir"]}/{m["file"]}'
+            steps.append(
+                f'if [ -f "{dest}" ]; then echo "EXISTS {m["file"]}"; else echo "GET {m["file"]}"; '
+                f'src=$("$HF" download {shlex.quote(m["repo"])} {shlex.quote(m["remote"])} {tok}2>/dev/null) && '
+                f'mkdir -p "{comfy}/models/{m["dir"]}" && cp -f "$src" "{dest}" && echo "OK {m["file"]}" '
+                f'|| {{ echo "FAIL {m["file"]}"; exit 4; }}; fi')
+        script = "\n".join(steps)
+        try:
+            proc = subprocess.run(
+                ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, "bash -s"],
+                input=script, capture_output=True, text=True, timeout=6 * 3600)
+            results[host] = {"ok": proc.returncode == 0,
+                             "log": (proc.stdout + proc.stderr).strip()[-2000:]}
+        except Exception as ex:
+            results[host] = {"ok": False, "log": str(ex)}
+        with _model_install_lock:
+            _model_install_tasks[task_id] = {"status": "running", "engine": engine_key, "hosts": dict(results)}
+    with _model_install_lock:
+        ok = bool(results) and all(r["ok"] for r in results.values())
+        _model_install_tasks[task_id] = {"status": "done" if ok else "error",
+                                         "engine": engine_key, "hosts": results}
+
+
+class EngineInstallBody(BaseModel):
+    engine: str
+
+
+@api.post("/api/models/install")
+def install_engine(body: EngineInstallBody) -> dict:
+    """Kick off an async download of an engine's models onto every ComfyUI worker."""
+    from pipeline import engines as eng
+    e = eng.get(body.engine)
+    if not e:
+        raise HTTPException(400, f"Unknown engine: {body.engine!r}")
+    cfg = gapp.load_config()
+    hosts = _comfy_hosts(cfg)
+    if not hosts:
+        raise HTTPException(400, "No ComfyUI workers configured.")
+    hf_token = (cfg.get("hf_token") or "").strip()
+    if any(m.get("gated") for m in e.get("models", [])) and not hf_token:
+        raise HTTPException(400, "This engine's models are gated — set a Hugging Face token in Settings first.")
+    task_id = f"modelinstall_{body.engine}_{int(time.time())}"
+    _model_install_tasks[task_id] = {"status": "running", "engine": body.engine, "hosts": {}}
+    threading.Thread(target=_install_engine_worker, args=(task_id, body.engine, hosts, hf_token), daemon=True).start()
+    return {"ok": True, "task_id": task_id, "hosts": hosts}
+
+
+@api.get("/api/models/install/status")
+def install_engine_status(task_id: str = Query(...)) -> dict:
+    t = _model_install_tasks.get(task_id)
+    if not t:
+        raise HTTPException(404, "Task not found.")
+    return {"ok": True, **t}
 
 
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
@@ -5369,9 +5469,10 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
     import secrets
-    from pipeline.comfyui import generate_scene_image, ltx_dimensions
+    from pipeline.comfyui import generate_with_engine, ltx_dimensions
 
     cfg = gapp.load_config()
+    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
     worker_urls = gapp._preview_worker_urls()
     if not worker_urls:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
@@ -5401,16 +5502,12 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
             # acquire() can block a long time behind a busy GPU — re-check
             # before submitting work the film may no longer exist to receive.
             _film_checkpoint(task_id)
-            generate_scene_image(
+            generate_with_engine(
+                engine,
                 image_prompt or row.get("title") or f"Scene {sid}",
                 first_frame,
                 width=vid_w, height=vid_h,
                 seed=new_seed,
-                steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
-                flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-                clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-                clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
-                flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
                 comfy_url=url,
             )
         finally:
@@ -5696,11 +5793,13 @@ def inpaint_film_scene(scene_id: int, body: FilmInpaintBody) -> dict:
     style_clean = (jc.get("style") or "").strip().rstrip(".")
     # Lead with the edit (it gets the most weight) and trail the style for coherence.
     prompt = f"{edit}. {style_clean}" if style_clean else edit
+    cfg = gapp.load_config()
+    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("edit_engine"))
 
     job_id = job_id_from_work_dir(wd)
     try:
-        with _track_op("Editing image", f"scene {sid}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, denoise=body.denoise)
+        with _track_op("Editing image", f"scene {sid} · {engine['key']}"):
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, engine, denoise=body.denoise)
     except HTTPException:
         raise
     except Exception as e:
