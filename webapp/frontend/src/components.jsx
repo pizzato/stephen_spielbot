@@ -1,6 +1,7 @@
 // Reusable primitives for the redesign — ported from the design system's
 // components.jsx / App.jsx into ES modules.
 
+import { useRef, useEffect, useState } from 'react'
 import { fileUrl } from './api'
 
 export function Icon({ name, brand, style, spin }) {
@@ -195,6 +196,159 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
             </button>
           )
         })}
+      </div>
+    </div>
+  )
+}
+
+// Masked image editor: paint over a region of an image, describe the change, and
+// send it to a FLUX inpaint pass. Calls `onApply(maskDataUrl, prompt)` where
+// maskDataUrl is a black/white PNG (white = the painted region to change).
+// `busy` disables the controls while the edit runs; `error` shows a message.
+const MASK_COLOR = 'rgba(168,85,247,0.55)'
+
+export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onClose }) {
+  const baseRef = useRef(null)
+  const overlayRef = useRef(null)
+  const drawing = useRef(false)
+  const last = useRef(null)
+  const [brush, setBrush] = useState(36)
+  const [prompt, setPrompt] = useState('')
+  const [hasMask, setHasMask] = useState(false)
+  const [ready, setReady] = useState(false)
+
+  // Load the image and size both canvases to it (capped so painting stays smooth).
+  useEffect(() => {
+    if (!src) return
+    let alive = true
+    const img = new Image()
+    img.onload = () => {
+      if (!alive) return
+      const max = 1024
+      const scale = Math.min(1, max / Math.max(img.naturalWidth, img.naturalHeight))
+      const w = Math.max(1, Math.round(img.naturalWidth * scale))
+      const h = Math.max(1, Math.round(img.naturalHeight * scale))
+      for (const c of [baseRef.current, overlayRef.current]) {
+        if (c) { c.width = w; c.height = h }
+      }
+      const bctx = baseRef.current?.getContext('2d')
+      if (bctx) bctx.drawImage(img, 0, 0, w, h)
+      overlayRef.current?.getContext('2d').clearRect(0, 0, w, h)
+      setHasMask(false)
+      setReady(true)
+    }
+    img.src = src
+    return () => { alive = false }
+  }, [src])
+
+  const pos = (e) => {
+    const c = overlayRef.current
+    const r = c.getBoundingClientRect()
+    return {
+      x: (e.clientX - r.left) * (c.width / r.width),
+      y: (e.clientY - r.top) * (c.height / r.height),
+      r: brush * (c.width / r.width),
+    }
+  }
+  const onDown = (e) => {
+    if (busy) return
+    overlayRef.current.setPointerCapture(e.pointerId)
+    drawing.current = true
+    const p = pos(e)
+    last.current = p
+    const ctx = overlayRef.current.getContext('2d')
+    ctx.fillStyle = MASK_COLOR
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill()
+    setHasMask(true)
+  }
+  const onMove = (e) => {
+    if (!drawing.current) return
+    const p = pos(e)
+    const ctx = overlayRef.current.getContext('2d')
+    ctx.strokeStyle = MASK_COLOR
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.lineWidth = p.r * 2
+    ctx.beginPath(); ctx.moveTo(last.current.x, last.current.y); ctx.lineTo(p.x, p.y); ctx.stroke()
+    last.current = p
+  }
+  const onUp = () => { drawing.current = false; last.current = null }
+
+  const clear = () => {
+    const c = overlayRef.current
+    c?.getContext('2d').clearRect(0, 0, c.width, c.height)
+    setHasMask(false)
+  }
+
+  // Convert the painted overlay into a black/white mask PNG: any painted pixel
+  // becomes white, everything else black — what the inpaint workflow expects.
+  const buildMask = () => {
+    const o = overlayRef.current
+    const W = o.width, H = o.height
+    const src = o.getContext('2d').getImageData(0, 0, W, H).data
+    const mask = document.createElement('canvas')
+    mask.width = W; mask.height = H
+    const mctx = mask.getContext('2d')
+    const out = mctx.createImageData(W, H)
+    for (let i = 0; i < src.length; i += 4) {
+      const on = src[i + 3] > 10 ? 255 : 0
+      out.data[i] = out.data[i + 1] = out.data[i + 2] = on
+      out.data[i + 3] = 255
+    }
+    mctx.putImageData(out, 0, 0)
+    return mask.toDataURL('image/png')
+  }
+
+  const apply = () => {
+    if (busy || !hasMask || !prompt.trim()) return
+    onApply(buildMask(), prompt.trim())
+  }
+
+  return (
+    <div onClick={() => !busy && onClose()}
+      style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--paper)', borderRadius: 'var(--r-lg)', padding: 20, width: 'min(760px, 96vw)', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,.5)' }}>
+        <div className="row center between" style={{ marginBottom: 12 }}>
+          <span className="h-title">Edit image</span>
+          <button type="button" className="btn btn--quiet" onClick={() => !busy && onClose()} disabled={busy}><Icon name="xmark" /></button>
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+          Paint over the area to change, then describe the edit. Only the painted region is regenerated.
+        </p>
+
+        <div style={{ textAlign: 'center', background: 'var(--paper-2)', borderRadius: 'var(--r-md)', padding: 8 }}>
+          <div style={{ position: 'relative', display: 'inline-block', lineHeight: 0, maxWidth: '100%' }}>
+            <canvas ref={baseRef} style={{ display: 'block', maxWidth: '100%', maxHeight: '52vh', width: 'auto', height: 'auto', borderRadius: 8 }} />
+            <canvas ref={overlayRef}
+              onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerCancel={onUp}
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', cursor: busy ? 'default' : 'crosshair', touchAction: 'none', borderRadius: 8 }} />
+            {!ready && <div className="muted" style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13 }}>Loading…</div>}
+          </div>
+        </div>
+
+        <div className="row center gap-14 mt-16" style={{ flexWrap: 'wrap' }}>
+          <span className="label-sm" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="paintbrush" /> Brush
+            <input type="range" min={8} max={80} value={brush} disabled={busy}
+              onChange={(e) => setBrush(Number(e.target.value))} style={{ width: 120 }} />
+          </span>
+          <Button variant="ghost" size="sm" icon="eraser" disabled={busy || !hasMask} onClick={clear}>Clear</Button>
+        </div>
+
+        <div className="mt-16">
+          <Field label="Describe the change" hint="e.g. “give him red sunglasses” or “remove the cup on the table”.">
+            <textarea className="textarea" rows={2} value={prompt} disabled={busy}
+              onChange={(e) => setPrompt(e.target.value)} placeholder="What should change in the painted area?" />
+          </Field>
+        </div>
+
+        {error && <Banner tone="danger">{error}</Banner>}
+
+        <div className="row gap-10 mt-16" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="ghost" onClick={() => !busy && onClose()} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon="wand-magic-sparkles" disabled={busy || !hasMask || !prompt.trim()} onClick={apply}>
+            {busy ? 'Editing…' : 'Apply edit'}
+          </Button>
+        </div>
       </div>
     </div>
   )
