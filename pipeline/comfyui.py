@@ -687,6 +687,69 @@ def generate_scene_image(
     return output_path
 
 
+def inpaint_scene_image(
+    positive_prompt: str,
+    base_image: Path,
+    mask_image: Path,
+    output_path: Path,
+    *,
+    seed: int | None = None,
+    steps: int = 4,
+    denoise: float = 0.85,
+    flux_model: str = "flux1-schnell-fp8.safetensors",
+    clip_t5: str = "t5xxl_fp8_e4m3fn.safetensors",
+    clip_l: str = "clip_l.safetensors",
+    flux_vae: str = "ae.safetensors",
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Edit a region of *base_image* using FLUX masked img2img and save to *output_path*.
+
+    *mask_image* is a black/white PNG (white = the region to change). The masked
+    region is regenerated from *positive_prompt* while the rest of the image is
+    preserved; *denoise* controls how much the masked region is allowed to change
+    (lower keeps more of the original, 1.0 fully repaints it).
+    """
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    workflow = _load_workflow("flux_inpaint.json")
+    # fp8 weights require CUDA; on MPS/CPU use "default" (needs a non-fp8 model).
+    weight_dtype = "fp8_e4m3fn" if _comfy_has_cuda(comfy_url) else "default"
+
+    base_name = _upload_image(Path(base_image), comfy_url=comfy_url)
+    mask_name = _upload_image(Path(mask_image), comfy_url=comfy_url)
+
+    workflow = _fill_template(workflow, {
+        "FLUX_MODEL":      flux_model,
+        "CLIP_T5":         clip_t5,
+        "CLIP_L":          clip_l,
+        "FLUX_VAE":        flux_vae,
+        "WEIGHT_DTYPE":    weight_dtype,
+        "POSITIVE_PROMPT": positive_prompt,
+        "BASE_IMAGE":      base_name,
+        "MASK_IMAGE":      mask_name,
+        "STEPS":           steps,
+        "DENOISE":         denoise,
+        "SEED":            seed,
+    })
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No image output from FLUX inpaint for prompt {prompt_id} ({comfy_url})")
+
+    img_item = outputs[0]
+    suffix = Path(img_item.get("filename", "preview.png")).suffix or ".png"
+    tmp = output_path.with_suffix(suffix)
+    _download_output(img_item, tmp, comfy_url=comfy_url)
+    if tmp != output_path:
+        tmp.rename(output_path)
+    return output_path
+
+
 def generate_music(
     topic: str,
     duration_seconds: float,

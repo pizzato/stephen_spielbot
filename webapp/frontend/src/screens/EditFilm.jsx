@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 function SceneCard({
@@ -20,6 +20,8 @@ function SceneCard({
   const [confirmDel, setConfirmDel] = useState(false)
   const [history, setHistory] = useState(scene.history)
   const [selecting, setSelecting] = useState(false)
+  const [inpaint, setInpaint] = useState(false)
+  const [inpaintErr, setInpaintErr] = useState('')
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
@@ -124,6 +126,15 @@ function SceneCard({
     }
   }
 
+  const applyInpaint = async (mask, editPrompt) => {
+    setBusy('inpaint'); setInpaintErr('')
+    try {
+      const r = await api.inpaintFilmScene(workDir, scene.id, mask, editPrompt)
+      setHistory(r.history)
+      setInpaint(false)
+    } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
+  }
+
   const rerender = async (component) => {
     await persist()
     setBusy(component)
@@ -158,6 +169,11 @@ function SceneCard({
 
   return (
     <>
+      {inpaint && (
+        <InpaintModal src={previewUrl} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
+          onApply={applyInpaint} onClose={() => setInpaint(false)} />
+      )}
+
       {lightbox && previewUrl && (
         <div
           onClick={() => setLightbox(false)}
@@ -314,6 +330,10 @@ function SceneCard({
               <Button variant="ghost" icon="image" size="sm" disabled={isRendering}
                 onClick={() => rerender('image')}>
                 {busy === 'image' ? 'Rendering…' : 'Image'}
+              </Button>
+              <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
+                onClick={() => { setInpaintErr(''); setInpaint(true) }}>
+                Edit image
               </Button>
               <Button variant="ghost" icon="film" size="sm" disabled={isRendering}
                 onClick={() => rerender('video')}>

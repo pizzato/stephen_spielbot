@@ -985,6 +985,117 @@ def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) ->
             "history": image_history.history(wd, int(scene_id))}
 
 
+# ── masked image edit (FLUX inpaint) ─────────────────────────────────────────
+
+class InpaintBody(BaseModel):
+    mask: str       # base64 PNG data-URL, white = the region to change
+    prompt: str     # plain-language description of the change
+
+
+def _decode_data_url(data: str) -> bytes:
+    """Decode a base64 data-URL (or bare base64 string) into raw bytes."""
+    s = (data or "").strip()
+    if s.startswith("data:") and "," in s:
+        s = s.split(",", 1)[1]
+    return base64.b64decode(s)
+
+
+def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: str, job_id: str) -> dict:
+    """Run a FLUX masked edit on a scene image and record it as a new version.
+
+    Shared by the Script and Film inpaint endpoints. *base* is the image to edit;
+    the result overwrites the canonical preview (and the first frame, if one
+    exists) and becomes the selected image-history version."""
+    import shutil
+    from pipeline.comfyui import inpaint_scene_image
+
+    mask_bytes = _decode_data_url(mask_data)
+    if not mask_bytes:
+        raise HTTPException(400, "No mask was provided.")
+
+    worker_urls = gapp._preview_worker_urls()
+    if not worker_urls:
+        raise HTTPException(503, "No reachable workers for image editing.")
+
+    cfg = gapp.load_config()
+    # Preserve the current image so the user can return to it (mirrors regen/rerender).
+    image_history.seed_if_empty(wd, sid, base)
+
+    out = wd / f"scene_{sid:02d}_preview.png"
+    mask_tmp = wd / f"_inpaint_mask_{sid:02d}.png"
+    mask_tmp.write_bytes(mask_bytes)
+
+    pool = gapp.WorkerPool(worker_urls)
+    url = pool.acquire()
+    try:
+        inpaint_scene_image(
+            prompt, base, mask_tmp, out,
+            steps=int(cfg.get("flux_steps", 4)),
+            flux_model=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
+            clip_t5=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+            clip_l=cfg.get("flux_clip_l", "clip_l.safetensors"),
+            flux_vae=cfg.get("flux_vae", "ae.safetensors"),
+            comfy_url=url,
+        )
+    finally:
+        pool.release(url)
+        mask_tmp.unlink(missing_ok=True)
+
+    # Keep the first frame in sync so a later video re-render uses the edited image.
+    first_frame = wd / f"scene_{sid:02d}_first_frame.png"
+    if first_frame.exists():
+        shutil.copy2(out, first_frame)
+
+    store = DurableStore.default()
+    try:
+        store.update_scene_preview(job_id, sid, out)
+    finally:
+        store.close()
+    hist = image_history.record(wd, sid, out)
+    return {"ok": True, "preview_path": str(out), "history": hist}
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/inpaint")
+def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict:
+    """Masked FLUX edit of a scene's first-frame image (Script editor)."""
+    wd = gapp._job_work_dir(job_id)
+    if wd is None:
+        raise HTTPException(404, "No work directory for this job.")
+    sid = int(scene_id)
+    base = wd / f"scene_{sid:02d}_preview.png"
+    if not base.exists():
+        base = wd / f"scene_{sid:02d}_first_frame.png"
+    if not base.exists():
+        raise HTTPException(400, "Generate the scene image first, then edit it.")
+    edit = (body.prompt or "").strip()
+    if not edit:
+        raise HTTPException(400, "Describe the change to make.")
+
+    # Resolve the job's style profile so the edit stays on-style (mirrors preview gen).
+    cfg = gapp.load_config()
+    style_name = ""
+    store = DurableStore.default()
+    try:
+        job_row = store.get_job(job_id)
+    finally:
+        store.close()
+    if job_row is not None:
+        try:
+            style_name = json.loads(dict(job_row).get("config_json") or "{}").get("style_name", "")
+        except Exception:
+            style_name = ""
+    combined_style = gapp._compose_visual_style("", cfg, style_name)
+    prompt = f"{combined_style}. {edit}" if combined_style else edit
+
+    try:
+        with _track_op("Editing image", f"scene {sid}"):
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:200]}")
+
+
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
 
 _FIELD_INSTRUCTIONS = {
@@ -5546,6 +5657,42 @@ def select_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
         store.close()
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
+
+
+class FilmInpaintBody(BaseModel):
+    work_dir: str
+    mask: str
+    prompt: str
+
+
+@api.post("/api/films/scenes/{scene_id}/inpaint")
+def inpaint_film_scene(scene_id: int, body: FilmInpaintBody) -> dict:
+    """Masked FLUX edit of a rendered film scene's image (Film editor)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    sid = int(scene_id)
+    base = wd / f"scene_{sid:02d}_first_frame.png"
+    if not base.exists():
+        base = wd / f"scene_{sid:02d}_preview.png"
+    if not base.exists():
+        raise HTTPException(400, "This scene has no image to edit yet.")
+    edit = (body.prompt or "").strip()
+    if not edit:
+        raise HTTPException(400, "Describe the change to make.")
+
+    jc = _film_job_config(wd)
+    style_clean = (jc.get("style") or "").strip().rstrip(".")
+    prompt = f"{style_clean}. {edit}" if style_clean else edit
+
+    job_id = job_id_from_work_dir(wd)
+    try:
+        with _track_op("Editing image", f"scene {sid}"):
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:200]}")
 
 
 @api.get("/api/films/task")

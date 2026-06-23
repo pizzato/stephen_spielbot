@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, VersionStrip } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, VersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
@@ -26,6 +26,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [scenes, setScenes] = useState(job?.scenes || [])
   const [cur, setCur] = useState(0)
   const [lightbox, setLightbox] = useState(null)
+  const [inpaint, setInpaint] = useState(false)
+  const [inpaintErr, setInpaintErr] = useState('')
   const [genAll, setGenAll] = useState(false)
   const [genAllMsg, setGenAllMsg] = useState('')
   const [regenStatus, setRegenStatus] = useState('')
@@ -270,6 +272,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const applyInpaint = async (mask, editPrompt) => {
+    setBusy('inpaint'); setInpaintErr('')
+    try {
+      const r = await api.inpaintScene(job.job_id, scenes[cur].id, mask, editPrompt)
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+      setInpaint(false)
+    } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
+  }
+
   const approve = async () => {
     setBusy('generate'); setError('')
     try {
@@ -503,10 +514,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     </span>
                   )}
                 </div>
-                <Button variant="ghost" block icon="rotate-right" disabled={busy === 'preview'} onClick={regen}>
+                <Button variant="ghost" block icon="rotate-right" disabled={!!busy} onClick={regen}>
                   {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
+                <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!d.has_preview || !!busy}
+                  onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
-                  onSelect={selectVersion} aspect={aspect} busy={busy === 'preview'} />
+                  onSelect={selectVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
               </Card>
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">
@@ -539,6 +552,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
               <img src={lightbox} alt="" style={{ maxWidth: '95%', maxHeight: '95%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)' }} />
             </div>
+          )}
+
+          {inpaint && (
+            <InpaintModal src={imgUrl(d)} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
+              onApply={applyInpaint} onClose={() => setInpaint(false)} />
           )}
         </>
       )}
