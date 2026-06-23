@@ -445,7 +445,10 @@ def _wait_for_completion(
                     return   # execution finished
                 last_activity_at = time.time()
             elif mtype == "execution_error":
-                raise RuntimeError(f"ComfyUI execution error: {data}")
+                info = data if isinstance(data, dict) else {}
+                detail = info.get("exception_message") or info.get("exception_type") or info
+                where = info.get("node_type") or info.get("node_id") or "?"
+                raise RuntimeError(f"ComfyUI execution error at {where}: {detail}")
 
     finally:
         try:

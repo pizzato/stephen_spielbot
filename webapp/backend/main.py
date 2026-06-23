@@ -988,8 +988,9 @@ def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) ->
 # ── masked image edit (FLUX inpaint) ─────────────────────────────────────────
 
 class InpaintBody(BaseModel):
-    mask: str       # base64 PNG data-URL, white = the region to change
-    prompt: str     # plain-language description of the change
+    mask: str                       # base64 PNG data-URL, white = the region to change
+    prompt: str                     # plain-language description of the change
+    denoise: float | None = None    # edit strength 0.3–1.0 (lower keeps more of the original)
 
 
 def _decode_data_url(data: str) -> bytes:
@@ -1000,12 +1001,14 @@ def _decode_data_url(data: str) -> bytes:
     return base64.b64decode(s)
 
 
-def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: str, job_id: str) -> dict:
+def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: str, job_id: str,
+                       denoise: float | None = None) -> dict:
     """Run a FLUX masked edit on a scene image and record it as a new version.
 
     Shared by the Script and Film inpaint endpoints. *base* is the image to edit;
     the result overwrites the canonical preview (and the first frame, if one
-    exists) and becomes the selected image-history version."""
+    exists) and becomes the selected image-history version. *denoise* is the edit
+    strength (lower keeps more of the original); ``None`` uses a sensible default."""
     import shutil
     from pipeline.comfyui import inpaint_scene_image
 
@@ -1016,6 +1019,11 @@ def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: s
     worker_urls = gapp._preview_worker_urls()
     if not worker_urls:
         raise HTTPException(503, "No reachable workers for image editing.")
+
+    # Keep the prompt bounded — a very long prompt blows up T5's activation memory
+    # on a contended GPU. ~1000 chars is plenty to describe a localized edit.
+    prompt = (prompt or "").strip()[:1000]
+    dn = 0.85 if not denoise else max(0.3, min(1.0, float(denoise)))
 
     cfg = gapp.load_config()
     # Preserve the current image so the user can return to it (mirrors regen/rerender).
@@ -1030,6 +1038,7 @@ def _run_scene_inpaint(wd: Path, sid: int, base: Path, prompt: str, mask_data: s
     try:
         inpaint_scene_image(
             prompt, base, mask_tmp, out,
+            denoise=dn,
             steps=int(cfg.get("flux_steps", 4)),
             flux_model=cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
             clip_t5=cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -1067,7 +1076,7 @@ def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict
         base = wd / f"scene_{sid:02d}_first_frame.png"
     if not base.exists():
         raise HTTPException(400, "Generate the scene image first, then edit it.")
-    edit = (body.prompt or "").strip()
+    edit = (body.prompt or "").strip()[:700]
     if not edit:
         raise HTTPException(400, "Describe the change to make.")
 
@@ -1085,15 +1094,16 @@ def inpaint_scene_preview(job_id: str, scene_id: int, body: InpaintBody) -> dict
         except Exception:
             style_name = ""
     combined_style = gapp._compose_visual_style("", cfg, style_name)
-    prompt = f"{combined_style}. {edit}" if combined_style else edit
+    # Lead with the edit (it gets the most weight) and trail the style for coherence.
+    prompt = f"{edit}. {combined_style}" if combined_style else edit
 
     try:
         with _track_op("Editing image", f"scene {sid}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id)
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, denoise=body.denoise)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:200]}")
+        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:300]}")
 
 
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
@@ -5663,6 +5673,7 @@ class FilmInpaintBody(BaseModel):
     work_dir: str
     mask: str
     prompt: str
+    denoise: float | None = None
 
 
 @api.post("/api/films/scenes/{scene_id}/inpaint")
@@ -5677,22 +5688,23 @@ def inpaint_film_scene(scene_id: int, body: FilmInpaintBody) -> dict:
         base = wd / f"scene_{sid:02d}_preview.png"
     if not base.exists():
         raise HTTPException(400, "This scene has no image to edit yet.")
-    edit = (body.prompt or "").strip()
+    edit = (body.prompt or "").strip()[:700]
     if not edit:
         raise HTTPException(400, "Describe the change to make.")
 
     jc = _film_job_config(wd)
     style_clean = (jc.get("style") or "").strip().rstrip(".")
-    prompt = f"{style_clean}. {edit}" if style_clean else edit
+    # Lead with the edit (it gets the most weight) and trail the style for coherence.
+    prompt = f"{edit}. {style_clean}" if style_clean else edit
 
     job_id = job_id_from_work_dir(wd)
     try:
         with _track_op("Editing image", f"scene {sid}"):
-            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id)
+            return _run_scene_inpaint(wd, sid, base, prompt, body.mask, job_id, denoise=body.denoise)
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:200]}")
+        raise HTTPException(503, f"Image edit failed: {str(e).splitlines()[0][:300]}")
 
 
 @api.get("/api/films/task")

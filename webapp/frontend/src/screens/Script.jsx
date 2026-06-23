@@ -272,10 +272,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const applyInpaint = async (mask, editPrompt) => {
+  const applyInpaint = async (mask, editPrompt, denoise) => {
     setBusy('inpaint'); setInpaintErr('')
     try {
-      const r = await api.inpaintScene(job.job_id, scenes[cur].id, mask, editPrompt)
+      const r = await api.inpaintScene(job.job_id, scenes[cur].id, mask, editPrompt, denoise)
       setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
       setInpaint(false)
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }

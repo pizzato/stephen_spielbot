@@ -126,10 +126,10 @@ function SceneCard({
     }
   }
 
-  const applyInpaint = async (mask, editPrompt) => {
+  const applyInpaint = async (mask, editPrompt, denoise) => {
     setBusy('inpaint'); setInpaintErr('')
     try {
-      const r = await api.inpaintFilmScene(workDir, scene.id, mask, editPrompt)
+      const r = await api.inpaintFilmScene(workDir, scene.id, mask, editPrompt, denoise)
       setHistory(r.history)
       setInpaint(false)
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }

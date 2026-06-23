@@ -88,9 +88,10 @@ export const api = {
   selectPreview: (jobId, sceneId, versionId) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-select`, { version_id: versionId }),
   // Masked image edit (FLUX inpaint): `mask` is a base64 PNG data-URL where white
-  // marks the region to change; `prompt` describes the change.
-  inpaintScene: (jobId, sceneId, mask, prompt) =>
-    req('POST', `/jobs/${jobId}/scenes/${sceneId}/inpaint`, { mask, prompt }),
+  // marks the region to change; `prompt` describes the change; `denoise` is the
+  // edit strength (0.3–1.0, lower keeps more of the original).
+  inpaintScene: (jobId, sceneId, mask, prompt, denoise) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/inpaint`, { mask, prompt, denoise }),
   regenField: (jobId, sceneId, field, body) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-field?field=${encodeURIComponent(field)}`, body),
 
@@ -220,7 +221,7 @@ export const api = {
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
   rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
-  inpaintFilmScene: (workDir, sceneId, mask, prompt) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt }),
+  inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),
