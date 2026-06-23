@@ -96,15 +96,16 @@ ENGINES: dict[str, dict] = {
         "commercial_ok": False,
         "license": "FLUX.2 [dev] Non-Commercial",
         "model_file": "flux2_dev_fp8mixed.safetensors",
-        "clip_t5": "mistral_3_small_flux2_bf16.safetensors",   # single Mistral-3 encoder
+        "clip_t5": "mistral_3_small_flux2_fp8.safetensors",   # single Mistral-3 encoder (fp8 to save VRAM)
         "clip_l": None,
         "vae": "flux2-vae.safetensors",
         "probe": ("UNETLoader", "unet_name", "flux2_dev_fp8mixed.safetensors"),
-        # NOTE: repo ids below need verification against the live ComfyUI FLUX.2 release.
+        # Repo + paths verified against the public Comfy-Org/flux2-dev repo (not gated,
+        # so no HF token needed); the workflow node graph still needs first-run validation.
         "models": [
             _model("Comfy-Org/flux2-dev", "split_files/diffusion_models/flux2_dev_fp8mixed.safetensors",
-                   "models/diffusion_models", gated=True),
-            _model("Comfy-Org/flux2-dev", "split_files/text_encoders/mistral_3_small_flux2_bf16.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/flux2-dev", "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors",
                    "models/text_encoders"),
             _model("Comfy-Org/flux2-dev", "split_files/vae/flux2-vae.safetensors", "models/vae"),
         ],

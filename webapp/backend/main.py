@@ -1137,33 +1137,31 @@ def list_engines() -> dict:
 def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_token: str) -> None:
     """Background: download an engine's model files onto each ComfyUI host over SSH.
 
-    Builds a small idempotent bash script (skip files already present) from the
-    engine's model specs and pipes it to `ssh host bash -s`, downloading via the
-    `hf` CLI into ~/github/ComfyUI/models/<subdir>. Long-running (weights are GBs)."""
+    Reuses the proven scripts/download_models.sh (which resolves the hf CLI from
+    ~/github/comfyui-env and flattens split_files/ paths) in its targeted
+    ENGINE_MODELS mode — piped to `ssh host bash -s`. Long-running (weights are GBs)."""
     import shlex
     from pipeline import engines as eng
     e = eng.get(engine_key) or {}
-    comfy = "$HOME/github/ComfyUI"
+    spec = ";".join(f'{m["repo"]}|{m["remote"]}|{m["dir"]}' for m in e.get("models", []))
+    try:
+        script_text = (REPO_ROOT / "scripts" / "download_models.sh").read_text()
+    except Exception as ex:
+        with _model_install_lock:
+            _model_install_tasks[task_id] = {"status": "error", "engine": engine_key,
+                                             "hosts": {}, "error": f"download_models.sh unreadable: {ex}"}
+        return
+    env = f"ENGINE_MODELS={shlex.quote(spec)} "
+    if hf_token:
+        env += f"HF_TOKEN={shlex.quote(hf_token)} "
     results: dict[str, dict] = {}
     for host in hosts:
-        steps = ["set -e",
-                 'HF=$(command -v hf || command -v huggingface-cli || true)',
-                 '[ -z "$HF" ] && { echo NO_HF_CLI; exit 3; }']
-        tok = f"--token {shlex.quote(hf_token)} " if hf_token else ""
-        for m in e.get("models", []):
-            dest = f'{comfy}/models/{m["dir"]}/{m["file"]}'
-            steps.append(
-                f'if [ -f "{dest}" ]; then echo "EXISTS {m["file"]}"; else echo "GET {m["file"]}"; '
-                f'src=$("$HF" download {shlex.quote(m["repo"])} {shlex.quote(m["remote"])} {tok}2>/dev/null) && '
-                f'mkdir -p "{comfy}/models/{m["dir"]}" && cp -f "$src" "{dest}" && echo "OK {m["file"]}" '
-                f'|| {{ echo "FAIL {m["file"]}"; exit 4; }}; fi')
-        script = "\n".join(steps)
         try:
             proc = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, "bash -s"],
-                input=script, capture_output=True, text=True, timeout=6 * 3600)
+                ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, f"{env}bash -s"],
+                input=script_text, capture_output=True, text=True, timeout=6 * 3600)
             results[host] = {"ok": proc.returncode == 0,
-                             "log": (proc.stdout + proc.stderr).strip()[-2000:]}
+                             "log": (proc.stdout + proc.stderr).strip()[-3000:]}
         except Exception as ex:
             results[host] = {"ok": False, "log": str(ex)}
         with _model_install_lock:
