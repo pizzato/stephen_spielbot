@@ -36,6 +36,10 @@ export const api = {
   getConfig: () => req('GET', '/config'),
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
+  // Image engines (model bundles) + automated model download onto the workers.
+  listEngines: () => req('GET', '/models/engines'),
+  installEngine: (engine) => req('POST', '/models/install', { engine }),
+  installEngineStatus: (taskId) => req('GET', `/models/install/status?task_id=${encodeURIComponent(taskId)}`),
   // Start/stop/restart one host's worker containers over SSH (action: start|stop|restart).
   controlWorker: (host, action) => req('POST', '/workers/control', { host, action }),
 

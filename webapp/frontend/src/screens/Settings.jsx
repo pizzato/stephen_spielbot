@@ -673,6 +673,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const restoreRef = useRef(null)
   const [workers, setWorkers] = useState(null)
   const [workerBusy, setWorkerBusy] = useState('')  // host with a start/stop action in flight
+  const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
+  const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
   const [newOpen, setNewOpen] = useState(false)
@@ -690,6 +692,28 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   // tab load, so a long-lived tab would otherwise show (and later Save —
   // clobbering newer values) a stale snapshot here.
   useEffect(() => { api.getConfig().then(setMeta).catch(() => {}) }, [setMeta])
+
+  // Image engines: registry + per-worker model availability (for the picker +
+  // the download buttons). Refreshed after an install completes.
+  const reloadEngines = () => api.listEngines().then(setEngineInfo).catch(() => {})
+  useEffect(() => { reloadEngines() }, [])
+  const installEngine = async (key) => {
+    setEngInstall((m) => ({ ...m, [key]: { status: 'running' } }))
+    try {
+      const { task_id } = await api.installEngine(key)
+      const poll = async () => {
+        try {
+          const s = await api.installEngineStatus(task_id)
+          setEngInstall((m) => ({ ...m, [key]: s }))
+          if (s.status === 'running') setTimeout(poll, 4000)
+          else reloadEngines()
+        } catch (e) { setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } })) }
+      }
+      setTimeout(poll, 3000)
+    } catch (e) {
+      setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } }))
+    }
+  }
 
   // Stage a Save-required edit and flag it as unsaved (see dirtyRef).
   const editCfg = (updater) => { dirtyRef.current = true; setCfg(updater) }
@@ -981,6 +1005,51 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
           </Card>
 
+          {/* ── Image models (engines) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Image models</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download here</span>
+            </div>
+            <div className="stack gap-22 mt-16">
+              <Field label="Hugging Face token"
+                hint="Needed to auto-download gated models (FLUX.1 Fill, FLUX.2). Create a read token at huggingface.co/settings/tokens and accept each model's license on its HF page first.">
+                <input className="input" type="password"
+                  placeholder={engineInfo?.hf_token_set ? '•••••••• (saved — leave blank to keep)' : 'hf_…'}
+                  value={cfg.hf_token || ''} onChange={(e) => set('hf_token', e.target.value)} />
+              </Field>
+              <div className="stack gap-10">
+                {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
+                {(engineInfo?.engines || []).map((e) => {
+                  const avail = engineInfo?.availability?.[e.key]
+                  const ins = engInstall[e.key]
+                  const running = ins?.status === 'running'
+                  return (
+                    <div key={e.key} className="row center between" style={{ borderTop: '1px solid var(--line)', paddingTop: 10, gap: 12 }}>
+                      <div className="grow">
+                        <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
+                          <span style={{ fontWeight: 600 }}>{e.label}</span>
+                          {avail === true && <Chip tone="ok" dot>installed</Chip>}
+                          {avail === false && <Chip tone="warn">not installed</Chip>}
+                          {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
+                        </div>
+                        <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                        {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
+                        {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                      </div>
+                      <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
+                        disabled={running || avail === true}
+                        onClick={() => installEngine(e.key)}>
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                      </Button>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="field__hint">Downloads run on every ComfyUI worker over SSH and can take a while (weights are several GB). FLUX.2 is authored from public templates and may need a workflow tweak on first use.</div>
+            </div>
+          </Card>
+
           {/* ── Voices ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
 
@@ -1149,6 +1218,31 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label={`LoRA strength — ${st.lora_strength ?? 0}`}>
                 <input className="slider" type="range" min={0} max={1} step={0.05} value={st.lora_strength ?? 0} onChange={(e) => setStyleField('lora_strength', +e.target.value)} />
               </Field>
+            </div>
+          </Card>
+
+          {/* ── Image model (engine) ── */}
+          <Card span={6} className="reveal reveal-d3">
+            <span className="label-sm">Image model</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>Which engine generates this style's scenes and powers “Edit image”. Download models under <strong>Infrastructure</strong>.</div>
+            <div className="stack gap-22 mt-16">
+              {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
+              {engineInfo && (<>
+                <Field label="Generation">
+                  <select className="select" value={st.image_engine || 'flux1-schnell'} onChange={(e) => setStyleField('image_engine', e.target.value)}>
+                    {(engineInfo.engines || []).filter((e) => e.can_generate).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Edit (mask + prompt)" hint="FLUX.1 Fill is a dedicated inpaint model — best for detailed edits.">
+                  <select className="select" value={st.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
+                    {(engineInfo.engines || []).filter((e) => e.can_edit).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
+                    ))}
+                  </select>
+                </Field>
+              </>)}
             </div>
           </Card>
 
