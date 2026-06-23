@@ -1753,15 +1753,21 @@ def _generate_mixed_suggestions(cfg: dict, style_names: list[str],
     topics are passed to the LLM so automation never re-suggests a thrown-away
     idea."""
     batches = []
+    # Titles generated so far this run, keyed by channel, so sibling styles on
+    # the same channel dedup against each other's fresh batch.
+    fresh_by_channel: dict[str, list[str]] = {}
     for name in style_names:
         ss = style_settings(cfg, name)
-        existing_titles = _channel_video_titles(cfg, style_name=name)
+        ch = channel_for_style(cfg, name)
+        existing_titles = _channel_video_titles(cfg, style_name=name) + fresh_by_channel.get(ch, [])
         try:
             new_data = generate_video_suggestions(existing_titles, cfg, style=ss,
                                                   discarded_titles=discarded)
         except Exception as exc:
             logger.warning("_generate_mixed_suggestions: generation failed for %r: %s", name, exc)
             new_data = []
+        fresh_by_channel.setdefault(ch, []).extend(
+            str(s.get("title") or "") for s in new_data if s.get("title"))
         batches.append([
             {
                 "id": str(uuid.uuid4())[:8],

@@ -1829,15 +1829,31 @@ def _merge_suggestions(existing: list[dict], fresh: list[dict]) -> list[dict]:
     return out
 
 
+def _styles_sharing_channel(cfg: dict, target: str) -> set[str]:
+    """Style names that publish to the same channel as ``target`` (target
+    included). Lets dedup pools be pooled per channel, so two styles on one
+    channel don't surface the same idea twice."""
+    ch = gapp.channel_for_style(cfg, target)
+    names = {target}
+    for st in (cfg.get("styles") or []):
+        nm = str(st.get("name") or "").strip()
+        if nm and gapp.channel_for_style(cfg, nm) == ch:
+            names.add(nm)
+    return names
+
+
 def _existing_idea_titles(cfg: dict, target: str) -> list[str]:
-    """Titles of the ideas already shown for a style, so 'Generate more' can
-    steer the LLM away from re-suggesting them (otherwise the fresh batch is
-    mostly deduped away and few genuinely new ideas surface)."""
+    """Titles of the ideas already shown for the target's channel, so 'Generate
+    more' can steer the LLM away from re-suggesting them (otherwise the fresh
+    batch is mostly deduped away and few genuinely new ideas surface). Pooled
+    across every style on the same channel so a topic open under one style isn't
+    re-suggested for a sibling style of the same channel."""
     default_name = cfg.get("default_style", "")
+    siblings = _styles_sharing_channel(cfg, target)
     try:
         return [str(s.get("title") or "")
                 for s in _visible_suggestions(yt.load_suggestions())
-                if _idea_style_key(s, default_name) == target and s.get("title")]
+                if _idea_style_key(s, default_name) in siblings and s.get("title")]
     except Exception:
         return []
 
@@ -2079,16 +2095,25 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
     discarded = _discarded_idea_titles(cfg)
     with _track_op("Generating suggestions", g or "all styles"):
         batches = []
+        # Titles generated so far in this run, keyed by channel, so sibling
+        # styles on the same channel dedup against each other's fresh batch —
+        # the saved-state pools don't yet include this run's output.
+        fresh_by_channel: dict[str, list[str]] = {}
         for name in style_names:
             ss = gapp.style_settings(cfg, name)
+            ch = gapp.channel_for_style(cfg, name)
             try:
                 previous = _already_made_titles(cfg, name)
             except Exception:
                 previous = []
+            previous = previous + fresh_by_channel.get(ch, [])
             try:
-                batches.append(_style_idea_batch(cfg, ss, g, previous, discarded))
+                batch = _style_idea_batch(cfg, ss, g, previous, discarded)
             except Exception as e:
                 raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
+            batches.append(batch)
+            fresh_by_channel.setdefault(ch, []).extend(
+                str(b.get("title") or "") for b in batch if b.get("title"))
     merged = _interleave(batches)
 
     # Append the fresh batch to the eligible styles' existing ideas so "Generate
