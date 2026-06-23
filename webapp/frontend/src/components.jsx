@@ -202,9 +202,10 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
 }
 
 // Masked image editor: paint over a region of an image, describe the change, and
-// send it to a FLUX inpaint pass. Calls `onApply(maskDataUrl, prompt)` where
-// maskDataUrl is a black/white PNG (white = the painted region to change).
-// `busy` disables the controls while the edit runs; `error` shows a message.
+// send it to a FLUX inpaint pass. Calls `onApply(maskDataUrl, prompt, denoise)`
+// where maskDataUrl is a black/white PNG (white = the painted region to change)
+// and denoise (0.3–1.0) is the edit strength. `busy` disables the controls while
+// the edit runs; `error` shows a message.
 const MASK_COLOR = 'rgba(168,85,247,0.55)'
 
 export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onClose }) {
@@ -213,6 +214,7 @@ export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onC
   const drawing = useRef(false)
   const last = useRef(null)
   const [brush, setBrush] = useState(36)
+  const [strength, setStrength] = useState(75)   // % → denoise 0.30–1.00
   const [prompt, setPrompt] = useState('')
   const [hasMask, setHasMask] = useState(false)
   const [ready, setReady] = useState(false)
@@ -299,7 +301,7 @@ export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onC
 
   const apply = () => {
     if (busy || !hasMask || !prompt.trim()) return
-    onApply(buildMask(), prompt.trim())
+    onApply(buildMask(), prompt.trim(), Math.round(strength) / 100)
   }
 
   return (
@@ -330,6 +332,13 @@ export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onC
             <Icon name="paintbrush" /> Brush
             <input type="range" min={8} max={80} value={brush} disabled={busy}
               onChange={(e) => setBrush(Number(e.target.value))} style={{ width: 120 }} />
+          </span>
+          <span className="label-sm" style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+            title="How much the painted area is allowed to change — lower keeps more of the original.">
+            <Icon name="sliders" /> Strength
+            <input type="range" min={30} max={100} value={strength} disabled={busy}
+              onChange={(e) => setStrength(Number(e.target.value))} style={{ width: 120 }} />
+            <span className="muted" style={{ width: 56 }}>{strength < 55 ? 'Subtle' : strength > 85 ? 'Strong' : 'Medium'}</span>
           </span>
           <Button variant="ghost" size="sm" icon="eraser" disabled={busy || !hasMask} onClick={clear}>Clear</Button>
         </div>
