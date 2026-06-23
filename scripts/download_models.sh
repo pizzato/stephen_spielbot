@@ -96,6 +96,23 @@ download() {
     echo "  [done] $filename ($size)"
 }
 
+# ── Targeted per-engine download (Settings "Download" button) ─────────────────
+# ENGINE_MODELS="repo|remote|dir;repo|remote|dir;…" downloads just those files,
+# reusing the resolved hf CLI + download() (skip-if-present + split_files flatten),
+# then exits — so the webapp can install one engine's weights without the bulk set.
+if [[ -n "${ENGINE_MODELS:-}" ]]; then
+    echo "=== Downloading engine models to $COMFY_DIR ==="
+    [[ -n "$HF_TOKEN" ]] && echo "    (using HuggingFace token)"
+    IFS=';' read -ra _ENGINE_SPECS <<< "$ENGINE_MODELS"
+    for _spec in "${_ENGINE_SPECS[@]}"; do
+        [[ -z "$_spec" ]] && continue
+        IFS='|' read -r _repo _remote _dir <<< "$_spec"
+        download "$_repo" "$_remote" "$_dir"
+    done
+    echo "✅ Engine model download complete."
+    exit 0
+fi
+
 # ── LTX 2.3 ───────────────────────────────────────────────────────────────────
 # Skip with:  SKIP_LTX=1 bash scripts/download_models.sh
 if [[ "${SKIP_LTX:-0}" == "1" ]]; then
