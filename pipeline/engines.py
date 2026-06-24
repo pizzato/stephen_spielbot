@@ -122,22 +122,24 @@ ENGINES: dict[str, dict] = {
         "edit_workflow": "flux2_edit.json",
         "steps": 4,
         "edit_denoise": 1.0,
-        "guidance": 1.0,   # distilled → cfg 1.0 (no real CFG), like schnell
+        "guidance": 4.0,
         "commercial_ok": True,
         "license": "Apache-2.0",
         "model_file": "flux-2-klein-4b.safetensors",
-        "clip_t5": "mistral_3_small_flux2_fp8.safetensors",   # reuses the FLUX.2 Mistral encoder
+        "clip_t5": "qwen_3_4b.safetensors",   # Klein uses a Qwen-3 encoder (NOT the Mistral one dev uses)
         "clip_l": None,
-        "vae": "flux2-vae.safetensors",                       # reuses the FLUX.2 VAE
+        "vae": "flux2-vae.safetensors",
         "probe": ("UNETLoader", "unet_name", "flux-2-klein-4b.safetensors"),
-        # Klein 4B is the distilled, Apache-2.0 (commercial) FLUX.2 — single file,
-        # public; reuses the encoder + VAE downloaded with flux2-dev.
+        # Klein 4B (Apache-2.0, commercial). The ComfyUI-ready model + its Qwen-3
+        # encoder + VAE all come from the Comfy-Org klein repo (note their typo
+        # "encorder"); verified against the ComfyUI Klein blueprint.
         "models": [
-            _model("black-forest-labs/FLUX.2-klein-4B", "flux-2-klein-4b.safetensors",
-                   "models/diffusion_models"),
-            _model("Comfy-Org/flux2-dev", "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors",
-                   "models/text_encoders"),
-            _model("Comfy-Org/flux2-dev", "split_files/vae/flux2-vae.safetensors", "models/vae"),
+            _model("Comfy-Org/vae-text-encorder-for-flux-klein-4b",
+                   "split_files/diffusion_models/flux-2-klein-4b.safetensors", "models/diffusion_models"),
+            _model("Comfy-Org/vae-text-encorder-for-flux-klein-4b",
+                   "split_files/text_encoders/qwen_3_4b.safetensors", "models/text_encoders"),
+            _model("Comfy-Org/vae-text-encorder-for-flux-klein-4b",
+                   "split_files/vae/flux2-vae.safetensors", "models/vae"),
         ],
     },
 }
