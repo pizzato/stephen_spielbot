@@ -110,6 +110,36 @@ ENGINES: dict[str, dict] = {
             _model("Comfy-Org/flux2-dev", "split_files/vae/flux2-vae.safetensors", "models/vae"),
         ],
     },
+    "flux2-klein": {
+        "key": "flux2-klein",
+        "label": "FLUX.2 Klein 4B",
+        "sub": "Fast · 4 steps · commercial OK · needs validation",
+        "family": "flux2",
+        "can_generate": True,
+        "can_edit": True,
+        "edit_mode": "flux2",
+        "t2i_workflow": "flux2_t2i.json",
+        "edit_workflow": "flux2_edit.json",
+        "steps": 4,
+        "edit_denoise": 1.0,
+        "guidance": 1.0,   # distilled → cfg 1.0 (no real CFG), like schnell
+        "commercial_ok": True,
+        "license": "Apache-2.0",
+        "model_file": "flux-2-klein-4b.safetensors",
+        "clip_t5": "mistral_3_small_flux2_fp8.safetensors",   # reuses the FLUX.2 Mistral encoder
+        "clip_l": None,
+        "vae": "flux2-vae.safetensors",                       # reuses the FLUX.2 VAE
+        "probe": ("UNETLoader", "unet_name", "flux-2-klein-4b.safetensors"),
+        # Klein 4B is the distilled, Apache-2.0 (commercial) FLUX.2 — single file,
+        # public; reuses the encoder + VAE downloaded with flux2-dev.
+        "models": [
+            _model("black-forest-labs/FLUX.2-klein-4B", "flux-2-klein-4b.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/flux2-dev", "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/flux2-dev", "split_files/vae/flux2-vae.safetensors", "models/vae"),
+        ],
+    },
 }
 
 DEFAULT_ENGINE = "flux1-schnell"
