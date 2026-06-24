@@ -10,7 +10,8 @@
     "class_type": "CLIPLoader",
     "inputs": {
       "clip_name": "{{CLIP_T5}}",
-      "type": "flux2"
+      "type": "flux2",
+      "device": "default"
     }
   },
   "3": {
@@ -27,10 +28,10 @@
     }
   },
   "5": {
-    "class_type": "CLIPTextEncode",
+    "class_type": "FluxGuidance",
     "inputs": {
-      "clip": ["2", 0],
-      "text": ""
+      "conditioning": ["4", 0],
+      "guidance": "{{GUIDANCE}}"
     }
   },
   "13": {
@@ -67,31 +68,53 @@
     }
   },
   "7": {
-    "class_type": "KSampler",
+    "class_type": "RandomNoise",
+    "inputs": {
+      "noise_seed": "{{SEED}}"
+    }
+  },
+  "8": {
+    "class_type": "BasicGuider",
     "inputs": {
       "model": ["1", 0],
-      "positive": ["4", 0],
-      "negative": ["5", 0],
-      "latent_image": ["17", 0],
-      "seed": "{{SEED}}",
+      "conditioning": ["5", 0]
+    }
+  },
+  "9": {
+    "class_type": "KSamplerSelect",
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "10": {
+    "class_type": "Flux2Scheduler",
+    "inputs": {
       "steps": "{{STEPS}}",
-      "cfg": "{{GUIDANCE}}",
-      "sampler_name": "euler",
-      "scheduler": "simple",
-      "denoise": "{{DENOISE}}"
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}"
     }
   },
   "11": {
-    "class_type": "VAEDecode",
+    "class_type": "SamplerCustomAdvanced",
     "inputs": {
-      "samples": ["7", 0],
-      "vae": ["3", 0]
+      "noise": ["7", 0],
+      "guider": ["8", 0],
+      "sampler": ["9", 0],
+      "sigmas": ["10", 0],
+      "latent_image": ["17", 0]
     }
   },
   "12": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["11", 0],
+      "vae": ["3", 0]
+    }
+  },
+  "18": {
     "class_type": "SaveImage",
     "inputs": {
-      "images": ["11", 0],
+      "images": ["12", 0],
       "filename_prefix": "flux2-edit"
     }
   }

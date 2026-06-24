@@ -771,10 +771,16 @@ def _run_and_save(workflow: dict, output_path: Path, comfy_url: str) -> Path:
 
 
 def _weight_dtype(engine: dict, comfy_url: str) -> str:
-    """fp8 weights need CUDA; FLUX.2 fp8-mixed weights load as-is ("default")."""
+    """Pick the UNETLoader weight_dtype. An engine may override it (e.g. a bf16
+    model cast to fp8 to dodge a failing bf16 GEMM path on some GPUs); otherwise
+    FLUX.2 fp8-mixed weights load as-is and FLUX.1 fp8 needs CUDA."""
+    has_cuda = _comfy_has_cuda(comfy_url)
+    override = engine.get("weight_dtype")
+    if override:
+        return override if has_cuda else "default"
     if engine.get("family") == "flux2":
         return "default"
-    return "fp8_e4m3fn" if _comfy_has_cuda(comfy_url) else "default"
+    return "fp8_e4m3fn" if has_cuda else "default"
 
 
 def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
@@ -835,8 +841,14 @@ def edit_with_engine(engine: dict, prompt: str, base_image: Path, mask_image: Pa
     if mode == "fill":
         repl["FILL_MODEL"] = engine["model_file"]
         repl["CLIP_L"] = engine["clip_l"]
-    else:  # flux2
+    else:  # flux2 — Flux2Scheduler needs the image's pixel dimensions
         repl["FLUX_MODEL"] = engine["model_file"]
+        try:
+            from PIL import Image
+            with Image.open(base_image) as im:
+                repl["WIDTH"], repl["HEIGHT"] = im.size
+        except Exception:
+            repl["WIDTH"], repl["HEIGHT"] = 1024, 1024
     workflow = _fill_template(_load_workflow(engine["edit_workflow"]), repl)
     return _run_and_save(workflow, output_path, comfy_url)
 
