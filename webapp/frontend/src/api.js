@@ -189,6 +189,10 @@ export const api = {
   ytPostSave: (body) => req('POST', '/youtube/post/save', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
+  // Cover image edit (mask + prompt) + version history (mirrors scene previews).
+  coverHistory: (workDir) => req('GET', `/youtube/cover/history?work_dir=${encodeURIComponent(workDir || '')}`),
+  coverInpaint: (workDir, mask, prompt, denoise) => req('POST', '/youtube/cover/inpaint', { work_dir: workDir, mask, prompt, denoise }),
+  coverSelect: (workDir, versionId) => req('POST', '/youtube/cover/select', { work_dir: workDir, version_id: versionId }),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),

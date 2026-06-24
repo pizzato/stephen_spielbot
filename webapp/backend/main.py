@@ -3386,6 +3386,15 @@ def yt_cover(body: CoverBody) -> dict:
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
+        # Generate the cover with the style's selected image engine (same as scenes).
+        style_name = ""
+        job_row = store.get_job(job_id)
+        if job_row is not None:
+            try:
+                style_name = json.loads(dict(job_row).get("config_json") or "{}").get("style_name", "")
+            except Exception:
+                style_name = ""
+        engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, style_name).get("image_engine"))
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
@@ -3397,6 +3406,8 @@ def yt_cover(body: CoverBody) -> dict:
                 "vid_width": vid_width,
                 "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
+                "engine": engine,
+                # flux_* kept for back-compat with pre-engine workers.
                 "flux_steps": cfg.get("flux_steps", 4),
                 "flux_model": cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
                 "flux_clip_t5": cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -3431,9 +3442,102 @@ def yt_cover_status(task_id: str = Query(...)) -> dict:
         cover = Path(t.result.get("path", "")) if t.result else None
         if cover and cover.exists() and cover.stat().st_size > 1000:
             result["cover_url"] = f"/api/file?path={cover}&t={int(time.time())}"
+            result["history"] = image_history.cover_history(cover.parent)
     if t.error:
         result["error"] = t.error[:200]
     return result
+
+
+def _cover_engine_and_style(wd: Path, cfg: dict, slot: str) -> tuple[dict, str]:
+    """Resolve the work dir's style engine for *slot* ('image'|'edit') and its
+    composed visual style, from the job's stamped style_name."""
+    job_id = job_id_from_work_dir(wd)
+    style_name = ""
+    store = DurableStore.default()
+    try:
+        job_row = store.get_job(job_id)
+    finally:
+        store.close()
+    if job_row is not None:
+        try:
+            style_name = json.loads(dict(job_row).get("config_json") or "{}").get("style_name", "")
+        except Exception:
+            style_name = ""
+    key = "edit_engine" if slot == "edit" else "image_engine"
+    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, style_name).get(key))
+    return engine, gapp._compose_visual_style("", cfg, style_name)
+
+
+class CoverInpaintBody(BaseModel):
+    work_dir: str
+    mask: str
+    prompt: str
+    denoise: float | None = None
+
+
+@api.post("/api/youtube/cover/inpaint")
+def inpaint_cover(body: CoverInpaintBody) -> dict:
+    """Masked edit of the cover image, using the style's edit engine; keeps a version."""
+    from pipeline.comfyui import edit_with_engine
+    wd = Path(body.work_dir)
+    if not wd.exists():
+        raise HTTPException(404, "No work directory.")
+    cover = wd / "cover.png"
+    if not cover.exists():
+        raise HTTPException(400, "Generate the cover first, then edit it.")
+    edit = (body.prompt or "").strip()[:700]
+    if not edit:
+        raise HTTPException(400, "Describe the change to make.")
+    mask_bytes = _decode_data_url(body.mask)
+    if not mask_bytes:
+        raise HTTPException(400, "No mask was provided.")
+    worker_urls = gapp._preview_worker_urls()
+    if not worker_urls:
+        raise HTTPException(503, "No reachable workers for image editing.")
+
+    cfg = gapp.load_config()
+    engine, combined_style = _cover_engine_and_style(wd, cfg, "edit")
+    prompt = f"{edit}. {combined_style}" if combined_style else edit
+    dn = None if body.denoise is None else max(0.3, min(1.0, float(body.denoise)))
+
+    image_history.cover_seed_if_empty(wd, cover)
+    mask_tmp = wd / "_cover_inpaint_mask.png"
+    mask_tmp.write_bytes(mask_bytes)
+    pool = gapp.WorkerPool(worker_urls)
+    url = pool.acquire()
+    try:
+        with _track_op("Editing cover", f"{engine['key']}"):
+            edit_with_engine(engine, prompt, cover, mask_tmp, cover, denoise=dn, comfy_url=url)
+    except Exception as e:
+        raise HTTPException(503, f"Cover edit failed: {str(e).splitlines()[0][:300]}")
+    finally:
+        pool.release(url)
+        mask_tmp.unlink(missing_ok=True)
+
+    hist = image_history.cover_record(wd, cover)
+    return {"ok": True, "cover_url": f"/api/file?path={cover}&t={int(time.time())}", "history": hist}
+
+
+class CoverSelectBody(BaseModel):
+    work_dir: str
+    version_id: int
+
+
+@api.post("/api/youtube/cover/select")
+def select_cover(body: CoverSelectBody) -> dict:
+    """Make a kept cover version the active cover.png."""
+    wd = Path(body.work_dir)
+    try:
+        cover = image_history.cover_select(wd, int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "cover_url": f"/api/file?path={cover}&t={int(time.time())}",
+            "history": image_history.cover_history(wd)}
+
+
+@api.get("/api/youtube/cover/history")
+def cover_history(work_dir: str = Query(...)) -> dict:
+    return {"history": image_history.cover_history(Path(work_dir))}
 
 
 class ThumbnailBody(BaseModel):

@@ -21,6 +21,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [coverUrl, setCoverUrl] = useState('')
   const [ytBusy, setYtBusy] = useState('')
   const [coverMsg, setCoverMsg] = useState('')
+  const [coverHist, setCoverHist] = useState(null)
+  const [coverEdit, setCoverEdit] = useState(false)
+  const [coverEditErr, setCoverEditErr] = useState('')
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -61,6 +64,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         if (!alive) return
         if (p.description) setDescription((cur) => cur || p.description)
         setCoverUrl(p.cover_url || '')
+        api.coverHistory(job.work_dir).then((r) => { if (alive) setCoverHist(r.history) }).catch(() => {})
         if (!p.description && tries++ < 10) timer = setTimeout(load, 3000)
       } catch { /* prefill is best-effort */ }
     }
@@ -168,7 +172,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         const check = async () => {
           try {
             const s = await api.ytCoverStatus(tid)
-            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); resolve() }
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); if (s.history) setCoverHist(s.history); resolve() }
             else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
             else pollTimer = setTimeout(check, 2000)
           } catch (e) { reject(e) }
@@ -179,6 +183,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       clearTimeout(pollTimer)
       setYtBusy('')
     }
+  }
+
+  // Pick a kept cover version, or masked-edit the cover with the style's edit engine.
+  const selectCover = async (versionId) => {
+    setYtBusy('cover'); setError('')
+    try {
+      const r = await api.coverSelect(job.work_dir, versionId)
+      setCoverUrl(r.cover_url || ''); setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const applyCoverEdit = async (mask, editPrompt, denoise) => {
+    setYtBusy('coveredit'); setCoverEditErr('')
+    try {
+      const r = await api.coverInpaint(job.work_dir, mask, editPrompt, denoise)
+      setCoverUrl(r.cover_url || ''); setCoverHist(r.history); setCoverEdit(false)
+    } catch (e) { setCoverEditErr(e.message) } finally { setYtBusy('') }
   }
 
   const deleteCurrent = async () => {
@@ -443,9 +464,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                   : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
               </div>
-              <Button variant="ghost" block icon="rotate-right" disabled={ytBusy === 'cover'} onClick={regenCover}>
+              <Button variant="ghost" block icon="rotate-right" disabled={!!ytBusy} onClick={regenCover}>
                 {ytBusy === 'cover' ? 'Generating…' : coverUrl ? 'Regenerate cover' : 'Generate cover'}
               </Button>
+              <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
+                onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
+              <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
+                onSelect={selectCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
             </Card>
             <Card well className="reveal reveal-d3">
               <div className="row center gap-10">
@@ -454,6 +479,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </div>
             </Card>
           </div>
+
+          {coverEdit && (
+            <InpaintModal src={coverUrl} aspect={aspect} busy={ytBusy === 'coveredit'} error={coverEditErr}
+              onApply={applyCoverEdit} onClose={() => setCoverEdit(false)} />
+          )}
         </div>
       )}
 

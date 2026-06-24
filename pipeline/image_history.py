@@ -156,3 +156,92 @@ def history(work_dir: Path, scene_id: int) -> dict:
     if selected not in valid:
         selected = versions[-1]["id"] if versions else None
     return {"versions": versions, "selected": selected}
+
+
+# ── cover image history ───────────────────────────────────────────────────────
+# The cover is one image per work dir (``cover.png``), so it has no scene id; it
+# lives under the reserved manifest key "cover" with versions ``cover_v{id}.png``
+# in the same image_history/ dir. Mirrors the scene helpers above.
+_COVER_KEY = "cover"
+
+
+def _cover_canonical(work_dir: Path) -> Path:
+    return Path(work_dir) / "cover.png"
+
+
+def _add_cover_version(work_dir: Path, image: Path, entry: dict) -> dict:
+    hist = _hist_dir(work_dir)
+    hist.mkdir(parents=True, exist_ok=True)
+    vid = int(entry.get("next_id", 1))
+    fname = f"cover_v{vid}.png"
+    shutil.copy2(image, hist / fname)
+    entry.setdefault("versions", []).append({"id": vid, "file": fname})
+    entry["selected"] = vid
+    entry["next_id"] = vid + 1
+    return entry
+
+
+def cover_seed_if_empty(work_dir: Path, current: Path) -> None:
+    """Capture an existing cover as the first kept version before it's overwritten."""
+    work_dir, current = Path(work_dir), Path(current)
+    if not current.exists():
+        return
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
+        if entry.get("versions"):
+            return
+        _add_cover_version(work_dir, current, entry)
+        data[_COVER_KEY] = entry
+        _save(work_dir, data)
+
+
+def cover_record(work_dir: Path, image: Path) -> dict:
+    """Add the just-generated/edited cover as a new selected version."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
+        _add_cover_version(work_dir, Path(image), entry)
+        data[_COVER_KEY] = entry
+        _save(work_dir, data)
+    return cover_history(work_dir)
+
+
+def cover_select(work_dir: Path, version_id: int) -> Path:
+    """Copy a kept cover version onto the canonical cover.png and return it."""
+    work_dir = Path(work_dir)
+    version_id = int(version_id)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
+        match = next((v for v in entry.get("versions", []) if int(v["id"]) == version_id), None)
+        if match is None:
+            raise ValueError(f"No cover version {version_id}")
+        src = _hist_dir(work_dir) / match["file"]
+        if not src.exists():
+            raise FileNotFoundError(f"Cover version file missing: {src}")
+        cover = _cover_canonical(work_dir)
+        shutil.copy2(src, cover)
+        entry["selected"] = version_id
+        data[_COVER_KEY] = entry
+        _save(work_dir, data)
+        return cover
+
+
+def cover_history(work_dir: Path) -> dict:
+    """Return ``{"versions": [{"id", "path"}], "selected": id|None}`` for the cover."""
+    work_dir = Path(work_dir)
+    data = _load(work_dir)
+    entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
+    hist = _hist_dir(work_dir)
+    versions = []
+    for v in entry.get("versions", []):
+        f = hist / v["file"]
+        if f.exists():
+            versions.append({"id": int(v["id"]), "path": str(f)})
+    selected = entry.get("selected")
+    valid = {v["id"] for v in versions}
+    if selected not in valid:
+        selected = versions[-1]["id"] if versions else None
+    return {"versions": versions, "selected": selected}
