@@ -144,7 +144,10 @@ ENGINES: dict[str, dict] = {
     },
 }
 
-DEFAULT_ENGINE = "flux1-schnell"
+# FLUX.2 Klein is the default engine (fast, commercial Apache-2.0, much better
+# than schnell) — used for new styles and as the resolve()/normalize fallback.
+# FLUX.1 schnell / Fill are opt-in: chosen per style and downloaded on demand.
+DEFAULT_ENGINE = "flux2-klein"
 
 
 def get(key: str) -> dict | None:

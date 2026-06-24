@@ -170,9 +170,13 @@ DEFAULT_CFG = {
     "flux_steps":    4,
     # Image engine per style (see pipeline/engines.py): which model bundle does
     # scene generation vs the "Edit image" inpaint. Flat keys mirror the DEFAULT
-    # style like every other STYLE_FIELD_TO_FLAT entry.
-    "default_image_engine": "flux1-schnell",
-    "default_edit_engine":  "flux1-schnell",
+    # style like every other STYLE_FIELD_TO_FLAT entry. Default = FLUX.2 Klein.
+    "default_image_engine": "flux2-klein",
+    "default_edit_engine":  "flux2-klein",
+    # One-time migration guard: when False, _ensure_styles flips styles still on
+    # the old default (flux1-schnell) to the new default, then sets this True so a
+    # later deliberate flux1-schnell choice is preserved.
+    "engines_default_v2": False,
     # Hugging Face token (with the gated FLUX licenses accepted) used to
     # auto-download engine model weights onto the workers. Set in Settings.
     "hf_token": "",
@@ -404,6 +408,16 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
+    # One-time flip of the old default engine (flux1-schnell) to the new default
+    # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
+    # later flux1-schnell choice is preserved.
+    if not cfg.get("engines_default_v2"):
+        for row in normalized:
+            if row.get("image_engine") == "flux1-schnell":
+                row["image_engine"] = engines.DEFAULT_ENGINE
+            if row.get("edit_engine") == "flux1-schnell":
+                row["edit_engine"] = engines.DEFAULT_ENGINE
+        cfg["engines_default_v2"] = True
     default = normalized[default_idx]
     for field, flat in STYLE_FIELD_TO_FLAT.items():
         cfg[flat] = default[field]
