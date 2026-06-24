@@ -753,6 +753,125 @@ def inpaint_scene_image(
     return output_path
 
 
+def _run_and_save(workflow: dict, output_path: Path, comfy_url: str) -> Path:
+    """Queue a prepared workflow, wait, and save its first image output."""
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No image output from ComfyUI for prompt {prompt_id} ({comfy_url})")
+    item = outputs[0]
+    suffix = Path(item.get("filename", "out.png")).suffix or ".png"
+    tmp = output_path.with_suffix(suffix)
+    _download_output(item, tmp, comfy_url=comfy_url)
+    if tmp != output_path:
+        tmp.rename(output_path)
+    return output_path
+
+
+def _weight_dtype(engine: dict, comfy_url: str) -> str:
+    """Pick the UNETLoader weight_dtype. An engine may override it (e.g. a bf16
+    model cast to fp8 to dodge a failing bf16 GEMM path on some GPUs); otherwise
+    FLUX.2 fp8-mixed weights load as-is and FLUX.1 fp8 needs CUDA."""
+    has_cuda = _comfy_has_cuda(comfy_url)
+    override = engine.get("weight_dtype")
+    if override:
+        return override if has_cuda else "default"
+    if engine.get("family") == "flux2":
+        return "default"
+    return "fp8_e4m3fn" if has_cuda else "default"
+
+
+def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
+                         width: int, height: int, seed: int | None = None,
+                         comfy_url: str = COMFYUI_URL) -> Path:
+    """Text→image for the given engine. Dispatches by engine family.
+
+    flux1 reuses :func:`generate_scene_image`; flux2 runs ``flux2_t2i.json``."""
+    if not engine.get("can_generate"):
+        raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
+    if engine.get("family") != "flux2":
+        return generate_scene_image(
+            prompt, output_path, width=width, height=height, seed=seed,
+            steps=int(engine["steps"]), flux_model=engine["model_file"],
+            clip_t5=engine["clip_t5"], clip_l=engine["clip_l"], flux_vae=engine["vae"],
+            comfy_url=comfy_url)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), {
+        "FLUX_MODEL": engine["model_file"], "CLIP_T5": engine["clip_t5"],
+        "FLUX_VAE": engine["vae"], "WEIGHT_DTYPE": _weight_dtype(engine, comfy_url),
+        "POSITIVE_PROMPT": prompt, "WIDTH": width, "HEIGHT": height,
+        "STEPS": int(engine["steps"]), "GUIDANCE": float(engine.get("guidance") or 4.0),
+        "SEED": seed,
+    })
+    return _run_and_save(workflow, output_path, comfy_url)
+
+
+def edit_with_engine(engine: dict, prompt: str, base_image: Path, mask_image: Path,
+                     output_path: Path, *, denoise: float | None = None,
+                     seed: int | None = None, comfy_url: str = COMFYUI_URL) -> Path:
+    """Masked image edit for the given engine, dispatched by ``edit_mode``.
+
+    noise_mask → :func:`inpaint_scene_image` (schnell); fill → ``flux_fill.json``
+    (dedicated FLUX.1 Fill model); flux2 → ``flux2_edit.json``."""
+    if not engine.get("can_edit"):
+        raise RuntimeError(f"Engine {engine.get('key')!r} cannot edit images.")
+    mode = engine.get("edit_mode")
+    dn = denoise if denoise is not None else float(engine.get("edit_denoise") or 0.85)
+    if mode == "noise_mask":
+        return inpaint_scene_image(
+            prompt, base_image, mask_image, output_path, seed=seed,
+            steps=int(engine["steps"]), denoise=dn, flux_model=engine["model_file"],
+            clip_t5=engine["clip_t5"], clip_l=engine["clip_l"], flux_vae=engine["vae"],
+            comfy_url=comfy_url)
+
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+    base_name = _upload_image(Path(base_image), comfy_url=comfy_url)
+    mask_name = _upload_image(Path(mask_image), comfy_url=comfy_url)
+    repl = {
+        "WEIGHT_DTYPE": _weight_dtype(engine, comfy_url),
+        "FLUX_VAE": engine["vae"], "CLIP_T5": engine["clip_t5"],
+        "POSITIVE_PROMPT": prompt, "BASE_IMAGE": base_name, "MASK_IMAGE": mask_name,
+        "STEPS": int(engine["steps"]), "DENOISE": dn,
+        "GUIDANCE": float(engine.get("guidance") or 30.0), "SEED": seed,
+    }
+    if mode == "fill":
+        repl["FILL_MODEL"] = engine["model_file"]
+        repl["CLIP_L"] = engine["clip_l"]
+    else:  # flux2 — Flux2Scheduler needs the image's pixel dimensions
+        repl["FLUX_MODEL"] = engine["model_file"]
+        try:
+            from PIL import Image
+            with Image.open(base_image) as im:
+                repl["WIDTH"], repl["HEIGHT"] = im.size
+        except Exception:
+            repl["WIDTH"], repl["HEIGHT"] = 1024, 1024
+    workflow = _fill_template(_load_workflow(engine["edit_workflow"]), repl)
+    return _run_and_save(workflow, output_path, comfy_url)
+
+
+def engine_model_present(comfy_url: str, probe) -> bool | None:
+    """True/False if the engine's model file is loadable on this worker, or None
+    if the probe couldn't be evaluated. *probe* is (node_class, input_name, filename);
+    we read ComfyUI's /object_info to see if the filename is in that loader's list."""
+    if not probe:
+        return None
+    node_class, input_name, filename = probe
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_class}", timeout=8) as r:
+            data = json.loads(r.read())
+        info = data.get(node_class) or {}
+        inputs = info.get("input") or {}
+        spec = (inputs.get("required") or {}).get(input_name) or (inputs.get("optional") or {}).get(input_name)
+        names = spec[0] if isinstance(spec, list) and spec and isinstance(spec[0], list) else []
+        return filename in names
+    except Exception:
+        return None
+
+
 def generate_music(
     topic: str,
     duration_seconds: float,

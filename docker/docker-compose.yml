@@ -21,6 +21,11 @@ services:
     image: spielbot-comfyui:latest
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
+    environment:
+      # Route GEMMs through cuBLASLt. On DGX Spark / GB10 the legacy cuBLAS path
+      # fails specific bf16 GEMMs (CUBLAS_STATUS_INTERNAL_ERROR), breaking every
+      # FLUX.2 model; cuBLASLt avoids it. Set to 1 in .env on GB10 (no rebuild).
+      - TORCH_BLAS_PREFER_CUBLASLT=${TORCH_BLAS_PREFER_CUBLASLT:-}
     volumes:
       # ~33 GB of models live on the host; populate once (see docker/README.md).
       - ${MODELS_DIR:?set MODELS_DIR in docker/.env}:/opt/ComfyUI/models
