@@ -25,7 +25,8 @@ from pipeline.assembler import (  # noqa: E402
     mix_background_music,
     mux_video_audio,
 )
-from pipeline.comfyui import generate_music, generate_scene_image  # noqa: E402
+from pipeline.comfyui import generate_music, generate_scene_image, generate_with_engine  # noqa: E402
+from pipeline import image_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
     cover_dimensions,
@@ -267,16 +268,28 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # Use the endpoint selected at task-creation time (render-aware routing);
     # fall back to the worker's own endpoint if not set.
     comfy_url = p.get("comfy_url") or endpoint
-    generate_scene_image(
-        prompt, cover_path,
-        width=cover_w, height=cover_h,
-        steps=int(p.get("flux_steps", 4)),
-        flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
-        clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-        clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
-        flux_vae=p.get("flux_vae", "ae.safetensors"),
-        comfy_url=comfy_url,
-    )
+    # Keep the previous cover so the user can return to it (same as scenes).
+    image_history.cover_seed_if_empty(work_dir, cover_path)
+    engine = p.get("engine")
+    if engine:
+        # Generate with the style's selected image engine (FLUX.1/Fill/FLUX.2).
+        generate_with_engine(
+            engine, prompt, cover_path,
+            width=cover_w, height=cover_h, comfy_url=comfy_url,
+        )
+    else:
+        # Back-compat for tasks queued before per-style engines.
+        generate_scene_image(
+            prompt, cover_path,
+            width=cover_w, height=cover_h,
+            steps=int(p.get("flux_steps", 4)),
+            flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
+            clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+            clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
+            flux_vae=p.get("flux_vae", "ae.safetensors"),
+            comfy_url=comfy_url,
+        )
+    image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")
 

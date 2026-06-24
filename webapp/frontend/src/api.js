@@ -36,6 +36,10 @@ export const api = {
   getConfig: () => req('GET', '/config'),
   saveConfig: (config) => req('POST', '/config', { config }),
   workerStatus: () => req('GET', '/workers/status'),
+  // Image engines (model bundles) + automated model download onto the workers.
+  listEngines: () => req('GET', '/models/engines'),
+  installEngine: (engine) => req('POST', '/models/install', { engine }),
+  installEngineStatus: (taskId) => req('GET', `/models/install/status?task_id=${encodeURIComponent(taskId)}`),
   // Start/stop/restart one host's worker containers over SSH (action: start|stop|restart).
   controlWorker: (host, action) => req('POST', '/workers/control', { host, action }),
 
@@ -185,6 +189,10 @@ export const api = {
   ytPostSave: (body) => req('POST', '/youtube/post/save', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
   ytCoverStatus: (taskId) => req('GET', `/youtube/cover/status?task_id=${encodeURIComponent(taskId)}`),
+  // Cover image edit (mask + prompt) + version history (mirrors scene previews).
+  coverHistory: (workDir) => req('GET', `/youtube/cover/history?work_dir=${encodeURIComponent(workDir || '')}`),
+  coverInpaint: (workDir, mask, prompt, denoise) => req('POST', '/youtube/cover/inpaint', { work_dir: workDir, mask, prompt, denoise }),
+  coverSelect: (workDir, versionId) => req('POST', '/youtube/cover/select', { work_dir: workDir, version_id: versionId }),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),

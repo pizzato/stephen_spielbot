@@ -2,9 +2,12 @@
 # Download all models required by Stephen Spielbot into a ComfyUI installation.
 # Usage: bash scripts/download_models.sh [/path/to/ComfyUI]
 #
-# Models downloaded (~33 GB total):
-#   LTX 2.3  — checkpoint, LoRA, spatial upscaler, text encoder  (~28 GB)
-#   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders   (~5 GB)
+# Models downloaded by default (~49 GB):
+#   LTX 2.3  — checkpoint, LoRA, spatial upscaler, text encoder    (~28 GB)
+#   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders     (~5 GB)
+#   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE         (~16 GB)
+# Opt-in (env flags): INSTALL_FLUX1=1 adds FLUX.1-schnell. FLUX.1 Fill and
+# FLUX.2 dev are downloaded on demand from Settings (per-style engine choice).
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
@@ -96,6 +99,23 @@ download() {
     echo "  [done] $filename ($size)"
 }
 
+# ── Targeted per-engine download (Settings "Download" button) ─────────────────
+# ENGINE_MODELS="repo|remote|dir;repo|remote|dir;…" downloads just those files,
+# reusing the resolved hf CLI + download() (skip-if-present + split_files flatten),
+# then exits — so the webapp can install one engine's weights without the bulk set.
+if [[ -n "${ENGINE_MODELS:-}" ]]; then
+    echo "=== Downloading engine models to $COMFY_DIR ==="
+    [[ -n "$HF_TOKEN" ]] && echo "    (using HuggingFace token)"
+    IFS=';' read -ra _ENGINE_SPECS <<< "$ENGINE_MODELS"
+    for _spec in "${_ENGINE_SPECS[@]}"; do
+        [[ -z "$_spec" ]] && continue
+        IFS='|' read -r _repo _remote _dir <<< "$_spec"
+        download "$_repo" "$_remote" "$_dir"
+    done
+    echo "✅ Engine model download complete."
+    exit 0
+fi
+
 # ── LTX 2.3 ───────────────────────────────────────────────────────────────────
 # Skip with:  SKIP_LTX=1 bash scripts/download_models.sh
 if [[ "${SKIP_LTX:-0}" == "1" ]]; then
@@ -155,12 +175,37 @@ download \
 
 fi  # SKIP_ACE
 
-# ── FLUX.1-schnell (scene preview image generation) — optional ────────────────
-# ~13 GB total. Skip with:  SKIP_FLUX=1 bash scripts/download_models.sh
-if [[ "${SKIP_FLUX:-0}" == "1" ]]; then
+# ── FLUX.2 Klein 4B (DEFAULT image + edit engine) ─────────────────────────────
+# Fast (4-step), commercial (Apache-2.0) — the default for scenes + cover.
+# ~16 GB. Skip with:  SKIP_FLUX2=1 bash scripts/download_models.sh
+if [[ "${SKIP_FLUX2:-0}" == "1" ]]; then
     echo ""
-    echo "--- FLUX.1-schnell models skipped (SKIP_FLUX=1) ---"
+    echo "--- FLUX.2 Klein models skipped (SKIP_FLUX2=1) ---"
 else
+    echo ""
+    echo "--- FLUX.2 Klein 4B image models (~16 GB) ---"
+
+    download \
+        "Comfy-Org/vae-text-encorder-for-flux-klein-4b" \
+        "split_files/diffusion_models/flux-2-klein-4b.safetensors" \
+        "models/diffusion_models"
+
+    download \
+        "Comfy-Org/vae-text-encorder-for-flux-klein-4b" \
+        "split_files/text_encoders/qwen_3_4b.safetensors" \
+        "models/text_encoders"
+
+    download \
+        "Comfy-Org/vae-text-encorder-for-flux-klein-4b" \
+        "split_files/vae/flux2-vae.safetensors" \
+        "models/vae"
+fi
+
+# ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────
+# The default is now FLUX.2 Klein. Download schnell only if you'll select it per
+# style (FLUX.1 Fill + FLUX.2 dev are downloaded on demand from Settings):
+#   INSTALL_FLUX1=1 bash scripts/download_models.sh
+if [[ "${INSTALL_FLUX1:-0}" == "1" ]]; then
     echo ""
     echo "--- FLUX.1-schnell scene preview models (~13 GB) ---"
 
@@ -170,15 +215,14 @@ else
         "models/unet"
 
     # BF16 (non-quantised) version — required to run ComfyUI on MPS (Apple
-    # Silicon), which cannot load the fp8 model. Point flux_model at it in config
-    # on a Mac worker. Requires accepting the BFL license at
-    # huggingface.co/black-forest-labs/FLUX.1-schnell
+    # Silicon), which cannot load the fp8 model. Requires accepting the BFL
+    # license at huggingface.co/black-forest-labs/FLUX.1-schnell
     download \
         "black-forest-labs/FLUX.1-schnell" \
         "flux1-schnell.safetensors" \
-        "models/unet" || echo "  [warn] flux1-schnell.safetensors skipped — accept the license at huggingface.co/black-forest-labs/FLUX.1-schnell then re-run with HF_TOKEN=<token> make install"
+        "models/unet" || echo "  [warn] flux1-schnell.safetensors skipped — accept the license at huggingface.co/black-forest-labs/FLUX.1-schnell then re-run with HF_TOKEN=<token>"
 
-    # Shared FLUX text encoders (also used by FLUX dev)
+    # Shared FLUX.1 text encoders (also used by FLUX.1 Fill)
     download \
         "comfyanonymous/flux_text_encoders" \
         "t5xxl_fp8_e4m3fn.safetensors" \
@@ -189,11 +233,14 @@ else
         "clip_l.safetensors" \
         "models/clip"
 
-    # FLUX VAE — BFL repo requires license approval; use public mirror instead
+    # FLUX.1 VAE — BFL repo requires license approval; use public mirror instead
     download \
         "camenduru/FLUX.1-dev" \
         "ae.safetensors" \
         "models/vae"
+else
+    echo ""
+    echo "--- FLUX.1-schnell skipped (opt-in: INSTALL_FLUX1=1) ---"
 fi
 
 # ── Summary ───────────────────────────────────────────────────────────────────
