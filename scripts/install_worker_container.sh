@@ -66,6 +66,9 @@ BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
 TTS_PORT=${TTS_PORT}
+# DGX Spark / GB10: use cuBLASLt so FLUX.2's bf16 GEMMs don't hit the failing
+# legacy cuBLAS path (CUBLAS_STATUS_INTERNAL_ERROR). Harmless on other GPUs.
+TORCH_BLAS_PREFER_CUBLASLT=1
 ENV
 echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 
