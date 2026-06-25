@@ -132,6 +132,8 @@ export const api = {
   getDiscarded: (styleName) => req('GET', '/youtube/suggestions/discarded' + (styleName ? `?style_name=${encodeURIComponent(styleName)}` : '')),
   reviveSuggestion: (body) => req('POST', '/youtube/suggestions/revive', body),
   forgetSuggestion: (body) => req('POST', '/youtube/suggestions/forget', body),
+  // Empty the declined ("not accepted") ideas list (Settings → Automation).
+  resetDeclinedSuggestions: () => req('POST', '/youtube/suggestions/discarded/reset'),
 
   // comment actions
   fetchComments: (autoApprove) => req('POST', '/youtube/comments/fetch', { auto_approve: autoApprove ?? null }),

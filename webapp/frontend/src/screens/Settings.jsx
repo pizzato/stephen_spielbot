@@ -673,6 +673,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const restoreRef = useRef(null)
   const [workers, setWorkers] = useState(null)
   const [workerBusy, setWorkerBusy] = useState('')  // host with a start/stop action in flight
+  const [clearingDeclined, setClearingDeclined] = useState(false)  // declined-ideas reset in flight
   const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
   const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
@@ -756,6 +757,22 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       setError(`${host}: ${action} failed — ${e.message}`)
     } finally {
       setWorkerBusy('')
+    }
+  }
+
+  // Empty the declined ("not accepted") ideas list. Forgets every declined idea
+  // so the AI no longer treats those topics as rejected; ignored ideas stay
+  // hidden. Operational data, so it doesn't touch the Save-required config.
+  const resetDeclinedIdeas = async () => {
+    if (!window.confirm('Clear the declined ideas list? The AI will stop treating those topics as rejected (they may resurface in future suggestions). Ignored ideas stay hidden.')) return
+    setError(''); setStatus(''); setClearingDeclined(true)
+    try {
+      const r = await api.resetDeclinedSuggestions()
+      setStatus(`Declined ideas cleared${typeof r.cleared === 'number' ? ` (${r.cleared}).` : '.'}`)
+    } catch (e) {
+      setError(`Could not clear declined ideas — ${e.message}`)
+    } finally {
+      setClearingDeclined(false)
     }
   }
 
@@ -1329,6 +1346,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
               <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
               <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
+              <div className="row center between row--wrap gap-10" style={{ paddingLeft: 26 }}>
+                <span className="muted" style={{ fontSize: 12.5 }}>Declined ideas are kept out of new AI suggestions. Clear the list to let those topics resurface — ignored ideas stay hidden.</span>
+                <Button variant="ghost" icon="trash-can" disabled={clearingDeclined} onClick={resetDeclinedIdeas}>{clearingDeclined ? 'Clearing…' : 'Clear declined ideas'}</Button>
+              </div>
               <Check checked={!!cfg.youtube_auto_post} disabled={!!cfg.publish_schedule_enabled} onChange={(v) => set('youtube_auto_post', v)} label="Auto-post to YouTube the moment a film finishes (off = it waits in the publish queue)" />
               <Field label="Default privacy">
                 <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
