@@ -2617,6 +2617,26 @@ def badges() -> dict:
     films_total = _finished_film_count()
     films_new = max(0, films_total - int(seen.get("films_total", 0)))
 
+    # Publishing channels whose OAuth token has died but still have videos
+    # waiting — drives a global "reconnect" banner so a silent token expiry can't
+    # stall publishing unnoticed (guards the dead-token incident).
+    yt_disconnected = []
+    try:
+        waiting_channels = {
+            (e.get("youtube") or {}).get("channel") or ""
+            for e in pq.load_queue()
+            if (e.get("youtube") or {}).get("status") in ("pending", "publishing")
+        }
+        waiting_channels.discard("")
+        if waiting_channels:
+            names = {c.get("id"): c.get("name") for c in (gapp.load_config().get("youtube_channels") or [])}
+            secrets = _client_secrets_path()
+            for ch in waiting_channels:
+                if not yt.check_auth_status(secrets, channel=ch).get("connected"):
+                    yt_disconnected.append({"channel": ch, "name": names.get(ch) or ch})
+    except Exception:
+        pass
+
     return {
         "render_active": render_active,
         "render_pct": render_pct,
@@ -2624,6 +2644,7 @@ def badges() -> dict:
         "youtube": attention + publishable,
         "youtube_attention": attention,
         "youtube_publishable": publishable,
+        "youtube_disconnected": yt_disconnected,
         "films": films_new,
         "films_total": films_total,
     }
@@ -3698,14 +3719,15 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
-        # Release a manual claim so the film can be retried / auto-published.
-        if not body_dict.get("auto"):
-            with gapp._auto_post_lock:
-                gapp._auto_post_triggered.discard(str(wd))
-            try:
-                gapp._write_job_meta(wd, _auto_post_triggered=False)
-            except Exception:
-                pass
+        # Release the claim — manual OR scheduled — so a later tick can retry. A
+        # scheduled upload that dies on a transient/auth error must not stay
+        # claimed forever; the publish-queue reconciler re-pends it from here.
+        with gapp._auto_post_lock:
+            gapp._auto_post_triggered.discard(str(wd))
+        try:
+            gapp._write_job_meta(wd, _auto_post_triggered=False)
+        except Exception:
+            pass
         return
 
     video_id, url = "", ""
@@ -6269,10 +6291,27 @@ def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
     return added
 
 
+# Self-healing knobs for the publish queue — mirror the render-queue retry cap so
+# a failed publish recovers headlessly instead of stranding the video.
+_PUBLISH_STUCK_SECONDS = 1800   # 'publishing' with no id after this == failed upload
+_PUBLISH_MAX_ATTEMPTS = 3       # genuine upload retries before giving up
+
+
+def _youtube_channel_connected(channel: str) -> bool:
+    """Cheap (60s-cached) check used to gate scheduled releases and to tell a
+    dead token apart from a real upload failure. Never blocks publishing on a
+    flaky check — assume connected on error."""
+    try:
+        return bool(yt.check_auth_status(_client_secrets_path(), channel=channel).get("connected"))
+    except Exception:
+        return True
+
+
 def _reconcile_publish_queue() -> None:
     """Sync each entry's platform sub-state from job.json — the async upload
-    threads write youtube_video_id / x_tweet_id when they finish — and error out
-    entries whose work dir vanished so the governor stops retrying them."""
+    threads write youtube_video_id / x_tweet_id when they finish — error out
+    entries whose work dir vanished, and re-pend uploads stuck mid-flight so the
+    governor stops waiting on a release that already died."""
     q = pq.load_queue()
     changed = False
     for e in q:
@@ -6297,6 +6336,40 @@ def _reconcile_publish_queue() -> None:
             x_sub.update(status="done", tweet_id=meta.get("x_tweet_id"),
                          url=meta.get("x_url"),
                          published_at=x_sub.get("released_at") or time.time())
+            changed = True
+        # Self-heal stalled releases: a sub stuck in 'publishing' with no id long
+        # after release means its async upload died (errored, or lost to a server
+        # restart). Free the claim and re-pend so the governor retries — but only
+        # count the attempt when the channel is actually connected, so a dead
+        # token re-pends indefinitely (drains on reconnect) instead of burning the
+        # retry cap and erroring out the whole backlog.
+        now = time.time()
+        for plat, claim_key, id_field in (
+                ("youtube", "_auto_post_triggered", "youtube_video_id"),
+                ("x", "_x_auto_post_triggered", "x_tweet_id")):
+            sub = e.get(plat) or {}
+            if sub.get("status") != "publishing" or meta.get(id_field):
+                continue
+            released = sub.get("released_at") or 0
+            if released and (now - released) < _PUBLISH_STUCK_SECONDS:
+                continue  # still within the normal upload window — leave it
+            task = _upload_tasks.get(sub.get("task_id") or "")
+            if task and task.get("status") != "error":
+                continue  # task still running — don't yank it
+            try:
+                gapp._write_job_meta(p, **{claim_key: False})
+            except Exception:
+                pass
+            if plat == "youtube":
+                with gapp._auto_post_lock:
+                    gapp._auto_post_triggered.discard(str(p))
+            connected = _youtube_channel_connected(sub.get("channel") or "") if plat == "youtube" else True
+            attempts = int(sub.get("attempts") or 0) + (1 if connected else 0)
+            if connected and attempts >= _PUBLISH_MAX_ATTEMPTS:
+                sub.update(status="error", attempts=attempts,
+                           error=(task or {}).get("error") or "upload failed")
+            else:
+                sub.update(status="pending", task_id=None, released_at=None, attempts=attempts)
             changed = True
     if changed:
         pq.save_queue(q)
@@ -6366,7 +6439,13 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
             key = yt_sub.get("channel") or ""
             k = ("youtube", key)
             interval_min = _interval_minutes_for(cfg, "youtube_channels", key)
-            if bypass or (k not in fired and _eligible(k, interval_min)):
+            eligible = bypass or (k not in fired and _eligible(k, interval_min))
+            # Don't start a scheduled upload we know will fail on a dead token —
+            # hold it pending so it drains on reconnect (the badge alerts the
+            # user). An explicit 'Publish now' (bypass) still tries.
+            if eligible and not bypass and not _youtube_channel_connected(key):
+                eligible = False
+            if eligible:
                 tid = _claim_and_post_youtube(p, jc, cfg)
                 if tid:
                     yt_sub.update(status="publishing", released_at=now, task_id=tid)
