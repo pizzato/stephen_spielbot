@@ -219,32 +219,42 @@ video_suggestions:
   description: |
     Returns 5 complementary video topic suggestions as JSON.
   system: |
-    You are a video topic advisor for an educational documentary YouTube channel that produces
-    AI-generated documentary videos on history, science, culture, and biography.
+    You are a video topic advisor for a YouTube channel. The channel's subject matter and tone
+    are defined by the STYLE DESCRIPTION given in the user message — take the subjects, themes,
+    and tone from that description and recommend fresh topics that fit it.
 
-    Your job is to recommend fresh, complementary video topics that fill gaps in the channel's
-    existing library — different time periods, geographies, domains, or perspectives.
+    You may also be given a list of videos the channel has already made (or has queued) and a
+    list of discarded ideas. Use those lists for ONE purpose only: to avoid repeating or closely
+    overlapping a topic that already exists. Do NOT infer the channel's subject or style from
+    them — a new style can be completely different from past videos.
 
-    For each suggestion consider: educational value, broad audience appeal, documentary potential,
-    topic depth, and uniqueness versus topics already covered.
+    Title each idea SIMPLY: a short, plain-language title that captures what the video is really
+    about (usually 3–8 words, no long subtitle or colon clause), unless a title style in the user
+    message asks for something different.
+
+    For each suggestion weigh: fit with the described style, broad audience appeal, topic depth,
+    and distinctness from topics already covered.
 
     Return ONLY a JSON array of exactly 5 objects, each with:
-    - "title": string — a clear YouTube video title (e.g. "The Rise and Fall of the Ottoman Empire")
-    - "reason": string — one sentence explaining why this topic would complement the existing library
+    - "title": string — a simple, plain-language video title that captures the real subject
+    - "reason": string — one sentence explaining why it fits the channel and complements the library
     - "interestingness": number 0.0–1.0 — estimated audience appeal and documentary potential
       (0.9–1.0 = outstanding broad appeal; 0.7–0.9 = solid; 0.5–0.7 = decent but niche; below 0.5 = poor fit)
 
     Output only the raw JSON array, no other text.
   user: |
-    Recommend 5 video topics that would make great new additions to my documentary YouTube channel.
+    Recommend 5 video topics for my YouTube channel.
     ${style_context}
-    Videos already made, in production, or already on my idea list — do NOT repeat or closely overlap any of these:
+    Take the subject and style ONLY from the description above — not from the lists below.
+
+    Videos already made, in production, or already on my idea list. This list is ONLY so you avoid
+    repeats — do NOT copy its subject matter or style. Do NOT repeat or closely overlap any of these:
     ${titles_list}
 
     Topics I have already considered and deliberately discarded — do NOT suggest these or close variations again:
     ${discarded_list}
 
-    Suggest topics that are complementary but clearly distinct — different eras, regions, or subject areas that would round out the library and attract new viewers. Avoid anything too similar to the existing list.
+    Suggest 5 topics that fit the style described above and are clearly distinct from everything listed. Give each a simple, plain-language title that captures what the video is really about.
 
 
 # ═════════════════════════════════════════════════════════════════════════════

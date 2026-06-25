@@ -260,5 +260,30 @@ class VideoTitlesCacheCase(unittest.TestCase):
         self.assertEqual(out, ["X", "Y"])
 
 
+class SuggestionRepeatFilterCase(unittest.TestCase):
+    """Idea generation must never re-propose an already-made video, even if the
+    LLM ignores the prompt and returns one — a hard programmatic guarantee."""
+
+    def test_generate_video_suggestions_drops_verbatim_repeats(self):
+        import pipeline.llm as llm
+        payload = json.dumps([
+            {"title": "Already Made Video", "reason": "x", "interestingness": 0.8},
+            {"title": "A Brand New Topic", "reason": "y", "interestingness": 0.9},
+        ])
+        with mock.patch.object(llm, "_local_llm", return_value=payload):
+            # "already made video" differs only by case/space — still a repeat.
+            out = llm.generate_video_suggestions(["Already  Made Video"], cfg={"llm_backend": "local"})
+        self.assertEqual([s["title"] for s in out], ["A Brand New Topic"])
+
+    def test_guided_suggestions_drops_verbatim_repeats(self):
+        payload = json.dumps([
+            {"title": "Existing One", "reason": "x", "suggested_scene_count": 10, "interestingness": 0.8},
+            {"title": "Fresh Idea", "reason": "y", "suggested_scene_count": 12, "interestingness": 0.9},
+        ])
+        with mock.patch.object(backend, "_llm_complete", return_value=payload):
+            out = backend._guided_suggestions("rock bands", ["existing one"], {"llm_backend": "local"})
+        self.assertEqual([s["title"] for s in out], ["Fresh Idea"])
+
+
 if __name__ == "__main__":
     unittest.main()
