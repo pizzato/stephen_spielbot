@@ -106,6 +106,7 @@ export const api = {
   retryJob: (workDir) => req('POST', '/jobs/retry', { work_dir: workDir }),
   cancelJob: (workDir) => req('POST', '/jobs/cancel', { work_dir: workDir }),
   deleteJob: (workDir) => req('POST', '/jobs/delete', { work_dir: workDir }),
+  markJobSeen: (workDir) => req('POST', '/jobs/seen', { work_dir: workDir }),
 
   listJobs: () => req('GET', '/jobs'),
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
