@@ -491,16 +491,35 @@ def _ensure_channels(cfg: dict) -> dict:
     return cfg
 
 
-def channel_for_style(cfg: dict, style_name: str = "") -> str:
-    """Channel KEY a style publishes to: the style's own channel if connected,
-    else the first connected channel, else '' (the legacy single-channel
-    token)."""
+def _style_channel_explicit(cfg: dict, style_name: str = "") -> str:
+    """Channel KEY a style is EXPLICITLY assigned to (and still connected), or ''.
+
+    Unlike :func:`channel_for_style` this does NOT fall back to the first channel.
+    Idea dedup/grouping uses it so a style with no channel of its own isn't tied
+    to an unrelated channel's library — the first-channel fallback is only for
+    picking a real publish destination, never for deciding what's 'already made'."""
     keys = [c["id"] for c in (cfg.get("youtube_channels") or [])
             if isinstance(c, dict) and c.get("id")]
     ch = str(style_settings(cfg, style_name).get("channel") or "")
-    if ch and ch in keys:
-        return ch
-    return keys[0] if keys else ""
+    return ch if ch in keys else ""
+
+
+def _dedup_scope(cfg: dict, style_name: str = "") -> str:
+    """Idea-dedup bucket for a style: its explicit channel, or a private per-style
+    bucket when it has none — so two channel-less styles never dedup against each
+    other, and none inherits the first channel's library via the publish fallback."""
+    return _style_channel_explicit(cfg, style_name) or f"\x00style:{style_name}"
+
+
+def channel_for_style(cfg: dict, style_name: str = "") -> str:
+    """Channel KEY a style publishes to: the style's own channel if connected,
+    else the first connected channel, else '' (the legacy single-channel token).
+
+    The first-channel fallback is a *publish target* only; idea dedup uses
+    :func:`_style_channel_explicit` so a channel-less style stays a clean slate."""
+    keys = [c["id"] for c in (cfg.get("youtube_channels") or [])
+            if isinstance(c, dict) and c.get("id")]
+    return _style_channel_explicit(cfg, style_name) or (keys[0] if keys else "")
 
 
 def _ensure_x_accounts(cfg: dict) -> dict:
@@ -1723,12 +1742,17 @@ def _channel_video_titles(cfg: dict, style_name: str = "") -> list[str]:
     """Collect known video titles: YouTube API first, posted queue items as fallback.
 
     Titles come from the channel the style publishes to (issue #22), so the
-    dedup check runs against the channel the new video would actually join."""
+    dedup check runs against the channel the new video would actually join. A
+    style with no channel of its own returns nothing — idea dedup must NOT
+    inherit an unrelated channel's back-catalog via the publish fallback."""
+    channel = _style_channel_explicit(cfg, style_name)
+    if not channel:
+        return []
     secrets = cfg.get("youtube_client_secrets", "")
     titles: list[str] = []
     try:
         titles = yt.cached_channel_video_titles(
-            secrets, max_results=500, channel=channel_for_style(cfg, style_name))
+            secrets, max_results=500, channel=channel)
     except Exception as exc:
         logger.warning("cached_channel_video_titles error: %s", exc)
     # Supplement with posted queue items in case the API call failed or is partial
@@ -1788,7 +1812,7 @@ def _generate_mixed_suggestions(cfg: dict, style_names: list[str],
     fresh_by_channel: dict[str, list[str]] = {}
     for name in style_names:
         ss = style_settings(cfg, name)
-        ch = channel_for_style(cfg, name)
+        ch = _dedup_scope(cfg, name)
         existing_titles = _channel_video_titles(cfg, style_name=name) + fresh_by_channel.get(ch, [])
         try:
             new_data = generate_video_suggestions(existing_titles, cfg, style=ss,
