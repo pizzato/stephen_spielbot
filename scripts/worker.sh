@@ -55,6 +55,16 @@ case "$ACTION" in
         _compose ps 2>/dev/null || true
         _health "ComfyUI" "http://${HOST}:${COMFYUI_PORT}/system_stats"
         _health "F5-TTS " "http://${HOST}:${TTS_PORT}/health"
+        # GPU device per container — surfaces a silent CPU fallback (a host
+        # daemon-reload can revoke the GPU from a running container; see README).
+        for svc in comfyui tts; do
+            dev=$(ssh "$HOST" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
+            if [ -n "$dev" ]; then
+                printf "    ✓ %-7s GPU  %s\n" "$svc" "$dev"
+            else
+                printf "    ✗ %-7s CPU  (no GPU — run: bash %s restart %s)\n" "$svc" "$0" "$HOST"
+            fi
+        done
         ;;
     logs)
         _compose logs --tail 100 -f

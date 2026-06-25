@@ -30,6 +30,10 @@ services:
       # ~33 GB of models live on the host; populate once (see docker/README.md).
       - ${MODELS_DIR:?set MODELS_DIR in docker/.env}:/opt/ComfyUI/models
       - comfyui-output:/opt/ComfyUI/output
+    # Let autoheal restart this container if its GPU-aware healthcheck fails
+    # (silent CPU fallback after a host daemon-reload — see the autoheal service).
+    labels:
+      autoheal: "true"
     restart: unless-stopped
     deploy:
       resources:
@@ -52,6 +56,10 @@ services:
     volumes:
       # Persist the F5TTS_v1_Base weights (~1.3 GB) across container recreation.
       - hf-cache:/cache/huggingface
+    # Let autoheal restart this container if its GPU-aware healthcheck fails
+    # (silent CPU fallback after a host daemon-reload — see the autoheal service).
+    labels:
+      autoheal: "true"
     restart: unless-stopped
     deploy:
       resources:
@@ -60,6 +68,25 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+
+  # ── Self-heal GPU loss ──────────────────────────────────────────────────────
+  # A host `systemctl daemon-reload` / driver update can revoke the GPU from an
+  # already-running container ("Failed to initialize NVML: Unknown Error"), after
+  # which F5-TTS / ComfyUI silently fall back to CPU. The GPU-aware HEALTHCHECKs
+  # (in each Dockerfile) mark such a container "unhealthy"; autoheal then restarts
+  # it, which re-runs the NVIDIA prestart hook and reclaims the GPU — the same fix
+  # as `docker restart`, applied automatically. It watches only containers
+  # labelled autoheal=true. To disable, delete this service (the labels go inert).
+  autoheal:
+    image: willfarrell/autoheal:latest
+    restart: unless-stopped
+    environment:
+      AUTOHEAL_CONTAINER_LABEL: autoheal
+      AUTOHEAL_INTERVAL: 30        # seconds between unhealthy-container sweeps
+      AUTOHEAL_START_PERIOD: 120   # grace before acting on a (re)started container
+      CURL_TIMEOUT: 30
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
 volumes:
   comfyui-output:

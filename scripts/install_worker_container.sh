@@ -120,6 +120,22 @@ for i in $(seq 1 40); do
     sleep 5
 done
 
+# ── 7. Verify the containers actually got the GPU (not a silent CPU fallback) ──
+# The HTTP health endpoints above return 200 even on CPU, so check the GPU
+# directly. nvidia-smi failing inside a container ("NVML: Unknown Error") means
+# the NVIDIA Container Toolkit isn't granting the GPU — the render/narration
+# would run on CPU (very slow). See docker/README.md ("GPU lost at runtime").
+echo ""
+echo "[deploy] verifying GPU access inside the containers on $TARGET ..."
+for svc in comfyui tts; do
+    if ssh "$TARGET" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -q '^GPU'"; then
+        echo "  ✓ $svc on GPU"
+    else
+        echo "  ✗ WARNING: $svc has NO GPU access — it will run on CPU (slow)."
+        echo "    Check the NVIDIA Container Toolkit on $TARGET, then: bash scripts/worker.sh restart $TARGET"
+    fi
+done
+
 echo ""
 echo "✅ Containerized worker ready on $TARGET"
 echo "   ComfyUI: http://${TARGET}:${COMFYUI_PORT}    F5-TTS: http://${TARGET}:${TTS_PORT}"

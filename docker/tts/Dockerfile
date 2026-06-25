@@ -46,7 +46,12 @@ COPY assets/default_narrator.wav /app/assets/default_narrator.wav
 
 EXPOSE 8189
 
-HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
-    CMD curl -sf http://localhost:8189/health || exit 1
+# Verifies the server is up AND the GPU is still reachable (probed fresh via
+# nvidia-smi). A GPU revoked mid-run by a host daemon-reload ("NVML: Unknown
+# Error") makes F5-TTS silently fall back to CPU; this flips the container
+# "unhealthy" so autoheal restarts it to reclaim the GPU (see docker-compose.yml).
+HEALTHCHECK --interval=30s --timeout=15s --start-period=60s --retries=5 \
+    CMD curl -sf http://localhost:8189/health >/dev/null 2>&1 \
+        && nvidia-smi -L 2>/dev/null | grep -q '^GPU' || exit 1
 
 CMD ["uvicorn", "pipeline.tts_server:app", "--host", "0.0.0.0", "--port", "8189"]
