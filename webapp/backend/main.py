@@ -1640,6 +1640,31 @@ def delete_job(body: JobActionBody) -> dict:
     return {"ok": True, "deleted": wd.name}
 
 
+@api.post("/api/jobs/seen")
+def mark_job_seen(body: JobActionBody) -> dict:
+    """Record that the user opened a finished film to watch it — clears its "New"
+    badge in the Library. Stored in the film's job.json (not the browser) so the
+    watched state is shared across devices. Idempotent: only the first open writes."""
+    wd = Path(body.work_dir)
+    out = gapp.OUTPUT_DIR.resolve()
+    try:
+        wd_res = wd.resolve()
+    except OSError:
+        raise HTTPException(400, "Invalid path.")
+    if not body.work_dir or wd_res == out or wd_res.parent != out:
+        raise HTTPException(400, "Refusing to write outside the videos directory.")
+    jp = wd / "job.json"
+    if not jp.exists():
+        raise HTTPException(404, "Film not found.")
+    try:
+        meta = json.loads(jp.read_text())
+    except Exception:
+        meta = {}
+    if not meta.get("viewed_at"):
+        gapp._write_job_meta(wd, viewed_at=time.time())
+    return {"ok": True}
+
+
 # ── library / recent jobs ────────────────────────────────────────────────────
 
 def _channel_display_name(cfg: dict, key: str) -> str:
@@ -1689,6 +1714,7 @@ def list_jobs() -> dict:
         except Exception:
             meta = {}
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
+                         "seen": bool(meta.get("viewed_at")),
                          **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
     resumable = []
