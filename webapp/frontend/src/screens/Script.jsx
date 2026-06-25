@@ -2,6 +2,14 @@ import { useState, useEffect } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, VersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
+// Shared style for the floating arrow / close controls in the enlarged-image view.
+const LB_BTN = {
+  position: 'absolute', zIndex: 2, border: 'none', color: '#fff',
+  background: 'rgba(20,22,24,.55)', backdropFilter: 'blur(6px)',
+  width: 46, height: 46, borderRadius: '50%', fontSize: 18,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+}
+
 export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
@@ -237,6 +245,56 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
+
+  // ── Lightbox (enlarged scene image) ──────────────────────────────────────────
+  // `lightbox` is { scene, ver }: which scene index and which of that scene's
+  // generated image versions are shown enlarged. Left/right step between scenes;
+  // up/down step between the versions made for a scene; arrow keys do the same.
+  const selVerIdx = (s) => {
+    const vs = s?.history?.versions || []
+    const i = vs.findIndex((v) => v.id === s?.history?.selected)
+    return i < 0 ? 0 : i
+  }
+  const openLightbox = () => setLightbox({ scene: cur, ver: selVerIdx(d) })
+  const lbMove = (delta) => setLightbox((lb) => {
+    if (!lb) return lb
+    const ns = Math.min(total - 1, Math.max(0, lb.scene + delta))
+    return ns === lb.scene ? lb : { scene: ns, ver: selVerIdx(scenes[ns]) }
+  })
+  const lbVerMove = (delta) => setLightbox((lb) => {
+    if (!lb) return lb
+    const vs = scenes[lb.scene]?.history?.versions || []
+    const nv = Math.min(vs.length - 1, Math.max(0, lb.ver + delta))
+    return nv === lb.ver ? lb : { ...lb, ver: nv }
+  })
+  const lbArrow = (icon, title, disabled, onPress, pos) => (
+    <button type="button" title={title} disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); onPress() }}
+      style={{ ...LB_BTN, ...pos, opacity: disabled ? 0.28 : 1, cursor: disabled ? 'default' : 'pointer' }}>
+      <Icon name={icon} />
+    </button>
+  )
+
+  // Arrow keys navigate the enlarged image; Escape closes it. Active only while open.
+  useEffect(() => {
+    if (!lightbox) return
+    const onKey = (e) => {
+      const k = e.key
+      if (k === 'ArrowLeft') { e.preventDefault(); lbMove(-1) }
+      else if (k === 'ArrowRight') { e.preventDefault(); lbMove(1) }
+      else if (k === 'ArrowUp') { e.preventDefault(); lbVerMove(-1) }
+      else if (k === 'ArrowDown') { e.preventDefault(); lbVerMove(1) }
+      else if (k === 'Escape') { e.preventDefault(); setLightbox(null) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [lightbox, scenes, total])
+
+  const lbVersions = lightbox ? (scenes[lightbox.scene]?.history?.versions || []) : []
+  const lbMulti = lbVersions.length > 1
+  const lbSrc = lightbox
+    ? (lbMulti && lbVersions[lightbox.ver] ? fileUrl(lbVersions[lightbox.ver].path) : imgUrl(scenes[lightbox.scene] || {}))
+    : ''
 
   const regenField = async (field) => {
     setFieldBusy(field); setError('')
@@ -533,7 +591,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <div className="col-4 stack gap-16">
               <Card className="reveal reveal-d2">
                 <span className="label-sm">First frame</span>
-                <div className="mt-16" onClick={() => d.has_preview && setLightbox(imgUrl(d))}
+                <div className="mt-16" onClick={() => d.has_preview && openLightbox()}
                   style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: d.has_preview ? 'zoom-in' : 'default' }}>
                   {d.has_preview
                     ? <img src={imgUrl(d)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -580,7 +638,35 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           {lightbox && (
             <div onClick={() => setLightbox(null)}
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
-              <img src={lightbox} alt="" style={{ maxWidth: '95%', maxHeight: '95%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)' }} />
+              {lbSrc
+                ? <img src={lbSrc} alt="" onClick={(e) => e.stopPropagation()}
+                    style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)', cursor: 'default' }} />
+                : <span onClick={(e) => e.stopPropagation()} style={{ color: 'rgba(255,255,255,.8)', fontSize: 14, cursor: 'default' }}>No image for this scene yet.</span>}
+
+              {/* Scene / image counters */}
+              <div onClick={(e) => e.stopPropagation()}
+                style={{ position: 'absolute', top: 18, left: 22, color: 'rgba(255,255,255,.92)', fontSize: 13, fontWeight: 600, display: 'flex', gap: 10, cursor: 'default' }}>
+                <span>Scene {lightbox.scene + 1} / {total}</span>
+                {lbMulti && <span style={{ opacity: 0.65 }}>· Image {lightbox.ver + 1} / {lbVersions.length}</span>}
+              </div>
+
+              {/* Close */}
+              <button type="button" title="Close (Esc)" onClick={(e) => { e.stopPropagation(); setLightbox(null) }}
+                style={{ ...LB_BTN, top: 14, right: 16, width: 40, height: 40, fontSize: 16, cursor: 'pointer' }}>
+                <Icon name="xmark" />
+              </button>
+
+              {/* Previous / next scene */}
+              {total > 1 && lbArrow('chevron-left', 'Previous scene (←)', lightbox.scene <= 0,
+                () => lbMove(-1), { left: 18, top: '50%', transform: 'translateY(-50%)' })}
+              {total > 1 && lbArrow('chevron-right', 'Next scene (→)', lightbox.scene >= total - 1,
+                () => lbMove(1), { right: 18, top: '50%', transform: 'translateY(-50%)' })}
+
+              {/* Other images generated for this scene */}
+              {lbMulti && lbArrow('chevron-up', 'Previous image for this scene (↑)', lightbox.ver <= 0,
+                () => lbVerMove(-1), { top: 64, left: '50%', transform: 'translateX(-50%)' })}
+              {lbMulti && lbArrow('chevron-down', 'Next image for this scene (↓)', lightbox.ver >= lbVersions.length - 1,
+                () => lbVerMove(1), { bottom: 22, left: '50%', transform: 'translateX(-50%)' })}
             </div>
           )}
 
