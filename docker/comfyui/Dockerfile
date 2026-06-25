@@ -45,7 +45,13 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~33 GB).
-HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=5 \
-    CMD curl -sf http://localhost:8188/system_stats || exit 1
+# The healthcheck verifies BOTH that the server is up AND the GPU is still
+# reachable. nvidia-smi is probed fresh each time (not ComfyUI's startup-cached
+# device), so a GPU revoked mid-run by a host daemon-reload ("NVML: Unknown
+# Error", silent CPU fallback) flips the container "unhealthy" — which autoheal
+# then restarts to reclaim the GPU (see docker/docker-compose.yml).
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=5 \
+    CMD curl -sf http://localhost:8188/system_stats >/dev/null 2>&1 \
+        && nvidia-smi -L 2>/dev/null | grep -q '^GPU' || exit 1
 
 CMD ["python3", "main.py", "--listen", "0.0.0.0", "--port", "8188"]
