@@ -118,4 +118,49 @@ make stop                   # stop all worker containers + the web app
 ```
 
 Containers carry `restart: unless-stopped`, so they also come back on their own
-after a host reboot. `make logs W=s2` tails a host's container logs.
+after a host reboot. An `autoheal` sidecar additionally restarts any container
+whose healthcheck fails (see GPU troubleshooting below). `make logs W=s2` tails a
+host's container logs.
+
+## Troubleshooting: GPU lost at runtime (silent CPU fallback)
+
+A container can **lose access to the GPU while running** — typically after a host
+`systemctl daemon-reload` or NVIDIA driver update, which revokes the device
+cgroup from already-running containers. The symptom, inside the container:
+
+```bash
+$ docker exec spielbot-worker-tts-1 nvidia-smi -L
+Failed to initialize NVML: Unknown Error
+```
+
+ComfyUI and F5-TTS then **silently fall back to CPU** — renders/narration still
+"work" but are an order of magnitude slower (F5-TTS picks cuda→…→cpu with no
+error). The host GPU itself is fine (`nvidia-smi` on the host works, and a fresh
+`docker run --gpus all … nvidia-smi` sees it); only long-running containers are
+affected, and it can hit one container but not another on the same host.
+
+**Detect it:**
+```bash
+make status W=s1            # now prints GPU/CPU per container
+```
+
+**Fix it** (re-runs the NVIDIA prestart hook, reclaiming the GPU):
+```bash
+make restart W=s1          # or, one container: docker restart spielbot-worker-tts-1
+```
+
+**Self-healing — built in:** each container has a GPU-aware healthcheck, and the
+`autoheal` service in `docker-compose.yml` restarts any container whose GPU check
+fails, so a runtime GPU loss self-corrects within ~1–2 minutes. `make install`
+also verifies GPU access on every container at the end of a deploy and warns if
+one came up on CPU.
+
+**Permanent prevention (optional, opt-in):** to stop a `daemon-reload` from
+revoking the GPU in the first place, switch the toolkit to CDI device injection
+on each host (test on one host first):
+```bash
+sudo nvidia-ctk runtime configure --runtime=docker --cdi.enabled
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml   # re-run after driver updates
+sudo systemctl restart docker
+```
+The built-in self-heal keeps things working even without this.
