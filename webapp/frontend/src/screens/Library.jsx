@@ -82,11 +82,23 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
                 ? <img src={f.cover_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 : <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
               }
-              <div style={{ position: 'absolute', top: 12, left: 12 }}><Chip tone="ok" dot>Done</Chip></div>
+              <div style={{ position: 'absolute', top: 12, left: 12 }}>
+                {f.published ? <Chip tone="ok" dot>Published</Chip> : <Chip tone="info" dot>New</Chip>}
+              </div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
             <div style={{ padding: '14px 18px 16px' }}>
               <div style={{ fontWeight: 700, letterSpacing: '-0.01em' }}>{f.label}</div>
+              {f.published && f.destinations?.length > 0 && (
+                <div className="row gap-6 mt-8 row--wrap">
+                  {f.destinations.map((d, k) => {
+                    const chip = <Chip tone="ok"><Icon name={d.platform === 'x' ? 'x-twitter' : 'youtube'} brand /> {d.name}</Chip>
+                    return d.url
+                      ? <a key={k} href={d.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ textDecoration: 'none' }}>{chip}</a>
+                      : <span key={k}>{chip}</span>
+                  })}
+                </div>
+              )}
               <div className="row gap-10 mt-16 row--wrap">
                 <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
                 <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
