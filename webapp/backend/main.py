@@ -1642,15 +1642,54 @@ def delete_job(body: JobActionBody) -> dict:
 
 # ── library / recent jobs ────────────────────────────────────────────────────
 
+def _channel_display_name(cfg: dict, key: str) -> str:
+    entry = next((c for c in (cfg.get("youtube_channels") or []) if c.get("id") == key), None)
+    return ((entry.get("name") if entry else "") or "").strip() or "YouTube"
+
+
+def _x_account_display_name(cfg: dict, key: str) -> str:
+    entry = next((a for a in (cfg.get("x_accounts") or []) if a.get("id") == key), None)
+    return ((entry.get("name") if entry else "") or "").strip() or "X"
+
+
+def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
+    """Where a finished film has been published. 'New' (published=False) means it
+    hasn't been posted anywhere yet. Channel/account names resolve from the film's
+    style — the same mapping the Publish screen uses — since job.json records only
+    the resulting video/tweet id, not the destination key."""
+    dests = []
+    if meta.get("youtube_video_id"):
+        dests.append({
+            "platform": "youtube",
+            "name": _channel_display_name(cfg, _channel_for_work_dir(wd)),
+            "url": meta.get("youtube_url") or "",
+        })
+    if meta.get("x_tweet_id"):
+        dests.append({
+            "platform": "x",
+            "name": _x_account_display_name(cfg, _x_account_for_work_dir(wd)),
+            "url": meta.get("x_url") or "",
+        })
+    return {"published": bool(dests), "destinations": dests}
+
+
 @api.get("/api/jobs")
 def list_jobs() -> dict:
     finished_rows = gapp._list_recent_jobs(max_results=50)
+    cfg = gapp.load_config()
     def _cover_url(work_dir: str) -> str:
         cover = Path(work_dir) / "cover.png"
         if cover.exists() and cover.stat().st_size > 1000:
             return f"/api/file?path={cover}"
         return ""
-    finished = [{"label": l, "work_dir": d, "cover_url": _cover_url(d)} for l, d in finished_rows]
+    finished = []
+    for l, d in finished_rows:
+        try:
+            meta = json.loads((Path(d) / "job.json").read_text())
+        except Exception:
+            meta = {}
+        finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
+                         **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
