@@ -2258,18 +2258,35 @@ def _already_made_titles(cfg: dict, target: str) -> list[str]:
     return titles
 
 
+# Idea the user silently hid ("Ignore"): kept out of every future suggestion
+# like a declined one, but never shown in the reviewable "Declined" list and
+# left untouched by the declined-list reset — it just disappears for good.
+IGNORED_REASON = "ignored"
+
+
 def _is_real_discard(reason: str) -> bool:
-    """A discard the user made on purpose (the Close action), as opposed to the
+    """A discard the user made on purpose (Decline or Ignore), as opposed to the
     'used' marker the Queue/Create actions reuse — those become videos and are
     tracked via the queue, not the discard list."""
     return (reason or "").strip().lower() not in ("used", "queued", "created")
 
 
-def _discarded_records(cfg: dict, target: str = "") -> list[dict]:
+def _is_declined_reason(reason: str) -> bool:
+    """A deliberately *declined* idea (the Decline action / legacy Close) — the
+    'not accepted' list the user can review and reset. Distinct from an
+    'ignored' idea, which is suppressed silently and never surfaces here."""
+    r = (reason or "").strip().lower()
+    return _is_real_discard(r) and r != IGNORED_REASON
+
+
+def _discarded_records(cfg: dict, target: str = "",
+                       include_ignored: bool = False) -> list[dict]:
     """Ideas the user deliberately discarded, newest first. Rich data comes from
     the suggestions store (title/reason/scene count/style); the dismissed-log
     supplements any discard not represented there. ``target`` filters to a
-    style (legacy/unstamped discards fall under the default style)."""
+    style (legacy/unstamped discards fall under the default style). Ignored
+    ideas stay out of this (reviewable) list unless ``include_ignored`` is set —
+    the LLM 'do not suggest' list sets it so an ignored topic never resurfaces."""
     default_name = cfg.get("default_style", "")
     by_title: dict[str, dict] = {}
 
@@ -2280,6 +2297,8 @@ def _discarded_records(cfg: dict, target: str = "") -> list[dict]:
         reason = str(rec.get("dismissed_reason") or rec.get("reason") or "dismissed")
         if not _is_real_discard(reason):
             return
+        if not include_ignored and not _is_declined_reason(reason):
+            return  # an ignored idea — suppressed, but never shown in the list
         key = _suggestion_key(title)
         prev = by_title.get(key)
         if prev is not None and (prev.get("_rich") or not rich):
@@ -2317,10 +2336,11 @@ def _discarded_records(cfg: dict, target: str = "") -> list[dict]:
 
 
 def _discarded_idea_titles(cfg: dict) -> list[str]:
-    """Titles the user has deliberately discarded — passed to the LLM as a 'do
-    not suggest again' list. Global (a thrown-away topic stays out of every
-    style) since the discard log isn't reliably style-stamped."""
-    return [r["title"] for r in _discarded_records(cfg)]
+    """Titles the user has thrown away — passed to the LLM as a 'do not suggest
+    again' list so neither a declined nor an ignored topic resurfaces. Global (a
+    thrown-away topic stays out of every style) since the discard log isn't
+    reliably style-stamped."""
+    return [r["title"] for r in _discarded_records(cfg, include_ignored=True)]
 
 
 def _suggestion_matches(s: dict, key: str, title_key: str) -> bool:
@@ -2598,6 +2618,28 @@ def forget_suggestion(body: SuggestionReviveBody) -> dict:
         yt.save_suggestions(kept)
     cfg = gapp.load_config()
     return {"ok": True, "discarded": _discarded_records(cfg)}
+
+
+@api.post("/api/youtube/suggestions/discarded/reset")
+def reset_declined_suggestions() -> dict:
+    """Empty the declined ('not accepted') ideas list — forget every deliberately
+    declined idea so the negative list the LLM steers away from starts fresh
+    (those topics may resurface organically later). Ignored ideas stay
+    suppressed, and queued/created markers are left untouched."""
+    dismissed = _load_dismissed_suggestions()
+    pruned = {k: v for k, v in dismissed.items()
+              if not _is_declined_reason((v or {}).get("reason"))}
+    if len(pruned) != len(dismissed):
+        _save_dismissed_suggestions(pruned)
+
+    suggestions = yt.load_suggestions()
+    kept = [s for s in suggestions
+            if not (s.get("dismissed") and _is_declined_reason(s.get("dismissed_reason")))]
+    if len(kept) != len(suggestions):
+        yt.save_suggestions(kept)
+    cfg = gapp.load_config()
+    return {"ok": True, "cleared": len(suggestions) - len(kept),
+            "discarded": _discarded_records(cfg)}
 
 
 # ── sidebar badges ("needs attention" counts) ────────────────────────────────
