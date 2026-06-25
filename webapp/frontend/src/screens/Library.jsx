@@ -2,6 +2,25 @@ import { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
+// "New" is a per-viewer "haven't watched it yet" marker: opening a finished film
+// to watch it clears the badge. Tracked per browser in localStorage (keyed by
+// work dir) — the same client-side pattern Ideas uses for dismissals.
+const SEEN_FILMS_KEY = 'spielbot.seenFilms'
+const readSeenFilms = () => {
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(SEEN_FILMS_KEY) || '{}')
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+const markFilmSeen = (workDir) => {
+  const data = readSeenFilms()
+  data[workDir] = true
+  window.localStorage.setItem(SEEN_FILMS_KEY, JSON.stringify(data))
+  return data
+}
+
 export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, onNewVersion }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
@@ -9,9 +28,14 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
   const [confirmDel, setConfirmDel] = useState('')   // work_dir pending delete confirm
   const [busyDel, setBusyDel] = useState('')
   const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
+  const [seen, setSeen] = useState(readSeenFilms)    // work_dirs opened to watch → drop the "New" badge
 
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
+
+  // Entering a finished film to watch it (the card's primary action) clears its
+  // "New" badge, then opens the remix/player view.
+  const openCard = (wd) => { setSeen(markFilmSeen(wd)); onOpenRemix(wd) }
 
   // Copy a finished film's script into a fresh work dir and open the editor on it.
   // On success onNewVersion navigates away (this screen unmounts), so busy is only
@@ -76,14 +100,16 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
       <div className="bento">
         {loaded && jobs.finished.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No finished films yet — create your first one.</p></Card>}
         {jobs.finished.map((f, i) => (
-          <Card key={i} span={4} link onClick={() => onOpenRemix(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
+          <Card key={i} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ position: 'relative', aspectRatio: '16/9' }}>
               {f.cover_url
                 ? <img src={f.cover_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 : <div className={`gfill g${i % 6}`} style={{ position: 'absolute', inset: 0 }}></div>
               }
               <div style={{ position: 'absolute', top: 12, left: 12 }}>
-                {f.published ? <Chip tone="ok" dot>Published</Chip> : <Chip tone="info" dot>New</Chip>}
+                {f.published
+                  ? <Chip tone="ok" dot>Published</Chip>
+                  : !seen[f.work_dir] && <Chip tone="info" dot>New</Chip>}
               </div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
@@ -101,7 +127,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
               )}
               <div className="row gap-10 mt-16 row--wrap">
                 <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
-                <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); onOpenRemix(f.work_dir) }}>Remix</Button>
+                <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); openCard(f.work_dir) }}>Remix</Button>
                 <Button variant="ghost" icon="copy" disabled={busyNew === f.work_dir} onClick={(e) => { e.stopPropagation(); newVersion(f.work_dir) }}>
                   {busyNew === f.work_dir ? 'Copying…' : 'New version'}
                 </Button>
