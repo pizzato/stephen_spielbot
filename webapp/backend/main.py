@@ -2116,12 +2116,16 @@ def _merge_suggestions(existing: list[dict], fresh: list[dict]) -> list[dict]:
 def _styles_sharing_channel(cfg: dict, target: str) -> set[str]:
     """Style names that publish to the same channel as ``target`` (target
     included). Lets dedup pools be pooled per channel, so two styles on one
-    channel don't surface the same idea twice."""
-    ch = gapp.channel_for_style(cfg, target)
+    channel don't surface the same idea twice. Uses the EXPLICIT channel (not the
+    publish fallback): a style with no channel of its own pools only with itself,
+    so a channel-less style never inherits sibling styles' open ideas."""
+    scope = gapp._style_channel_explicit(cfg, target)
     names = {target}
+    if not scope:
+        return names
     for st in (cfg.get("styles") or []):
         nm = str(st.get("name") or "").strip()
-        if nm and gapp.channel_for_style(cfg, nm) == ch:
+        if nm and gapp._style_channel_explicit(cfg, nm) == scope:
             names.add(nm)
     return names
 
@@ -2246,13 +2250,17 @@ def _already_made_titles(cfg: dict, target: str) -> list[str]:
             add(t)
     except Exception:
         pass
-    for t in _inflight_video_titles():
-        add(t)
-    try:
-        for label, _ in gapp._list_recent_jobs(max_results=500):
-            add(label)
-    except Exception:
-        pass
+    # In-flight and finished-locally work isn't channel-stamped, so fold it in
+    # only for a style that actually has a channel; a channel-less style stays a
+    # clean slate and won't dedup against other styles' videos.
+    if gapp._style_channel_explicit(cfg, target):
+        for t in _inflight_video_titles():
+            add(t)
+        try:
+            for label, _ in gapp._list_recent_jobs(max_results=500):
+                add(label)
+        except Exception:
+            pass
     for t in _existing_idea_titles(cfg, target):
         add(t)
     return titles
@@ -2405,7 +2413,7 @@ def _all_styles_suggestions(cfg: dict, g: str, refresh: bool) -> dict:
         fresh_by_channel: dict[str, list[str]] = {}
         for name in style_names:
             ss = gapp.style_settings(cfg, name)
-            ch = gapp.channel_for_style(cfg, name)
+            ch = gapp._dedup_scope(cfg, name)
             try:
                 previous = _already_made_titles(cfg, name)
             except Exception:
