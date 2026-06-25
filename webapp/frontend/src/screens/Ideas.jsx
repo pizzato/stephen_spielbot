@@ -165,7 +165,15 @@ export default function Ideas({ go, meta = {} }) {
     const key = ideaKey(idea)
     setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, size } : it)))
   }
-  const closeIdea = async (idea, reason = 'dismissed') => {
+  // Remove an idea from the active list. reason: 'declined' → tracked in the
+  // reviewable "Declined" list (the AI steers away from it); 'ignored' → hidden
+  // for good, never shown again, but kept out of the Declined list; 'used' →
+  // queued/created. Decline and Ignore both keep it out of future suggestions.
+  const dismissLabel = (reason) =>
+    reason === 'used' ? 'Idea marked as used.'
+      : reason === 'ignored' ? 'Idea ignored.'
+        : 'Idea declined.'
+  const closeIdea = async (idea, reason = 'declined') => {
     const title = idea.title || idea.final_title || idea
     const key = ideaKey(idea)
     setBusy('idea-' + key); setError('')
@@ -174,10 +182,10 @@ export default function Ideas({ go, meta = {} }) {
     try {
       const r = await api.dismissSuggestion({ id: idea.id || '', title, reason })
       if (Array.isArray(r.suggestions)) setIdeas(byStyle(visibleIdeas(r.suggestions)))
-      if (reason !== 'used') loadDiscarded()   // a real close — surface it under "Discarded"
-      setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
+      if (reason === 'declined') loadDiscarded()   // surface it under "Declined"
+      setStatus(dismissLabel(reason))
     } catch (e) {
-      setStatus(reason === 'used' ? 'Idea marked as used.' : 'Idea closed.')
+      setStatus(dismissLabel(reason))
     } finally {
       setBusy('')
     }
@@ -306,8 +314,9 @@ export default function Ideas({ go, meta = {} }) {
               </div>
               <div className="row center between mt-16 row--wrap gap-10">
                 <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
-                <div className="row gap-10">
-                  <Button variant="ghost" icon="xmark" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea)}>Close</Button>
+                <div className="row gap-10 row--wrap">
+                  <Button variant="ghost" icon="ban" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'declined')} title="Add to the not-accepted list so the AI steers away from it">Decline</Button>
+                  <Button variant="ghost" icon="eye-slash" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'ignored')} title="Hide it for good — you won't see it again">Ignore</Button>
                   <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title)}>Queue</Button>
                   <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'idea-' + key} onClick={() => createIdea(idea, title)}>Create</Button>
                 </div>
@@ -321,8 +330,8 @@ export default function Ideas({ go, meta = {} }) {
               <div className="row center gap-10">
                 <span className="stream-ico" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}><Icon name="trash-can" /></span>
                 <div>
-                  <div style={{ fontWeight: 600 }}>Discarded ideas ({discarded.length})</div>
-                  <div className="muted" style={{ fontSize: 12.5 }}>Kept out of new suggestions. Revive one to bring it back, or forget it for good.</div>
+                  <div style={{ fontWeight: 600 }}>Declined ideas ({discarded.length})</div>
+                  <div className="muted" style={{ fontSize: 12.5 }}>Topics you turned down — kept out of new suggestions. Revive one to bring it back, or forget it for good. (Ignored ideas stay hidden and aren't listed here.)</div>
                 </div>
               </div>
               <Icon name={showDiscarded ? 'chevron-up' : 'chevron-down'} />
