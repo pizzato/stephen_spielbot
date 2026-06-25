@@ -2059,14 +2059,15 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     import re
     avoid = "; ".join(previous)
     rejected = "; ".join(discarded or [])
-    system = ("You are a content strategist for an educational/documentary YouTube channel. "
+    system = ("You are a content strategist for a YouTube channel. "
               "Return ONLY a JSON array, no prose.")
     user = (
         f'Generate {n} specific, compelling video ideas guided by this theme: "{guidance}".\n'
-        f"Each must be a concrete documentary topic that clearly fits the theme.\n"
+        f"Each must be a concrete topic that fits both the theme and the channel style below.\n"
         + llm.style_suggestion_context(style)
-        + (f"Avoid duplicating these existing titles: {avoid}\n" if avoid else "")
+        + (f"These titles already exist — use this ONLY to avoid repeats, not as a guide to subject or style: {avoid}\n" if avoid else "")
         + (f"Never suggest these previously discarded ideas or close variations: {rejected}\n" if rejected else "")
+        + '\nGive each a simple, plain-language title that captures the real topic.'
         + '\nReturn a JSON array; each item: {"title": string, "reason": one-sentence string, '
         '"suggested_scene_count": integer 6-50, "interestingness": number 0..1}. Output ONLY the JSON array.'
     )
@@ -2087,7 +2088,9 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
             "interestingness": float(it.get("interestingness", 0.7) or 0.7),
             "source": "guided",
         })
-    return out
+    # Guarantee no verbatim repeat of an already-made/queued video slips through.
+    made = {_suggestion_key(t) for t in previous}
+    return [o for o in out if _suggestion_key(o["title"]) not in made]
 
 
 def _suggestion_key(title: str) -> str:
