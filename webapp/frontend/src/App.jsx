@@ -289,6 +289,12 @@ export default function App() {
         {uiWait && (
           <Banner tone="info">A render worker for the UI will be free in {uiWorker.eta_text}.</Banner>
         )}
+        {badges?.youtube_disconnected?.length > 0 && (
+          <Banner tone="danger">
+            YouTube disconnected — reconnect {badges.youtube_disconnected.map((c) => c.name).join(', ')} to resume publishing.{' '}
+            <a href="#" onClick={(e) => { e.preventDefault(); go('settings') }} style={{ color: 'inherit', fontWeight: 600 }}>Reconnect →</a>
+          </Banner>
+        )}
         {screen}
       </main>
     </div>
