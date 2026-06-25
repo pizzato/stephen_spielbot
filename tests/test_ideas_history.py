@@ -74,6 +74,9 @@ class IdeaHistoryCase(unittest.TestCase):
 
     # ── already-made list ────────────────────────────────────────────────────
     def test_already_made_includes_pending_queue(self):
+        # A channel-ful style folds in in-flight work + the channel back-catalog.
+        cfg = {"default_style": "doc", "youtube_channels": [{"id": "ch1"}],
+               "styles": [{"name": "doc", "channel": "ch1"}]}
         self.write(self.queue, [
             {"final_title": "Pending One", "status": "pending"},
             {"final_title": "Already Posted", "status": "posted"},  # comes via channel list, not inflight
@@ -81,10 +84,45 @@ class IdeaHistoryCase(unittest.TestCase):
         self.write(self.pq, [])
         with mock.patch.object(app, "_channel_video_titles", return_value=["Already Posted"]), \
              mock.patch.object(app, "_list_recent_jobs", return_value=[]):
-            titles = backend._already_made_titles({"default_style": "doc"}, "doc")
+            titles = backend._already_made_titles(cfg, "doc")
         self.assertIn("Pending One", titles)
         self.assertIn("Already Posted", titles)
         self.assertEqual(len(titles), len(set(t.lower() for t in titles)))  # deduped
+
+    def test_channel_less_style_is_clean_slate(self):
+        # A style with no channel must NOT inherit the first channel's catalog,
+        # other styles' in-flight work, or recent local jobs (issue: new "Bands"
+        # style pulled an unrelated channel's history via the publish fallback).
+        cfg = {"default_style": "doc", "youtube_channels": [{"id": "ch1"}],
+               "styles": [{"name": "doc", "channel": "ch1"}, {"name": "Bands", "channel": ""}]}
+        self.write(self.queue, [{"final_title": "Other Inflight", "status": "pending"}])
+        self.write(self.pq, [])
+        self.write(self.suggestions, [{"id": "1", "title": "Doc Idea", "style_name": "doc"}])
+        self.write(self.dismissed, {})
+        with mock.patch.object(app, "_list_recent_jobs", return_value=[("Recent Job", "/x")]):
+            bands = backend._already_made_titles(cfg, "Bands")
+            doc = backend._already_made_titles(cfg, "doc")
+        self.assertEqual(bands, [])  # clean slate — nothing from doc's channel
+        # The channel-ful sibling still dedups against in-flight + recent work.
+        self.assertIn("Other Inflight", doc)
+        self.assertIn("Recent Job", doc)
+
+    def test_channel_less_style_pools_open_ideas_only_with_itself(self):
+        cfg = {"default_style": "doc",
+               "youtube_channels": [{"id": "ch1"}],
+               "styles": [{"name": "doc", "channel": "ch1"},
+                          {"name": "history", "channel": "ch1"},
+                          {"name": "Bands", "channel": ""}]}
+        self.write(self.suggestions, [
+            {"id": "1", "title": "Doc Idea", "style_name": "doc"},
+            {"id": "2", "title": "Bands Idea", "style_name": "Bands"},
+        ])
+        self.write(self.dismissed, {})
+        # Bands pools only with itself — not the first channel's styles…
+        self.assertEqual(backend._styles_sharing_channel(cfg, "Bands"), {"Bands"})
+        self.assertEqual(backend._existing_idea_titles(cfg, "Bands"), ["Bands Idea"])
+        # …and the channel-ful styles no longer pull Bands in via the fallback.
+        self.assertEqual(backend._styles_sharing_channel(cfg, "doc"), {"doc", "history"})
 
     # ── channel-pooled open ideas ────────────────────────────────────────────
     def test_existing_ideas_pooled_across_styles_on_same_channel(self):
@@ -220,6 +258,31 @@ class VideoTitlesCacheCase(unittest.TestCase):
         with mock.patch.object(yt, "fetch_channel_video_titles", return_value=[]):
             out = yt.cached_channel_video_titles("secrets", channel="c1", force=True)
         self.assertEqual(out, ["X", "Y"])
+
+
+class SuggestionRepeatFilterCase(unittest.TestCase):
+    """Idea generation must never re-propose an already-made video, even if the
+    LLM ignores the prompt and returns one — a hard programmatic guarantee."""
+
+    def test_generate_video_suggestions_drops_verbatim_repeats(self):
+        import pipeline.llm as llm
+        payload = json.dumps([
+            {"title": "Already Made Video", "reason": "x", "interestingness": 0.8},
+            {"title": "A Brand New Topic", "reason": "y", "interestingness": 0.9},
+        ])
+        with mock.patch.object(llm, "_local_llm", return_value=payload):
+            # "already made video" differs only by case/space — still a repeat.
+            out = llm.generate_video_suggestions(["Already  Made Video"], cfg={"llm_backend": "local"})
+        self.assertEqual([s["title"] for s in out], ["A Brand New Topic"])
+
+    def test_guided_suggestions_drops_verbatim_repeats(self):
+        payload = json.dumps([
+            {"title": "Existing One", "reason": "x", "suggested_scene_count": 10, "interestingness": 0.8},
+            {"title": "Fresh Idea", "reason": "y", "suggested_scene_count": 12, "interestingness": 0.9},
+        ])
+        with mock.patch.object(backend, "_llm_complete", return_value=payload):
+            out = backend._guided_suggestions("rock bands", ["existing one"], {"llm_backend": "local"})
+        self.assertEqual([s["title"] for s in out], ["Fresh Idea"])
 
 
 if __name__ == "__main__":

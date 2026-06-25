@@ -736,17 +736,30 @@ def style_suggestion_context(style: dict | None) -> str:
     return "\n" + "\n".join(lines) + "\n"
 
 
+def _norm_title(t: str) -> str:
+    """Casefolded, whitespace-collapsed title key for verbatim de-duplication."""
+    return " ".join((t or "").strip().lower().split())
+
+
+def _drop_repeats(suggestions: list[dict], previous_titles: list[str] | None) -> list[dict]:
+    """Drop any suggestion whose title verbatim-matches an already-made/queued
+    title. A hard guarantee on top of the prompt instruction that idea generation
+    never re-proposes an existing video (the model occasionally repeats one)."""
+    made = {_norm_title(t) for t in (previous_titles or [])}
+    return [s for s in suggestions if _norm_title(s.get("title")) not in made]
+
+
 def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None,
                                style: dict | None = None,
                                discarded_titles: list[str] | None = None) -> list[dict]:
-    """Generate 5 video topic suggestions complementary to the channel's existing content.
+    """Generate 5 video topic suggestions that suit the channel's style.
 
     ``style`` (optional) is a style profile dict (name/description/visual_style)
     whose character steers the ideas — a children-story style should yield
-    children-story topics. ``discarded_titles`` (optional) are topics the user
-    deliberately threw away; they're shown to the model as a 'do not suggest
-    again' list. Returns a list of dicts with keys: title, reason,
-    interestingness.
+    children-story topics, NOT topics inferred from past videos. ``previous_titles``
+    and ``discarded_titles`` are shown to the model only as 'do not repeat' lists,
+    and verbatim repeats are also filtered out programmatically. Returns a list of
+    dicts with keys: title, reason, interestingness.
     """
     if cfg is None:
         cfg = _load_cfg()
@@ -784,7 +797,7 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
                 max_tokens=2048,
                 label="video_suggestions",
             )
-            return _parse_suggestions(text)
+            return _drop_repeats(_parse_suggestions(text), previous_titles)
         # Local backend
         url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
         model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -797,7 +810,7 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
             url=url,
             model=model,
         )
-        return _parse_suggestions(text)
+        return _drop_repeats(_parse_suggestions(text), previous_titles)
     except Exception as exc:
         logger.warning("generate_video_suggestions failed: %s", exc)
         return []
