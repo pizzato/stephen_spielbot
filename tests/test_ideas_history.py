@@ -142,6 +142,53 @@ class IdeaHistoryCase(unittest.TestCase):
         self.assertEqual(json.loads(self.suggestions.read_text()), [])
         self.assertEqual(json.loads(self.dismissed.read_text()), {})
 
+    # ── decline vs ignore ────────────────────────────────────────────────────
+    def test_ignore_hidden_from_list_but_still_steers_llm(self):
+        # Decline → reviewable "not accepted" list; Ignore → hidden for good and
+        # never listed, yet both keep the topic out of future suggestions.
+        self.write(self.suggestions, [
+            {"id": "d1", "title": "Declined One", "style_name": "doc",
+             "dismissed": True, "dismissed_reason": "declined"},
+            {"id": "i1", "title": "Ignored One", "style_name": "doc",
+             "dismissed": True, "dismissed_reason": "ignored"},
+        ])
+        self.write(self.dismissed, {})
+        cfg = {"default_style": "doc"}
+        # The reviewable list shows only the declined idea...
+        self.assertEqual([r["title"] for r in backend._discarded_records(cfg)],
+                         ["Declined One"])
+        # ...but the LLM "do not suggest" list covers both, so neither resurfaces.
+        self.assertEqual(set(backend._discarded_idea_titles(cfg)),
+                         {"Declined One", "Ignored One"})
+
+    # ── reset the declined ("negative") list ─────────────────────────────────
+    def test_reset_declined_clears_declined_keeps_ignored(self):
+        self.write(self.suggestions, [
+            {"id": "d1", "title": "Declined New", "dismissed": True, "dismissed_reason": "declined"},
+            {"id": "d2", "title": "Legacy Closed", "dismissed": True, "dismissed_reason": "dismissed"},
+            {"id": "i1", "title": "Ignored Topic", "dismissed": True, "dismissed_reason": "ignored"},
+            {"id": "u1", "title": "Queued Topic", "used": True, "dismissed": True, "dismissed_reason": "used"},
+            {"id": "a1", "title": "Active Topic"},
+        ])
+        self.write(self.dismissed, {
+            "d1": {"id": "d1", "title": "Declined New", "reason": "declined"},
+            "declined new": {"id": "d1", "title": "Declined New", "reason": "declined"},
+            "i1": {"id": "i1", "title": "Ignored Topic", "reason": "ignored"},
+            "ignored topic": {"id": "i1", "title": "Ignored Topic", "reason": "ignored"},
+        })
+        with mock.patch.object(app, "load_config", return_value={"default_style": "doc"}):
+            out = backend.reset_declined_suggestions()
+        self.assertEqual(out["cleared"], 2)  # both declined rows forgotten
+        # Store keeps the ignored, queued, and active ideas; declined ones gone.
+        store_titles = {s["title"] for s in json.loads(self.suggestions.read_text())}
+        self.assertEqual(store_titles, {"Ignored Topic", "Queued Topic", "Active Topic"})
+        # Dismissed log keeps only the ignored entries.
+        self.assertEqual(set(json.loads(self.dismissed.read_text())), {"i1", "ignored topic"})
+        # The reviewable list is now empty; the ignored topic still steers the LLM.
+        cfg = {"default_style": "doc"}
+        self.assertEqual(backend._discarded_records(cfg), [])
+        self.assertEqual(backend._discarded_idea_titles(cfg), ["Ignored Topic"])
+
 
 class VideoTitlesCacheCase(unittest.TestCase):
     def setUp(self):
