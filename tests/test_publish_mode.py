@@ -207,5 +207,80 @@ class StickyForceXTests(TempConfigCase):
         self.assertEqual(q["e1"]["x"]["status"], "pending")
 
 
+class ApprovalGateTests(TempConfigCase):
+    """publish_require_approval holds a finished video in the queue until the user
+    approves it in the Films tab. Comment requests and 'Publish now' bypass it."""
+
+    def setUp(self):
+        super().setUp()
+        self.pq_path = Path(self._tmp.name) / "publish_queue.json"
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH", self.pq_path)
+        p.start()
+        self.addCleanup(p.stop)
+        for name, ret in [("_reconcile_publish_queue", None), ("_film_job_config", {}),
+                          ("_youtube_channel_connected", True)]:
+            p = mock.patch.object(backend, name, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+
+    def _entry(self, **over):
+        e = {
+            "id": "e1", "work_dir": "/tmp/wd1", "title": "T", "source": "manual",
+            "created_at": 1.0,
+            "youtube": {"enabled": True, "channel": "chan", "status": "pending"},
+            "x": {"enabled": False, "account": "", "status": "skipped"},
+        }
+        e.update(over)
+        return e
+
+    def _cfg(self, **over):
+        cfg = {"publish_require_approval": True,
+               "youtube_channels": [{"id": "chan", "publish_per_day": 0}],
+               "x_accounts": [{"id": "acct", "publish_per_day": 0}]}
+        cfg.update(over)
+        self.write_config(cfg)
+
+    def test_unapproved_entry_is_held(self):
+        self._cfg()
+        backend.pq.save_queue([self._entry()])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_not_called()
+        self.assertEqual(out, {})
+        self.assertEqual(backend.pq.load_queue()[0]["youtube"]["status"], "pending")
+
+    def test_approved_entry_releases(self):
+        self._cfg()
+        backend.pq.save_queue([self._entry(approved=True)])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+    def test_comment_request_bypasses_approval(self):
+        self._cfg(publish_schedule_skip_comment_requests=True)
+        backend.pq.save_queue([self._entry(source="comment")])  # not approved
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+    def test_publish_now_bypasses_approval(self):
+        self._cfg()
+        backend.pq.save_queue([self._entry()])  # not approved
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes(force_id="e1")
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+    def test_off_by_default_releases_normally(self):
+        self._cfg(publish_require_approval=False)
+        backend.pq.save_queue([self._entry()])  # no approved flag
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+
 if __name__ == "__main__":
     unittest.main()

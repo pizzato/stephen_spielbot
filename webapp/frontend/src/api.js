@@ -170,6 +170,7 @@ export const api = {
   publishRemove: (id, platform) => req('POST', '/publish/remove', { id, platform: platform || '' }),
   publishNow: (id) => req('POST', '/publish/now', { id }),
   publishMove: (id, direction) => req('POST', '/publish/move', { id, direction }),
+  publishApprove: (workDir, approved = true) => req('POST', '/publish/approve', { work_dir: workDir, approved }),
 
   ytAnalytics: (channel, refresh) => {
     const p = new URLSearchParams()
