@@ -239,6 +239,10 @@ DEFAULT_CFG = {
     # Comment-driven requests skip the cadence and post immediately even when
     # scheduling is on, so requesters get a prompt reply.
     "publish_schedule_skip_comment_requests": True,
+    # Approval gate — when on, a finished video is HELD in the publish queue and
+    # never released (scheduled or immediate) until the user approves it in the
+    # Films tab. Comment-requested videos and an explicit "Publish now" bypass it.
+    "publish_require_approval": False,
     # X (Twitter) integration (issue #107) — mirrors the YouTube block above.
     "x_client_id": "",
     "x_client_secret": "",       # blank → public PKCE client; set → confidential

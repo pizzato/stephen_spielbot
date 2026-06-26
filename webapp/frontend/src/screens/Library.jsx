@@ -9,6 +9,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
   const [confirmDel, setConfirmDel] = useState('')   // work_dir pending delete confirm
   const [busyDel, setBusyDel] = useState('')
   const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
+  const [busyApprove, setBusyApprove] = useState('') // work_dir pending publish approval
 
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
@@ -25,6 +26,14 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
     setBusyNew(wd); setError('')
     try { await onNewVersion(wd) }
     catch (e) { setError(e.message); setBusyNew('') }
+  }
+
+  // Approve a finished film for publishing (publish_require_approval gate). Once
+  // approved it releases on the normal schedule/cadence — no manual posting.
+  const approve = async (wd) => {
+    setBusyApprove(wd); setError('')
+    try { await api.publishApprove(wd); await load() }
+    catch (e) { setError(e.message) } finally { setBusyApprove('') }
   }
 
   // Delete a partial render / unfinished job and its files (cancels it first if running).
@@ -90,7 +99,11 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
               <div style={{ position: 'absolute', top: 12, left: 12 }}>
                 {f.published
                   ? <Chip tone="ok" dot>Published</Chip>
-                  : !f.seen && <Chip tone="info" dot>New</Chip>}
+                  : f.awaiting_approval
+                    ? <Chip tone="warn" dot>Needs approval</Chip>
+                    : f.approved
+                      ? <Chip tone="info" dot>Approved</Chip>
+                      : !f.seen && <Chip tone="info" dot>New</Chip>}
               </div>
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
@@ -112,7 +125,12 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
                 <Button variant="ghost" icon="copy" disabled={busyNew === f.work_dir} onClick={(e) => { e.stopPropagation(); newVersion(f.work_dir) }}>
                   {busyNew === f.work_dir ? 'Copying…' : 'New version'}
                 </Button>
-                <Button variant="primary" icon="upload" onClick={(e) => { e.stopPropagation(); go('publish', { publishWorkDir: f.work_dir }) }}>Publish</Button>
+                {f.awaiting_approval && (
+                  <Button variant="primary" icon="check" disabled={busyApprove === f.work_dir} onClick={(e) => { e.stopPropagation(); approve(f.work_dir) }}>
+                    {busyApprove === f.work_dir ? 'Approving…' : 'Approve'}
+                  </Button>
+                )}
+                <Button variant={f.awaiting_approval ? 'ghost' : 'primary'} icon="upload" onClick={(e) => { e.stopPropagation(); go('publish', { publishWorkDir: f.work_dir }) }}>Publish</Button>
               </div>
             </div>
           </Card>

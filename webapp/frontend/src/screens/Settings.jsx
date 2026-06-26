@@ -1378,6 +1378,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={cfg.publish_schedule_skip_comment_requests !== false} disabled={!cfg.publish_schedule_enabled}
                 onChange={(v) => set('publish_schedule_skip_comment_requests', v)}
                 label="Let comment-requested videos skip the schedule and post immediately" />
+              <Check checked={!!cfg.publish_require_approval}
+                onChange={(v) => set('publish_require_approval', v)}
+                label="Require approval before publishing — finished videos are held until you approve them in the Films tab (comment-requested videos still post automatically)" />
             </div>
           </Card>
         </>)}
