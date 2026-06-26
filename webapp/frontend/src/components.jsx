@@ -201,6 +201,56 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
   )
 }
 
+// Like VersionStrip, but for rendered video takes: each thumbnail is a muted
+// <video> (preload=metadata shows the first frame) so the user can flip between
+// re-renders of a scene and pick the best one.
+export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy }) {
+  if (!versions || versions.length < 2) return null
+  return (
+    <div className="mt-16">
+      <span className="label-sm">Video takes <span className="muted">· click to use</span></span>
+      <div className="row gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
+        {versions.map((v) => {
+          const isSel = v.id === selected
+          return (
+            <button
+              key={v.id}
+              type="button"
+              onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
+              disabled={busy}
+              title={isSel ? 'Current video' : 'Use this video'}
+              style={{
+                position: 'relative', padding: 0, width: 84, aspectRatio: aspect,
+                borderRadius: 'var(--r-sm)', overflow: 'hidden', background: '#000',
+                cursor: isSel ? 'default' : 'pointer',
+                border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
+                opacity: busy && !isSel ? 0.5 : 1,
+              }}>
+              <video src={fileUrl(v.path)} muted preload="metadata" tabIndex={-1}
+                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+              <span style={{
+                position: 'absolute', left: 3, bottom: 3, fontSize: 9, color: '#fff',
+                background: 'rgba(0,0,0,.55)', padding: '1px 5px', borderRadius: 3,
+              }}>
+                <Icon name="film" />
+              </span>
+              {isSel && (
+                <span style={{
+                  position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
+                  background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }}>
+                  <Icon name="check" />
+                </span>
+              )}
+            </button>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // Masked image editor: paint over a region of an image, describe the change, and
 // send it to a FLUX inpaint pass. Calls `onApply(maskDataUrl, prompt, denoise)`
 // where maskDataUrl is a black/white PNG (white = the painted region to change)
