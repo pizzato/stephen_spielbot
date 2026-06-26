@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip, InpaintModal } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip, VideoVersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 function SceneCard({
@@ -19,6 +19,7 @@ function SceneCard({
   const [error, setError] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [history, setHistory] = useState(scene.history)
+  const [videoHistory, setVideoHistory] = useState(scene.video_history)
   const [selecting, setSelecting] = useState(false)
   const [inpaint, setInpaint] = useState(false)
   const [inpaintErr, setInpaintErr] = useState('')
@@ -110,8 +111,9 @@ function SceneCard({
   }, [initialTask, startPolling])
 
   // Keep local history in sync when the parent reloads scenes (e.g. after an
-  // image re-render adds a new version).
+  // image or video re-render adds a new version).
   useEffect(() => { setHistory(scene.history) }, [scene.history])
+  useEffect(() => { setVideoHistory(scene.video_history) }, [scene.video_history])
 
   const selectVersion = async (versionId) => {
     setSelecting(true)
@@ -119,6 +121,19 @@ function SceneCard({
     try {
       const r = await api.selectFilmPreview(workDir, scene.id, versionId)
       setHistory(r.history)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSelecting(false)
+    }
+  }
+
+  const selectVideoVersion = async (versionId) => {
+    setSelecting(true)
+    setError('')
+    try {
+      const r = await api.selectFilmVideo(workDir, scene.id, versionId)
+      setVideoHistory(r.video_history)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -161,7 +176,10 @@ function SceneCard({
   const selectedVersion = history?.versions?.find((v) => v.id === history.selected)
   const previewUrl = selectedVersion ? fileUrl(selectedVersion.path)
     : (scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : ''))
-  const videoUrl = scene.video_url
+  // Prefer the selected kept take (each has a unique URL, so switching updates the
+  // player instantly without cache-busting); fall back to the canonical final.
+  const selectedTake = videoHistory?.versions?.find((v) => v.id === videoHistory.selected)
+  const videoUrl = selectedTake ? fileUrl(selectedTake.path) : scene.video_url
   // Match the panels to the film's real orientation so portrait frames aren't
   // cropped into a landscape box. Derived from the resolution name (e.g.
   // "Portrait FHD (1080×1920)"), falling back to 16/9 when it's unparseable.
@@ -360,6 +378,9 @@ function SceneCard({
 
             <VersionStrip versions={history?.versions} selected={history?.selected}
               onSelect={selectVersion} aspect={aspect} busy={selecting || isRendering} />
+
+            <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
+              onSelect={selectVideoVersion} aspect={aspect} busy={selecting || isRendering} />
           </div>
         </div>
       </Card>

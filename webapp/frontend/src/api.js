@@ -233,6 +233,7 @@ export const api = {
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
   rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
+  selectFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-select`, { work_dir: workDir, version_id: versionId }),
   inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
