@@ -1,0 +1,115 @@
+"""Unit tests for pipeline.video_history — the per-scene rendered-video take store.
+
+The module only copies files around, so the "videos" here are tiny byte strings;
+distinct bytes per take let us assert that ``select`` copies the *right* one. The
+key difference from image_history is the last-N pruning of large take files.
+"""
+from pathlib import Path
+
+from pipeline import video_history as vh
+
+
+def _write(p: Path, data: bytes) -> Path:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
+    return p
+
+
+def _final(wd: Path, sid: int = 1) -> Path:
+    return wd / f"scene_{sid:02d}_final.mp4"
+
+
+def test_seed_if_empty_records_existing_as_v1(tmp_path):
+    _write(_final(tmp_path), b"original")
+    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
+
+    h = vh.history(tmp_path, 1)
+    assert len(h["versions"]) == 1
+    assert h["selected"] == h["versions"][0]["id"]
+    assert Path(h["versions"][0]["path"]).read_bytes() == b"original"
+
+
+def test_seed_if_empty_is_noop_when_history_exists(tmp_path):
+    _write(_final(tmp_path), b"original")
+    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"changed")
+    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))
+    assert len(vh.history(tmp_path, 1)["versions"]) == 1
+
+
+def test_seed_if_empty_is_noop_when_current_missing(tmp_path):
+    vh.seed_if_empty(tmp_path, 1, _final(tmp_path))  # no file on disk
+    assert vh.history(tmp_path, 1)["versions"] == []
+
+
+def test_record_appends_and_selects_newest(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"two")
+    h = vh.record(tmp_path, 1, _final(tmp_path))
+
+    assert len(h["versions"]) == 2
+    assert h["selected"] == h["versions"][-1]["id"]
+    by_id = {v["id"]: Path(v["path"]).read_bytes() for v in h["versions"]}
+    assert sorted(by_id.values()) == [b"one", b"two"]
+
+
+def test_record_prunes_to_last_three_and_deletes_files(tmp_path):
+    for tag in (b"v1", b"v2", b"v3", b"v4", b"v5"):
+        _write(_final(tmp_path), tag)
+        vh.record(tmp_path, 1, _final(tmp_path))
+
+    h = vh.history(tmp_path, 1)
+    assert len(h["versions"]) == 3                       # only the last 3 kept
+    contents = sorted(Path(v["path"]).read_bytes() for v in h["versions"])
+    assert contents == [b"v3", b"v4", b"v5"]
+    # The pruned take files are gone from disk, not just the manifest.
+    kept = {p.name for p in (tmp_path / "video_history").glob("*.mp4")}
+    assert len(kept) == 3
+
+
+def test_select_copies_chosen_take_onto_canonical_final(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"two")
+    h = vh.record(tmp_path, 1, _final(tmp_path))
+    older = h["versions"][0]["id"]
+
+    vh.select(tmp_path, 1, older)
+
+    assert _final(tmp_path).read_bytes() == b"one"
+    assert vh.history(tmp_path, 1)["selected"] == older
+
+
+def test_select_unknown_take_raises(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    try:
+        vh.select(tmp_path, 1, 999)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown take id")
+
+
+def test_history_filters_missing_files(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"two")
+    h = vh.record(tmp_path, 1, _final(tmp_path))
+
+    Path(h["versions"][-1]["path"]).unlink()
+    h2 = vh.history(tmp_path, 1)
+    assert len(h2["versions"]) == 1
+    assert h2["selected"] == h2["versions"][0]["id"]
+
+
+def test_scenes_are_tracked_independently(tmp_path):
+    _write(_final(tmp_path, 1), b"s1")
+    vh.record(tmp_path, 1, _final(tmp_path, 1))
+    _write(_final(tmp_path, 2), b"s2")
+    vh.record(tmp_path, 2, _final(tmp_path, 2))
+
+    assert len(vh.history(tmp_path, 1)["versions"]) == 1
+    assert len(vh.history(tmp_path, 2)["versions"]) == 1
+    assert Path(vh.history(tmp_path, 2)["versions"][0]["path"]).read_bytes() == b"s2"
