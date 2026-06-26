@@ -1695,7 +1695,18 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
             "name": _x_account_display_name(cfg, _x_account_for_work_dir(wd)),
             "url": meta.get("x_url") or "",
         })
-    return {"published": bool(dests), "destinations": dests}
+    out = {"published": bool(dests), "destinations": dests}
+    # Approval gate (publish_require_approval): a still-unpublished film waits for
+    # a thumbs-up in the Films tab. Comment-requested videos bypass it.
+    if cfg.get("publish_require_approval") and not dests:
+        e = pq.item_by_work_dir(str(wd))
+        source = (e or {}).get("source") or _publish_source_for(_film_job_config(wd))
+        bypass = source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True)
+        if not bypass:
+            approved = bool(e and e.get("approved"))
+            out["approved"] = approved
+            out["awaiting_approval"] = not approved
+    return out
 
 
 @api.get("/api/jobs")
@@ -4498,6 +4509,26 @@ def publish_move(body: PublishMoveBody) -> dict:
     return {"ok": pq.move_item(body.id, body.direction)}
 
 
+class PublishApproveBody(BaseModel):
+    work_dir: str
+    approved: bool = True
+
+
+@api.post("/api/publish/approve")
+def publish_approve(body: PublishApproveBody) -> dict:
+    """Approve (or un-approve) a finished film for publishing — the Films-tab gate
+    for publish_require_approval. Ensures the film has a publish-queue entry
+    (creating a held one if the automation tick hasn't enqueued it yet), then
+    flags it. Approved entries then release on the normal schedule/cadence."""
+    p = Path(body.work_dir)
+    e = _ensure_publish_entry(p)
+    if e is None:
+        raise HTTPException(404, "Nothing to publish for this film.")
+    pq.update_item(e["id"], approved=bool(body.approved),
+                   approved_at=(time.time() if body.approved else None))
+    return {"ok": True, "approved": bool(body.approved)}
+
+
 @api.get("/api/x/analytics")
 def x_analytics(account: str = Query(""), refresh: bool = Query(False)) -> dict:
     # Cache-first, mirroring yt_analytics: serve the persisted per-account
@@ -6309,6 +6340,9 @@ def _auto_post_done() -> list[str]:
             jc = {}
         if not jc.get("queue_item_id"):
             continue  # only auto-post videos that came from the queue
+        if _awaiting_approval(p, cfg, _publish_source_for(jc)):
+            _ensure_publish_entry(p)  # surface it in the Films tab for approval
+            continue
         tid = _claim_and_post_youtube(p, jc, cfg)
         if tid:
             posted.append(tid)
@@ -6330,6 +6364,9 @@ def _auto_post_x_done() -> list[str]:
             jc = {}
         if not jc.get("queue_item_id"):
             continue  # only auto-post videos that came from the queue
+        if _awaiting_approval(p, cfg, _publish_source_for(jc)):
+            _ensure_publish_entry(p)  # surface it in the Films tab for approval
+            continue
         tid = _claim_and_post_x(p, jc, require_yt_link=yt_on)
         if tid:
             posted.append(tid)
@@ -6374,6 +6411,13 @@ def _publish_targets_for_job(p: Path, meta: dict) -> tuple[dict, dict]:
     return youtube, x
 
 
+def _publish_source_for(jc: dict) -> str:
+    """Provenance of a finished film for the publish queue: 'comment' for a
+    viewer-requested video (so it can bypass cadence/approval), else 'manual'."""
+    item = _queue_item_by_id(jc.get("queue_item_id", "")) or {}
+    return item.get("source") or ("comment" if item.get("comment_id") else "manual")
+
+
 def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
     """Add finished, unpublished videos to the publish queue. *recent_only* (the
     automation-tick path) only adds jobs finished within the last few hours, so
@@ -6399,14 +6443,51 @@ def _enqueue_finished_for_publish(recent_only: bool = True) -> int:
         if not (youtube["enabled"] or x["enabled"]):
             continue  # nothing left to publish
         jc = _film_job_config(p)
-        item = _queue_item_by_id(jc.get("queue_item_id", "")) or {}
-        source = item.get("source") or ("comment" if item.get("comment_id") else "manual")
+        source = _publish_source_for(jc)
         title = jc.get("video_title") or _video_title_for(p)
         if pq.add_item(str(p), title=title, source=source,
                        queue_item_id=jc.get("queue_item_id", ""),
                        youtube=youtube, x=x):
             added += 1
     return added
+
+
+def _ensure_publish_entry(p: Path) -> dict | None:
+    """Return the publish-queue entry for a finished film, creating a held one if
+    none exists yet. Used by the Films-tab approval, which can run before the
+    automation tick has enqueued the film. Returns None if there's nothing to
+    publish (not finished, or already posted everywhere)."""
+    existing = pq.item_by_work_dir(str(p))
+    if existing is not None:
+        return existing
+    try:
+        meta = json.loads((p / "job.json").read_text())
+    except Exception:
+        return None
+    if meta.get("status") != "done":
+        return None
+    youtube, x = _publish_targets_for_job(p, meta)
+    if not (youtube["enabled"] or x["enabled"]):
+        return None
+    jc = _film_job_config(p)
+    source = _publish_source_for(jc)
+    title = jc.get("video_title") or _video_title_for(p)
+    pq.add_item(str(p), title=title, source=source,
+                queue_item_id=jc.get("queue_item_id", ""),
+                youtube=youtube, x=x)
+    return pq.item_by_work_dir(str(p))
+
+
+def _awaiting_approval(p: Path, cfg: dict, source: str = "") -> bool:
+    """True if the approval toggle is on and this film hasn't been approved yet.
+    Comment-requested videos bypass approval (they also bypass the cadence), so
+    requesters still get a prompt reply."""
+    if not cfg.get("publish_require_approval"):
+        return False
+    if source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True):
+        return False
+    e = pq.item_by_work_dir(str(p))
+    return not (e and e.get("approved"))
 
 
 # Self-healing knobs for the publish queue — mirror the render-queue retry cap so
@@ -6529,6 +6610,7 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
         return {}
     now = time.time()
     skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
+    require_approval = bool(cfg.get("publish_require_approval"))
 
     # Seed each key's last release time from entries already released, so the
     # spacing survives restarts.
@@ -6552,6 +6634,10 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
         p = Path(e.get("work_dir", ""))
         jc = _film_job_config(p)
         bypass = bool(force_id) or (skip_comment and e.get("source") == "comment")
+        # Approval gate: hold entries the user hasn't approved in the Films tab.
+        # A bypass (comment request or explicit 'Publish now') counts as approval.
+        if require_approval and not bypass and not e.get("approved"):
+            continue
         yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
         if yt_sub.get("enabled") and yt_sub.get("status") == "pending":
             key = yt_sub.get("channel") or ""
