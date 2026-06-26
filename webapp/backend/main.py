@@ -48,6 +48,7 @@ from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
 from pipeline import image_history  # noqa: E402
+from pipeline import video_history  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -156,6 +157,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     }
     if wd is not None:
         out["history"] = image_history.history(wd, sid)
+        out["video_history"] = video_history.history(wd, sid)
     return out
 
 
@@ -5731,10 +5733,17 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         if actual_video:
             _film_checkpoint(task_id)
             _film_tasks[task_id]["step"] = "mux"
-            mux_video_audio(actual_video, narration_path, final_path)
+            # Mux to a staging file and swap atomically so an interrupted re-mux
+            # never destroys the existing final.mp4. The .mp4 extension lets ffmpeg
+            # infer the container format.
+            staged_final = wd / f"scene_{sid:02d}_final.staging.mp4"
+            mux_video_audio(actual_video, narration_path, staged_final)
+            staged_final.replace(final_path)
+            video_history.record(wd, sid, final_path)
 
         _film_tasks[task_id] = {"status": "done"}
     except Exception as e:
+        (wd / f"scene_{sid:02d}_final.staging.mp4").unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
 
 
@@ -5919,10 +5928,21 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
         _film_checkpoint(task_id)
         _film_tasks[task_id]["step"] = "mux"
-        mux_video_audio(scene_video, narration_path, final_path)
+        # Mux to a staging file and swap it in atomically, so an interrupted mux
+        # (backend restart / crash) never destroys the existing final.mp4 — the
+        # scene keeps its old video until the new one is fully written. The staging
+        # name keeps a .mp4 extension so ffmpeg infers the container format.
+        staged_final = wd / f"scene_{sid:02d}_final.staging.mp4"
+        mux_video_audio(scene_video, narration_path, staged_final)
+        staged_final.replace(final_path)
+        video_history.record(wd, sid, final_path)
+        # The fresh single clip + final supersede any legacy multi-clip artifacts.
+        for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_02.mp4"):
+            (wd / legacy).unlink(missing_ok=True)
 
         _film_tasks[task_id] = {"status": "done"}
     except Exception as e:
+        (wd / f"scene_{sid:02d}_final.staging.mp4").unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
 
 
@@ -5977,8 +5997,12 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
 
     # Delete stale files for the component and its dependents
     if body.component == "narration":
-        for f in [f"scene_{sid:02d}_narration.wav", f"scene_{sid:02d}_final.mp4"]:
-            (wd / f).unlink(missing_ok=True)
+        # Don't delete anything up front: generate_narration overwrites the wav,
+        # and the new final.mp4 is swapped in atomically (see _run_narration_rerender).
+        # Pre-deleting final.mp4 would leave the scene with no video if the re-mux is
+        # interrupted (backend restart / crash mid-render). Keep the current video as a
+        # take so the re-mux can be reverted.
+        video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
     elif body.component == "image":
         # Preserve the current image before deleting it so the user can return to it.
         cur = wd / f"scene_{sid:02d}_preview.png"
@@ -5988,13 +6012,13 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
             (wd / f).unlink(missing_ok=True)
     elif body.component == "video":
-        # Keep the existing first frame — re-rendering video reuses it, doesn't
-        # regenerate it. Only clear the video clips and muxed output.
-        for f in [
-            f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
-            f"scene_{sid:02d}_clip_02.mp4", f"scene_{sid:02d}_final.mp4",
-        ]:
-            (wd / f).unlink(missing_ok=True)
+        # Keep the existing first frame AND the existing video. The new clip/final
+        # are rendered to staging paths and swapped in atomically only on success
+        # (see _run_video_rerender). Deleting the old video here would lose it if the
+        # render is interrupted mid-flight — e.g. a backend restart while the LTX
+        # render runs — leaving the scene with no video at all. Snapshot the current
+        # video as a take so the user can flip back to it.
+        video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
 
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
@@ -6037,6 +6061,20 @@ def select_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
         store.close()
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
+
+
+@api.post("/api/films/scenes/{scene_id}/video-select")
+def select_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
+    """Make a previously-kept video take the selected one for a film scene."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        out = video_history.select(wd, int(scene_id), int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
+    return {"ok": True, "final_path": str(out),
+            "video_history": video_history.history(wd, int(scene_id))}
 
 
 class FilmInpaintBody(BaseModel):
