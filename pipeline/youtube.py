@@ -1130,16 +1130,17 @@ def _iso8601_duration_seconds(s: str) -> int:
     return h * 3600 + mn * 60 + sec
 
 
-def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel: str = "") -> list[dict]:
+def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel: str = "",
+                        days_window: int = 6) -> list[dict]:
     """Return raw per-video rows for the engagement model (issue #50).
 
     For every upload on the authenticated channel (newest first, up to
     ``max_videos``) returns the title, description, full publish timestamp,
     privacy status, video duration (seconds), and a ``{date: views}`` map
-    covering the video's first days. The caller derives day-1/2/3 view counts,
-    a Short/long-form flag, and decides which rows are usable (public, old
-    enough to have a complete first-3-day window); see
-    ``pipeline.engagement.build_dataset``.
+    covering the video's first days. The caller sums the first-N-day view counts
+    (N = the configured prediction horizon), derives a Short/long-form flag, and
+    decides which rows are usable (public, old enough to have a complete window);
+    see ``pipeline.engagement.build_dataset``.
 
     Returns:
         [{video_id, title, description, published_at, privacy, duration_seconds,
@@ -1147,7 +1148,7 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel
 
     Note: the Analytics API omits days with zero views, so an absent date means
     "no views that day", not "missing data" — the caller's data-lag filter is
-    what guarantees the first 3 days are complete.
+    what guarantees the first N days are complete.
     """
     import datetime
     creds = _load_credentials(client_secrets_path, channel)
@@ -1204,8 +1205,9 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel
                 }
 
         # Per-video daily views over each video's first days. One Analytics query
-        # per video, each bounded to a short post-publish window (6 days absorbs
-        # the analytics data lag while keeping every query tiny). Failures are
+        # per video, each bounded to a short post-publish window (`days_window`
+        # past publish — wide enough to cover the prediction horizon plus the
+        # analytics data lag, while keeping every query tiny). Failures are
         # isolated so one bad video doesn't wipe the batch.
         today = datetime.date.today()
         try:
@@ -1222,7 +1224,7 @@ def fetch_training_rows(client_secrets_path: str, max_videos: int = 500, channel
                     pub = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00")).date()
                 except Exception:
                     continue
-                end = min(today, pub + datetime.timedelta(days=6))
+                end = min(today, pub + datetime.timedelta(days=days_window))
                 try:
                     rep = yt_analytics.reports().query(
                         ids="channel==MINE",

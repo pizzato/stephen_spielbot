@@ -130,7 +130,7 @@ export default function PublishSchedule({ go, meta = {} }) {
             {e.source && <Chip tone="info">{e.source}</Chip>}
             {data.skip_comment && e.source === 'comment' && pendingAny && <Chip tone="warn">bypasses schedule</Chip>}
             {e.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(e.interestingness).toFixed(1)}</span>}
-            {e.predicted_views != null && e.predicted_views >= 0 && <span title="Predicted 3-day views"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(e.predicted_views)}</Chip></span>}
+            {e.predicted_views != null && e.predicted_views >= 0 && <span title="Predicted reach"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(e.predicted_views)}</Chip></span>}
           </div>
           <div className="stack gap-8 mt-8">
             {platformRow(e, 'youtube', data.channels || {})}

@@ -86,6 +86,34 @@ class BuildDatasetTests(unittest.TestCase):
         self.assertEqual(by_id["longy"]["is_short"], 0)
         self.assertEqual(by_id["nodur"]["is_short"], 0)
 
+    def test_configurable_prediction_horizon(self):
+        # With a 5-day horizon the target sums 5 calendar days and the recency
+        # cutoff widens to frozen-today - 5 (= 2024-03-15), so a video published
+        # on 2024-03-16 is now too recent.
+        rows = [
+            {  # kept: published 2024-03-15, exactly at the widened cutoff
+                "video_id": "wide", "title": "t", "description": "",
+                "published_at": "2024-03-15T12:00:00Z", "privacy": "public",
+                "duration_seconds": 600,
+                "day_views": {"2024-03-15": 1, "2024-03-16": 2, "2024-03-17": 4,
+                              "2024-03-18": 8, "2024-03-19": 16, "2024-03-20": 32},
+            },
+            {  # dropped: 2024-03-16 > cutoff (no full 5-day window yet)
+                "video_id": "toonew", "title": "t", "description": "",
+                "published_at": "2024-03-16T12:00:00Z", "privacy": "public",
+                "duration_seconds": 600, "day_views": {"2024-03-16": 1},
+            },
+        ]
+        with mock.patch.object(eng, "_load_cfg", return_value={"engagement_prediction_days": 5}), \
+                mock.patch.object(eng.yt, "fetch_training_rows", return_value=rows) as frt, \
+                mock.patch("datetime.datetime", _FrozenDateTime):
+            dataset, dropped = eng.build_dataset("/tmp/secrets.json")
+        self.assertEqual(len(dataset), 1)
+        self.assertEqual(dropped, 1)
+        self.assertEqual(dataset[0]["views"], 31)   # 1+2+4+8+16 over the first 5 days
+        # The Analytics fetch window must cover the horizon (days + 3 slack).
+        self.assertEqual(frt.call_args.kwargs.get("days_window"), 8)
+
     def test_unparseable_publish_date_dropped(self):
         rows = [{
             "video_id": "bad", "title": "t", "description": "",

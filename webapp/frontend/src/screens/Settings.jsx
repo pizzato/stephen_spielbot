@@ -1074,6 +1074,34 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
           </Card>
 
+          {/* ── Predictive model (issue #50) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Predictive model</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>rebuild on the <strong>Predictive Model</strong> tab to apply</span>
+            </div>
+            <div className="row gap-22 mt-16 row--wrap">
+              <Field label="Prediction horizon (days)"
+                hint="What the model predicts: total views over a video's first N calendar days. Changing this needs a rebuild.">
+                <input className="input" type="number" min={1} max={30} step={1} style={{ width: 120 }}
+                  value={cfg.engagement_prediction_days ?? 3}
+                  onChange={(e) => set('engagement_prediction_days', Math.max(1, Math.min(30, +e.target.value || 1)))} />
+              </Field>
+              <Field label="Minimum training samples"
+                hint="Below this many usable videos the model is flagged low-confidence (“insufficient”).">
+                <input className="input" type="number" min={1} step={1} style={{ width: 120 }}
+                  value={cfg.engagement_min_samples ?? 15}
+                  onChange={(e) => set('engagement_min_samples', Math.max(1, +e.target.value || 1))} />
+              </Field>
+              <Field label="Data lag / exclusion (days)"
+                hint="Videos newer than this are excluded from training — the Analytics API finalises a day's views a few days late.">
+                <input className="input" type="number" min={0} step={1} style={{ width: 120 }}
+                  value={cfg.engagement_data_lag_days ?? 3}
+                  onChange={(e) => set('engagement_data_lag_days', Math.max(0, +e.target.value || 0))} />
+              </Field>
+            </div>
+          </Card>
+
           {/* ── Voices ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
 
