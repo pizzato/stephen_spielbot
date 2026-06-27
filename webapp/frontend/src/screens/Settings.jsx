@@ -852,6 +852,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     setBusy(true)
     try {
       const out = { ...cfg }
+      // The connected-channel / X-account lists are owned entirely by their own
+      // endpoints (connect/disconnect + the per-channel/account Settings panel,
+      // which saves publish_per_day & co. immediately). The main form only reads
+      // them; sending the mount-time snapshot back here would clobber any cadence
+      // edit made through those panels with a stale value.
+      delete out.youtube_channels
+      delete out.x_accounts
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
