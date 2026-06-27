@@ -1344,6 +1344,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
               <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
+              <Check checked={!!cfg.youtube_auto_write_scripts} onChange={(v) => set('youtube_auto_write_scripts', v)} label="Auto-write scripts for queued items but don't render — they wait unapproved for you to review, edit and approve" />
               <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
               <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
               <div className="row center between row--wrap gap-10" style={{ paddingLeft: 26 }}>

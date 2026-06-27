@@ -219,6 +219,7 @@ DEFAULT_CFG = {
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
     "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
+    "youtube_auto_write_scripts": False,       # write (but don't render) scripts for pending queue items, parking them unapproved for review/edit
     "youtube_auto_approve_script": False,      # let auto-start also WRITE missing scripts and render them without review
     "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
     "youtube_auto_post": False,               # auto-publish when video generation completes
