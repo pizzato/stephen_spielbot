@@ -258,10 +258,11 @@ DEFAULT_CFG = {
     "x_auto_post": False,             # auto-publish to X when video generation completes
     "x_fully_automated": False,       # derived mirror of the x_auto_* steps (no behaviour of its own)
     "x_post_default_text": "",        # appended to the tweet text on post (like description_suffix)
-    # Engagement prediction (issue #50) — config-file-only advanced knobs.
+    # Engagement prediction (issue #50).
+    "engagement_prediction_days": 3,     # horizon: target = sum of views over the first N calendar days
     "engagement_embed_model": "BAAI/bge-small-en-v1.5",  # fastembed text-embedding model
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
-    "engagement_data_lag_days": 3,       # exclude videos newer than this (no full 3-day window yet)
+    "engagement_data_lag_days": 3,       # exclude videos newer than this (no full prediction window yet)
     "engagement_short_max_seconds": 180, # videos this long (s) or shorter count as a Short
     # Style profiles (issue #66) — named bundles of the script/content, render
     # quality and audio-mix settings above. load/save normalize this list and
