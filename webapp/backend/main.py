@@ -1699,8 +1699,9 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
         })
     out = {"published": bool(dests), "destinations": dests}
     # Approval gate (publish_require_approval): a still-unpublished film waits for
-    # a thumbs-up in the Films tab. Comment-requested videos bypass it.
-    if cfg.get("publish_require_approval") and not dests:
+    # a thumbs-up in the Films tab. Comment-requested videos bypass it, as does the
+    # automation override that publishes unapproved films.
+    if cfg.get("publish_require_approval") and not cfg.get("publish_auto_publish_unapproved") and not dests:
         e = pq.item_by_work_dir(str(wd))
         source = (e or {}).get("source") or _publish_source_for(_film_job_config(wd))
         bypass = source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True)
@@ -4435,6 +4436,7 @@ def publish_queue_list() -> dict:
         # bypass the schedule also bypass approval.
         e["awaiting_approval"] = bool(
             cfg.get("publish_require_approval")
+            and not cfg.get("publish_auto_publish_unapproved")
             and not (skip_comment and e.get("source") == "comment")
             and not e.get("approved"))
     # Project a concrete release time per waiting target: the j-th still-waiting
@@ -6576,8 +6578,12 @@ def _ensure_publish_entry(p: Path) -> dict | None:
 def _awaiting_approval(p: Path, cfg: dict, source: str = "") -> bool:
     """True if the approval toggle is on and this film hasn't been approved yet.
     Comment-requested videos bypass approval (they also bypass the cadence), so
-    requesters still get a prompt reply."""
+    requesters still get a prompt reply. The automation override
+    (publish_auto_publish_unapproved) lets everything through without changing the
+    per-film approved flag, so flipping it back off re-holds the unapproved ones."""
     if not cfg.get("publish_require_approval"):
+        return False
+    if cfg.get("publish_auto_publish_unapproved"):
         return False
     if source == "comment" and cfg.get("publish_schedule_skip_comment_requests", True):
         return False
@@ -6706,6 +6712,7 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
     now = time.time()
     skip_comment = bool(cfg.get("publish_schedule_skip_comment_requests", True))
     require_approval = bool(cfg.get("publish_require_approval"))
+    auto_pub_unapproved = bool(cfg.get("publish_auto_publish_unapproved"))
 
     # Seed each key's last release time from entries already released, so the
     # spacing survives restarts.
@@ -6730,8 +6737,9 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
         jc = _film_job_config(p)
         bypass = bool(force_id) or (skip_comment and e.get("source") == "comment")
         # Approval gate: hold entries the user hasn't approved in the Films tab.
-        # A bypass (comment request or explicit 'Publish now') counts as approval.
-        if require_approval and not bypass and not e.get("approved"):
+        # A bypass (comment request or explicit 'Publish now') counts as approval;
+        # so does the automation override (publish_auto_publish_unapproved).
+        if require_approval and not bypass and not auto_pub_unapproved and not e.get("approved"):
             continue
         yt_sub, x_sub = e.get("youtube") or {}, e.get("x") or {}
         if yt_sub.get("enabled") and yt_sub.get("status") == "pending":
