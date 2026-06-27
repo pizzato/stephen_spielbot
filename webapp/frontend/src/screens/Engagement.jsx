@@ -15,7 +15,7 @@ function fmtDate(ts) {
 }
 
 const PHASE_LABEL = {
-  fetching: 'Fetching every channel’s history & first-3-day views…',
+  fetching: 'Fetching every channel’s history & early view counts…',
   embedding: 'Computing embeddings… (first run downloads the model, ~130 MB)',
   training: 'Training & cross-validating…',
   done: 'Done.',
@@ -30,7 +30,7 @@ const RELIABILITY = {
 
 // Actual-vs-predicted scatter on a log1p scale (views are heavy-tailed). Points
 // near the dashed y=x line are accurate predictions. Dependency-free SVG.
-function Scatter({ samples }) {
+function Scatter({ samples, days = 3 }) {
   const S = 300, pad = 30, plot = S - 2 * pad
   const vals = samples.flatMap((s) => [s.actual, s.predicted])
   const max = Math.max(1, ...vals)
@@ -47,7 +47,7 @@ function Scatter({ samples }) {
           <title>{`${s.title}\nactual ${s.actual} · predicted ${s.predicted}`}</title>
         </circle>
       ))}
-      <text x={pad + plot / 2} y={S - 4} textAnchor="middle" fontSize="11" fill="var(--ink-3)">actual 3-day views →</text>
+      <text x={pad + plot / 2} y={S - 4} textAnchor="middle" fontSize="11" fill="var(--ink-3)">actual {days}-day views →</text>
       <text x={12} y={pad + plot / 2} textAnchor="middle" fontSize="11" fill="var(--ink-3)"
         transform={`rotate(-90 12 ${pad + plot / 2})`}>predicted ↑</text>
     </svg>
@@ -125,6 +125,12 @@ export default function Engagement() {
   const content = status?.content
   const rel = status?.reliability
   const relInfo = RELIABILITY[rel]
+  // Horizon the built model actually uses; falls back to the configured value
+  // before any model exists.
+  const days = status?.prediction_days || status?.configured_prediction_days || 3
+  // The setting was changed but the live model still predicts the old horizon.
+  const horizonStale = available && status?.configured_prediction_days
+    && status.configured_prediction_days !== status.prediction_days
 
   return (
     <div>
@@ -143,6 +149,11 @@ export default function Engagement() {
 
       <Banner tone="danger">{error}</Banner>
       {note && <Banner tone="ok">{note}</Banner>}
+      {horizonStale && !building && (
+        <Banner tone="warn">
+          Prediction horizon changed to {status.configured_prediction_days} days in Settings — the current model still predicts {status.prediction_days}-day views. Rebuild to apply.
+        </Banner>
+      )}
 
       {building && (
         <Card span={12} className="reveal reveal-d1" style={{ marginBottom: 16 }}>
@@ -166,7 +177,7 @@ export default function Engagement() {
               <p className="muted" style={{ fontSize: 13, margin: '6px 0 0', maxWidth: 640 }}>
                 {status?.needs_rebuild
                   ? 'A model exists but is out of date (different library version or feature set). Rebuild it to use predictions again.'
-                  : "Build one model from all your channels' history to estimate how many views a new idea will get in its first 3 days. Predictions then appear on the Create screen and on AI ideas, with posting-time guidance on the Publish screen."}
+                  : `Build one model from all your channels' history to estimate how many views a new idea will get in its first ${days} days. Predictions then appear on the Create screen and on AI ideas, with posting-time guidance on the Publish screen.`}
               </p>
             </div>
             <Button variant="primary" icon="wand-magic-sparkles" disabled={building} onClick={build}>
@@ -199,7 +210,7 @@ export default function Engagement() {
             <p className="muted" style={{ fontSize: 12, margin: '0 0 8px' }}>
               Each point is one video predicted by a model that never saw it (cross-validation).
             </p>
-            {status.samples?.length ? <Scatter samples={status.samples} />
+            {status.samples?.length ? <Scatter samples={status.samples} days={days} />
               : <p className="muted" style={{ fontSize: 12 }}>Not enough videos to plot.</p>}
           </Card>
 
@@ -223,7 +234,7 @@ export default function Engagement() {
               {pred && pred.available && (
                 <div className="row center gap-10" style={{ padding: '12px 14px', background: 'var(--accent-soft)', borderRadius: 'var(--r-md)' }}>
                   <div style={{ fontSize: 28, fontWeight: 700, color: 'var(--accent)' }}>{fmtNum(pred.predicted_views)}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>predicted views in the first 3 days<br />reliability: {pred.reliability}</div>
+                  <div className="muted" style={{ fontSize: 12 }}>predicted views in the first {pred.prediction_days || days} days<br />reliability: {pred.reliability}</div>
                 </div>
               )}
               {pred && !pred.available && <span className="muted" style={{ fontSize: 12 }}>Could not estimate — try rebuilding the model.</span>}
@@ -234,7 +245,7 @@ export default function Engagement() {
             <div className="row center between row--wrap gap-10" style={{ fontSize: 12.5 }}>
               <span className="muted">
                 Built {fmtDate(status.built_at)} · embeddings: {status.embed_model} · {status.n_short ?? 0} of {status.n_samples} Shorts ·
-                videos newer than {status.data_lag_days} days excluded (no full 3-day window yet)
+                videos newer than {status.data_lag_days} days excluded (no full {days}-day window yet)
               </span>
               <span className="muted">
                 Timing model correlation: {status.timing?.pearson != null ? status.timing.pearson.toFixed(2) : '—'} · drives the Publish tab's best-time guidance

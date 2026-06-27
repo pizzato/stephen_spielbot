@@ -1,21 +1,22 @@
 """Engagement prediction (issue #50).
 
-Estimates a video's first-3-day view count from its title + description plus a
+Estimates a video's first-N-day view count from its title + description plus a
 few structural features (currently whether it's a Short vs long-form), trained
-on the channel's own YouTube history. Title+description are embedded with
+on the channel's own YouTube history. N is the prediction horizon, configurable
+via ``engagement_prediction_days`` (default 3). Title+description are embedded with
 ``BAAI/bge-small-en-v1.5`` (via fastembed / ONNX — no torch), concatenated with
 the structural features, and fed to a Ridge regressor. A second model adds post
 weekday + hour to suggest *when* to publish.
 
 Two design notes that keep the numbers honest:
-  * Target = sum of views over the first 3 *calendar* days (UTC) after publish.
+  * Target = sum of views over the first N *calendar* days (UTC) after publish.
     A late-day upload gets a short calendar day-1; the timing model's hour
     feature absorbs that effect, so the content/timing models are not strictly
     apples-to-apples (surfaced in the eval UI).
-  * A video needs a full first-3-day calendar window to have a label, so ones
-    younger than ``engagement_data_lag_days`` (default 3) are excluded. The
+  * A video needs a full first-N-day calendar window to have a label, so ones
+    younger than ``max(N, engagement_data_lag_days)`` are excluded. The
     Analytics API finalises a day's views ~2-3 days late, so the freshest
-    included videos may have slightly under-counted 3-day totals — accepted to
+    included videos may have slightly under-counted N-day totals — accepted to
     keep recent uploads in the training set.
 
 Heavy deps (numpy, scikit-learn, fastembed) are imported lazily inside functions
@@ -49,9 +50,18 @@ _METRICS_PATH = _ENG_DIR / "metrics.json"
 
 _DEFAULT_EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 _DEFAULT_MIN_SAMPLES = 15
+_DEFAULT_PREDICTION_DAYS = 3       # horizon: target = views summed over the first N calendar days
 _DEFAULT_LAG_DAYS = 3
 _DEFAULT_SHORT_MAX_SECONDS = 180  # videos this long (s) or shorter count as a Short
 _FEATURE_VERSION = 2              # bump when the feature set changes (forces a rebuild)
+
+
+def _prediction_days(cfg: dict) -> int:
+    """Configured prediction horizon (calendar days), clamped to a sane range."""
+    try:
+        return max(1, min(30, int(cfg.get("engagement_prediction_days", _DEFAULT_PREDICTION_DAYS))))
+    except (TypeError, ValueError):
+        return _DEFAULT_PREDICTION_DAYS
 
 # Warm, process-local state so predict()/best_times() are fast. One entry per
 # channel (issue #22), guarded by _lock; reloaded from disk when that channel's
@@ -219,23 +229,30 @@ def build_dataset(client_secrets_path: str, channel: str = "") -> tuple[list[dic
 
     Returns ``(dataset, n_dropped)`` where each row is
     ``{video_id, title, description, views, weekday, hour, is_short}`` and
-    ``views`` is the first-3-calendar-day total. ``is_short`` flags videos whose
-    duration is ``<= engagement_short_max_seconds``. Drops non-public videos and
-    ones too recent to have a full 3-day window.
+    ``views`` is the total over the first ``engagement_prediction_days`` calendar
+    days. ``is_short`` flags videos whose duration is
+    ``<= engagement_short_max_seconds``. Drops non-public videos and ones too
+    recent to have a full prediction window.
     """
     import datetime
     cfg = _load_cfg()
+    days = _prediction_days(cfg)
     lag = int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS))
     short_max = int(cfg.get("engagement_short_max_seconds", _DEFAULT_SHORT_MAX_SECONDS))
+    # A video needs all `days` calendar days in the past to have a complete label;
+    # `lag` is an extra exclusion buffer for the Analytics data lag. Take the max
+    # so the window is always complete regardless of how the two are configured.
     # UTC date to match the published_at timestamps below — local date.today()
     # would shift the recency boundary by a day on machines ahead of/behind UTC.
-    cutoff = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=lag)
+    cutoff = datetime.datetime.now(datetime.timezone.utc).date() - datetime.timedelta(days=max(days, lag))
     # Pool history across every connected channel into one global model (issue
     # #107). `channel` is ignored — there is a single model for everything now.
+    # The Analytics fetch window must cover the horizon plus a few days of lag
+    # slack (days+3 keeps the historical "+6 for a 3-day target" behaviour).
     rows: list[dict] = []
     for ch in _all_channels(cfg):
         try:
-            rows.extend(yt.fetch_training_rows(client_secrets_path, channel=ch))
+            rows.extend(yt.fetch_training_rows(client_secrets_path, channel=ch, days_window=days + 3))
         except Exception as exc:
             logger.warning("training rows fetch failed for %s: %s", ch or "default", exc)
     dataset: list[dict] = []
@@ -251,13 +268,13 @@ def build_dataset(client_secrets_path: str, channel: str = "") -> tuple[list[dic
             dropped += 1
             continue
         pub = dt.date()
-        if pub > cutoff:   # too recent — no complete 3-day window yet
+        if pub > cutoff:   # too recent — no complete prediction window yet
             dropped += 1
             continue
         dv = r.get("day_views") or {}
         views = sum(
             int(dv.get((pub + datetime.timedelta(days=k)).isoformat(), 0) or 0)
-            for k in range(3)
+            for k in range(days)
         )
         dur = int(r.get("duration_seconds") or 0)
         dataset.append({
@@ -361,9 +378,10 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
     # One global model across all channels (issue #107) — `channel` is ignored.
     dataset, dropped = build_dataset(client_secrets_path)
     n = len(dataset)
+    days = _prediction_days(_load_cfg())
     if n < 2:
         return {"available": False, "n_samples": n, "n_dropped": dropped,
-                "error": "Not enough public videos with a complete first-3-day window "
+                "error": f"Not enough public videos with a complete first-{days}-day window "
                          "to train a model. Publish a few more, then rebuild."}
 
     m = _ml()
@@ -387,6 +405,7 @@ def build(client_secrets_path: str, on_phase=None, channel: str = "") -> dict:
         "sklearn_version": m.sklearn_version,
         "feature_version": _FEATURE_VERSION,
         "embed_model": cfg.get("engagement_embed_model", _DEFAULT_EMBED_MODEL),
+        "prediction_days": _prediction_days(cfg),
         "data_lag_days": int(cfg.get("engagement_data_lag_days", _DEFAULT_LAG_DAYS)),
         "n_short": int(sum(shorts)),
         "channel": "",   # global model (issue #107)
@@ -457,15 +476,18 @@ def status(channel: str = "") -> dict:
     """Current model state + evaluation for a channel, for the Engagement tab."""
     content, _timing, metrics = _get_models(channel)
     if metrics is None:
-        return {"available": False}
+        return {"available": False, "configured_prediction_days": _prediction_days(_load_cfg())}
     res = {"available": content is not None, **metrics}
+    res.setdefault("prediction_days", _DEFAULT_PREDICTION_DAYS)  # legacy models had no horizon field
+    # Surface the live config so the UI can nudge a rebuild after the horizon changes.
+    res["configured_prediction_days"] = _prediction_days(_load_cfg())
     if content is None:
         res["needs_rebuild"] = True
     return res
 
 
 def predict(title: str, description: str, is_short: bool = False, channel: str = "") -> dict:
-    """Estimate first-3-day views for an idea using the channel's model.
+    """Estimate first-N-day views (N = the model's prediction horizon) for an idea.
     ``is_short`` flags a Short vs a long-form video. Never raises — returns
     ``{"available": False}`` when no usable model exists (the common case on the
     create screens before a model is built)."""
@@ -478,6 +500,7 @@ def predict(title: str, description: str, is_short: bool = False, channel: str =
         pred = float(np.clip(np.expm1(content.predict(X)), 0, None)[0])
         return {"available": True, "predicted_views": int(round(pred)),
                 "reliability": metrics.get("reliability", "weak"),
+                "prediction_days": metrics.get("prediction_days", _DEFAULT_PREDICTION_DAYS),
                 "n_samples": metrics.get("n_samples", 0)}
     except Exception as exc:
         logger.info("engagement.predict failed: %s", exc)

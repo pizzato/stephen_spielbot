@@ -88,7 +88,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setResolution(profile.resolution || meta.default_resolution || '')
   }, [profile, profile?.resolution, meta.default_resolution, seed?.resolution])
 
-  // Estimate the idea's 3-day reach (debounced). Silently no-ops when no model
+  // Estimate the idea's early-window reach (debounced). Silently no-ops when no model
   // has been built — the card simply doesn't render. A portrait resolution means
   // a Short, which the model weighs differently. (issue #50)
   useEffect(() => {
@@ -219,7 +219,7 @@ export default function Create({ seed, meta, onGenerated }) {
               <div className="row center gap-12 mt-16">
                 <div style={{ fontSize: 30, fontWeight: 700, color: 'var(--accent)', letterSpacing: '-0.02em' }}>{fmtNum(reach.predicted_views)}</div>
                 <div className="muted" style={{ fontSize: 12 }}>
-                  est. views in the first 3 days
+                  est. views in the first {reach.prediction_days || 3} days
                   {reach.reliability && reach.reliability !== 'ok' && <><br /><span style={{ color: 'var(--warn)' }}>rough estimate ({reach.reliability})</span></>}
                 </div>
               </div>

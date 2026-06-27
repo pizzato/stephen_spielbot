@@ -39,7 +39,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [editId, setEditId] = useState('')         // pending item open for inline edit
   const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '', gen_style_name: '' })
   const [sortBy, setSortBy] = useState(() => validSort(meta.config?.queue_sort_order))
-  // id -> predicted 3-day views (null = model unavailable, undefined = not fetched yet)
+  // id -> predicted early-window views (null = model unavailable, undefined = not fetched yet)
   const [views, setViews] = useState({})
   const styleList = meta.config?.styles || []
 
@@ -214,7 +214,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               {it.source && <Chip tone="info">{it.source}</Chip>}
               {styleLabel && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {styleLabel}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
-              {views[it.id] != null && <span title="Predicted 3-day views"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(views[it.id])}</Chip></span>}
+              {views[it.id] != null && <span title="Predicted reach"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(views[it.id])}</Chip></span>}
               {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
               {it.est_text && <span className="muted" style={{ fontSize: 12.5 }} title={it.est_confidence === 'rough' ? 'Estimated render time (rough — little timing data for this setup yet)' : 'Estimated render time, from your past renders'}><Icon name="clock" style={{ fontSize: 11 }} /> {it.est_text}</span>}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
