@@ -97,7 +97,9 @@ export default function PublishSchedule({ go, meta = {} }) {
   const platformRow = (e, plat, summary) => {
     const sub = e[plat] || {}
     if (sub.status === 'skipped' && !sub.enabled) return null   // platform not targeted
-    const [tone, label] = SUB_CHIP[sub.status] || ['neutral', sub.status]
+    const [tone, label] = e.awaiting_approval && sub.status === 'pending'
+      ? ['warn', 'Held']   // pending but waiting on approval — not actually queued to release
+      : SUB_CHIP[sub.status] || ['neutral', sub.status]
     const key = plat === 'youtube' ? sub.channel : sub.account
     const cad = summary[key] || {}
     const icon = plat === 'youtube' ? 'youtube' : 'x-twitter'
@@ -126,6 +128,7 @@ export default function PublishSchedule({ go, meta = {} }) {
         <div className="grow">
           <div className="row center gap-10" style={{ flexWrap: 'wrap' }}>
             {pendingAny && e.is_next && <Chip tone="ok" dot>Next up</Chip>}
+            {e.awaiting_approval && <Chip tone="warn" dot>Awaiting approval</Chip>}
             <span style={{ fontWeight: 600, letterSpacing: '-0.01em' }}>{e.title || '(untitled)'}</span>
             {e.source && <Chip tone="info">{e.source}</Chip>}
             {data.skip_comment && e.source === 'comment' && pendingAny && <Chip tone="warn">bypasses schedule</Chip>}
@@ -138,7 +141,12 @@ export default function PublishSchedule({ go, meta = {} }) {
           </div>
         </div>
         <div className="row gap-10 row--wrap qrow__actions" style={{ justifyContent: 'flex-end' }}>
-          {pendingAny && (
+          {e.awaiting_approval ? (
+            <Button variant="primary" icon="check" disabled={!!busy}
+              onClick={() => run('ap' + e.id, () => api.publishApprove(e.work_dir, true), () => setStatus('Approved — will publish on cadence.'))}>
+              {busy === 'ap' + e.id ? 'Approving…' : 'Approve'}
+            </Button>
+          ) : pendingAny && (
             <Button variant="ghost" icon="bolt" disabled={!!busy}
               onClick={() => run('now' + e.id, () => api.publishNow(e.id), () => setStatus('Releasing now…'))}>
               {busy === 'now' + e.id ? 'Releasing…' : 'Publish now'}

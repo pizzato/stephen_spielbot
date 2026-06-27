@@ -244,6 +244,12 @@ DEFAULT_CFG = {
     # never released (scheduled or immediate) until the user approves it in the
     # Films tab. Comment-requested videos and an explicit "Publish now" bypass it.
     "publish_require_approval": False,
+    # Automation override for the approval gate: when on, finished videos are
+    # published on their normal cadence (scheduled or immediate auto-post) even
+    # though they're not approved — their `approved` flag stays False. Lets you
+    # keep the approval workflow but switch to hands-off publishing. No effect
+    # unless publish_require_approval is on.
+    "publish_auto_publish_unapproved": False,
     # X (Twitter) integration (issue #107) — mirrors the YouTube block above.
     "x_client_id": "",
     "x_client_secret": "",       # blank → public PKCE client; set → confidential
