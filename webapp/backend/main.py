@@ -4430,6 +4430,13 @@ def publish_queue_list() -> dict:
     ordered = _ordered_publish_queue(cfg, q)
     for e in ordered:          # ensure interest/views chips render for every entry
         _publish_entry_scores(e, cfg)
+        # Surface the approval hold so the UI can mark it instead of showing it as
+        # a normal queued item. Mirrors _awaiting_approval: comment requests that
+        # bypass the schedule also bypass approval.
+        e["awaiting_approval"] = bool(
+            cfg.get("publish_require_approval")
+            and not (skip_comment and e.get("source") == "comment")
+            and not e.get("approved"))
     # Project a concrete release time per waiting target: the j-th still-waiting
     # entry for a channel/account posts j cadence-steps after that key's next
     # eligible time. Comment requests that bypass the schedule go on the next
@@ -4440,6 +4447,8 @@ def publish_queue_list() -> dict:
     counters: dict = {}
     best: tuple | None = None  # (projected_at, entry)
     for e in ordered:
+        if e.get("awaiting_approval"):
+            continue  # held for approval — no cadence slot, no projected time, not "next up"
         bypass = skip_comment and e.get("source") == "comment"
         for plat, keyf in (("youtube", "channel"), ("x", "account")):
             sub = e.get(plat) or {}
