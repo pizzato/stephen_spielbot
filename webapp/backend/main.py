@@ -6240,6 +6240,54 @@ def _retryable_failed(cfg: dict) -> dict | None:
     return item
 
 
+def _auto_write_scripts(cfg: dict) -> int:
+    """Write — but DON'T render — a script for every pending queue item that
+    lacks one, leaving it unapproved so the user can review / edit / approve it
+    before it renders. This is the "prepare and park" mode: it only fills in
+    missing scripts and never starts a render (script generation is an LLM call,
+    not a GPU job, so it can even run while a render is in progress).
+
+    Independent of auto-start: with auto-start also on (review mode), the user
+    approves a parked script and the next tick renders it. Items keep their
+    queue position — each script is linked in place. Returns the count written."""
+    written = 0
+    for q in _ordered_pending(cfg):
+        if q.get("script_ready") and q.get("work_dir") and q.get("video_job_id"):
+            continue  # already has a parked script
+        item_id = q.get("id")
+        title = q.get("final_title", "")
+        style_name = (q.get("gen_style_name") or "").strip()
+        ss = gapp.style_settings(cfg, style_name)
+        n = max(6, int(q.get("suggested_scene_count") or ss.get("n_scenes") or 6))
+        topic = q.get("video_prompt") or title
+        resolution = q.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+        try:
+            gen = _do_script_generate(GenerateScriptBody(
+                video_title=title, topic=topic, n_scenes=n, resolution=resolution,
+                style_name=style_name))
+        except Exception:
+            continue
+        # Re-check the slot is still pending before attaching: script generation
+        # takes ~45s, in which a manual "Render now" (or a concurrent claim) could
+        # have flipped the item to "creating" and written its own script. Stamping
+        # our work_dir/job over a rendering item would corrupt it — and queue_from_job
+        # would otherwise spawn a duplicate row. If it's no longer pending, drop the
+        # just-written script rather than risk that.
+        cur = next((x for x in yt.load_queue() if x.get("id") == item_id), None)
+        if not cur or cur.get("status") != "pending":
+            continue
+        # Park it: link the script and mark it ready, but leave approved=False so
+        # neither this nor _auto_start_best renders it until the user approves.
+        yt.update_queue_item(
+            item_id, video_job_id=gen["job_id"], work_dir=gen["work_dir"],
+            script_ready=True, approved=False, suggested_scene_count=n,
+            gen_style=gen.get("style", ""), gen_resolution=resolution,
+            gen_voice=ss.get("voice", ""), gen_voice_robotic=q.get("gen_voice_robotic"),
+            gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
+        written += 1
+    return written
+
+
 def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
@@ -6829,6 +6877,15 @@ def _automation_tick() -> dict:
                     out["x_fetch"] = _fetch_and_evaluate_x(cfg.get("x_auto_approve_comments", False))
                 except Exception as e:
                     out["x_fetch_error"] = str(e)[:120]
+            # Prepare-and-park: write scripts for pending items but leave them
+            # unapproved. Runs before auto-start so the freshly written scripts
+            # are visible to it — they stay unapproved, so review-mode auto-start
+            # won't pick them up until the user approves.
+            if cfg.get("youtube_auto_write_scripts"):
+                try:
+                    out["scripts_written"] = _auto_write_scripts(cfg)
+                except Exception as e:
+                    out["scripts_error"] = str(e)[:120]
             if cfg.get("youtube_auto_start_job"):
                 out["started"] = _auto_start_best()
             # Publishing. Finished videos are enqueued in the loop regardless of
@@ -6929,8 +6986,8 @@ def _automation_loop():
             except Exception:
                 pass
             if any(cfg.get(k) for k in (
-                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_post",
-                    "x_auto_fetch_evaluate", "x_auto_post", "publish_schedule_enabled")):
+                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_write_scripts",
+                    "youtube_auto_post", "x_auto_fetch_evaluate", "x_auto_post", "publish_schedule_enabled")):
                 _automation_tick()
         except Exception:
             pass
