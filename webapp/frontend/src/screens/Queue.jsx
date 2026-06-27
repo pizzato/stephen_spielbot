@@ -196,10 +196,11 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     const renderStyle = it.gen_style_name || (isPending ? meta.config?.default_style : '')
     const styleLabel = renderStyle === '(none)' ? 'No style' : renderStyle
     // The approval gate only bites when auto-start is on (it decides which
-    // ready scripts the loop renders). With auto-start off every render is a
-    // manual "Render now", so approval isn't surfaced at all.
+    // ready scripts the loop renders). We surface approval state regardless so
+    // you can see — and pre-set — which scripts are approved; with auto-start
+    // off it's just a flag, so "Render now" stays the primary action.
     const autoStartOn = !!meta.config?.youtube_auto_start_job
-    const needsApproval = isPending && it.script_ready && !it.approved && autoStartOn
+    const needsApproval = isPending && it.script_ready && !it.approved
     return (
       <Fragment key={it.id || idx}>
         <div className="row center qrow" style={{ gap: 14, padding: '14px 22px', borderBottom: editing || idx < sectionItems.length - 1 ? '1px solid var(--line)' : 'none', opacity: dim ? 0.62 : 1 }}>
@@ -219,16 +220,14 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
             </div>
           </div>
-          {isPending && it.script_ready && (!autoStartOn
-            ? <Chip tone="ok" dot>Script ready</Chip>
-            : <Chip tone={it.approved ? 'ok' : 'warn'} dot>{it.approved ? 'Approved' : 'Needs review'}</Chip>)}
+          {isPending && it.script_ready && <Chip tone={it.approved ? 'ok' : 'warn'} dot>{it.approved ? 'Approved' : 'Needs review'}</Chip>}
           <Chip tone={tone} dot>{label}</Chip>
           <div className="row gap-6 row--wrap qrow__actions">
             {isPending && it.script_ready && <Button variant="ghost" icon="feather-pointed" disabled={!!busy} onClick={() => openScript(it)}>{busy === 'e' + it.id ? 'Opening…' : 'Edit script'}</Button>}
             {isPending && !it.script_ready && <Button variant="ghost" icon="pencil" disabled={!!busy} onClick={() => editing ? setEditId('') : startEdit(it)}>Edit</Button>}
-            {needsApproval && <Button variant="primary" icon="check" disabled={!!busy} onClick={() => run('a' + it.id, () => api.queueApprove(it.id), () => setStatus('Approved — it will render shortly.'))}>{busy === 'a' + it.id ? 'Approving…' : 'Approve'}</Button>}
-            {isPending && it.script_ready && it.approved && autoStartOn && <Button variant="ghost" icon="rotate-left" disabled={!!busy} onClick={() => run('a' + it.id, () => api.queueApprove(it.id, false), () => setStatus('Moved back to review.'))}>{busy === 'a' + it.id ? '…' : 'Unapprove'}</Button>}
-            {isPending && <Button variant={needsApproval ? 'ghost' : 'primary'} icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
+            {needsApproval && <Button variant={autoStartOn ? 'primary' : 'ghost'} icon="check" disabled={!!busy} onClick={() => run('a' + it.id, () => api.queueApprove(it.id), () => setStatus(autoStartOn ? 'Approved — it will render shortly.' : 'Approved.'))}>{busy === 'a' + it.id ? 'Approving…' : 'Approve'}</Button>}
+            {isPending && it.script_ready && it.approved && <Button variant="ghost" icon="rotate-left" disabled={!!busy} onClick={() => run('a' + it.id, () => api.queueApprove(it.id, false), () => setStatus('Moved back to review.'))}>{busy === 'a' + it.id ? '…' : 'Unapprove'}</Button>}
+            {isPending && <Button variant={needsApproval && autoStartOn ? 'ghost' : 'primary'} icon="play" disabled={!!busy} onClick={() => run('s' + it.id, () => api.queueStart(it.id), () => { setStatus('Render started.'); go('progress') })}>Render now</Button>}
             {it.status === 'creating' && <Button variant="ghost" icon="stop" disabled={!!busy} onClick={() => run('d' + it.id, () => api.queueAbandon(it.id))}>Cancel</Button>}
             {['done', 'upload_pending'].includes(it.status) && <Button variant="ghost" icon="upload" onClick={() => go('publish', { publishWorkDir: it.work_dir })}>Publish</Button>}
             {it.status === 'posted' && it.comment_id && !it.completion_replied && <Button variant="ghost" icon="reply" disabled={!!busy} onClick={() => run('r' + it.id, () => api.queueRetryReply(it.id), () => setStatus('Reply sent.'))}>Retry reply</Button>}
