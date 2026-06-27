@@ -1417,6 +1417,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Check checked={!!cfg.publish_require_approval}
                 onChange={(v) => set('publish_require_approval', v)}
                 label="Require approval before publishing — finished videos are held until you approve them in the Films tab (comment-requested videos still post automatically)" />
+              <Check checked={!!cfg.publish_auto_publish_unapproved} disabled={!cfg.publish_require_approval}
+                onChange={(v) => set('publish_auto_publish_unapproved', v)}
+                label="…but let automation publish them without waiting for approval — videos still show as unapproved, yet the scheduler/auto-post releases them on cadence (turn this off again to re-hold any not-yet-published videos)" />
             </div>
           </Card>
         </>)}
