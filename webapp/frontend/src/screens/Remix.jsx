@@ -5,6 +5,8 @@ import { api } from '../api.js'
 export default function Remix({ workDir, go }) {
   const [data, setData] = useState(null)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
+  const [musicDesc, setMusicDesc] = useState('')
+  const [musicBusy, setMusicBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -20,11 +22,35 @@ export default function Remix({ workDir, go }) {
 
   useEffect(() => {
     api.loadRemix(workDir)
-      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }) })
+      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setMusicDesc(d.music_desc || '') })
       .catch((e) => setError(e.message))
   }, [workDir])
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
+
+  const regenMusic = async () => {
+    setMusicBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc })
+      // Music generation runs on a GPU worker and can take a minute or two — poll
+      // the shared film-task tracker until it finishes, then refresh the preview.
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              setStatus('Regenerated the music and re-muxed the film.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Music regen ${t.status}.`))
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
 
   const remix = async () => {
     setBusy(true); setError(''); setStatus('')
@@ -102,6 +128,19 @@ export default function Remix({ workDir, go }) {
             ))}
           </div>
           <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={busy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
+        </Card>
+
+        <Card span={12} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} /> Background music</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
+          <div className="mt-24">
+            <Field label="Music prompt" hint="What the soundtrack should sound like">
+              <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy}
+                onChange={(e) => setMusicDesc(e.target.value)}
+                placeholder="cinematic orchestral background music, atmospheric, instrumental" />
+            </Field>
+          </div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
         </Card>
       </div>
     </div>
