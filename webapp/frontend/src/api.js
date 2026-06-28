@@ -113,6 +113,7 @@ export const api = {
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
   regenMusic: (body) => req('POST', '/remix/music', body),
+  selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),
 
   getActivity: () => req('GET', '/activity'),
   getBadges: () => req('GET', '/badges'),
