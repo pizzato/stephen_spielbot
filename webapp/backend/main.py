@@ -1794,6 +1794,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
+        "music_desc": jc.get("music_desc", ""),
     }
 
 
@@ -1812,6 +1813,99 @@ def remix_apply(body: RemixBody) -> dict:
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": f"/api/file?path={final_path}"}
+
+
+class MusicRegenBody(BaseModel):
+    work_dir: str
+    music_desc: str = ""
+
+
+def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
+    """Background thread: regenerate the background music, then re-mux the film.
+
+    Music is a film-level asset (one background_music.wav), so this mirrors the
+    scene re-render workers: it generates to a staging file, swaps it in
+    atomically, then re-muxes the final with the film's saved volumes. Progress
+    is tracked in _film_tasks so the Remix screen can poll /api/films/task."""
+    from pipeline.assembler import _get_duration
+    from pipeline.comfyui import generate_music
+    from pipeline.worker_pool import WorkerPool
+
+    combined = wd / "combined.mp4"
+    music_path = wd / "background_music.wav"
+    staged = wd / "background_music.staging.wav"
+    try:
+        _film_checkpoint(task_id)
+        worker_urls = gapp._preview_worker_urls()
+        if not worker_urls:
+            _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
+            return
+        pool = WorkerPool(worker_urls)
+
+        jc = _film_job_config(wd)
+        title = (jc.get("video_title") or jc.get("title") or wd.name).strip()
+        # Duration of the narration video the music plays under; fall back to the
+        # existing music length if combined.mp4 is missing.
+        music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
+
+        _film_tasks[task_id] = {"status": "running", "step": "music"}
+        url = pool.acquire()
+        try:
+            # acquire() can block behind a busy GPU — re-check before submitting.
+            _film_checkpoint(task_id)
+            generate_music(title, music_dur, staged, (music_desc or None), comfy_url=url)
+        finally:
+            pool.release(url)
+        staged.replace(music_path)
+
+        # Re-mux the final with the film's current voice/music/ambient volumes so
+        # the regenerated track is what gets published.
+        _film_checkpoint(task_id)
+        _film_tasks[task_id]["step"] = "mux"
+        cfg = gapp.load_config()
+        ambient = wd / "ambient.wav"
+        final_path, message = gapp.on_remix(
+            str(combined), str(music_path),
+            str(ambient) if ambient.exists() else "",
+            voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
+            music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
+            ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+        )
+        if not final_path:
+            raise RuntimeError(message or "Re-mux failed after regenerating music.")
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+        }
+    except Exception as e:
+        staged.unlink(missing_ok=True)
+        _finish_film_task_error(task_id, e)
+
+
+@api.post("/api/remix/music")
+def remix_regen_music(body: MusicRegenBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not (wd / "combined.mp4").exists():
+        raise HTTPException(404, f"combined.mp4 not found in {wd.name} — render the film first.")
+
+    # Persist the (possibly edited) music prompt so a later re-render reuses it.
+    try:
+        cfg_path = wd / "job_config.json"
+        jc = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+        jc["music_desc"] = body.music_desc or ""
+        cfg_path.write_text(json.dumps(jc, indent=2))
+    except Exception:
+        logger.warning("Could not persist music_desc to job_config", exc_info=True)
+
+    tid = f"music_regen_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "music"}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "music"}
+    threading.Thread(
+        target=_run_music_regen, args=(tid, wd, body.music_desc or ""), daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid}
 
 
 # ── queue ────────────────────────────────────────────────────────────────────
