@@ -251,6 +251,39 @@ export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 /
   )
 }
 
+// Music is film-level audio, so its versions are a vertical list of players (not
+// thumbnails): listen to each kept track, see the prompt that made it, and click
+// "Use" to make it the selected soundtrack. `onSelect(versionId)` re-muxes the film.
+export function MusicVersionStrip({ versions, selected, onSelect, busy }) {
+  if (!versions || versions.length < 2) return null
+  return (
+    <div className="mt-16">
+      <span className="label-sm">Music versions <span className="muted">· listen and pick one</span></span>
+      <div className="stack gap-8 mt-8">
+        {versions.map((v) => {
+          const isSel = v.id === selected
+          return (
+            <div key={v.id} className="row center gap-10" style={{
+              padding: '8px 10px', borderRadius: 'var(--r-sm)', background: 'var(--paper-2)',
+              border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
+              opacity: busy && !isSel ? 0.5 : 1,
+            }}>
+              <audio src={fileUrl(v.path)} controls preload="none" style={{ height: 34, flex: '0 0 auto', maxWidth: '60%' }} />
+              <span className="muted" title={v.desc} style={{
+                flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden',
+                textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+              }}>{v.desc || `Version ${v.id}`}</span>
+              {isSel
+                ? <Chip tone="ok" dot>In use</Chip>
+                : <Button variant="ghost" icon="check" disabled={busy} onClick={() => onSelect && onSelect(v.id)}>Use</Button>}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // Masked image editor: paint over a region of an image, describe the change, and
 // send it to a FLUX inpaint pass. Calls `onApply(maskDataUrl, prompt, denoise)`
 // where maskDataUrl is a black/white PNG (white = the painted region to change)
