@@ -112,6 +112,7 @@ export const api = {
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
+  regenMusic: (body) => req('POST', '/remix/music', body),
 
   getActivity: () => req('GET', '/activity'),
   getBadges: () => req('GET', '/badges'),
