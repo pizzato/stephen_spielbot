@@ -1850,10 +1850,8 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # existing music length if combined.mp4 is missing.
         music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
 
-        # Keep the current track (the original generation, first time round) so the
-        # user can always flip back to it after regenerating.
-        music_history.seed_if_empty(wd, music_path, jc.get("music_desc", ""))
-
+        # The original track was already seeded (with its own prompt) by the endpoint,
+        # before the prompt was overwritten — see remix_regen_music.
         _film_tasks[task_id] = {"status": "running", "step": "music"}
         url = pool.acquire()
         try:
@@ -1898,10 +1896,20 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
     if not (wd / "combined.mp4").exists():
         raise HTTPException(404, f"combined.mp4 not found in {wd.name} — render the film first.")
 
-    # Persist the (possibly edited) music prompt so a later re-render reuses it.
+    # Capture the current track as the first kept version BEFORE overwriting the
+    # prompt — otherwise the original gets mislabelled with the new prompt. Read
+    # the existing music_desc (what produced that track) and seed with it, then
+    # persist the new (possibly edited) prompt for the regen and later re-renders.
+    cfg_path = wd / "job_config.json"
     try:
-        cfg_path = wd / "job_config.json"
         jc = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    except Exception:
+        jc = {}
+    try:
+        music_history.seed_if_empty(wd, wd / "background_music.wav", jc.get("music_desc", ""))
+    except Exception:
+        logger.warning("Could not seed original music into history", exc_info=True)
+    try:
         jc["music_desc"] = body.music_desc or ""
         cfg_path.write_text(json.dumps(jc, indent=2))
     except Exception:
