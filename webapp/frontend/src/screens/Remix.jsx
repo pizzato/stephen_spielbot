@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, MusicVersionStrip } from '../components.jsx'
 import { api } from '../api.js'
 
 export default function Remix({ workDir, go }) {
   const [data, setData] = useState(null)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
   const [musicDesc, setMusicDesc] = useState('')
+  const [musicHistory, setMusicHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -22,7 +23,7 @@ export default function Remix({ workDir, go }) {
 
   useEffect(() => {
     api.loadRemix(workDir)
-      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setMusicDesc(d.music_desc || '') })
+      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setMusicDesc(d.music_desc || ''); setMusicHistory(d.music_history) })
       .catch((e) => setError(e.message))
   }, [workDir])
 
@@ -41,6 +42,7 @@ export default function Remix({ workDir, go }) {
             if (t.status === 'done') {
               clearInterval(poll)
               if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.music_history) setMusicHistory(t.music_history)
               setStatus('Regenerated the music and re-muxed the film.')
               resolve()
             } else if (t.status === 'error' || t.status === 'cancelled') {
@@ -49,6 +51,19 @@ export default function Remix({ workDir, go }) {
           } catch (e) { clearInterval(poll); reject(e) }
         }, 3000)
       })
+    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const selectMusic = async (versionId) => {
+    setMusicBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.selectMusic(data.work_dir, versionId)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      if (r.music_history) setMusicHistory(r.music_history)
+      // Reflect the chosen track's prompt in the editor so a follow-up tweak starts from it.
+      const chosen = r.music_history?.versions?.find((v) => v.id === r.music_history.selected)
+      if (chosen && chosen.desc) setMusicDesc(chosen.desc)
+      setStatus('Switched the soundtrack and re-muxed the film.')
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
   }
 
@@ -141,6 +156,8 @@ export default function Remix({ workDir, go }) {
             </Field>
           </div>
           <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
+            onSelect={selectMusic} busy={musicBusy} />
         </Card>
       </div>
     </div>

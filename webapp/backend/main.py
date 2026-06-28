@@ -49,6 +49,7 @@ from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, ne
 from pipeline import ui_activity  # noqa: E402
 from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
+from pipeline import music_history  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -1795,6 +1796,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
         "music_desc": jc.get("music_desc", ""),
+        "music_history": music_history.history(wd),
     }
 
 
@@ -1848,6 +1850,10 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # existing music length if combined.mp4 is missing.
         music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
 
+        # Keep the current track (the original generation, first time round) so the
+        # user can always flip back to it after regenerating.
+        music_history.seed_if_empty(wd, music_path, jc.get("music_desc", ""))
+
         _film_tasks[task_id] = {"status": "running", "step": "music"}
         url = pool.acquire()
         try:
@@ -1857,6 +1863,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         finally:
             pool.release(url)
         staged.replace(music_path)
+        music_history.record(wd, music_path, music_desc)
 
         # Re-mux the final with the film's current voice/music/ambient volumes so
         # the regenerated track is what gets published.
@@ -1876,6 +1883,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "music_history": music_history.history(wd),
         }
     except Exception as e:
         staged.unlink(missing_ok=True)
@@ -1906,6 +1914,49 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
         target=_run_music_regen, args=(tid, wd, body.music_desc or ""), daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+class MusicSelectBody(BaseModel):
+    work_dir: str
+    version_id: int
+
+
+@api.post("/api/remix/music-select")
+def select_music(body: MusicSelectBody) -> dict:
+    """Make a previously-generated music track the selected one and re-mux the film.
+
+    Unlike scene image/video selection (which only swaps a canonical file), the
+    music is baked into the published final, so selecting a version re-mixes the
+    final video with the film's saved volumes — quick, ffmpeg-only, no GPU."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        music_path = music_history.select(wd, int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
+
+    combined = wd / "combined.mp4"
+    if not combined.exists():
+        raise HTTPException(404, f"combined.mp4 not found in {wd.name}.")
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    ambient = wd / "ambient.wav"
+    with _track_op("Selecting music", wd.name):
+        final_path, message = gapp.on_remix(
+            str(combined), str(music_path),
+            str(ambient) if ambient.exists() else "",
+            voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
+            music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
+            ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+        )
+    if not final_path:
+        raise HTTPException(500, message or "Re-mux failed.")
+    return {
+        "ok": True,
+        "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+        "music_history": music_history.history(wd),
+    }
 
 
 # ── queue ────────────────────────────────────────────────────────────────────
