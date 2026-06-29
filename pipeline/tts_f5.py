@@ -35,10 +35,12 @@ def generate_narration_f5(
             "Add a voice in the Config tab or regenerate the default narrator."
         )
 
+    from pipeline.openf5 import f5_model_args  # Apache-2.0 OpenF5-TTS-Base weights
+
     result = subprocess.run(
         [
             F5TTS_PYTHON, "-m", "f5_tts.infer.infer_cli",
-            "--model",      "F5TTS_v1_Base",
+            *f5_model_args(),
             "--ref_audio",  str(ref),
             "--ref_text",   "",        # leave empty — model auto-transcribes
             "--gen_text",   text,
