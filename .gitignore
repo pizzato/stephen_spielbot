@@ -17,7 +17,7 @@ videos/
 *.wav
 *.mp3
 *.flac
-!assets/default_narrator.wav
+!assets/default_narrator.mp3
 
 # Logs
 *.log

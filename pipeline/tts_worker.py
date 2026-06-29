@@ -12,7 +12,7 @@ from pathlib import Path
 
 logger = logging.getLogger("video_gen")
 
-DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.mp3"
 
 
 def _find_local_python() -> str:
