@@ -134,17 +134,11 @@ export default function Engagement() {
 
   return (
     <div>
-      <div className="page-head">
-        <div className="page-head__intro">
-          <span className="label-sm reveal">Predictive Model</span>
-          <h1 className="display-md reveal reveal-d1">Predict a video's reach</h1>
-        </div>
-        <div className="row center gap-10 reveal reveal-d1">
-          <Button variant={available ? 'ghost' : 'primary'} icon="wand-magic-sparkles"
-            disabled={building} onClick={build}>
-            {building ? 'Building…' : (available ? 'Rebuild model' : 'Build model')}
-          </Button>
-        </div>
+      <div className="row center reveal reveal-d1" style={{ justifyContent: 'flex-end', marginBottom: 16 }}>
+        <Button variant={available ? 'ghost' : 'primary'} icon="wand-magic-sparkles"
+          disabled={building} onClick={build}>
+          {building ? 'Building…' : (available ? 'Rebuild model' : 'Build model')}
+        </Button>
       </div>
 
       <Banner tone="danger">{error}</Banner>

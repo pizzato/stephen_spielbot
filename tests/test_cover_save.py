@@ -8,10 +8,13 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 
 import webapp.backend.main as backend
 
+# Work dirs must live under OUTPUT_DIR (endpoints reject paths outside it).
+_OUT = Path(tempfile.mkdtemp(prefix="spielbot-test-out-"))
+
 
 def _make_script(title="Old Title", style_name="docu"):
     """Temp work dir registered in the durable store as a script in review."""
-    wd = Path(tempfile.mkdtemp(prefix="spielbot-test-cover-"))
+    wd = Path(tempfile.mkdtemp(prefix="spielbot-test-cover-", dir=_OUT))
     job_id = backend.job_id_from_work_dir(wd)
     store = backend.DurableStore.default()
     try:
@@ -26,6 +29,11 @@ def _make_script(title="Old Title", style_name="docu"):
 
 
 class CoverSaveTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_persists_title_and_description(self):
         wd = _make_script()
         backend.yt_post_save(backend.CoverSaveBody(
@@ -70,7 +78,7 @@ class CoverSaveTests(unittest.TestCase):
     def test_missing_work_dir_404(self):
         with self.assertRaises(backend.HTTPException) as ctx:
             backend.yt_post_save(backend.CoverSaveBody(
-                work_dir="/tmp/does-not-exist-spielbot", title="x"))
+                work_dir=str(_OUT / "does-not-exist-spielbot"), title="x"))
         self.assertEqual(ctx.exception.status_code, 404)
 
 

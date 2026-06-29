@@ -1017,7 +1017,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               </Field>
               {isClaude ? (
                 <>
-                  <Field label="Claude API key"><input className="input" type="password" value={cfg.claude_api_key || ''} onChange={(e) => set('claude_api_key', e.target.value)} /></Field>
+                  <Field label="Claude API key"><input className="input" type="password" placeholder={cfg.claude_api_key_set ? '•••••••• (saved — leave blank to keep)' : 'sk-ant-…'} value={cfg.claude_api_key || ''} onChange={(e) => set('claude_api_key', e.target.value)} /></Field>
                   <Field label="Claude model"><input className="input" value={cfg.claude_model || ''} onChange={(e) => set('claude_model', e.target.value)} /></Field>
                 </>
               ) : (
@@ -1037,7 +1037,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
             <div className="stack gap-22 mt-16">
               <Field label="Hugging Face token"
-                hint="Needed to auto-download gated models (FLUX.1 Fill, FLUX.2). Create a read token at huggingface.co/settings/tokens and accept each model's license on its HF page first.">
+                hint="Needed to auto-download gated model weights. Create a read token at huggingface.co/settings/tokens and accept each model's license on its HF page first.">
                 <input className="input" type="password"
                   placeholder={engineInfo?.hf_token_set ? '•••••••• (saved — leave blank to keep)' : 'hf_…'}
                   value={cfg.hf_token || ''} onChange={(e) => set('hf_token', e.target.value)} />
@@ -1287,7 +1287,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                     ))}
                   </select>
                 </Field>
-                <Field label="Edit (mask + prompt)" hint="FLUX.1 Fill is a dedicated inpaint model — best for detailed edits.">
+                <Field label="Edit (mask + prompt)" hint="Model used for masked 'Edit image' inpaints.">
                   <select className="select" value={st.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
                     {(engineInfo.engines || []).filter((e) => e.can_edit).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
@@ -1361,7 +1361,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 <input className="input" value={cfg.x_client_id || ''} onChange={(e) => set('x_client_id', e.target.value)} />
               </Field>
               <Field label="Client secret" hint="Only for confidential X apps. Leave blank for a public (PKCE-only) app.">
-                <input className="input" type="password" value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
+                <input className="input" type="password" placeholder={cfg.x_client_secret_set ? '•••••••• (saved — leave blank to keep)' : ''} value={cfg.x_client_secret || ''} onChange={(e) => set('x_client_secret', e.target.value)} />
               </Field>
               <Field label="Default post text" hint="Appended to every tweet (like the YouTube description suffix). Optional.">
                 <input className="input" value={cfg.x_post_default_text || ''} onChange={(e) => set('x_post_default_text', e.target.value)} />

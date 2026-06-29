@@ -4,11 +4,15 @@ tests assert prompt wiring and response shaping, not model output."""
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 
 import webapp.backend.main as backend
+
+# Work dirs must live under OUTPUT_DIR (endpoints reject paths outside it).
+_OUT = Path(tempfile.mkdtemp(prefix="spielbot-test-out-"))
 
 
 class DraftReplyTests(unittest.TestCase):
@@ -57,8 +61,13 @@ class CreateImproveTests(unittest.TestCase):
 
 
 class PostTitleTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_post_title_caps_at_100_chars(self):
-        wd = tempfile.mkdtemp(prefix="spielbot-film-")
+        wd = tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT)
         with mock.patch.object(backend.gapp, "load_config", return_value={}), \
              mock.patch.object(backend.gapp, "_load_scenes_for_work_dir", return_value=[]), \
              mock.patch.object(backend.gapp, "style_settings", return_value={"title_style": ""}), \
@@ -70,7 +79,7 @@ class PostTitleTests(unittest.TestCase):
 
     def test_post_title_missing_film_is_404(self):
         with self.assertRaises(backend.HTTPException) as ctx:
-            backend.yt_post_title(backend.DescribeBody(work_dir="/no/such/film/dir", title="t"))
+            backend.yt_post_title(backend.DescribeBody(work_dir=str(_OUT / "no-such-film-dir"), title="t"))
         self.assertEqual(ctx.exception.status_code, 404)
 
 

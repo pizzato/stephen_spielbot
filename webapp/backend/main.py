@@ -203,7 +203,7 @@ _RERENDER_STEP_LABELS = {
 def get_config() -> dict:
     cfg = gapp.load_config()
     return {
-        "config": cfg,
+        "config": gapp.public_config(cfg),
         "voices": gapp.get_voice_choices(),
         # Root of every work_dir; the frontend joins it with a URL slug to
         # reconstruct a full path for deep links (issue #32).
@@ -230,9 +230,9 @@ class ConfigUpdate(BaseModel):
 @api.post("/api/config")
 def post_config(body: ConfigUpdate) -> dict:
     cfg = gapp.load_config()
-    cfg.update(body.config)
-    gapp.save_config(cfg)
-    return {"ok": True, "config": gapp.load_config()}
+    merged = gapp.merge_config_update(cfg, body.config)
+    gapp.save_config(merged)
+    return {"ok": True, "config": gapp.public_config(gapp.load_config())}
 
 
 # ── settings backup / restore (issue #106) ───────────────────────────────────
@@ -278,7 +278,7 @@ def settings_restore(body: SettingsRestore) -> dict:
         yt._auth_cache.clear()
     except Exception:
         pass
-    return {"ok": True, **result, "config": gapp.load_config()}
+    return {"ok": True, **result, "config": gapp.public_config(gapp.load_config())}
 
 
 # ── voices ───────────────────────────────────────────────────────────────────
@@ -305,7 +305,7 @@ def _decode_audio(data: str, filename: str) -> tuple[bytes, str]:
 
 
 def _voice_response(cfg: dict) -> dict:
-    return {"ok": True, "config": cfg, "voices": gapp.get_voice_choices()}
+    return {"ok": True, "config": gapp.public_config(cfg), "voices": gapp.get_voice_choices()}
 
 
 class VoiceAdd(BaseModel):
@@ -500,11 +500,16 @@ _WORKER_ACTIONS = {"start", "stop", "restart"}
 
 
 def _host_of(entry: str) -> str:
-    """SSH hostname for a worker entry: http://HOST:PORT → HOST, host:port → host."""
+    """SSH hostname for a worker entry: http://HOST:PORT → HOST, host:port → host.
+    Returns "" for anything that can't be a safe hostname — notably a value
+    starting with '-', which ssh would parse as an option (command-injection
+    guard, since worker entries come from saved config)."""
     e = (entry or "").strip()
     if "://" in e:
-        return urllib.parse.urlparse(e).hostname or ""
-    return e.split("/")[0].split(":")[0]
+        host = urllib.parse.urlparse(e).hostname or ""
+    else:
+        host = e.split("/")[0].split(":")[0]
+    return "" if host.startswith("-") else host
 
 
 def _worker_hosts(cfg: dict) -> list[str]:
@@ -1413,6 +1418,8 @@ def start_generation(body: GenerateBody) -> dict:
     if not job_id or not work_dir_str:
         raise HTTPException(400, "No generated script available. Generate the script again.")
     work_dir = Path(work_dir_str)
+    if not _safe_under(work_dir, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
 
     store = DurableStore.default()
     try:
@@ -1649,6 +1656,8 @@ def mark_job_seen(body: JobActionBody) -> dict:
     badge in the Library. Stored in the film's job.json (not the browser) so the
     watched state is shared across devices. Idempotent: only the first open writes."""
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     out = gapp.OUTPUT_DIR.resolve()
     try:
         wd_res = wd.resolve()
@@ -1803,6 +1812,8 @@ def remix_load(work_dir: str = Query("")) -> dict:
 @api.post("/api/remix")
 def remix_apply(body: RemixBody) -> dict:
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
@@ -1908,12 +1919,12 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
     try:
         music_history.seed_if_empty(wd, wd / "background_music.wav", jc.get("music_desc", ""))
     except Exception:
-        logger.warning("Could not seed original music into history", exc_info=True)
+        gapp.logger.warning("Could not seed original music into history", exc_info=True)
     try:
         jc["music_desc"] = body.music_desc or ""
         cfg_path.write_text(json.dumps(jc, indent=2))
     except Exception:
-        logger.warning("Could not persist music_desc to job_config", exc_info=True)
+        gapp.logger.warning("Could not persist music_desc to job_config", exc_info=True)
 
     tid = f"music_regen_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "music"}
@@ -3324,6 +3335,8 @@ def yt_post_title(body: DescribeBody) -> dict:
     """Regenerate the YouTube title for a finished film (issue #88), steered by the
     film's scene outline and its style's title phrasing (issue #82)."""
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if wd is None or not wd.exists():
         raise HTTPException(404, "No film found.")
     cfg = gapp.load_config()
@@ -3365,6 +3378,8 @@ def yt_post_save(body: CoverSaveBody) -> dict:
     the description is written verbatim to description.txt. A still-pending linked
     queue item keeps its title in sync so the Queue reflects the edit too."""
     wd = Path(body.work_dir) if body.work_dir else None
+    if wd is not None and not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if wd is None or not wd.exists():
         raise HTTPException(404, "No script found.")
     title = (body.title or "").strip()
@@ -3680,6 +3695,8 @@ def _track_durable_task(tid: str, name: str, detail: str, poll: float = 1.5) -> 
 @api.post("/api/youtube/cover")
 def yt_cover(body: CoverBody) -> dict:
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if wd is None or not wd.exists():
         raise HTTPException(404, "No film found.")
     job_id = job_id_from_work_dir(wd)
@@ -3786,6 +3803,8 @@ def inpaint_cover(body: CoverInpaintBody) -> dict:
     """Masked edit of the cover image, using the style's edit engine; keeps a version."""
     from pipeline.comfyui import edit_with_engine
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "No work directory.")
     cover = wd / "cover.png"
@@ -3833,6 +3852,8 @@ class CoverSelectBody(BaseModel):
 def select_cover(body: CoverSelectBody) -> dict:
     """Make a kept cover version the active cover.png."""
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     try:
         cover = image_history.cover_select(wd, int(body.version_id))
     except (ValueError, FileNotFoundError) as e:
@@ -3855,6 +3876,8 @@ class ThumbnailBody(BaseModel):
 def yt_thumbnail(body: ThumbnailBody) -> dict:
     """Push the current cover.png to an already-uploaded video's thumbnail."""
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
     cover = wd / "cover.png"
@@ -4066,6 +4089,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
 @api.post("/api/youtube/post")
 def yt_post(body: PostBody) -> dict:
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
     final = gapp._final_path_for_work_dir(wd)
@@ -4454,6 +4479,8 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
 @api.post("/api/x/post")
 def x_post(body: XPostBody) -> dict:
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
     final = gapp._final_path_for_work_dir(wd)
@@ -4687,6 +4714,8 @@ def publish_approve(body: PublishApproveBody) -> dict:
     (creating a held one if the automation tick hasn't enqueued it yet), then
     flags it. Approved entries then release on the normal schedule/cadence."""
     p = Path(body.work_dir)
+    if not _safe_under(p, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     e = _ensure_publish_entry(p)
     if e is None:
         raise HTTPException(404, "Nothing to publish for this film.")
@@ -6314,6 +6343,8 @@ def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
 @api.post("/api/films/delete")
 def delete_film(body: JobActionBody) -> dict:
     wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
     out = gapp.OUTPUT_DIR.resolve()
     try:
         wd_res = wd.resolve()

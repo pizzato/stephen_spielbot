@@ -6,8 +6,7 @@
 #   LTX 2.3  — checkpoint, LoRA, spatial upscaler, text encoder    (~28 GB)
 #   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders     (~5 GB)
 #   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE         (~16 GB)
-# Opt-in (env flags): INSTALL_FLUX1=1 adds FLUX.1-schnell. FLUX.1 Fill and
-# FLUX.2 dev are downloaded on demand from Settings (per-style engine choice).
+# Opt-in (env flags): INSTALL_FLUX1=1 adds the legacy FLUX.1-schnell engine.
 set -euo pipefail
 
 COMFY_DIR="${1:-$HOME/github/ComfyUI}"
@@ -203,7 +202,7 @@ fi
 
 # ── FLUX.1 schnell (legacy image engine) — OPT-IN ─────────────────────────────
 # The default is now FLUX.2 Klein. Download schnell only if you'll select it per
-# style (FLUX.1 Fill + FLUX.2 dev are downloaded on demand from Settings):
+# style:
 #   INSTALL_FLUX1=1 bash scripts/download_models.sh
 if [[ "${INSTALL_FLUX1:-0}" == "1" ]]; then
     echo ""
@@ -222,7 +221,7 @@ if [[ "${INSTALL_FLUX1:-0}" == "1" ]]; then
         "flux1-schnell.safetensors" \
         "models/unet" || echo "  [warn] flux1-schnell.safetensors skipped — accept the license at huggingface.co/black-forest-labs/FLUX.1-schnell then re-run with HF_TOKEN=<token>"
 
-    # Shared FLUX.1 text encoders (also used by FLUX.1 Fill)
+    # Shared FLUX.1 text encoders
     download \
         "comfyanonymous/flux_text_encoders" \
         "t5xxl_fp8_e4m3fn.safetensors" \

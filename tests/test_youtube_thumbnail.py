@@ -9,10 +9,13 @@ os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 
 import webapp.backend.main as backend
 
+# Work dirs must live under OUTPUT_DIR (endpoints reject paths outside it).
+_OUT = Path(tempfile.mkdtemp(prefix="spielbot-test-out-"))
+
 
 def _make_film(with_cover=True, video_id=""):
     """Create a temp work dir with an optional cover.png and job.json meta."""
-    wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-"))
+    wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-", dir=_OUT))
     if with_cover:
         # Must exceed the 1000-byte threshold the endpoint checks.
         (wd / "cover.png").write_bytes(b"\x89PNG" + b"\0" * 2000)
@@ -22,6 +25,11 @@ def _make_film(with_cover=True, video_id=""):
 
 
 class YouTubeThumbnailTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+
     def test_pushes_cover_to_existing_video(self):
         wd = _make_film(video_id="vid-123")
         with mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/secrets.json"), \

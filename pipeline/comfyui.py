@@ -814,8 +814,7 @@ def edit_with_engine(engine: dict, prompt: str, base_image: Path, mask_image: Pa
                      seed: int | None = None, comfy_url: str = COMFYUI_URL) -> Path:
     """Masked image edit for the given engine, dispatched by ``edit_mode``.
 
-    noise_mask → :func:`inpaint_scene_image` (schnell); fill → ``flux_fill.json``
-    (dedicated FLUX.1 Fill model); flux2 → ``flux2_edit.json``."""
+    noise_mask → :func:`inpaint_scene_image` (schnell); flux2 → ``flux2_edit.json``."""
     if not engine.get("can_edit"):
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot edit images.")
     mode = engine.get("edit_mode")
@@ -827,6 +826,7 @@ def edit_with_engine(engine: dict, prompt: str, base_image: Path, mask_image: Pa
             clip_t5=engine["clip_t5"], clip_l=engine["clip_l"], flux_vae=engine["vae"],
             comfy_url=comfy_url)
 
+    # flux2 — Flux2Scheduler needs the image's pixel dimensions
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
     base_name = _upload_image(Path(base_image), comfy_url=comfy_url)
@@ -837,18 +837,14 @@ def edit_with_engine(engine: dict, prompt: str, base_image: Path, mask_image: Pa
         "POSITIVE_PROMPT": prompt, "BASE_IMAGE": base_name, "MASK_IMAGE": mask_name,
         "STEPS": int(engine["steps"]), "DENOISE": dn,
         "GUIDANCE": float(engine.get("guidance") or 30.0), "SEED": seed,
+        "FLUX_MODEL": engine["model_file"],
     }
-    if mode == "fill":
-        repl["FILL_MODEL"] = engine["model_file"]
-        repl["CLIP_L"] = engine["clip_l"]
-    else:  # flux2 — Flux2Scheduler needs the image's pixel dimensions
-        repl["FLUX_MODEL"] = engine["model_file"]
-        try:
-            from PIL import Image
-            with Image.open(base_image) as im:
-                repl["WIDTH"], repl["HEIGHT"] = im.size
-        except Exception:
-            repl["WIDTH"], repl["HEIGHT"] = 1024, 1024
+    try:
+        from PIL import Image
+        with Image.open(base_image) as im:
+            repl["WIDTH"], repl["HEIGHT"] = im.size
+    except Exception:
+        repl["WIDTH"], repl["HEIGHT"] = 1024, 1024
     workflow = _fill_template(_load_workflow(engine["edit_workflow"]), repl)
     return _run_and_save(workflow, output_path, comfy_url)
 

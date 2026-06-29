@@ -53,7 +53,6 @@ from pipeline.llm import generate_video_prompt, generate_video_suggestions
 import pipeline.youtube as yt
 import pipeline.x as xt
 from pipeline.comfyui import (
-    generate_scene_image,
     generate_with_engine,
     ltx_dimensions,
 )
@@ -718,6 +717,39 @@ def save_config(cfg: dict) -> None:
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+
+
+# Config keys whose VALUE is a credential — never returned to the browser, and
+# preserved (not overwritten with blank) when the client saves them empty.
+# youtube_client_secrets is a file PATH, not a secret, so it is deliberately
+# excluded here.
+_SECRET_VALUE_KEYS = ("claude_api_key", "hf_token", "x_client_secret")
+
+
+def public_config(cfg: dict) -> dict:
+    """A copy of *cfg* safe to return to the browser: every credential value is
+    blanked and a ``<key>_set`` boolean is added so the UI can show a
+    'saved — leave blank to keep' placeholder without ever exposing the secret."""
+    safe = dict(cfg)
+    for key in _SECRET_VALUE_KEYS:
+        val = safe.get(key)
+        safe[f"{key}_set"] = bool(isinstance(val, str) and val.strip())
+        safe[key] = ""
+    return safe
+
+
+def merge_config_update(current: dict, update: dict) -> dict:
+    """Merge a client config *update* onto *current* for persistence: drop the
+    UI-only ``<key>_set`` flags, and keep an existing credential when the client
+    sends it blank (the 'leave blank to keep' contract of :func:`public_config`)."""
+    merged = dict(current)
+    for key, val in update.items():
+        if key.endswith("_set"):
+            continue
+        if key in _SECRET_VALUE_KEYS and not (isinstance(val, str) and val.strip()):
+            continue
+        merged[key] = val
+    return merged
 
 
 # ── Settings backup / restore (issue #106) ──────────────────────────────────

@@ -18,11 +18,11 @@ install:
 
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
-	@SKIP_FLUX=1 bash $(SCRIPTS)/download_models.sh
-
-## Download FLUX.1-schnell models locally (~13 GB).
-download-flux:
 	@bash $(SCRIPTS)/download_models.sh
+
+## Download the legacy FLUX.1-schnell models locally (~13 GB).
+download-flux:
+	@INSTALL_FLUX1=1 bash $(SCRIPTS)/download_models.sh
 
 ## Download FLUX.1-schnell models to the first cluster node, then rsync to all workers.
 download-flux-cluster:
@@ -156,8 +156,8 @@ help:
 	@echo ""
 	@echo "  install         Install everything: deps, models, workers, web UI (backend+React build)"
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
-	@echo "  download-models Download LTX 2.3 + ACE-Step models only (skips existing, no FLUX)"
-	@echo "  download-flux          Download FLUX.1-schnell models locally (~13 GB)"
+	@echo "  download-models Download the defaults: LTX 2.3 + ACE-Step + FLUX.2 Klein (skips existing)"
+	@echo "  download-flux          Download the legacy FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
 	@echo ""
 	@echo "  start           Start every worker's containers + the web app + UI worker(s)"
@@ -175,8 +175,8 @@ help:
 	@echo "    make logs    W=s2       # tail s2's container logs"
 	@echo ""
 	@echo "  worker-agent    Run one durable worker agent (KIND=comfy|tts|local|ui ENDPOINT=...)"
-	@echo "  ui-worker       Start/stop UI worker(s) for cover regen (ACT=start|stop|status,"
-	@echo "                  endpoints from config.yaml ui_workers — started by 'make start' too)"
+	@echo "  ui-worker       Start/stop the controller-side cover/preview regen agent"
+	@echo "                  (ACT=start|stop|status — started by 'make start' too)"
 	@echo ""
 	@echo "Workers run as Docker containers (see docker/README.md). 'make install' builds +"
 	@echo "deploys them; start/stop/restart/status/logs manage them over SSH."
