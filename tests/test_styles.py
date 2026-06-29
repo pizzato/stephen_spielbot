@@ -106,7 +106,7 @@ class MigrationTests(TempConfigCase):
         self.write_config({
             "default_visual_style": "Cel-shaded graphic novel",
             "script_extra_instructions": "Always sign off.",
-            "default_voice": "Luiz",
+            "default_voice": "Narrator",
             "default_voice_robotic": True,
             "default_voice_robotic_amount": 0.5,
             "default_n_scenes": 6,
@@ -121,7 +121,7 @@ class MigrationTests(TempConfigCase):
         st = cfg["styles"][0]
         self.assertEqual(st["visual_style"], "Cel-shaded graphic novel")
         self.assertEqual(st["extra_instructions"], "Always sign off.")
-        self.assertEqual(st["voice"], "Luiz")
+        self.assertEqual(st["voice"], "Narrator")
         self.assertTrue(st["voice_robotic"])
         self.assertEqual(st["voice_robotic_amount"], 0.5)
         self.assertEqual(st["n_scenes"], 6)
