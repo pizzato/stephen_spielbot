@@ -232,9 +232,10 @@ if [[ "${INSTALL_FLUX1:-0}" == "1" ]]; then
         "clip_l.safetensors" \
         "models/clip"
 
-    # FLUX.1 VAE — BFL repo requires license approval; use public mirror instead
+    # FLUX.1 VAE — from the official, ungated Apache-2.0 schnell repo
+    # (matches pipeline/engines.py; no unofficial mirror).
     download \
-        "camenduru/FLUX.1-dev" \
+        "black-forest-labs/FLUX.1-schnell" \
         "ae.safetensors" \
         "models/vae"
 else

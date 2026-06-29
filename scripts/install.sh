@@ -123,7 +123,7 @@ else
     echo "[web] WARNING: could not pre-fetch the embedding model — it will download on first build."
 fi
 if command -v npm &>/dev/null; then
-    if ( cd "$REPO_ROOT/webapp/frontend" && npm install && npm run build ); then
+    if ( cd "$REPO_ROOT/webapp/frontend" && npm ci && npm run build ); then
         echo "[web] frontend built → webapp/frontend/dist"
     else
         echo "[web] WARNING: frontend build failed — run 'make web-build' to retry."

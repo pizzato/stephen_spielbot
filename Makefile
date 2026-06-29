@@ -102,7 +102,7 @@ WEB_PORT := 8001
 ## Install web UI deps: FastAPI backend (into .venv) + the React frontend (npm).
 web-install:
 	.venv/bin/pip install -r webapp/backend/requirements.txt
-	cd $(FRONTEND) && npm install
+	cd $(FRONTEND) && npm ci
 
 ## Build the React frontend to webapp/frontend/dist.
 web-build:

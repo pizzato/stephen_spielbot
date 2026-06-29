@@ -31,12 +31,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         python3 python3-dev python3-pip ffmpeg libsndfile1 curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# torch first (pinned to the GPU's CUDA), then f5-tts + the HTTP server deps.
+# torch first (matched to the GPU's CUDA), then f5-tts + the HTTP server deps.
 # Installing torch up front keeps f5-tts from pulling a mismatched build.
+# Versions float by default (kept working on GB10/CUDA-13). For reproducible
+# builds, pin them at build time, e.g.:
+#   --build-arg TORCH_SPEC="torch==<ver> torchaudio==<ver>" \
+#   --build-arg F5TTS_SPEC="f5-tts==<ver>"
+ARG TORCH_SPEC="torch torchaudio"
+ARG F5TTS_SPEC="f5-tts"
 RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
-        pip install torch torchaudio --index-url "${TORCH_INDEX_URL}"; \
+        pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
     fi \
-    && pip install f5-tts fastapi "uvicorn[standard]"
+    && pip install ${F5TTS_SPEC} fastapi "uvicorn[standard]"
 
 WORKDIR /app
 # pipeline must be importable as a package for `uvicorn pipeline.tts_server:app`.
