@@ -40,6 +40,9 @@ export const api = {
   listEngines: () => req('GET', '/models/engines'),
   installEngine: (engine) => req('POST', '/models/install', { engine }),
   installEngineStatus: (taskId) => req('GET', `/models/install/status?task_id=${encodeURIComponent(taskId)}`),
+  // TTS narration models (per-style voice engine) — reuses the install-status machinery.
+  listTtsEngines: () => req('GET', '/models/tts-engines'),
+  installTtsEngine: (engine) => req('POST', '/models/tts-install', { engine }),
   // Start/stop/restart one host's worker containers over SSH (action: start|stop|restart).
   controlWorker: (host, action) => req('POST', '/workers/control', { host, action }),
 

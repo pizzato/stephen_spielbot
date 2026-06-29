@@ -62,6 +62,7 @@ from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
 from pipeline import engines
+from pipeline import tts_engines
 
 MAX_SCENES    = 100
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
@@ -173,6 +174,9 @@ DEFAULT_CFG = {
     # style like every other STYLE_FIELD_TO_FLAT entry. Default = FLUX.2 Klein.
     "default_image_engine": "flux2-klein",
     "default_edit_engine":  "flux2-klein",
+    # TTS engine per style (see pipeline/tts_engines.py): which narration model
+    # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
+    "default_tts_engine":   "openf5",
     # One-time migration guard: when False, _ensure_styles flips styles still on
     # the old default (flux1-schnell) to the new default, then sets this True so a
     # later deliberate flux1-schnell choice is preserved.
@@ -301,6 +305,8 @@ STYLE_FIELD_TO_FLAT = {
     # Image engine selection (generation vs edit) — see pipeline/engines.py
     "image_engine":         "default_image_engine",
     "edit_engine":          "default_edit_engine",
+    # TTS narration model selection — see pipeline/tts_engines.py
+    "tts_engine":           "default_tts_engine",
     # Render quality
     "resolution":           "resolution",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
@@ -371,6 +377,11 @@ def _norm_engine(value, slot: str) -> str:
     return value if ok else engines.DEFAULT_ENGINE
 
 
+def _norm_tts_engine(value) -> str:
+    """Coerce a TTS engine key to a known one (see pipeline/tts_engines.py)."""
+    return tts_engines.norm(value)
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -420,6 +431,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
+        row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved.
