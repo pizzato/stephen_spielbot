@@ -1,11 +1,11 @@
 /* ============================================================
    Stephen Spielbot — modern webapp redesign
-   Editorial / bento design language borrowed from luiz.pizzato.cc
+   Editorial / bento design language
    (Inter, warm-slate ink, soft rounded cards, uppercase micro-labels)
    ============================================================ */
 
 :root {
-  /* ── Ink & paper (warm slate, from the site: rgb(45,51,53)) ── */
+  /* ── Ink & paper (warm slate, rgb(45,51,53)) ── */
   --ink:        #2d3335;   /* primary text                 */
   --ink-2:      #565d60;   /* secondary text               */
   --ink-3:      #8a9094;   /* muted / meta                 */
@@ -204,7 +204,7 @@ body {
 .btn--sm i { font-size: 12px; }
 .btn--block { width: 100%; }
 
-/* ── Connect pills (circular icon buttons, from the site) ── */
+/* ── Connect pills (circular icon buttons) ── */
 .pill-btn {
   width: 44px; height: 44px; border-radius: 50%;
   border: 1px solid var(--line-2); background: var(--surface);
@@ -261,7 +261,7 @@ body {
 .check input { width: 17px; height: 17px; accent-color: var(--accent); }
 
 /* ============================================================
-   Metrics + mini chart (from site's research card)
+   Metrics + mini chart
    ============================================================ */
 .metric { font-size: 38px; font-weight: 800; letter-spacing: -0.02em; line-height: 1; }
 .metric-row { display: flex; align-items: baseline; gap: 8px; }
@@ -271,7 +271,7 @@ body {
 .bars > span { flex: 1; background: var(--line-2); border-radius: 4px 4px 0 0; transition: height .4s ease; }
 .bars > span.hi { background: var(--accent); }
 
-/* ── Stream list (from site) ── */
+/* ── Stream list ── */
 .stream { display: flex; flex-direction: column; }
 .stream-entry { display: flex; gap: 13px; align-items: center; padding: 11px 4px; border-top: 1px solid var(--line); text-decoration: none; color: inherit; }
 .stream-entry:first-child { border-top: 0; }
@@ -327,7 +327,7 @@ body {
 /* cover overlay title */
 .cover-title { position: absolute; left: 0; bottom: 0; padding: 22px; color: #fff; font-weight: 800; font-size: 26px; line-height: 1.05; text-shadow: 0 2px 18px rgba(0,0,0,.6); }
 
-/* ── reveal animation (staggered, from site) ── */
+/* ── reveal animation (staggered) ── */
 .reveal { opacity: 0; transform: translateY(14px); animation: reveal .55s cubic-bezier(.2,.7,.3,1) forwards; }
 .reveal-d1 { animation-delay: .06s; } .reveal-d2 { animation-delay: .12s; }
 .reveal-d3 { animation-delay: .18s; } .reveal-d4 { animation-delay: .24s; }
