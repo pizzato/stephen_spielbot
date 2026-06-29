@@ -18,7 +18,7 @@ The narration model is **[OpenF5-TTS-Base](https://huggingface.co/mrfakename/Ope
 The runtime engine is still [F5-TTS](https://github.com/SWivid/F5-TTS) (MIT-licensed
 code); only the *weights* are swapped.
 
-## What we deliberately do NOT use
+## The original (non-commercial) weights — opt-in only
 
 The official F5-TTS base weights — **`SWivid/F5-TTS` (`F5TTS_v1_Base`)** — are
 licensed **CC-BY-NC-4.0** because they were trained on the Emilia *in-the-wild*
@@ -29,11 +29,13 @@ survives fine-tuning:
 > finetuning."
 > — https://github.com/SWivid/F5-TTS/discussions/997
 
-Those weights are therefore **not** valid for this project's monetized output and
-must not be reintroduced as the default. The model source is centralised in
-[`pipeline/openf5.py`](pipeline/openf5.py); the `OPENF5_REPO` environment variable
-can point at a mirror or pinned fork but should remain an Apache/CC-BY-licensed
-repository.
+They are selectable in Settings as the opt-in `f5-original` engine (flagged
+**non-commercial**) for A/B quality comparison only — they **must not** be made
+the default or used for monetized output; the default stays `openf5`. The model
+registry lives in [`pipeline/tts_engines.py`](pipeline/tts_engines.py) and the
+OpenF5 source in [`pipeline/openf5.py`](pipeline/openf5.py); the `OPENF5_REPO`
+environment variable can point at a mirror or pinned fork but should remain an
+Apache/CC-BY-licensed repository.
 
 ## Scope
 

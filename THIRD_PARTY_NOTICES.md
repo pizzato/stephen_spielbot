@@ -33,14 +33,16 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | Model | Hugging Face repo | License | Commercial? |
 |---|---|---|---|
 | ACE-Step 1.5 (music) + Qwen text encoders | `Comfy-Org/ace_step_1.5_ComfyUI_files` | Apache-2.0 | ✅ Yes |
-| **F5-TTS (narration, current default)** | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | **CC-BY-NC-4.0 — NON-COMMERCIAL** | ❌ **No — see warning** |
+| **OpenF5-TTS-Base** (narration — **default**) | `mrfakename/OpenF5-TTS-Base` | Apache-2.0 | ✅ Yes |
+| F5-TTS Base original (narration — opt-in) | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
 
-> ⚠️ **Known issue (tracked):** the F5-TTS `F5TTS_v1_Base` weights this project
-> currently uses are **CC-BY-NC-4.0**, which does **not** permit commercial use.
-> A migration to an Apache-2.0 voice stack (e.g. `mrfakename/OpenF5-TTS-Base` or
-> Kokoro-82M) is planned. Until then, narration generated with the default model
-> is not cleared for monetized output. The bundled reference clip
-> (`assets/default_narrator.wav`) is also pending a public-domain replacement.
+> Narration uses a **per-style voice-model picker** (`pipeline/tts_engines.py`):
+> the default `openf5` is Apache-2.0 and commercial-safe; the original SWivid
+> `f5-original` weights are CC-BY-NC and offered only as an opt-in "preview"
+> (flagged non-commercial in Settings) for A/B quality checks — **don't** select
+> it for monetized output. See [`NOTICE.md`](NOTICE.md) for the TTS-weights
+> rationale. The bundled reference clip (`assets/default_narrator.wav`) provenance
+> is still pending a public-domain replacement (tracked TODO).
 
 ## Runtime tools
 
@@ -52,4 +54,4 @@ a convenience summary, **not** legal advice — always check the linked model ca
 
 - `assets/StephenSpielbot.png` — original artwork for this project.
 - `assets/default_narrator.wav` — reference voice clip, provenance under review
-  (see the F5-TTS warning above).
+  (see the narration note above).
