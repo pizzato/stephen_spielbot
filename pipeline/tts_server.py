@@ -26,7 +26,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
-from pipeline.openf5 import f5_model_args  # Apache-2.0 OpenF5-TTS-Base weights
+from pipeline import tts_engines  # selectable narration model (per style)
 
 # We run inside the f5tts environment, so the current interpreter is the one
 # that can import f5_tts.
@@ -40,11 +40,34 @@ class TTSRequest(BaseModel):
     text: str
     ref_audio_b64: str | None = None
     speed: float = 1.0
+    engine: str = "openf5"
 
 
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.get("/models")
+def models() -> dict:
+    """Which narration models are already downloaded in this worker's HF cache."""
+    return {"cached": {k: tts_engines.is_cached(k) for k in tts_engines.TTS_ENGINES}}
+
+
+class PrewarmRequest(BaseModel):
+    engine: str
+
+
+@app.post("/prewarm")
+def prewarm(req: PrewarmRequest) -> dict:
+    """Download an engine's weights into the HF cache so the first render is fast."""
+    if not tts_engines.get(req.engine):
+        raise HTTPException(status_code=400, detail=f"Unknown engine: {req.engine!r}")
+    try:
+        tts_engines.ensure(req.engine)
+    except Exception as e:  # noqa: BLE001 — surface the fetch error to the caller
+        raise HTTPException(status_code=500, detail=str(e)[:500])
+    return {"ok": True, "engine": req.engine, "cached": tts_engines.is_cached(req.engine)}
 
 
 @app.post("/tts")
@@ -64,7 +87,7 @@ def tts(req: TTSRequest) -> Response:
         result = subprocess.run(
             [
                 F5TTS_PYTHON, "-m", "f5_tts.infer.infer_cli",
-                *f5_model_args(),
+                *tts_engines.cli_args(req.engine),
                 "--ref_audio",   str(ref),
                 "--ref_text",    "",
                 "--gen_text",    text,

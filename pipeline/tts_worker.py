@@ -96,13 +96,14 @@ def _robotize_wav(path: Path, amount: float | None = None) -> None:
         raise RuntimeError(f"Robotic voice effect failed:\n{e.stderr}")
 
 
-def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0) -> None:
-    from pipeline.openf5 import f5_model_args  # Apache-2.0 OpenF5-TTS-Base weights
+def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0,
+              tts_engine: str = "openf5") -> None:
+    from pipeline import tts_engines  # selectable narration model (per style)
     try:
         result = subprocess.run(
             [
                 _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
-                *f5_model_args(),
+                *tts_engines.cli_args(tts_engine),
                 "--ref_audio",   str(ref),
                 "--ref_text",    "",
                 "--gen_text",    text,
@@ -119,17 +120,20 @@ def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0) -> No
         raise RuntimeError(f"F5-TTS failed:\n{result.stderr}")
 
 
-def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1.0) -> None:
+def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1.0,
+             tts_engine: str = "openf5") -> None:
     """POST narration to a containerized F5-TTS HTTP worker (pipeline/tts_server.py).
 
     The TTS worker runs as a container with no SSH access. The request hits
     <url>/tts and the WAV bytes come back in the response body. A default
     reference is sent as null so the server uses its own bundled narrator.
+    tts_engine selects which narration model the worker loads (per style).
     """
     payload = json.dumps({
         "text": text,
         "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
         "speed": speed,
+        "engine": tts_engine,
     }).encode()
 
     req = urllib.request.Request(
@@ -175,6 +179,7 @@ def generate_narration(
     robotic: bool = False,
     robotic_amount: float | None = None,
     speed: float | None = None,
+    tts_engine: str = "openf5",
 ) -> Path:
     """Generate narration audio, running F5-TTS on host.
 
@@ -191,17 +196,21 @@ def generate_narration(
 
     speed is F5-TTS's speaking pace (1.0 natural, lower slower); clamped to a
     range the model handles gracefully.
+
+    tts_engine selects the narration model (see pipeline/tts_engines.py); it is
+    carried per style and threaded through to the F5-TTS CLI / worker.
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
         raise RuntimeError(f"TTS reference audio not found: {ref}")
 
+    engine = tts_engine or "openf5"
     speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
-    logger.info("TTS on %s%s: %r", host, " (robotic)" if robotic else "", text[:60])
+    logger.info("TTS on %s [%s]%s: %r", host, engine, " (robotic)" if robotic else "", text[:60])
     if host in ("localhost", "127.0.0.1"):
-        _f5_local(text, ref, output_path, speed)
+        _f5_local(text, ref, output_path, speed, engine)
     elif host.startswith(("http://", "https://")):
-        _f5_http(text, ref, output_path, host, speed)
+        _f5_http(text, ref, output_path, host, speed, engine)
     else:
         raise RuntimeError(
             f"TTS worker must be an http:// container URL (e.g. http://host:8189); "

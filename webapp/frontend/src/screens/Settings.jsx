@@ -139,7 +139,7 @@ function PlayButton({ src }) {
 // robotic-level and voice-speed fields so you can dial them in by ear before
 // saving. Deliberately no voice picker of its own: a second dropdown here
 // looked like the style's voice setting but silently saved nothing.
-function VoiceTester({ voice, roboticAmount, speed, onError }) {
+function VoiceTester({ voice, roboticAmount, speed, engine, onError }) {
   const [busy, setBusy] = useState(false)
   const audioRef = useRef(null)
 
@@ -147,7 +147,7 @@ function VoiceTester({ voice, roboticAmount, speed, onError }) {
     onError(''); setBusy(true)
     try {
       const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1 })
+      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '' })
       const a = audioRef.current
       // Don't await play(): after a long first generation Chrome may block
       // autoplay (the click's activation window expired), and a blocked play()
@@ -675,6 +675,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [workerBusy, setWorkerBusy] = useState('')  // host with a start/stop action in flight
   const [clearingDeclined, setClearingDeclined] = useState(false)  // declined-ideas reset in flight
   const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
+  const [ttsEngineInfo, setTtsEngineInfo] = useState(null)  // {engines, availability, default_engine}
   const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
@@ -708,6 +709,29 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           setEngInstall((m) => ({ ...m, [key]: s }))
           if (s.status === 'running') setTimeout(poll, 4000)
           else reloadEngines()
+        } catch (e) { setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } })) }
+      }
+      setTimeout(poll, 3000)
+    } catch (e) {
+      setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } }))
+    }
+  }
+
+  // TTS narration models: registry + per-worker availability + download buttons.
+  // Mirrors the image-engine flow; reuses the shared engInstall status map (keys
+  // don't collide with the flux* engines) and the install-status endpoint.
+  const reloadTtsEngines = () => api.listTtsEngines().then(setTtsEngineInfo).catch(() => {})
+  useEffect(() => { reloadTtsEngines() }, [])
+  const installTtsEngine = async (key) => {
+    setEngInstall((m) => ({ ...m, [key]: { status: 'running' } }))
+    try {
+      const { task_id } = await api.installTtsEngine(key)
+      const poll = async () => {
+        try {
+          const s = await api.installEngineStatus(task_id)
+          setEngInstall((m) => ({ ...m, [key]: s }))
+          if (s.status === 'running') setTimeout(poll, 4000)
+          else reloadTtsEngines()
         } catch (e) { setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } })) }
       }
       setTimeout(poll, 3000)
@@ -1074,6 +1098,45 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
           </Card>
 
+          {/* ── Voice models (TTS engines) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Voice models</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download here</span>
+            </div>
+            <div className="stack gap-10 mt-16">
+              {!ttsEngineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading voice models…</div>}
+              {(ttsEngineInfo?.engines || []).map((e) => {
+                const hosts = ttsEngineInfo?.availability || {}
+                const reachable = Object.values(hosts).filter((v) => v && typeof v === 'object')
+                const avail = reachable.length ? reachable.every((h) => h[e.key]) : null
+                const ins = engInstall[e.key]
+                const running = ins?.status === 'running'
+                return (
+                  <div key={e.key} className="row center between" style={{ borderTop: '1px solid var(--line)', paddingTop: 10, gap: 12 }}>
+                    <div className="grow">
+                      <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600 }}>{e.label}</span>
+                        {avail === true && <Chip tone="ok" dot>installed</Chip>}
+                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                        {!e.commercial_ok && <Chip tone="info">non-commercial</Chip>}
+                      </div>
+                      <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                      {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
+                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                    </div>
+                    <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
+                      disabled={running || avail === true}
+                      onClick={() => installTtsEngine(e.key)}>
+                      {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                    </Button>
+                  </div>
+                )
+              })}
+            </div>
+            <div className="field__hint">Downloads run on every TTS worker (into its model cache) and can take a while (weights are several GB). Models also download automatically on first use.</div>
+          </Card>
+
           {/* ── Predictive model (issue #50) ── */}
           <Card span={12} className="reveal reveal-d2">
             <div className="row center between">
@@ -1225,6 +1288,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
                 <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
               </Field>
+              {/* Voice model (TTS engine) — which narration model synthesises this style */}
+              <Field label="Voice model" hint="Which TTS model synthesises this style's narration. OpenF5 is Apache-2.0 (commercial-safe); non-commercial models are flagged. Download models under Infrastructure.">
+                <select className="select" value={st.tts_engine || 'openf5'} onChange={(e) => setStyleField('tts_engine', e.target.value)}>
+                  {(ttsEngineInfo?.engines?.length ? ttsEngineInfo.engines : [{ key: 'openf5', label: 'OpenF5-TTS-Base', commercial_ok: true }]).map((e) => (
+                    <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
+                  ))}
+                </select>
+              </Field>
               {/* Narration — narrator beside the robotic toggle, the dial-in sliders and test right below */}
               <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
                 <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
@@ -1250,7 +1321,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                     onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
                 </Field></div>
               </div>
-              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} onError={setError} />
+              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} engine={st.tts_engine} onError={setError} />
             </div>
           </Card>
 

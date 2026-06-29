@@ -42,6 +42,7 @@ WORKDIR /app
 # pipeline must be importable as a package for `uvicorn pipeline.tts_server:app`.
 COPY pipeline/__init__.py /app/pipeline/__init__.py
 COPY pipeline/openf5.py /app/pipeline/openf5.py
+COPY pipeline/tts_engines.py /app/pipeline/tts_engines.py
 COPY pipeline/tts_server.py /app/pipeline/tts_server.py
 COPY assets/default_narrator.wav /app/assets/default_narrator.wav
 

@@ -38,12 +38,3 @@ def ensure_openf5_model() -> tuple[str, str, str]:
     ckpt = hf_hub_download(OPENF5_REPO, "model.pt")
     vocab = hf_hub_download(OPENF5_REPO, "vocab.txt")
     return cfg, ckpt, vocab
-
-
-def f5_model_args() -> list[str]:
-    """F5-TTS CLI flags selecting the OpenF5-TTS-Base weights.
-
-    Drop-in replacement for the old ``["--model", "F5TTS_v1_Base"]``.
-    """
-    cfg, ckpt, vocab = ensure_openf5_model()
-    return ["--model_cfg", cfg, "--ckpt_file", ckpt, "--vocab_file", vocab]
