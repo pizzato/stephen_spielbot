@@ -50,7 +50,7 @@ COPY pipeline/__init__.py /app/pipeline/__init__.py
 COPY pipeline/openf5.py /app/pipeline/openf5.py
 COPY pipeline/tts_engines.py /app/pipeline/tts_engines.py
 COPY pipeline/tts_server.py /app/pipeline/tts_server.py
-COPY assets/default_narrator.wav /app/assets/default_narrator.wav
+COPY assets/default_narrator.mp3 /app/assets/default_narrator.mp3
 
 EXPOSE 8189
 

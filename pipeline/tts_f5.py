@@ -16,7 +16,7 @@ F5TTS_PYTHON = os.environ.get(
     "F5TTS_PYTHON",
     str(Path.home() / "miniconda3" / "envs" / "f5tts" / "bin" / "python"),
 )
-DEFAULT_REF   = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+DEFAULT_REF   = Path(__file__).parent.parent / "assets" / "default_narrator.mp3"
 
 
 def generate_narration_f5(

@@ -11,7 +11,7 @@ Endpoints:
 
 The controller reaches this via ``pipeline/tts_worker.py``'s HTTP transport
 whenever a ``tts_workers`` entry is an ``http://`` URL. When ``ref_audio_b64``
-is null the bundled default narrator (assets/default_narrator.wav) is used,
+is null the bundled default narrator (assets/default_narrator.mp3) is used,
 matching the SSH runner's behaviour.
 """
 
@@ -31,7 +31,7 @@ from pipeline import tts_engines  # selectable narration model (per style)
 # We run inside the f5tts environment, so the current interpreter is the one
 # that can import f5_tts.
 F5TTS_PYTHON = sys.executable
-DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.wav"
+DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.mp3"
 
 app = FastAPI(title="Stephen Spielbot F5-TTS worker")
 

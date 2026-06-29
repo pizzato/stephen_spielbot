@@ -41,7 +41,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 > `f5-original` weights are CC-BY-NC and offered only as an opt-in "preview"
 > (flagged non-commercial in Settings) for A/B quality checks — **don't** select
 > it for monetized output. See [`NOTICE.md`](NOTICE.md) for the TTS-weights
-> rationale. The bundled reference clip (`assets/default_narrator.wav`) provenance
+> rationale. The bundled reference clip (`assets/default_narrator.mp3`) provenance
 > is still pending a public-domain replacement (tracked TODO).
 
 ## Runtime tools
@@ -53,5 +53,5 @@ a convenience summary, **not** legal advice — always check the linked model ca
 ## Bundled assets
 
 - `assets/StephenSpielbot.png` — original artwork for this project.
-- `assets/default_narrator.wav` — reference voice clip, provenance under review
+- `assets/default_narrator.mp3` — reference voice clip, provenance under review
   (see the narration note above).
