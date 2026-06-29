@@ -97,11 +97,12 @@ def _robotize_wav(path: Path, amount: float | None = None) -> None:
 
 
 def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0) -> None:
+    from pipeline.openf5 import f5_model_args  # Apache-2.0 OpenF5-TTS-Base weights
     try:
         result = subprocess.run(
             [
                 _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
-                "--model",       "F5TTS_v1_Base",
+                *f5_model_args(),
                 "--ref_audio",   str(ref),
                 "--ref_text",    "",
                 "--gen_text",    text,

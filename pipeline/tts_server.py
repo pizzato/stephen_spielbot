@@ -26,6 +26,8 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
+from pipeline.openf5 import f5_model_args  # Apache-2.0 OpenF5-TTS-Base weights
+
 # We run inside the f5tts environment, so the current interpreter is the one
 # that can import f5_tts.
 F5TTS_PYTHON = sys.executable
@@ -62,7 +64,7 @@ def tts(req: TTSRequest) -> Response:
         result = subprocess.run(
             [
                 F5TTS_PYTHON, "-m", "f5_tts.infer.infer_cli",
-                "--model",       "F5TTS_v1_Base",
+                *f5_model_args(),
                 "--ref_audio",   str(ref),
                 "--ref_text",    "",
                 "--gen_text",    text,
