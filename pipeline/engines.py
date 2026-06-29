@@ -6,12 +6,10 @@ because FLUX.1 and FLUX.2 use different ComfyUI graphs and encoders. Per-style
 settings carry ``image_engine`` (scene generation) and ``edit_engine`` (the
 "Edit image" inpaint); both fall back to ``flux1-schnell``.
 
-Validation status:
-- ``flux1-schnell``  — the existing, validated path (text→image + masked img2img).
-- ``flux1-fill``     — dedicated FLUX.1 Fill inpaint; standard ComfyUI Fill graph.
-- ``flux2-dev``      — authored from the public ComfyUI FLUX.2 templates; the
-  workflow node graph and download repo ids **need first-run validation on the
-  cluster** (sampler/edit wiring and exact HF repo names may need a tweak).
+Only commercial-usable (Apache-2.0) engines are bundled:
+- ``flux2-klein`` — the default; fast 4-step FLUX.2 (Apache-2.0, commercial OK).
+- ``flux1-schnell`` — the legacy validated path (text→image + masked img2img),
+  opt-in and downloaded on demand.
 """
 from __future__ import annotations
 
@@ -54,62 +52,6 @@ ENGINES: dict[str, dict] = {
             _model(*_FLUX1_T5), _model(*_FLUX1_CLIP_L), _model(*_FLUX1_VAE),
         ],
     },
-    "flux1-fill": {
-        "key": "flux1-fill",
-        "label": "FLUX.1 Fill",
-        "sub": "Dedicated inpaint · best edges · non-commercial",
-        "family": "flux1",
-        "can_generate": False,
-        "can_edit": True,
-        "edit_mode": "fill",
-        "t2i_workflow": None,
-        "edit_workflow": "flux_fill.json",
-        "steps": 20,
-        "edit_denoise": 1.0,
-        "guidance": 30.0,
-        "commercial_ok": False,
-        "license": "FLUX.1 [dev] Non-Commercial",
-        "model_file": "flux1-fill-dev.safetensors",
-        "clip_t5": "t5xxl_fp8_e4m3fn.safetensors",
-        "clip_l": "clip_l.safetensors",
-        "vae": "ae.safetensors",
-        "probe": ("UNETLoader", "unet_name", "flux1-fill-dev.safetensors"),
-        "models": [
-            _model("black-forest-labs/FLUX.1-Fill-dev", "flux1-fill-dev.safetensors",
-                   "models/diffusion_models", gated=True),
-            _model(*_FLUX1_T5), _model(*_FLUX1_CLIP_L), _model(*_FLUX1_VAE),
-        ],
-    },
-    "flux2-dev": {
-        "key": "flux2-dev",
-        "label": "FLUX.2 dev",
-        "sub": "Higher quality · ~28 steps · non-commercial · needs validation",
-        "family": "flux2",
-        "can_generate": True,
-        "can_edit": True,
-        "edit_mode": "flux2",
-        "t2i_workflow": "flux2_t2i.json",
-        "edit_workflow": "flux2_edit.json",
-        "steps": 28,
-        "edit_denoise": 1.0,
-        "guidance": 4.0,
-        "commercial_ok": False,
-        "license": "FLUX.2 [dev] Non-Commercial",
-        "model_file": "flux2_dev_fp8mixed.safetensors",
-        "clip_t5": "mistral_3_small_flux2_fp8.safetensors",   # single Mistral-3 encoder (fp8 to save VRAM)
-        "clip_l": None,
-        "vae": "flux2-vae.safetensors",
-        "probe": ("UNETLoader", "unet_name", "flux2_dev_fp8mixed.safetensors"),
-        # Repo + paths verified against the public Comfy-Org/flux2-dev repo (not gated,
-        # so no HF token needed); the workflow node graph still needs first-run validation.
-        "models": [
-            _model("Comfy-Org/flux2-dev", "split_files/diffusion_models/flux2_dev_fp8mixed.safetensors",
-                   "models/diffusion_models"),
-            _model("Comfy-Org/flux2-dev", "split_files/text_encoders/mistral_3_small_flux2_fp8.safetensors",
-                   "models/text_encoders"),
-            _model("Comfy-Org/flux2-dev", "split_files/vae/flux2-vae.safetensors", "models/vae"),
-        ],
-    },
     "flux2-klein": {
         "key": "flux2-klein",
         "label": "FLUX.2 Klein 4B",
@@ -146,7 +88,7 @@ ENGINES: dict[str, dict] = {
 
 # FLUX.2 Klein is the default engine (fast, commercial Apache-2.0, much better
 # than schnell) — used for new styles and as the resolve()/normalize fallback.
-# FLUX.1 schnell / Fill are opt-in: chosen per style and downloaded on demand.
+# FLUX.1 schnell is opt-in: chosen per style and downloaded on demand.
 DEFAULT_ENGINE = "flux2-klein"
 
 

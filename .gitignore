@@ -26,6 +26,14 @@ logs/
 # Config (contains user secrets and machine-specific paths)
 *.env
 .env.*
+# Defensive: these live under ~/.config|~/.local/share, but never commit them if
+# a copy lands in the repo tree.
+config.yaml
+client_secrets.json
+*_token.json
+*.sqlite3
+publish_queue.json
+youtube_queue.json
 
 # macOS
 .DS_Store

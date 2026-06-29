@@ -19,13 +19,20 @@ if [[ -z "$ACTION" || -z "$HOST" ]]; then
     exit 1
 fi
 
+# Reject a hostname that ssh would parse as an option (e.g. -oProxyCommand=…) —
+# a command-injection guard for hosts that originate from saved config.
+if [[ "$HOST" == -* ]]; then
+    echo "ERROR: invalid hostname '$HOST'"
+    exit 1
+fi
+
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
 REMOTE_DIR="spielbot-worker/docker"
 
 # Run a `docker compose` command on the host's deployed stack, over SSH.
 _compose() {
-    ssh "$HOST" "[ -d \$HOME/$REMOTE_DIR ] || { echo 'ERROR: no container stack at ~/$REMOTE_DIR on $HOST — run: make install'; exit 1; }; cd \$HOME/$REMOTE_DIR && docker compose $*"
+    ssh -- "$HOST" "[ -d \$HOME/$REMOTE_DIR ] || { echo 'ERROR: no container stack at ~/$REMOTE_DIR on $HOST — run: make install'; exit 1; }; cd \$HOME/$REMOTE_DIR && docker compose $*"
 }
 
 _health() {
@@ -58,7 +65,7 @@ case "$ACTION" in
         # GPU device per container — surfaces a silent CPU fallback (a host
         # daemon-reload can revoke the GPU from a running container; see README).
         for svc in comfyui tts; do
-            dev=$(ssh "$HOST" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
+            dev=$(ssh -- "$HOST" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
             if [ -n "$dev" ]; then
                 printf "    ✓ %-7s GPU  %s\n" "$svc" "$dev"
             else

@@ -5,7 +5,6 @@ migration, style→channel resolution, upload/reply channel routing, the
 multi-channel comment sweep, and per-channel engagement model paths.
 No network — everything is mocked at the pipeline boundary.
 """
-import json
 import os
 import tempfile
 import unittest

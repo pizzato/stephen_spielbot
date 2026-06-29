@@ -1,8 +1,9 @@
-anthropic
-pyyaml
-websocket-client
-google-auth
-google-auth-oauthlib
-google-auth-httplib2
-google-api-python-client
-requests          # X (Twitter) API integration — pipeline/x.py (issue #107)
+anthropic>=0.40,<1.0      # 0.x API (messages.stream, http_client=) — cap the major
+pyyaml>=6.0
+websocket-client>=1.6
+google-auth>=2.20
+google-auth-oauthlib>=1.0
+google-auth-httplib2>=0.1
+google-api-python-client>=2.100
+requests>=2.31           # X (Twitter) API integration — pipeline/x.py (issue #107)
+pillow>=10.0             # image compositing/covers — pipeline/cover.py, resume_generation.py

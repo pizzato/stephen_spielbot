@@ -38,7 +38,7 @@ class ImageHistoryEndpointTests(unittest.TestCase):
 
     def _regen(self, image_bytes):
         """Run the real regen endpoint with the image generator mocked to write bytes."""
-        def fake_generate(prompt, out, **kw):
+        def fake_generate(engine, prompt, out, **kw):
             Path(out).write_bytes(image_bytes)
 
         store = _FakeStore({"image_prompt": "p", "preview_path": str(self.preview)})
@@ -46,7 +46,7 @@ class ImageHistoryEndpointTests(unittest.TestCase):
              mock.patch.object(backend.gapp.DurableStore, "default", return_value=store), \
              mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w"]), \
              mock.patch.object(backend.gapp, "WorkerPool") as WP, \
-             mock.patch.object(backend.gapp, "generate_scene_image", side_effect=fake_generate):
+             mock.patch.object(backend.gapp, "generate_with_engine", side_effect=fake_generate):
             WP.return_value.acquire.return_value = "http://w"
             return backend.regen_scene_preview("job1", self.sid)
 

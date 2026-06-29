@@ -272,7 +272,7 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     image_history.cover_seed_if_empty(work_dir, cover_path)
     engine = p.get("engine")
     if engine:
-        # Generate with the style's selected image engine (FLUX.1/Fill/FLUX.2).
+        # Generate with the style's selected image engine (FLUX.1/FLUX.2).
         generate_with_engine(
             engine, prompt, cover_path,
             width=cover_w, height=cover_h, comfy_url=comfy_url,

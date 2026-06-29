@@ -75,6 +75,13 @@ make stop      # stop everything
 make status    # check health of the app and all workers
 ```
 
+## Security
+
+The web app has **no authentication** and is meant to run bound to `localhost`
+as a single-user tool — anyone who can reach port 8001 has full control. Don't
+expose it to untrusted networks. `make tailscale` shares it with your tailnet
+(no app auth, tailnet-only — never public). See [`SECURITY.md`](SECURITY.md).
+
 ## Cluster setup
 
 Workers are configured in the single config file (see below) — there is no
@@ -139,7 +146,7 @@ cluster status panel). Worker lists are part of this file:
 | Setting | Description |
 |---|---|
 | ComfyUI Workers | One URL per line — scenes are distributed across workers in parallel |
-| TTS Workers | Hostnames for parallel narration (need F5-TTS at `~/f5tts-env`) |
+| TTS Workers | F5-TTS endpoints for parallel narration (one container per worker on port 8189, derived from your render workers by `make install`) |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM Backend | `local` (vLLM) or `claude` (Anthropic API) |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
@@ -151,10 +158,15 @@ cluster status panel). Worker lists are part of this file:
 |---|---|---|
 | `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for *local* F5-TTS (workers use the container) |
 | `CHATTERBOX_PYTHON` | `~/miniconda3/envs/chatterbox/bin/python` | Python interpreter for Chatterbox TTS |
+| `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
+| `FFMPEG_PATH` | `$(which ffmpeg)` | Path to the ffmpeg binary (set when it isn't on `PATH`) |
+| `FFMPEG_TIMEOUT` | `600` | Per-call ffmpeg timeout, seconds |
+| `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
+| `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
 ## Models
 
-`make install` (and `make download-models`) downloads everything automatically. To download manually (~33 GB total):
+`make install` (and `make download-models`) downloads everything automatically. To download manually (~49 GB total):
 
 **LTX 2.3** (~28 GB):
 ```bash
@@ -172,3 +184,25 @@ huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/vae/ac
 huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/text_encoders/qwen_0.6b_ace15.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/text_encoders/qwen_4b_ace15.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 ```
+
+**FLUX.2 Klein 4B** (~16 GB, the default image generate + edit engine):
+```bash
+huggingface-cli download Comfy-Org/vae-text-encorder-for-flux-klein-4b split_files/diffusion_models/flux-2-klein-4b.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/vae-text-encorder-for-flux-klein-4b split_files/text_encoders/qwen_3_4b.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/vae-text-encorder-for-flux-klein-4b split_files/vae/flux2-vae.safetensors --local-dir models/vae --local-dir-use-symlinks False
+```
+
+The legacy FLUX.1 schnell engine is optional (`INSTALL_FLUX1=1 bash scripts/download_models.sh`).
+
+## License
+
+Stephen Spielbot's code is licensed under [Apache-2.0](LICENSE).
+
+The AI **models** it downloads each carry their own licenses — see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The defaults (FLUX.2 Klein,
+LTX-Video, ACE-Step) are commercial-friendly, **but** the current F5-TTS
+narration model is CC-BY-NC (non-commercial); review the notices before
+monetizing generated videos.
+
+> "Stephen Spielbot" is a playful name and is not affiliated with, endorsed by,
+> or connected to Steven Spielberg or any of his companies.

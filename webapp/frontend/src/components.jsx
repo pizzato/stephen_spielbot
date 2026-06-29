@@ -466,13 +466,19 @@ const NAV = [
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'community', label: 'Community', icon: 'comments' },
   { id: 'publish', label: 'Publishing', icon: 'upload' },
-  { id: 'analytics', label: 'Analytics', icon: 'chart-simple' },
+  { id: 'analytics', label: 'Channel Analytics', icon: 'chart-simple' },
   { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { id: 'library', label: 'Films', icon: 'film' },
-  { id: 'engagement', label: 'Predictive Model', icon: 'chart-line' },
   { sep: true },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
+
+// Whether a nav item is the active page. Channel Analytics owns the legacy
+// #/engagement (Predictive Model) deep link too, so it highlights for both.
+function navActive(id, route) {
+  if (id === 'analytics') return route === 'analytics' || route === 'engagement'
+  return route === id
+}
 
 // Mailbox-style sidebar indicator for a nav item: a live "REC" pill while a
 // render is running, otherwise a count of items needing attention.
@@ -504,7 +510,7 @@ export function Sidebar({ route, go, badges = {} }) {
         {NAV.map((n, i) => (
           n.sep
             ? <div key={'sep' + i} className="nav__sep"></div>
-            : <button key={n.id} className={`nav__item ${route === n.id ? 'is-active' : ''}`} onClick={() => go(n.id)}>
+            : <button key={n.id} className={`nav__item ${navActive(n.id, route) ? 'is-active' : ''}`} onClick={() => go(n.id)}>
                 <Icon name={n.icon} brand={n.brand} />
                 <span>{n.label}</span>
                 {navIndicator(n.id, badges)}

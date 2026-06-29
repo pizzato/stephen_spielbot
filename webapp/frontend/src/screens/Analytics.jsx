@@ -219,26 +219,17 @@ export default function Analytics() {
   const prefix = platform === 'x' ? '@' : ''
   return (
     <div>
-      <div className="page-head">
-        <div className="page-head__intro">
-          <span className="label-sm reveal">Analytics</span>
-          <h1 className="display-md reveal reveal-d1">Performance</h1>
-        </div>
-        <div className="row center gap-10 reveal reveal-d1">
-          {targets.length > 1 && (
-            <select className="select" value={target} onChange={(e) => setTarget(e.target.value)} style={{ maxWidth: 220 }}>
-              {targets.map((t) => <option key={t.id} value={t.id}>{prefix}{t.name || t.id}</option>)}
-            </select>
-          )}
-          {targets.length === 1 && <Chip tone="ok" dot>{prefix}{targets[0].name || targets[0].id}</Chip>}
-        </div>
-      </div>
-
-      <div className="reveal reveal-d1" style={{ marginBottom: 16 }}>
+      <div className="row center reveal reveal-d1" style={{ justifyContent: 'space-between', marginBottom: 16 }}>
         <Segmented value={platform} onChange={setPlatform} options={[
           { value: 'youtube', label: 'YouTube' },
           { value: 'x', label: 'X' },
         ]} />
+        {targets.length > 1 && (
+          <select className="select" value={target} onChange={(e) => setTarget(e.target.value)} style={{ maxWidth: 220 }}>
+            {targets.map((t) => <option key={t.id} value={t.id}>{prefix}{t.name || t.id}</option>)}
+          </select>
+        )}
+        {targets.length === 1 && <Chip tone="ok" dot>{prefix}{targets[0].name || targets[0].id}</Chip>}
       </div>
 
       {error && <Banner tone="danger">{error}</Banner>}
