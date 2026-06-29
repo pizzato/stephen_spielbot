@@ -37,8 +37,11 @@ WORKDIR /opt/ComfyUI
 RUN git checkout "${COMFYUI_REF}"
 
 # torch first (ComfyUI's requirements.txt does not pin it), then ComfyUI deps.
+# Versions float by default; pin for reproducible builds, e.g.:
+#   --build-arg TORCH_SPEC="torch==<ver> torchvision==<ver> torchaudio==<ver>"
+ARG TORCH_SPEC="torch torchvision torchaudio"
 RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
-        pip install torch torchvision torchaudio --index-url "${TORCH_INDEX_URL}"; \
+        pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
     fi \
     && pip install -r requirements.txt
 
