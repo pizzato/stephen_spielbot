@@ -20,6 +20,7 @@ import sys
 import threading
 import time
 import urllib.parse
+import urllib.request
 import uuid
 from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
@@ -362,6 +363,7 @@ class VoiceTest(BaseModel):
     robotic_amount: float | None = None
     speed: float | None = None
     text: str = ""
+    engine: str = ""
 
 
 @api.post("/api/voices/test")
@@ -389,6 +391,7 @@ def voices_test(body: VoiceTest) -> dict:
     robotic = bool(body.robotic)
     speed = (body.speed if body.speed is not None
              else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
+    engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
 
     # Content-addressed cache key: a given (voice, robotic level, speed, text,
     # source clip) always maps to the same file, so F5-TTS never re-runs for a
@@ -400,7 +403,7 @@ def voices_test(body: VoiceTest) -> dict:
     except OSError:
         ref_stamp = ""
     key = hashlib.md5(
-        f"{voice}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
+        f"{voice}|{engine}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
     ).hexdigest()[:16]
     out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
@@ -411,7 +414,8 @@ def voices_test(body: VoiceTest) -> dict:
         try:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
-                                   robotic=robotic, robotic_amount=amount, speed=speed)
+                                   robotic=robotic, robotic_amount=amount, speed=speed,
+                                   tts_engine=engine)
         except Exception as e:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
@@ -1212,6 +1216,70 @@ def install_engine_status(task_id: str = Query(...)) -> dict:
     return {"ok": True, **t}
 
 
+# ── TTS narration models (per-style voice engine) ────────────────────────────
+
+@api.get("/api/models/tts-engines")
+def list_tts_engines() -> dict:
+    """TTS engine registry for the Settings picker, plus per-worker availability
+    (which narration models are already downloaded on each tts_worker)."""
+    from pipeline import tts_engines as te
+    cfg = gapp.load_config()
+    availability: dict[str, dict | None] = {}
+    for url in (cfg.get("tts_workers") or []):
+        if not str(url).startswith(("http://", "https://")):
+            continue
+        try:
+            with urllib.request.urlopen(url.rstrip("/") + "/models", timeout=4) as r:
+                availability[url] = json.loads(r.read()).get("cached", {})
+        except Exception:
+            availability[url] = None
+    return {
+        "engines": te.public_list(),
+        "availability": availability,
+        "default_engine": te.DEFAULT_TTS_ENGINE,
+    }
+
+
+class TTSInstallBody(BaseModel):
+    engine: str
+
+
+def _prewarm_tts_worker(task_id: str, engine_key: str, hosts: list[str]) -> None:
+    """Background: POST /prewarm to each tts_worker so it downloads the engine's
+    weights into its HF cache. Long-running (weights are GBs)."""
+    results: dict[str, dict] = {}
+    payload = json.dumps({"engine": engine_key}).encode()
+    for url in hosts:
+        try:
+            req = urllib.request.Request(url.rstrip("/") + "/prewarm", data=payload,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=3 * 3600) as r:
+                results[url] = {"ok": True, "log": r.read().decode(errors="replace")[-1000:]}
+        except Exception as ex:
+            results[url] = {"ok": False, "log": str(ex)}
+        with _model_install_lock:
+            _model_install_tasks[task_id] = {"status": "running", "engine": engine_key, "hosts": dict(results)}
+    with _model_install_lock:
+        ok = bool(results) and all(r["ok"] for r in results.values())
+        _model_install_tasks[task_id] = {"status": "done" if ok else "error", "engine": engine_key, "hosts": results}
+
+
+@api.post("/api/models/tts-install")
+def install_tts_engine(body: TTSInstallBody) -> dict:
+    """Kick off a download (pre-warm) of a TTS engine's weights on every tts_worker."""
+    from pipeline import tts_engines as te
+    if not te.get(body.engine):
+        raise HTTPException(400, f"Unknown TTS engine: {body.engine!r}")
+    cfg = gapp.load_config()
+    hosts = [u for u in (cfg.get("tts_workers") or []) if str(u).startswith(("http://", "https://"))]
+    if not hosts:
+        raise HTTPException(400, "No http:// TTS workers configured.")
+    task_id = f"ttsinstall_{body.engine}_{int(time.time())}"
+    _model_install_tasks[task_id] = {"status": "running", "engine": body.engine, "hosts": {}}
+    threading.Thread(target=_prewarm_tts_worker, args=(task_id, body.engine, hosts), daemon=True).start()
+    return {"ok": True, "task_id": task_id, "hosts": hosts}
+
+
 # ── per-field LLM regeneration (Script tab "Re-generate" buttons) ─────────────
 
 _FIELD_INSTRUCTIONS = {
@@ -1478,6 +1546,7 @@ def start_generation(body: GenerateBody) -> dict:
         "voice_robotic": voice_robotic,
         "voice_robotic_amount": ss.get("voice_robotic_amount", 0.35),
         "voice_speed": ss.get("voice_speed", 1.0),
+        "tts_engine": gapp.tts_engines.norm(ss.get("tts_engine")),
         # Per-style render quality + audio mix (issue #66): the resumable
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
@@ -5909,11 +5978,12 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         voice_robotic = bool(jc.get("voice_robotic", False))
         voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
         voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
+        tts_engine = jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
         tts_hosts = cfg.get("tts_workers") or []
         tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
         _film_tasks[task_id] = {"status": "running", "step": "narration"}
-        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed)
+        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine)
 
         # Re-mux narration with the existing scene video
         video_path = wd / f"scene_{sid:02d}_video.mp4"

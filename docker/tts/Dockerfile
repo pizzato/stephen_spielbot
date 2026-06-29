@@ -4,9 +4,9 @@
 # HTTP service wrapping the same F5-TTS CLI the SSH runner used. The controller
 # reaches it over HTTP when a tts_workers entry is an http:// URL.
 #
-# The F5TTS_v1_Base weights (~1.3 GB) are fetched from HuggingFace into
-# HF_HOME on first request; mount that as a volume so it persists across
-# container recreation (see docker/docker-compose.yml).
+# The OpenF5-TTS-Base weights (Apache-2.0, commercial-safe — see NOTICE.md) are
+# fetched from HuggingFace into HF_HOME on first request; mount that as a volume
+# so it persists across container recreation (see docker/docker-compose.yml).
 
 ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 FROM ${BASE_IMAGE}
@@ -41,6 +41,8 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
 WORKDIR /app
 # pipeline must be importable as a package for `uvicorn pipeline.tts_server:app`.
 COPY pipeline/__init__.py /app/pipeline/__init__.py
+COPY pipeline/openf5.py /app/pipeline/openf5.py
+COPY pipeline/tts_engines.py /app/pipeline/tts_engines.py
 COPY pipeline/tts_server.py /app/pipeline/tts_server.py
 COPY assets/default_narrator.wav /app/assets/default_narrator.wav
 

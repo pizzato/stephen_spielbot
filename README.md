@@ -10,7 +10,7 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 1. **Script** — an LLM writes a multi-scene script with visual prompts, narration, and a mood-matched music description
 2. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-Video) generates each scene clip via ComfyUI (local or distributed workers)
-3. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech; supports voice cloning from a reference WAV
+3. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech; supports voice cloning from a reference WAV. Uses the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) weights so narration is licensed for commercial use — see [NOTICE.md](NOTICE.md)
 4. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
 5. **Assembly** — FFmpeg mixes everything into a single video with synced audio
 
