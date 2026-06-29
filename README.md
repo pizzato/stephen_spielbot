@@ -199,10 +199,10 @@ The legacy FLUX.1 schnell engine is optional (`INSTALL_FLUX1=1 bash scripts/down
 Stephen Spielbot's code is licensed under [Apache-2.0](LICENSE).
 
 The AI **models** it downloads each carry their own licenses — see
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md). The defaults (FLUX.2 Klein,
-LTX-Video, ACE-Step) are commercial-friendly, **but** the current F5-TTS
-narration model is CC-BY-NC (non-commercial); review the notices before
-monetizing generated videos.
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE.md`](NOTICE.md).
+The defaults (FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model)
+are commercial-friendly; the original F5-TTS narration weights are offered only
+as an opt-in **non-commercial** preview. Review the notices before monetizing.
 
 > "Stephen Spielbot" is a playful name and is not affiliated with, endorsed by,
 > or connected to Steven Spielberg or any of his companies.
