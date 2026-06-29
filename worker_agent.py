@@ -99,7 +99,8 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
     generate_narration(narration_text, output, reference_wav=ref, host=endpoint,
                        robotic=bool(p.get("voice_robotic")),
                        robotic_amount=p.get("voice_robotic_amount"),
-                       speed=p.get("voice_speed"))
+                       speed=p.get("voice_speed"),
+                       tts_engine=p.get("tts_engine") or "openf5")
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
     store.complete_task(task.id, result={"path": str(output), "duration": duration}, message="narration ready")
