@@ -457,18 +457,20 @@ export function Banner({ tone = 'danger', children }) {
   )
 }
 
+// Ordered to follow the production pipeline: ideation → production → publishing/audience.
 const NAV = [
   { id: 'home', label: 'Home', icon: 'house' },
   { id: 'create', label: 'Create', icon: 'wand-magic-sparkles' },
-  { id: 'script', label: 'Script', icon: 'feather-pointed' },
-  { id: 'progress', label: 'Render', icon: 'gauge-high' },
+  { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
   { sep: true },
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
-  { id: 'community', label: 'Community', icon: 'comments' },
-  { id: 'publish', label: 'Publishing', icon: 'upload' },
-  { id: 'analytics', label: 'Channel Analytics', icon: 'chart-simple' },
-  { id: 'ideas', label: 'AI ideas', icon: 'lightbulb' },
+  { id: 'script', label: 'Script', icon: 'feather-pointed' },
+  { id: 'progress', label: 'Render', icon: 'gauge-high' },
   { id: 'library', label: 'Films', icon: 'film' },
+  { sep: true },
+  { id: 'publish', label: 'Publishing', icon: 'upload' },
+  { id: 'community', label: 'Community', icon: 'comments' },
+  { id: 'analytics', label: 'Channel Analytics', icon: 'chart-simple' },
   { sep: true },
   { id: 'settings', label: 'Settings', icon: 'gear' },
 ]
