@@ -1867,6 +1867,10 @@ def remix_load(work_dir: str = Query("")) -> dict:
     # job_config, then global config) so a no-op re-mix reproduces it.
     cfg = gapp.load_config()
     jc = _film_job_config(wd)
+    try:
+        meta = json.loads((wd / "job.json").read_text())
+    except Exception:
+        meta = {}
     return {
         "work_dir": str(wd),
         "final_url": f"/api/file?path={final_vid}",
@@ -1875,6 +1879,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
+        # Same publish/approval status the Films tab shows, so the review screen
+        # can surface the Approve gate (publish_require_approval) inline.
+        **_film_publish_status(wd, meta, cfg),
     }
 
 

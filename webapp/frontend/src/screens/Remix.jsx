@@ -13,6 +13,7 @@ export default function Remix({ workDir, go }) {
   const [status, setStatus] = useState('')
   const [confirmDel, setConfirmDel] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [approving, setApproving] = useState(false)
   // Aspect ratio is read from the actual video so portrait films aren't letterboxed.
   const [aspect, setAspect] = useState('16 / 9')
   const [portrait, setPortrait] = useState(false)
@@ -78,6 +79,18 @@ export default function Remix({ workDir, go }) {
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
 
+  // Approve this finished film for publishing (publish_require_approval gate) —
+  // the same action as the Films tab, surfaced here since this is where the film
+  // is reviewed. Once approved it releases on the normal schedule/cadence.
+  const approve = async () => {
+    setApproving(true); setError(''); setStatus('')
+    try {
+      await api.publishApprove(data.work_dir || workDir)
+      setData((d) => ({ ...d, approved: true, awaiting_approval: false }))
+      setStatus('Approved — it will publish on the normal schedule.')
+    } catch (e) { setError(e.message) } finally { setApproving(false) }
+  }
+
   const del = async () => {
     setDeleting(true); setError('')
     try { await api.deleteFilm(data.work_dir || workDir); go('library') }
@@ -106,7 +119,10 @@ export default function Remix({ workDir, go }) {
         <div className="row gap-10 reveal reveal-d1 row--wrap">
           {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
           <Button variant="ghost" icon="film" onClick={() => go('editfilm', { workDir: data.work_dir || workDir })}>Edit</Button>
-          <Button variant="primary" icon="upload" onClick={() => go('publish', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
+          {data.awaiting_approval && (
+            <Button variant="primary" icon="check" disabled={approving} onClick={approve}>{approving ? 'Approving…' : 'Approve'}</Button>
+          )}
+          <Button variant={data.awaiting_approval ? 'ghost' : 'primary'} icon="upload" onClick={() => go('publish', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
           {confirmDel ? (
             <>
               <Button variant="danger" icon="trash-can" disabled={deleting} onClick={del}>{deleting ? 'Deleting…' : 'Confirm delete'}</Button>
