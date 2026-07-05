@@ -665,6 +665,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   // channel ops auto-save server-side, so they deliberately don't set it.
   // A ref, not state: only the sync effect and leave guards read it.
   const dirtyRef = useRef(false)
+  // Reactive mirror of dirtyRef — character image ops persist server-side, so
+  // they're only offered when there are no unsaved edits to clobber.
+  const [dirty, setDirty] = useState(false)
+  const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
+  const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -741,7 +746,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   }
 
   // Stage a Save-required edit and flag it as unsaved (see dirtyRef).
-  const editCfg = (updater) => { dirtyRef.current = true; setCfg(updater) }
+  const editCfg = (updater) => { dirtyRef.current = true; setDirty(true); setCfg(updater) }
 
   // Warn before leaving with unsaved edits — in-app navigation consults the
   // guard (via App's `go`), reload/close hits beforeunload. Voice and channel
@@ -833,6 +838,34 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     presets[bucket] = { ...(presets[bucket] || {}), [key]: value }
     setStyleField('size_presets', presets)
   }
+  // Recurring characters (consistent look). The backend normalizes/ids these on
+  // save (_norm_characters), so the UI can add bare rows and drop blank aliases.
+  const chars = st.characters || []
+  const addChar = () => setStyleField('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
+  const updateChar = (i, patch) => setStyleField('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  const removeChar = (i) => setStyleField('characters', chars.filter((_, j) => j !== i))
+  // Character reference images persist server-side immediately (like voice ops),
+  // so they're gated on a clean form. Merge just the affected style's characters
+  // back into the working copy and bump the thumbnail cache-bust token.
+  const characterOp = async (charId, run) => {
+    setError(''); setStatus(''); setCharBusy(charId)
+    try {
+      const r = await run()
+      setCfg((c) => ({
+        ...c,
+        styles: (c.styles || []).map((s) => {
+          const srv = (r.config.styles || []).find((x) => x.name === s.name)
+          return srv ? { ...s, characters: srv.characters } : s
+        }),
+      }))
+      setMeta((m) => ({ ...m, config: r.config }))
+      setCharBust((n) => n + 1)
+    } catch (e) { setError(e.message) } finally { setCharBusy('') }
+  }
+  const uploadCharImage = (char, file) => characterOp(char.id, async () =>
+    api.setCharacterImage(st.name, char.id, file.name, await fileToDataUrl(file)))
+  const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(st.name, char.id))
+  const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(st.name, char.id, ''))
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -888,7 +921,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
-      dirtyRef.current = false   // saved — let the sync effect adopt r.config
+      dirtyRef.current = false; setDirty(false)   // saved — let the sync effect adopt r.config
       setMeta((m) => ({ ...m, config: r.config }))
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -970,7 +1003,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     setError(''); setStatus(''); setRestoring(true)
     try {
       const r = await api.restoreSettings(await fileToDataUrl(file))
-      dirtyRef.current = false
+      dirtyRef.current = false; setDirty(false)
       setCfg(r.config)
       setMeta((m) => ({ ...m, config: r.config }))
       const n = r.restored?.length || 0
@@ -1322,6 +1355,63 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 </Field></div>
               </div>
               <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} engine={st.tts_engine} onError={setError} />
+            </div>
+          </Card>
+
+          {/* ── Characters (consistent look) ── */}
+          <Card span={12} className="reveal reveal-d3">
+            <span className="label-sm">Characters</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              Recurring people or things that should look the same across every scene and video. When a scene mentions a character by name (or an alias), its appearance is written into the image prompt so it stays consistent.
+            </div>
+            <div className="stack gap-16 mt-16">
+              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add one to keep a subject looking the same across scenes.</div>}
+              {chars.map((c, i) => (
+                <div key={c.id || i} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <div className="grow"><Field label="Name">
+                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                        onChange={(e) => updateChar(i, { name: e.target.value })} />
+                    </Field></div>
+                    <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
+                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                        key={`alias-${styleIdx}-${c.id || i}`}
+                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                    </Field></div>
+                  </div>
+                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                    <textarea className="textarea" rows={3} value={c.description || ''}
+                      onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                  <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
+                      label="Enabled — include this character in new scripts and renders" />
+                    <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
+                  </div>
+                  {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
+                  {c.id && !dirty ? (
+                    <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+                      {c.ref_image
+                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                            style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                        : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                      <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                        <Icon name="upload" /> Upload image
+                        <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                      </label>
+                      <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                        onClick={() => genCharPortrait(c)}>
+                        {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
+                      </Button>
+                      {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                    </div>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
+                  )}
+                </div>
+              ))}
+              <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
             </div>
           </Card>
 

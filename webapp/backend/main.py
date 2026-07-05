@@ -211,6 +211,9 @@ def get_config() -> dict:
         # Root of every work_dir; the frontend joins it with a URL slug to
         # reconstruct a full path for deep links (issue #32).
         "videos_dir": str(gapp.OUTPUT_DIR),
+        # Where character reference images live; the Settings UI joins it with
+        # "<char_id>.png" to display a thumbnail via /api/file.
+        "characters_dir": str(gapp._characters_dir()),
         # Kept for backward compatibility (composed name strings stay canonical).
         "resolutions": list(gapp._RESOLUTIONS.keys()),
         "default_resolution": gapp._DEFAULT_RESOLUTION,
@@ -357,6 +360,78 @@ def voices_delete(body: VoiceDelete) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _voice_response(cfg)
+
+
+# ── Character reference images (consistent characters, Phase 2) ──────────────
+# Identify a saved character by (style_name, char_id). These persist immediately
+# (mirroring voice ops) and return the fresh config; the client merges just the
+# affected style's characters back into any staged edits.
+
+class CharacterImage(BaseModel):
+    style_name: str
+    char_id: str
+    filename: str = ""
+    data: str
+
+
+class CharacterRef(BaseModel):
+    style_name: str
+    char_id: str
+
+
+class CharacterPortrait(BaseModel):
+    style_name: str
+    char_id: str
+    extra_prompt: str = ""
+
+
+def _decode_image(data: str) -> bytes:
+    """Decode a base64 (optionally data-URL) image payload to bytes."""
+    if not data:
+        raise HTTPException(400, "No image provided.")
+    if data.startswith("data:"):
+        data = data.split(",", 1)[-1]
+    try:
+        raw = base64.b64decode(data)
+    except Exception:
+        raise HTTPException(400, "Could not read the image file.")
+    if not raw:
+        raise HTTPException(400, "The image file is empty.")
+    return raw
+
+
+def _character_response(cfg: dict) -> dict:
+    return {"ok": True, "config": gapp.public_config(cfg)}
+
+
+@api.post("/api/characters/image")
+def characters_set_image(body: CharacterImage) -> dict:
+    raw = _decode_image(body.data)
+    try:
+        cfg = gapp.set_character_image(body.style_name, body.char_id, raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _character_response(cfg)
+
+
+@api.post("/api/characters/image/clear")
+def characters_clear_image(body: CharacterRef) -> dict:
+    try:
+        cfg = gapp.clear_character_image(body.style_name, body.char_id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _character_response(cfg)
+
+
+@api.post("/api/characters/portrait")
+def characters_portrait(body: CharacterPortrait) -> dict:
+    try:
+        cfg = gapp.generate_character_portrait(body.style_name, body.char_id, body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return _character_response(cfg)
 
 
 class VoiceTest(BaseModel):
@@ -650,12 +725,13 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
+    character_sheet = gapp._character_sheet(ss.get("characters")) or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style = generate_script(
                 topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
-                video_style_hint=video_style_hint,
+                video_style_hint=video_style_hint, character_sheet=character_sheet,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")

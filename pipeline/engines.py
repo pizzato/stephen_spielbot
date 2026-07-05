@@ -61,6 +61,10 @@ ENGINES: dict[str, dict] = {
         "can_edit": True,
         "edit_mode": "flux2",
         "t2i_workflow": "flux2_t2i.json",
+        # Reference-image conditioned t2i (FLUX.2 ReferenceLatent) — used when a
+        # scene features a character that has a reference image. See comfyui
+        # generate_with_engine(reference_images=...).
+        "t2i_ref_workflow": "flux2_t2i_ref.json",
         "edit_workflow": "flux2_edit.json",
         "steps": 4,
         "edit_denoise": 1.0,
