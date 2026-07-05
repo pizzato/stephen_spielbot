@@ -3,6 +3,7 @@ brief improvement, and YouTube title regeneration. The LLM call is mocked so the
 tests assert prompt wiring and response shaping, not model output."""
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -121,12 +122,20 @@ class FilmUpscaleTests(unittest.TestCase):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
         final = wd.with_suffix(".mp4")
         final.write_bytes(b"low-res-final")
+        scene = wd / "scene_01_final.mp4"
+        scene.write_bytes(b"scene-one" * 1500)
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None):
-            self.assertEqual(src, final)
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None):
+            self.assertEqual(src, scene)
             self.assertEqual((width, height), (1920, 1080))
             self.assertEqual(command_template, "temporal-cli -i {input} -o {output}")
             self.assertEqual(timeout_seconds, 1234)
+            self.assertIsNone(comfy_url)
+            out.write_bytes(b"temporal-upscaled-scene")
+            return out
+
+        def fake_concat(paths, out, fade=0.3):
+            self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4"])
             out.write_bytes(b"temporal-upscaled-final")
             return out
 
@@ -137,6 +146,7 @@ class FilmUpscaleTests(unittest.TestCase):
              }), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.upscale_video") as fast:
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
@@ -145,6 +155,64 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(backend._film_tasks["tid"]["status"], "done")
         temporal.assert_called_once()
         fast.assert_not_called()
+
+    def test_packaged_temporal_final_upscale_runs_by_scene(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd.with_suffix(".mp4")
+        final.write_bytes(b"low-res-final")
+        scene_1 = wd / "scene_01_final.mp4"
+        scene_2 = wd / "scene_02_final.mp4"
+        scene_1.write_bytes(b"scene-one" * 1500)
+        scene_2.write_bytes(b"scene-two" * 1500)
+        (wd / "background_music.wav").write_bytes(b"music")
+
+        calls = []
+        mixed = []
+
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None):
+            self.assertNotEqual(src, final)
+            self.assertEqual((width, height), (1920, 1080))
+            self.assertIsNone(command_template)
+            self.assertEqual(timeout_seconds, 1234)
+            calls.append((src, comfy_url))
+            time.sleep(0.05)
+            out.write_bytes(f"upscaled:{src.name}".encode())
+            return out
+
+        def fake_concat(paths, out, fade=0.3):
+            self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
+            out.write_bytes(b"combined-scenes")
+            return out
+
+        def fake_mix(video_path, music_path, output_path, volume=0.0, voice_volume=1.0, ambient_path=None, ambient_volume=0.0):
+            mixed.append((video_path.read_bytes(), music_path, volume, voice_volume, ambient_path, ambient_volume))
+            output_path.write_bytes(b"scene-temporal-final")
+            return output_path
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch.object(backend.gapp, "load_config", return_value={
+                 "comfy_workers": ["http://w1:8188", "http://w2:8188"],
+                 "temporal_video_upscaler_timeout": 1234,
+                 "music_vol": 5,
+                 "voice_vol": 200,
+                 "ambient_vol": 1,
+             }), \
+             mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w1:8188", "http://w2:8188"]), \
+             mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
+             mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.mix_background_music", side_effect=fake_mix):
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
+
+        self.assertEqual(final.read_bytes(), b"scene-temporal-final")
+        self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+        self.assertEqual({src for src, _ in calls}, {scene_1, scene_2})
+        self.assertEqual({url for _, url in calls}, {"http://w1:8188", "http://w2:8188"})
+        self.assertEqual(mixed[0], (b"combined-scenes", wd / "background_music.wav", 0.05, 2.0, None, 0.01))
+        history = backend.final_video_history.history(wd)
+        self.assertEqual(len(history["versions"]), 2)
+        self.assertEqual(history["selected"], 2)
 
     def test_remix_upscale_endpoint_accepts_target_and_mode(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
