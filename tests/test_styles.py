@@ -886,5 +886,257 @@ class ScriptGenerateTaskTests(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 404)
 
 
+class CharacterTests(TempConfigCase):
+    """Recurring-character registry: normalization, the LLM sheet, and the
+    deterministic injection into a scene's image prompt."""
+
+    def test_norm_characters_assigns_ids_and_drops_blank(self):
+        rows = app._norm_characters([
+            {"name": "Robot XYZ", "description": "matte-black chassis"},
+            {"name": "  ", "description": "no name — dropped"},
+            "not a dict",
+            {"description": "also no name"},
+        ])
+        self.assertEqual([c["name"] for c in rows], ["Robot XYZ"])
+        self.assertTrue(rows[0]["id"].startswith("char_"))
+        self.assertEqual(rows[0]["aliases"], [])
+        self.assertTrue(rows[0]["enabled"])
+
+    def test_norm_characters_coerces_and_clamps(self):
+        rows = app._norm_characters([{
+            "id": "keep-me", "name": "Bob", "aliases": ["Bobby", "  ", 42],
+            "description": " a man ", "ref_image": "bob.png",
+            "ref_strength": 5.0, "enabled": 0,
+        }])
+        c = rows[0]
+        self.assertEqual(c["id"], "keep-me")
+        self.assertEqual(c["aliases"], ["Bobby", "42"])
+        self.assertEqual(c["description"], "a man")
+        self.assertEqual(c["ref_strength"], 1.0)  # clamped 5.0 -> 1.0
+        self.assertFalse(c["enabled"])
+
+    def test_norm_characters_dedupes_ids(self):
+        rows = app._norm_characters([
+            {"id": "dup", "name": "A", "description": "a"},
+            {"id": "dup", "name": "B", "description": "b"},
+        ])
+        self.assertEqual(len({c["id"] for c in rows}), 2)
+
+    def test_characters_default_empty_on_fresh_install(self):
+        cfg = app.load_config()
+        self.assertEqual(cfg["styles"][0]["characters"], [])
+        self.assertEqual(cfg["default_characters"], [])
+
+    def test_characters_round_trip_through_ensure_styles(self):
+        self.write_config({
+            "styles": [_style("Hero", characters=[
+                {"name": "Robot XYZ", "aliases": ["XYZ"],
+                 "description": "matte-black humanoid chassis, cyan optic"},
+            ])],
+            "default_style": "Hero",
+        })
+        cfg = app.load_config()
+        chars = cfg["styles"][0]["characters"]
+        self.assertEqual(len(chars), 1)
+        self.assertEqual(chars[0]["name"], "Robot XYZ")
+        self.assertEqual(chars[0]["aliases"], ["XYZ"])
+        self.assertTrue(chars[0]["id"])
+        # mirrored onto the flat key like every other default-style field
+        self.assertEqual(cfg["default_characters"], chars)
+
+    def test_no_style_imposes_no_characters(self):
+        self.write_config({
+            "styles": [_style("Hero", characters=[
+                {"name": "Bob", "description": "a man"}])],
+            "default_style": "Hero",
+        })
+        cfg = app.load_config()
+        ss = app.style_settings(cfg, app.NO_STYLE)
+        self.assertEqual(ss["characters"], [])
+
+    def test_character_sheet_lists_enabled_described_only(self):
+        sheet = app._character_sheet([
+            {"name": "Robot XYZ", "description": "matte-black chassis", "enabled": True},
+            {"name": "Ghost", "description": "", "enabled": True},        # no description
+            {"name": "Bob", "description": "a man", "enabled": False},     # disabled
+        ])
+        self.assertIn("Robot XYZ: matte-black chassis", sheet)
+        self.assertNotIn("Ghost", sheet)
+        self.assertNotIn("Bob", sheet)
+
+    def test_character_sheet_empty_without_usable_characters(self):
+        self.assertEqual(app._character_sheet([]), "")
+        self.assertEqual(app._character_sheet([{"name": "X", "description": ""}]), "")
+
+    def _cfg_with_hero(self, **char):
+        base = {"name": "Robot XYZ", "description": "matte-black humanoid chassis"}
+        base.update(char)
+        self.write_config({
+            "styles": [_style("Hero", characters=[base])],
+            "default_style": "Hero",
+        })
+        return app.load_config()
+
+    def test_inject_appends_description_on_name_match(self):
+        cfg = self._cfg_with_hero()
+        scene = {"image_prompt": "Robot XYZ stands on a ridge.", "narration": ""}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertIn("matte-black humanoid chassis", out)
+        self.assertTrue(out.startswith("Robot XYZ stands on a ridge."))
+
+    def test_inject_matches_alias_and_narration(self):
+        cfg = self._cfg_with_hero(aliases=["the machine"])
+        # name/alias only in the narration, not the base prompt
+        scene = {"image_prompt": "A wide desert vista.",
+                 "narration": "Then the machine appeared."}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertIn("matte-black humanoid chassis", out)
+
+    def test_inject_noop_when_character_absent(self):
+        cfg = self._cfg_with_hero()
+        scene = {"image_prompt": "An empty canyon at dawn.", "narration": "Silence."}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual(out, "An empty canyon at dawn.")
+
+    def test_inject_does_not_double_stack_description(self):
+        cfg = self._cfg_with_hero()
+        base = "Robot XYZ, matte-black humanoid chassis, walks forward."
+        scene = {"image_prompt": base, "narration": ""}
+        out = app._inject_characters(base, scene, cfg, "Hero")
+        self.assertEqual(out, base)  # description already present → unchanged
+
+    def test_inject_skips_disabled_character(self):
+        cfg = self._cfg_with_hero(enabled=False)
+        scene = {"image_prompt": "Robot XYZ stands still.", "narration": ""}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual(out, "Robot XYZ stands still.")
+
+
+class CharacterReferenceImageTests(TempConfigCase):
+    """Phase 2 — reference-image conditioning: workflow builder, scene matching,
+    and the image store/clear helpers."""
+
+    _REPL = {
+        "FLUX_MODEL": "m", "CLIP_T5": "c", "FLUX_VAE": "v", "WEIGHT_DTYPE": "default",
+        "POSITIVE_PROMPT": "a scene", "WIDTH": 1024, "HEIGHT": 1024,
+        "STEPS": 4, "GUIDANCE": 4.0, "SEED": 1,
+    }
+
+    def test_ref_workflow_single_reference(self):
+        from pipeline import comfyui, engines
+        wf = comfyui._build_flux2_ref_workflow(engines.get("flux2-klein"), self._REPL, ["bob.png"])
+        self.assertEqual(wf["20"]["inputs"]["image"], "bob.png")
+        # BasicGuider (8) is driven by the single ReferenceLatent (22)
+        self.assertEqual(wf["8"]["inputs"]["conditioning"], ["22", 0])
+        self.assertNotIn("23", wf)
+
+    def test_ref_workflow_chains_multiple_references(self):
+        from pipeline import comfyui, engines
+        wf = comfyui._build_flux2_ref_workflow(engines.get("flux2-klein"), self._REPL, ["bob.png", "xyz.png"])
+        self.assertEqual(wf["20"]["inputs"]["image"], "bob.png")
+        self.assertEqual(wf["23"]["inputs"]["image"], "xyz.png")           # second ref loaded
+        self.assertEqual(wf["24"]["inputs"]["pixels"], ["23", 0])           # encoded
+        self.assertEqual(wf["25"]["inputs"]["conditioning"], ["22", 0])     # chained after first
+        self.assertEqual(wf["25"]["inputs"]["latent"], ["24", 0])
+        self.assertEqual(wf["8"]["inputs"]["conditioning"], ["25", 0])      # guider uses the last
+
+    def test_ref_workflow_is_valid_and_complete(self):
+        from pipeline import comfyui, engines
+        wf = comfyui._build_flux2_ref_workflow(engines.get("flux2-klein"), self._REPL, ["bob.png"])
+        # every placeholder filled — no unresolved {{...}} survives in the JSON
+        self.assertNotIn("{{", json.dumps(wf))
+        self.assertEqual(wf["1"]["class_type"], "UNETLoader")
+
+    def test_klein_engine_declares_ref_workflow(self):
+        from pipeline import engines
+        self.assertEqual(engines.get("flux2-klein")["t2i_ref_workflow"], "flux2_t2i_ref.json")
+
+    def test_character_image_path_is_basename_only(self):
+        p = app._character_image_path("../../etc/passwd")
+        self.assertEqual(p.name, "passwd")
+        self.assertEqual(p.parent, app._characters_dir())
+        self.assertIsNone(app._character_image_path(""))
+
+    def _hero_with_chars(self, chars):
+        # Explicit ids mirror a saved config: ids are minted on save and then
+        # stable, which is what the image ops (gated on a saved form) rely on.
+        chars = [{"id": f"char_test_{i}", **c} for i, c in enumerate(chars)]
+        self.write_config({"styles": [_style("Hero", characters=chars)], "default_style": "Hero"})
+        return app.load_config()
+
+    def _write_ref(self, char_id):
+        from PIL import Image
+        d = app._characters_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (8, 8), (0, 128, 255)).save(d / f"{char_id}.png", "PNG")
+
+    def test_scene_reference_images_matches_by_name(self):
+        cfg = self._hero_with_chars([
+            {"name": "Bob", "description": "a man", "ref_image": "x"},
+        ])
+        cid = cfg["styles"][0]["characters"][0]["id"]
+        # ensure the stored filename is the canonical <id>.png and the file exists
+        cfg = app.set_character_image("Hero", cid, self._png_bytes())
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        paths = app._scene_reference_images(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual([p.name for p in paths], [f"{cid}.png"])
+
+    def test_scene_reference_images_ignores_unmatched_and_missing_file(self):
+        cfg = self._hero_with_chars([
+            {"name": "Bob", "description": "a man", "ref_image": "ghost.png"},  # file never written
+        ])
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        self.assertEqual(app._scene_reference_images("Bob waves.", scene, cfg, "Hero"), [])
+        # unmatched name → empty even when the file exists
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man", "ref_image": "x"}])
+        cid = cfg["styles"][0]["characters"][0]["id"]
+        cfg = app.set_character_image("Hero", cid, self._png_bytes())
+        scene = {"image_prompt": "An empty room.", "narration": "Nobody."}
+        self.assertEqual(app._scene_reference_images("An empty room.", scene, cfg, "Hero"), [])
+
+    def test_scene_reference_images_caps_at_two(self):
+        cfg = self._hero_with_chars([
+            {"name": "Ana", "description": "a", "ref_image": "x"},
+            {"name": "Ben", "description": "b", "ref_image": "x"},
+            {"name": "Cid", "description": "c", "ref_image": "x"},
+        ])
+        for ch in cfg["styles"][0]["characters"]:
+            cfg = app.set_character_image("Hero", ch["id"], self._png_bytes())
+        scene = {"image_prompt": "Ana, Ben and Cid meet.", "narration": ""}
+        paths = app._scene_reference_images(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual(len(paths), app._MAX_SCENE_REFERENCES)
+
+    def test_set_and_clear_character_image(self):
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])
+        cid = cfg["styles"][0]["characters"][0]["id"]
+        cfg = app.set_character_image("Hero", cid, self._png_bytes())
+        char = cfg["styles"][0]["characters"][0]
+        self.assertEqual(char["ref_image"], f"{cid}.png")
+        p = app._character_image_path(char["ref_image"])
+        self.assertTrue(p.exists())
+        cfg = app.clear_character_image("Hero", cid)
+        self.assertEqual(cfg["styles"][0]["characters"][0]["ref_image"], "")
+        self.assertFalse(p.exists())
+
+    def test_image_ops_reject_unknown_character(self):
+        self._hero_with_chars([{"name": "Bob", "description": "a man"}])
+        with self.assertRaises(ValueError):
+            app.set_character_image("Hero", "not-an-id", self._png_bytes())
+        with self.assertRaises(ValueError):
+            app.clear_character_image("Nope", "x")
+
+    def test_ref_strength_defaults_to_one(self):
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])
+        self.assertEqual(cfg["styles"][0]["characters"][0]["ref_strength"], 1.0)
+
+    @staticmethod
+    def _png_bytes() -> bytes:
+        from PIL import Image
+        import io as _io
+        buf = _io.BytesIO()
+        Image.new("RGB", (8, 8), (255, 0, 0)).save(buf, "PNG")
+        return buf.getvalue()
+
+
 if __name__ == "__main__":
     unittest.main()

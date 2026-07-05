@@ -63,6 +63,10 @@ export const api = {
   deleteVoice: (name) => req('POST', '/voices/delete', { name }),
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.
   testVoice: (body) => req('POST', '/voices/test', body),
+  // Character reference images (consistent characters). `data` is a base64 / data-URL.
+  setCharacterImage: (styleName, charId, filename, data) => req('POST', '/characters/image', { style_name: styleName, char_id: charId, filename, data }),
+  clearCharacterImage: (styleName, charId) => req('POST', '/characters/image/clear', { style_name: styleName, char_id: charId }),
+  generateCharacterPortrait: (styleName, charId, extraPrompt) => req('POST', '/characters/portrait', { style_name: styleName, char_id: charId, extra_prompt: extraPrompt || '' }),
 
   // Script generation is several Claude calls (tens of seconds). Holding one long
   // POST open meant any blip on that connection surfaced as a "NetworkError" even
