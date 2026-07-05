@@ -1,5 +1,18 @@
 # Consistent Characters — Feature Plan
 
+> **Status (implementation).**
+> - **Phase 1 (text consistency): DONE** — per-style character registry, character
+>   sheet into both LLM backends, deterministic injection at generation, Settings
+>   Characters card. Shipped.
+> - **Phase 2 (reference images): CODE DONE, PENDING LIVE VALIDATION** — `flux2_t2i_ref.json`
+>   (ReferenceLatent), N-reference builder in `generate_with_engine`, scene→character
+>   ref-image matching (cap 2), upload/clear/generate-portrait endpoints, Settings
+>   image UI. **The one open item is the §5.0 spike:** the DGX workers were unreachable
+>   from the dev host, so the `ReferenceLatent` node graph has NOT yet been run on a
+>   live worker. Load `workflows/flux2_t2i_ref.json` into a worker's ComfyUI and run it
+>   before trusting reference generation; if the node is missing, see §5.6 fallback.
+
+
 > **Goal.** Let a user define named characters (e.g. "Robot XYZ", "Bob John") that
 > keep a **consistent look across every scene and every video**. A character can be:
 > - **text-defined** — a fixed appearance description the pipeline reuses verbatim, and/or

@@ -665,6 +665,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   // channel ops auto-save server-side, so they deliberately don't set it.
   // A ref, not state: only the sync effect and leave guards read it.
   const dirtyRef = useRef(false)
+  // Reactive mirror of dirtyRef — character image ops persist server-side, so
+  // they're only offered when there are no unsaved edits to clobber.
+  const [dirty, setDirty] = useState(false)
+  const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
+  const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -741,7 +746,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   }
 
   // Stage a Save-required edit and flag it as unsaved (see dirtyRef).
-  const editCfg = (updater) => { dirtyRef.current = true; setCfg(updater) }
+  const editCfg = (updater) => { dirtyRef.current = true; setDirty(true); setCfg(updater) }
 
   // Warn before leaving with unsaved edits — in-app navigation consults the
   // guard (via App's `go`), reload/close hits beforeunload. Voice and channel
@@ -839,6 +844,28 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const addChar = () => setStyleField('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
   const updateChar = (i, patch) => setStyleField('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
   const removeChar = (i) => setStyleField('characters', chars.filter((_, j) => j !== i))
+  // Character reference images persist server-side immediately (like voice ops),
+  // so they're gated on a clean form. Merge just the affected style's characters
+  // back into the working copy and bump the thumbnail cache-bust token.
+  const characterOp = async (charId, run) => {
+    setError(''); setStatus(''); setCharBusy(charId)
+    try {
+      const r = await run()
+      setCfg((c) => ({
+        ...c,
+        styles: (c.styles || []).map((s) => {
+          const srv = (r.config.styles || []).find((x) => x.name === s.name)
+          return srv ? { ...s, characters: srv.characters } : s
+        }),
+      }))
+      setMeta((m) => ({ ...m, config: r.config }))
+      setCharBust((n) => n + 1)
+    } catch (e) { setError(e.message) } finally { setCharBusy('') }
+  }
+  const uploadCharImage = (char, file) => characterOp(char.id, async () =>
+    api.setCharacterImage(st.name, char.id, file.name, await fileToDataUrl(file)))
+  const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(st.name, char.id))
+  const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(st.name, char.id, ''))
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -894,7 +921,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
-      dirtyRef.current = false   // saved — let the sync effect adopt r.config
+      dirtyRef.current = false; setDirty(false)   // saved — let the sync effect adopt r.config
       setMeta((m) => ({ ...m, config: r.config }))
     } catch (e) { setError(e.message) } finally { setBusy(false) }
   }
@@ -976,7 +1003,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     setError(''); setStatus(''); setRestoring(true)
     try {
       const r = await api.restoreSettings(await fileToDataUrl(file))
-      dirtyRef.current = false
+      dirtyRef.current = false; setDirty(false)
       setCfg(r.config)
       setMeta((m) => ({ ...m, config: r.config }))
       const n = r.restored?.length || 0
@@ -1361,6 +1388,27 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                       label="Enabled — include this character in new scripts and renders" />
                     <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
                   </div>
+                  {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
+                  {c.id && !dirty ? (
+                    <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+                      {c.ref_image
+                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                            style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                        : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                      <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                        <Icon name="upload" /> Upload image
+                        <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                      </label>
+                      <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                        onClick={() => genCharPortrait(c)}>
+                        {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
+                      </Button>
+                      {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                    </div>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
+                  )}
                 </div>
               ))}
               <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
