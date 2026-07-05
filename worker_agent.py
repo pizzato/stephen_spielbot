@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -61,21 +62,27 @@ def _execute_scene_image(store: DurableStore, task: TaskRecord, endpoint: str) -
     work_dir = Path(p["work_dir"]).expanduser()
     sid = int(p["scene_id"])
     output = _path(p, "output_path", work_dir / f"scene_{sid:02d}_first_frame.png")
-    if store.skip_task_if_artifact_exists(task.id, output, artifact_kind="image", min_size=1000):
+    uses_previous_end = bool(p.get("use_previous_scene_end_image")) and sid > 1
+    if not uses_previous_end and store.skip_task_if_artifact_exists(task.id, output, artifact_kind="image", min_size=1000):
         return
 
-    generate_scene_image(
-        p.get("image_prompt", ""),
-        output,
-        width=int(p.get("width", p.get("vid_width", 1024))),
-        height=int(p.get("height", p.get("vid_height", 576))),
-        steps=int(p.get("flux_steps", 4)),
-        flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
-        clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-        clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
-        flux_vae=p.get("flux_vae", "ae.safetensors"),
-        comfy_url=endpoint,
-    )
+    previous_end = work_dir / f"scene_{sid - 1:02d}_end_frame.png"
+    if uses_previous_end and previous_end.exists():
+        shutil.copy2(previous_end, output)
+    else:
+        generate_scene_image(
+            p.get("image_prompt", ""),
+            output,
+            width=int(p.get("width", p.get("vid_width", 1024))),
+            height=int(p.get("height", p.get("vid_height", 576))),
+            steps=int(p.get("flux_steps", 4)),
+            flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
+            clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
+            clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
+            flux_vae=p.get("flux_vae", "ae.safetensors"),
+            comfy_url=endpoint,
+        )
+    store.update_scene_preview(task.job_id, sid, output)
     store.record_artifact(task.job_id, task.id, "image", output, width=int(p.get("width", 0)) or None, height=int(p.get("height", 0)) or None)
     store.complete_task(task.id, result={"path": str(output)}, message="image ready")
 
@@ -157,8 +164,17 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         video_prompt=p.get("video_prompt", ""),
         narration=p.get("narration", ""),
         negative_prompt=p.get("negative_prompt", ""),
+        end_image_prompt=p.get("end_image_prompt", ""),
+        use_previous_scene_end_image=bool(p.get("use_previous_scene_end_image")),
     )
     first_frame = Path(p["first_frame"]).expanduser() if p.get("first_frame") else work_dir / f"scene_{sid:02d}_first_frame.png"
+    end_frame = Path(p["end_frame"]).expanduser() if p.get("end_frame") else work_dir / f"scene_{sid:02d}_end_frame.png"
+    previous_end_frame = work_dir / f"scene_{sid - 1:02d}_end_frame.png"
+
+    def _persist_end_frame(frame: Path) -> None:
+        store.update_scene_end_preview(task.job_id, sid, frame)
+        store.record_artifact(task.job_id, task.id, "end_image", frame)
+
     flux_cfg = {
         "model": p.get("flux_model", "flux1-schnell-fp8.safetensors"),
         "clip_t5": p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
@@ -181,6 +197,9 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         endpoint,
         first_frame if first_frame.exists() else None,
         flux_cfg,
+        scene_end_frame=end_frame if end_frame.exists() else None,
+        previous_scene_end_frame=previous_end_frame if previous_end_frame.exists() else None,
+        on_end_frame=_persist_end_frame,
     )
     store.record_artifact(task.job_id, task.id, "scene_video", scene_video, duration_seconds=_get_duration(scene_video))
     if ambient:

@@ -36,6 +36,8 @@ class DurableStoreTests(unittest.TestCase):
                 "title": "Scene 2",
                 "image_prompt": "Another still image",
                 "video_prompt": "Another slow camera move",
+                "end_image_prompt": "Another final image",
+                "use_previous_scene_end_image": True,
                 "narration": "More narration.",
             },
         ]
@@ -83,6 +85,14 @@ class DurableStoreTests(unittest.TestCase):
         narration = self.store.get_task(task_id(self.job_id, "scene", 1, "narration"))
         self.assertEqual(narration.payload["voice_ref"], "/tmp/voice.wav")
         self.assertEqual(narration.payload["resource_class"], "tts")
+        scene_two = self.store.get_scene(self.job_id, 2)
+        self.assertEqual(scene_two["end_image_prompt"], "Another final image")
+        self.assertTrue(scene_two["use_previous_scene_end_image"])
+        image_two = self.store.get_task(task_id(self.job_id, "scene", 2, "image"))
+        self.assertIn(
+            task_id(self.job_id, "scene", 1, "video"),
+            self.store.task_dependencies(image_two.id),
+        )
         music = self.store.get_task(task_id(self.job_id, "music"))
         self.assertEqual(music.payload["resource_class"], "comfy:music")
 

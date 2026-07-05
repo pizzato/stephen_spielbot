@@ -7,6 +7,8 @@ helper library that ``webapp/backend/main.py`` imports for config I/O,
 work-dir bookkeeping, job launching, progress polling, and automation.
 """
 
+from __future__ import annotations
+
 import concurrent.futures
 import fnmatch
 import io
@@ -1478,6 +1480,8 @@ def _save_active_scene(
     image_prompt: str,
     video_prompt: str,
     narration: str,
+    end_image_prompt: str = "",
+    use_previous_scene_end_image: bool = False,
 ) -> None:
     if not job_id:
         return
@@ -1491,8 +1495,11 @@ def _save_active_scene(
             title=title,
             image_prompt=image_prompt,
             video_prompt=video_prompt,
+            end_image_prompt=end_image_prompt,
+            use_previous_scene_end_image=use_previous_scene_end_image,
             narration=narration,
             preview_path=current.get("preview_path", ""),
+            end_preview_path=current.get("end_preview_path", ""),
             metadata=current.get("metadata", {}),
         )
         rows = store.scene_rows(job_id)
@@ -1754,6 +1761,7 @@ def _generate_active_scene_preview(
     *,
     force: bool = False,
     worker_pool: WorkerPool | None = None,
+    frame: str = "start",
 ) -> Path:
     work_dir = _job_work_dir(job_id)
     if work_dir is None:
@@ -1765,7 +1773,8 @@ def _generate_active_scene_preview(
         job_row = store.get_job(job_id)
     finally:
         store.close()
-    existing = scene.get("preview_path") or ""
+    frame = "end" if frame == "end" else "start"
+    existing = scene.get("end_preview_path" if frame == "end" else "preview_path") or ""
     if existing and Path(existing).exists() and not force:
         return Path(existing)
 
@@ -1786,9 +1795,10 @@ def _generate_active_scene_preview(
     if worker_pool is None:
         raise RuntimeError("No cluster workers reachable for scene preview generation.")
 
-    out = work_dir / f"scene_{sid:02d}_preview.png"
-    # Preserve the image we're about to overwrite so the user can return to it.
-    image_history.seed_if_empty(work_dir, sid, out)
+    out = work_dir / (f"scene_{sid:02d}_end_frame.png" if frame == "end" else f"scene_{sid:02d}_preview.png")
+    if frame == "start":
+        # Preserve the image we're about to overwrite so the user can return to it.
+        image_history.seed_if_empty(work_dir, sid, out)
     # Which model bundle generates this style's scenes (defaults to flux1-schnell).
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
     img_width, img_height = _RESOLUTIONS.get(
@@ -1799,7 +1809,9 @@ def _generate_active_scene_preview(
     # preview is reused as the first frame instead of regenerated at a new size.
     img_width, img_height = ltx_dimensions(img_width, img_height)
     combined_style = _compose_visual_style(style, cfg, style_name)
-    base_prompt = image_prompt or scene.get("image_prompt") or title
+    base_prompt = (
+        scene.get("end_image_prompt") if frame == "end" else image_prompt
+    ) or scene.get("image_prompt") or title
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it.
     base_prompt = _inject_characters(base_prompt, scene, cfg, style_name)
@@ -1821,10 +1833,14 @@ def _generate_active_scene_preview(
         )
         store = DurableStore.default()
         try:
-            store.update_scene_preview(job_id, sid, out)
+            if frame == "end":
+                store.update_scene_end_preview(job_id, sid, out)
+            else:
+                store.update_scene_preview(job_id, sid, out)
         finally:
             store.close()
-        image_history.record(work_dir, sid, out)
+        if frame == "start":
+            image_history.record(work_dir, sid, out)
         return out
     finally:
         worker_pool.release(url)
@@ -2303,8 +2319,6 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
 
     logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
     return queue_item
-
-
 
 
 

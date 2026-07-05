@@ -150,6 +150,107 @@ class SceneVideoTests(unittest.TestCase):
 
             self.assertEqual(fired, [])
 
+    def test_generates_end_frame_when_prompt_is_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = Path(tmp)
+            first_frame = work_dir / "scene_01_preview.png"
+            first_frame.write_bytes(b"png")
+            scene = Scene(
+                id=1,
+                title="Scene 1",
+                image_prompt="start image",
+                video_prompt="camera move",
+                narration="words",
+                end_image_prompt="final image",
+            )
+
+            prompts: list[str] = []
+            end_frames: list[Path] = []
+
+            def fake_image(prompt, output_path, **kwargs):
+                prompts.append(prompt)
+                Path(output_path).write_bytes(b"png")
+
+            def fake_video(*args, **kwargs):
+                Path(args[3]).write_bytes(b"video")
+
+            def fake_extract_audio(video_path, output_path, duration=None):
+                output_path.write_bytes(b"audio")
+                return output_path
+
+            with mock.patch("pipeline.scene_video.generate_scene_image", side_effect=fake_image), \
+                 mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_video), \
+                 mock.patch("pipeline.scene_video._get_duration", return_value=1.2), \
+                 mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
+                generate_scene_video(
+                    scene,
+                    work_dir,
+                    narration_dur=1.0,
+                    vid_width=512,
+                    vid_height=288,
+                    max_clip_secs=20,
+                    lora_strength=0.5,
+                    first_pass_cfg=1.0,
+                    first_pass_steps=8,
+                    second_pass_cfg=3.0,
+                    second_pass_steps=6,
+                    comfy_url="http://worker:8188",
+                    scene_first_frame=first_frame,
+                    on_end_frame=end_frames.append,
+                )
+
+            self.assertEqual(prompts, ["final image"])
+            self.assertEqual(end_frames, [work_dir / "scene_01_end_frame.png"])
+
+    def test_copies_previous_end_frame_as_first_frame_when_enabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = Path(tmp)
+            previous_end = work_dir / "scene_01_end_frame.png"
+            previous_end.write_bytes(b"previous-end")
+            scene = Scene(
+                id=2,
+                title="Scene 2",
+                image_prompt="start image",
+                video_prompt="camera move",
+                narration="words",
+                use_previous_scene_end_image=True,
+            )
+
+            used_first_frames: list[Path] = []
+
+            def fake_video(*args, **kwargs):
+                used_first_frames.append(Path(args[2]))
+                Path(args[3]).write_bytes(b"video")
+
+            def fake_extract_audio(video_path, output_path, duration=None):
+                output_path.write_bytes(b"audio")
+                return output_path
+
+            with mock.patch("pipeline.scene_video.generate_scene_image") as image, \
+                 mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_video), \
+                 mock.patch("pipeline.scene_video._get_duration", return_value=1.2), \
+                 mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
+                generate_scene_video(
+                    scene,
+                    work_dir,
+                    narration_dur=1.0,
+                    vid_width=512,
+                    vid_height=288,
+                    max_clip_secs=20,
+                    lora_strength=0.5,
+                    first_pass_cfg=1.0,
+                    first_pass_steps=8,
+                    second_pass_cfg=3.0,
+                    second_pass_steps=6,
+                    comfy_url="http://worker:8188",
+                    previous_scene_end_frame=previous_end,
+                )
+
+            copied = work_dir / "scene_02_first_frame.png"
+            self.assertEqual(copied.read_bytes(), b"previous-end")
+            self.assertEqual(used_first_frames, [copied])
+            image.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

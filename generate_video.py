@@ -60,6 +60,8 @@ def main() -> None:
     script_path.write_text(json.dumps(
         [{"id": s.id, "title": s.title,
           "image_prompt": s.image_prompt, "video_prompt": s.video_prompt,
+          "end_image_prompt": s.end_image_prompt,
+          "use_previous_scene_end_image": s.use_previous_scene_end_image,
           "narration": s.narration}
          for s in scenes],
         indent=2,

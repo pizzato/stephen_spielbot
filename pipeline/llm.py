@@ -53,6 +53,8 @@ class Scene:
     video_prompt: str   # LTX I2V: motion, camera movement, action, pacing
     narration: str
     negative_prompt: str = NEGATIVE_PROMPT
+    end_image_prompt: str = ""  # Optional FLUX prompt for the scene's final frame
+    use_previous_scene_end_image: bool = False
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -215,6 +217,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             image_prompt=item.get("image_prompt", title),
             video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
+            end_image_prompt=item.get("end_image_prompt", ""),
+            use_previous_scene_end_image=bool(item.get("use_previous_scene_end_image", False)),
         )
         for i, item in enumerate(scenes_data[:first_batch])
     ]
@@ -261,6 +265,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                 image_prompt=item.get("image_prompt", title),
                 video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
                 narration=item.get("narration", ""),
+                end_image_prompt=item.get("end_image_prompt", ""),
+                use_previous_scene_end_image=bool(item.get("use_previous_scene_end_image", False)),
             ))
         batch_start = batch_end + 1
 
@@ -461,7 +467,7 @@ def _local_generate_visual(title: str, style: str,
                             scene_id: int, scene_title: str, narration: str,
                             url: str, model: str,
                             video_style_hint: str | None = None,
-                            character_sheet: str | None = None) -> tuple[str, str]:
+                            character_sheet: str | None = None) -> tuple[str, str, str]:
     video_style_note = (
         f"\nMOTION DIRECTION for the VIDEO line: {video_style_hint.strip()}"
         if video_style_hint and video_style_hint.strip() else ""
@@ -488,13 +494,14 @@ def _local_generate_visual(title: str, style: str,
         url=url, model=model,
     )
     image_prompt = _get_field(raw, "IMAGE")
+    end_image_prompt = _get_field(raw, "END_IMAGE")
     video_prompt = _get_field(raw, "VIDEO")
     # Graceful fallback if model didn't split correctly
     if not image_prompt:
         image_prompt = raw.strip().lstrip("IMAGE:").strip()
     if not video_prompt:
         video_prompt = image_prompt
-    return image_prompt, video_prompt
+    return image_prompt, video_prompt, end_image_prompt
 
 
 def _local_generate(title: str, n_scenes: int,
@@ -525,8 +532,8 @@ def _local_generate(title: str, n_scenes: int,
 
     logger.info("Story: %d scenes, style=%r", len(outlines), style)
 
-    def _fetch(outline: dict) -> tuple[int, str, str]:
-        img_p, vid_p = _local_generate_visual(
+    def _fetch(outline: dict) -> tuple[int, str, str, str]:
+        img_p, vid_p, end_img_p = _local_generate_visual(
             title, style,
             outline["id"],
             outline.get("title", f"Scene {outline['id']}"),
@@ -535,14 +542,16 @@ def _local_generate(title: str, n_scenes: int,
             video_style_hint=video_style_hint,
             character_sheet=character_sheet,
         )
-        return outline["id"], img_p, vid_p
+        return outline["id"], img_p, vid_p, end_img_p
 
     img_prompts: dict[int, str] = {}
     vid_prompts: dict[int, str] = {}
+    end_img_prompts: dict[int, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
-        for sid, img_p, vid_p in pool.map(_fetch, outlines):
+        for sid, img_p, vid_p, end_img_p in pool.map(_fetch, outlines):
             img_prompts[sid] = img_p
             vid_prompts[sid] = vid_p
+            end_img_prompts[sid] = end_img_p
 
     scenes = [
         Scene(
@@ -551,6 +560,7 @@ def _local_generate(title: str, n_scenes: int,
             image_prompt=img_prompts.get(o["id"], title),
             video_prompt=vid_prompts.get(o["id"], title),
             narration=o.get("narration", ""),
+            end_image_prompt=end_img_prompts.get(o["id"], ""),
         )
         for o in sorted(outlines, key=lambda x: x["id"])
     ]

@@ -133,7 +133,9 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     try:
         (work_dir / "script.json").write_text(json.dumps([
             {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-             "video_prompt": s.video_prompt, "narration": s.narration}
+             "video_prompt": s.video_prompt, "narration": s.narration,
+             "end_image_prompt": s.end_image_prompt,
+             "use_previous_scene_end_image": s.use_previous_scene_end_image}
             for s in scenes
         ], indent=2))
         logger.info("Self-heal: rewrote script.json with %d filled scenes", len(scenes))
@@ -275,6 +277,8 @@ def main(work_dir: Path) -> None:
             image_prompt=s.get("image_prompt") or s.get("visual_prompt", s["title"]),
             video_prompt=s.get("video_prompt") or s.get("visual_prompt", s["title"]),
             narration=s.get("narration", ""),
+            end_image_prompt=s.get("end_image_prompt", ""),
+            use_previous_scene_end_image=bool(s.get("use_previous_scene_end_image", False)),
         )
         for s in script_data
     ]
@@ -574,6 +578,7 @@ def main(work_dir: Path) -> None:
         image_task = task_id(durable_job_id, "scene", scene.id, "image")
         video_task = task_id(durable_job_id, "scene", scene.id, "video")
         first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
+        end_frame_path = work_dir / f"scene_{scene.id:02d}_end_frame.png"
 
         def _persist_first_frame(frame: Path) -> None:
             """Record the first-frame image the video actually used as this scene's
@@ -583,6 +588,13 @@ def main(work_dir: Path) -> None:
                 store.update_scene_preview(durable_job_id, scene.id, frame)
             except Exception:
                 logger.debug("Could not persist preview for scene %d", scene.id, exc_info=True)
+
+        def _persist_end_frame(frame: Path) -> None:
+            try:
+                store.update_scene_end_preview(durable_job_id, scene.id, frame)
+                store.record_artifact(durable_job_id, video_task, "end_image", frame)
+            except Exception:
+                logger.debug("Could not persist end preview for scene %d", scene.id, exc_info=True)
 
         # The first frame (fast FLUX) and the video (slow LTX) are produced in one
         # _generate_scene_video call, but tracked as two tasks. Complete the image
@@ -692,6 +704,12 @@ def main(work_dir: Path) -> None:
                         scene_first_frame=scene_first_frame,
                         flux_cfg=flux_cfg,
                         on_first_frame=_finish_image,
+                        scene_end_frame=end_frame_path if end_frame_path.exists() else None,
+                        previous_scene_end_frame=(
+                            work_dir / f"scene_{scene.id - 1:02d}_end_frame.png"
+                            if scene.id > 1 else None
+                        ),
+                        on_end_frame=_persist_end_frame,
                     )
                     store.record_artifact(
                         durable_job_id,
@@ -741,7 +759,11 @@ def main(work_dir: Path) -> None:
     n_workers = len(worker_pool.urls)
     write_progress(status_file, 35, f"Generating {n} scenes across {n_workers} worker(s)…")
 
-    scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
+    continuity_requested = any(
+        scene.use_previous_scene_end_image for scene in scenes[1:]
+    )
+    scene_workers = 1 if continuity_requested else min(n, max(1, len(worker_pool.urls)))
+    scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=scene_workers)
     pending: dict[concurrent.futures.Future, Scene] = {
         scene_pool.submit(_run_scene, scene): scene for scene in scenes
     }

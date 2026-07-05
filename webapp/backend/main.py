@@ -11,6 +11,8 @@ Run it from the repo root:
     uvicorn webapp.backend.main:app --port 8001 --reload
 """
 
+from __future__ import annotations
+
 import base64
 import hashlib
 import json
@@ -147,17 +149,23 @@ def _safe_under(path: Path, *roots: Path) -> bool:
 def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     sid = int(row["id"])
     preview = row.get("preview_path") or ""
+    end_preview = row.get("end_preview_path") or ""
     has_preview = bool(preview and Path(preview).exists())
+    has_end_preview = bool(end_preview and Path(end_preview).exists())
     meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     out = {
         "id": sid,
         "title": row.get("title", ""),
         "image_prompt": row.get("image_prompt", ""),
         "video_prompt": row.get("video_prompt", ""),
+        "end_image_prompt": row.get("end_image_prompt", ""),
+        "use_previous_scene_end_image": bool(row.get("use_previous_scene_end_image", False)),
         "narration": row.get("narration", ""),
         "voice": meta.get("voice", ""),
         "preview_path": preview if has_preview else "",
+        "end_preview_path": end_preview if has_end_preview else "",
         "has_preview": has_preview,
+        "has_end_preview": has_end_preview,
     }
     if wd is not None:
         out["history"] = image_history.history(wd, sid)
@@ -747,6 +755,11 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
                           if combined_style and s.image_prompt
                           and not s.image_prompt.startswith(combined_style)
                           else s.image_prompt),
+         "end_image_prompt": (f"{combined_style}. {s.end_image_prompt}"
+                              if combined_style and s.end_image_prompt
+                              and not s.end_image_prompt.startswith(combined_style)
+                              else s.end_image_prompt),
+         "use_previous_scene_end_image": s.use_previous_scene_end_image,
          "video_prompt": s.video_prompt, "narration": s.narration}
         for s in scenes
     ]
@@ -869,15 +882,19 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
         # Back-fill preview_path for scenes whose image already exists on disk
         # (e.g. first_frame generated during a previous video render).
         for r in rows:
-            if r.get("preview_path") and Path(r["preview_path"]).exists():
-                continue
             sid = int(r["id"])
-            for suffix in ("_preview.png", "_first_frame.png"):
-                candidate = wd / f"scene_{sid:02d}{suffix}"
+            if not (r.get("preview_path") and Path(r["preview_path"]).exists()):
+                for suffix in ("_preview.png", "_first_frame.png"):
+                    candidate = wd / f"scene_{sid:02d}{suffix}"
+                    if candidate.exists():
+                        store.update_scene_preview(job_id, sid, candidate)
+                        r["preview_path"] = str(candidate)
+                        break
+            if not (r.get("end_preview_path") and Path(r["end_preview_path"]).exists()):
+                candidate = wd / f"scene_{sid:02d}_end_frame.png"
                 if candidate.exists():
-                    store.update_scene_preview(job_id, sid, candidate)
-                    r["preview_path"] = str(candidate)
-                    break
+                    store.update_scene_end_preview(job_id, sid, candidate)
+                    r["end_preview_path"] = str(candidate)
     finally:
         store.close()
 
@@ -951,7 +968,11 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
             continue
         if sid <= 0:
             continue
-        for suffix in (f"scene_{sid:02d}_preview.png", f"scene_{sid:02d}_first_frame.png"):
+        for suffix in (
+            f"scene_{sid:02d}_preview.png",
+            f"scene_{sid:02d}_first_frame.png",
+            f"scene_{sid:02d}_end_frame.png",
+        ):
             sp = src / suffix
             if sp.exists():
                 shutil.copy2(sp, new_wd / suffix)
@@ -978,6 +999,8 @@ class SceneUpdate(BaseModel):
     title: str = ""
     image_prompt: str = ""
     video_prompt: str = ""
+    end_image_prompt: str = ""
+    use_previous_scene_end_image: bool = False
     narration: str = ""
     voice: str | None = None
 
@@ -1001,8 +1024,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
             title=body.title,
             image_prompt=body.image_prompt,
             video_prompt=body.video_prompt,
+            end_image_prompt=body.end_image_prompt,
+            use_previous_scene_end_image=body.use_previous_scene_end_image,
             narration=body.narration,
             preview_path=current.get("preview_path", ""),
+            end_preview_path=current.get("end_preview_path", ""),
             metadata=meta,
         )
         rows = store.scene_rows(job_id)
@@ -1017,17 +1043,25 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
 # ── scene preview (FLUX first frame) ─────────────────────────────────────────
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview")
-def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style: str = "") -> dict:
+def regen_scene_preview(
+    job_id: str,
+    scene_id: int,
+    resolution: str = "",
+    style: str = "",
+    frame: str = "start",
+) -> dict:
+    frame = "end" if frame == "end" else "start"
     try:
-        with _track_op("Generating preview", f"scene {scene_id}"):
+        with _track_op("Generating preview", f"scene {scene_id} · {frame}"):
             out = gapp._generate_active_scene_preview(
-                job_id, int(scene_id), resolution, style, "", "", force=True
+                job_id, int(scene_id), resolution, style, "", "", force=True, frame=frame
             )
     except Exception as e:
         raise HTTPException(503, f"Preview failed: {str(e).splitlines()[0][:200]}")
     wd = gapp._job_work_dir(job_id)
-    hist = image_history.history(wd, int(scene_id)) if wd else None
-    return {"ok": True, "preview_path": str(out), "history": hist}
+    hist = image_history.history(wd, int(scene_id)) if wd and frame == "start" else None
+    key = "end_preview_path" if frame == "end" else "preview_path"
+    return {"ok": True, key: str(out), "history": hist}
 
 
 @api.post("/api/jobs/{job_id}/previews")
@@ -1387,6 +1421,7 @@ _FIELD_INSTRUCTIONS = {
     "title": "Write ONE short, vivid scene title (max ~8 words). Return only the title — no quotes, no label.",
     "narration": "Rewrite the narration for this scene: 2–4 sentences in an engaging documentary voice, consistent with the video topic and the surrounding scenes. Return only the narration text.",
     "image_prompt": "Write a single detailed text-to-image (FLUX) prompt for this scene's first frame: highly detailed, static, incorporating the visual style. Return only the prompt.",
+    "end_image_prompt": "Write a single detailed text-to-image (FLUX) prompt for this scene's final frame: highly detailed, static, incorporating the visual style. Return only the prompt.",
     "video_prompt": "Write a single concise video-motion (LTX) prompt for this scene describing camera movement and motion. Return only the prompt.",
 }
 
@@ -1443,7 +1478,9 @@ class FieldRegenBody(BaseModel):
     title: str = ""
     narration: str = ""
     image_prompt: str = ""
+    end_image_prompt: str = ""
     video_prompt: str = ""
+    use_previous_scene_end_image: bool = False
 
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-field")
@@ -1481,7 +1518,10 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         f"Full scene outline: {outline}\n\n"
         f"Scene {scene_id} — current draft:\n"
         f"Title: {body.title}\nNarration: {body.narration}\n"
-        f"Image prompt: {body.image_prompt}\nVideo prompt: {body.video_prompt}\n\n"
+        f"Image prompt: {body.image_prompt}\n"
+        f"End image prompt: {body.end_image_prompt}\n"
+        f"Use previous scene end image: {body.use_previous_scene_end_image}\n"
+        f"Video prompt: {body.video_prompt}\n\n"
         f"Task: {_FIELD_INSTRUCTIONS[field]}"
     )
     try:
@@ -1491,17 +1531,22 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
 
     # For image_prompt, bake the visual style prefix so the editor shows what renders.
-    if field == "image_prompt" and style_name:
+    if field in ("image_prompt", "end_image_prompt") and style_name:
         prefix = gapp._compose_visual_style(style, cfg, style_name)
         text = _apply_style_prefix(prefix, text)
 
     # Persist the regenerated field together with the user's current values.
     fields = {"title": body.title, "narration": body.narration,
-              "image_prompt": body.image_prompt, "video_prompt": body.video_prompt}
+              "image_prompt": body.image_prompt,
+              "end_image_prompt": body.end_image_prompt,
+              "video_prompt": body.video_prompt,
+              "use_previous_scene_end_image": body.use_previous_scene_end_image}
     fields[field] = text
     try:
         gapp._save_active_scene(job_id, int(scene_id), fields["title"],
-                                fields["image_prompt"], fields["video_prompt"], fields["narration"])
+                                fields["image_prompt"], fields["video_prompt"],
+                                fields["narration"], fields["end_image_prompt"],
+                                fields["use_previous_scene_end_image"])
     except Exception:
         pass  # the client also persists on blur — never lose the regenerated text
     return {"field": field, "value": text}
@@ -1632,12 +1677,16 @@ def start_generation(body: GenerateBody) -> dict:
             image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
+            end_image_prompt=_apply_style_prefix(combined_style, row.get("end_image_prompt") or ""),
+            use_previous_scene_end_image=bool(row.get("use_previous_scene_end_image", False)),
         )
         for row in scene_rows[:n]
     ]
     gapp._persist_script_snapshot(work_dir, [
         {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-         "video_prompt": s.video_prompt, "narration": s.narration} for s in scenes
+         "video_prompt": s.video_prompt, "narration": s.narration,
+         "end_image_prompt": s.end_image_prompt,
+         "use_previous_scene_end_image": s.use_previous_scene_end_image} for s in scenes
     ])
 
     job_cfg = gapp._job_config_snapshot(cfg)
@@ -5928,6 +5977,7 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
     final = work_dir / f"scene_{sid:02d}_final.mp4"
     first_frame = work_dir / f"scene_{sid:02d}_first_frame.png"
     preview = work_dir / f"scene_{sid:02d}_preview.png"
+    end_frame = work_dir / f"scene_{sid:02d}_end_frame.png"
 
     has_nar = narration.exists() and narration.stat().st_size > 1000
     has_final = final.exists() and final.stat().st_size > 10_000
@@ -5938,6 +5988,7 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
     )
     preview_img = first_frame if first_frame.exists() else (preview if preview.exists() else None)
     preview_mtime = int(preview_img.stat().st_mtime) if preview_img else 0
+    end_mtime = int(end_frame.stat().st_mtime) if end_frame.exists() else 0
 
     # Cache-bust the video URL with the file's mtime so a re-rendered clip at the
     # same path isn't served stale from the browser cache (the path alone never
@@ -5952,6 +6003,7 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
         "narration_url": f"/api/file?path={narration}" if has_nar else "",
         "video_url": f"/api/file?path={video_file}&t={video_mtime}" if video_file else "",
         "preview_url": f"/api/file?path={preview_img}&t={preview_mtime}" if preview_img else "",
+        "end_preview_url": f"/api/file?path={end_frame}&t={end_mtime}" if end_frame.exists() else "",
     }
 
 
@@ -6107,6 +6159,7 @@ def delete_film_scene(body: DeleteFilmSceneBody) -> dict:
         f"scene_{sid:02d}_final.mp4",
         f"scene_{sid:02d}_first_frame.png",
         f"scene_{sid:02d}_preview.png",
+        f"scene_{sid:02d}_end_frame.png",
     ]:
         (wd / fname).unlink(missing_ok=True)
 
@@ -6285,6 +6338,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     preview = wd / f"scene_{sid:02d}_preview.png"
+    previous_end = wd / f"scene_{sid - 1:02d}_end_frame.png"
 
     try:
         _film_checkpoint(task_id)
@@ -6297,23 +6351,26 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
         vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
 
-        new_seed = secrets.randbelow(2 ** 32)
         _film_tasks[task_id] = {"status": "running", "step": "image"}
-        url = pool.acquire()
-        try:
-            # acquire() can block a long time behind a busy GPU — re-check
-            # before submitting work the film may no longer exist to receive.
-            _film_checkpoint(task_id)
-            generate_with_engine(
-                engine,
-                image_prompt or row.get("title") or f"Scene {sid}",
-                first_frame,
-                width=vid_w, height=vid_h,
-                seed=new_seed,
-                comfy_url=url,
-            )
-        finally:
-            pool.release(url)
+        if row.get("use_previous_scene_end_image") and sid > 1 and previous_end.exists():
+            shutil.copy2(previous_end, first_frame)
+        else:
+            new_seed = secrets.randbelow(2 ** 32)
+            url = pool.acquire()
+            try:
+                # acquire() can block a long time behind a busy GPU — re-check
+                # before submitting work the film may no longer exist to receive.
+                _film_checkpoint(task_id)
+                generate_with_engine(
+                    engine,
+                    image_prompt or row.get("title") or f"Scene {sid}",
+                    first_frame,
+                    width=vid_w, height=vid_h,
+                    seed=new_seed,
+                    comfy_url=url,
+                )
+            finally:
+                pool.release(url)
 
         if first_frame.exists():
             shutil.copy2(first_frame, preview)
@@ -6360,11 +6417,14 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     try:
         _film_checkpoint(task_id)
         image_prompt = (row.get("image_prompt") or "").strip()
+        end_image_prompt = (row.get("end_image_prompt") or "").strip()
         video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
         if style_clean:
             if image_prompt and not image_prompt.startswith(style_clean):
                 image_prompt = f"{style_clean}. {image_prompt}"
+            if end_image_prompt and not end_image_prompt.startswith(style_clean):
+                end_image_prompt = f"{style_clean}. {end_image_prompt}"
             if video_prompt and not video_prompt.startswith(style_clean):
                 video_prompt = f"{style_clean}. {video_prompt}"
 
@@ -6413,13 +6473,33 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         nar_dur = _get_duration(narration_path)
 
         _film_tasks[task_id]["step"] = "video"
+        end_frame = wd / f"scene_{sid:02d}_end_frame.png"
+        previous_end_frame = wd / f"scene_{sid - 1:02d}_end_frame.png"
         scene = Scene(
             id=sid,
             title=row.get("title") or f"Scene {sid}",
             image_prompt=image_prompt,
             video_prompt=video_prompt,
             narration=row.get("narration") or "",
+            end_image_prompt=end_image_prompt,
+            use_previous_scene_end_image=bool(row.get("use_previous_scene_end_image", False)),
         )
+        job_id = job_id_from_work_dir(wd)
+
+        def _persist_first_frame(frame: Path) -> None:
+            store = DurableStore.default()
+            try:
+                store.update_scene_preview(job_id, sid, frame)
+            finally:
+                store.close()
+
+        def _persist_end_frame(frame: Path) -> None:
+            store = DurableStore.default()
+            try:
+                store.update_scene_end_preview(job_id, sid, frame)
+            finally:
+                store.close()
+
         url = pool.acquire()
         try:
             # acquire() can block a long time behind a busy GPU — re-check
@@ -6442,6 +6522,10 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
                     "vae": jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
                     "steps": int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
                 },
+                on_first_frame=_persist_first_frame,
+                scene_end_frame=end_frame if end_frame.exists() else None,
+                previous_scene_end_frame=previous_end_frame if previous_end_frame.exists() else None,
+                on_end_frame=_persist_end_frame,
             )
         finally:
             pool.release(url)

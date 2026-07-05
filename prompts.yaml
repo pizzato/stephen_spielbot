@@ -29,6 +29,8 @@ script_claude_initial:
       - "id": integer starting from 1
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
+      - "end_image_prompt": optional 60-100 word highly detailed STATIC image description for the scene's final frame. Use this when a distinct ending composition would help visual continuity; otherwise use an empty string. It must be a frozen photograph description, not motion.
+      - "use_previous_scene_end_image": boolean. For scene 1 always false. For later scenes, set true only when this scene should start from the exact final-frame image of the previous scene for continuous visual flow.
       - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
       - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
 
@@ -54,6 +56,8 @@ script_claude_continuation:
       - "id": integer scene number (as specified in the request)
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
+      - "end_image_prompt": optional 60-100 word highly detailed STATIC final-frame image description for FLUX, or an empty string when no separate final image is needed.
+      - "use_previous_scene_end_image": boolean. Scene 1 false; later scenes true only when this scene should start from the previous scene's end image.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors.
       - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.
 
@@ -120,9 +124,10 @@ script_local_visual:
 
     The visual style (camera style, color grade, film stock) will be automatically prepended — do NOT include it in either field.
 
-    Output ONLY plain text in this exact two-line format (each on a single line, no line breaks within a value):
+    Output ONLY plain text in this exact three-line format (each on a single line, no line breaks within a value):
 
     IMAGE: [60-100 word highly detailed static image description for FLUX. Describe this as a frozen, perfectly composed photograph. Include exact subjects and positions, environment details, lighting quality and direction, color palette, textures, atmospheric depth. NO motion words, NO camera movement words, NO action verbs.]
+    END_IMAGE: [Optional 60-100 word highly detailed static final-frame image description for FLUX when a distinct ending composition helps continuity. Use a frozen photograph description, no motion words. Leave empty after the colon if no separate final image is needed.]
     VIDEO: [30-50 word motion description for LTX I2V. What moves and how (camera pushes forward, mist drifts, leaves rustle), explicit camera movement (slow dolly, aerial descent, gentle pan, static wide angle), pacing. Match the narration's action. No style descriptors.]
   user: |
     Video topic: "${title}"
@@ -131,7 +136,7 @@ script_local_visual:
     Scene: ${scene_title}
     Narration: ${narration}${video_style_note}${character_note}
 
-    Generate the IMAGE and VIDEO lines for this scene.
+    Generate the IMAGE, END_IMAGE, and VIDEO lines for this scene.
 
 
 script_local_fill_narration:

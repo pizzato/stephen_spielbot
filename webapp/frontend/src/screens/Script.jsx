@@ -245,6 +245,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
+  const endImgUrl = (s) => (s && s.end_preview_path) ? fileUrl(s.end_preview_path) + (s.endCb ? `&t=${s.endCb}` : '') : ''
 
   // ── Lightbox (enlarged scene image) ──────────────────────────────────────────
   // `lightbox` is { scene, ver }: which scene index and which of that scene's
@@ -301,7 +302,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       const r = await api.regenField(job.job_id, d.id, field, {
         title: d.title || '', narration: d.narration || '',
-        image_prompt: d.image_prompt || '', video_prompt: d.video_prompt || '',
+        image_prompt: d.image_prompt || '',
+        end_image_prompt: d.end_image_prompt || '',
+        use_previous_scene_end_image: !!d.use_previous_scene_end_image,
+        video_prompt: d.video_prompt || '',
       })
       setField(field, r.value)
     } catch (e) { setError(e.message) } finally { setFieldBusy('') }
@@ -323,6 +327,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     try {
       await api.saveScene(job.job_id, s.id, {
         title: s.title || '', image_prompt: s.image_prompt || '',
+        end_image_prompt: s.end_image_prompt || '',
+        use_previous_scene_end_image: !!s.use_previous_scene_end_image,
         video_prompt: s.video_prompt || '', narration: s.narration || '',
       })
     } catch (e) { setError(e.message) }
@@ -340,6 +346,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       await persist(cur)
       const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style)
       setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const regenEnd = async () => {
+    setBusy('end-preview'); setError('')
+    try {
+      await persist(cur)
+      const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style, 'end')
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, end_preview_path: r.end_preview_path, has_end_preview: true, endCb: Date.now() } : s))
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -582,6 +597,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
                   <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
+                <Field label={fieldLabel('End image prompt', 'end_image_prompt', 'image')} hint="Optional FLUX final frame for continuity.">
+                  <textarea className="textarea" rows={4} value={d.end_image_prompt || ''} onChange={(e) => setField('end_image_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                </Field>
+                <label className="row center gap-10" style={{ fontSize: 13, color: 'var(--ink-2)' }}>
+                  <input type="checkbox" checked={!!d.use_previous_scene_end_image} disabled={cur === 0}
+                    onChange={(e) => setField('use_previous_scene_end_image', e.target.checked)}
+                    onBlur={() => persist(cur)} />
+                  <span>Start this scene from the previous scene's end image</span>
+                </label>
                 <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="LTX — motion & camera.">
                   <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
@@ -608,6 +632,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
                   onSelect={selectVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
+              </Card>
+              <Card className="reveal reveal-d3">
+                <span className="label-sm">End frame</span>
+                <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)' }}>
+                  {d.has_end_preview || d.end_preview_path
+                    ? <img src={endImgUrl(d)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                    : <div className={`gfill ${busy === 'end-preview' ? 'skel' : 'g' + ((cur + 2) % 6)}`} style={{ position: 'absolute', inset: 0 }}></div>}
+                </div>
+                <Button variant="ghost" block icon="rotate-right" disabled={!!busy || !(d.end_image_prompt || '').trim()} onClick={regenEnd}>
+                  {busy === 'end-preview' ? 'Painting…' : 'Regenerate end image'}</Button>
               </Card>
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">

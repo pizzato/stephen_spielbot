@@ -13,7 +13,11 @@ function SceneCard({
   const [narration, setNarration] = useState(scene.narration || '')
   const [voice, setVoice] = useState(scene.voice || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
+  const [endImagePrompt, setEndImagePrompt] = useState(scene.end_image_prompt || '')
+  const [usePreviousEnd, setUsePreviousEnd] = useState(!!scene.use_previous_scene_end_image)
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
+  const [endPreviewPath, setEndPreviewPath] = useState(scene.end_preview_path || '')
+  const [endPreviewUrl, setEndPreviewUrl] = useState(scene.end_preview_url || '')
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')   // which text field is regenerating (issue #88)
   const [taskId, setTaskId] = useState(null)
@@ -35,24 +39,46 @@ function SceneCard({
     setNarration(scene.narration || '')
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
+    setEndImagePrompt(scene.end_image_prompt || '')
+    setUsePreviousEnd(!!scene.use_previous_scene_end_image)
     setVideoPrompt(scene.video_prompt || '')
+    setEndPreviewPath(scene.end_preview_path || '')
+    setEndPreviewUrl(scene.end_preview_url || '')
     setEditing(false)
   }, [scene.id])
 
   const persist = async () => {
     try {
-      await api.saveScene(jobId, scene.id, { title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      await api.saveScene(jobId, scene.id, {
+        title, narration, voice,
+        image_prompt: imagePrompt,
+        end_image_prompt: endImagePrompt,
+        use_previous_scene_end_image: usePreviousEnd,
+        video_prompt: videoPrompt,
+      })
     } catch (e) {
       setError(e.message)
     }
   }
 
   // Regenerate one text field with the LLM, keeping the other edits as context (issue #88).
-  const setters = { title: setTitle, narration: setNarration, image_prompt: setImagePrompt, video_prompt: setVideoPrompt }
+  const setters = {
+    title: setTitle,
+    narration: setNarration,
+    image_prompt: setImagePrompt,
+    end_image_prompt: setEndImagePrompt,
+    video_prompt: setVideoPrompt,
+  }
   const regenField = async (field) => {
     setFieldBusy(field); setError('')
     try {
-      const r = await api.regenField(jobId, scene.id, field, { title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      const r = await api.regenField(jobId, scene.id, field, {
+        title, narration,
+        image_prompt: imagePrompt,
+        end_image_prompt: endImagePrompt,
+        use_previous_scene_end_image: usePreviousEnd,
+        video_prompt: videoPrompt,
+      })
       setters[field](r.value)
     } catch (e) { setError(e.message) } finally { setFieldBusy('') }
   }
@@ -174,6 +200,19 @@ function SceneCard({
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
   }
 
+  const regenEndImage = async () => {
+    await persist()
+    setBusy('end-image'); setError('')
+    try {
+      const r = await api.regenPreview(jobId, scene.id, resolution, style, 'end')
+      if (r.end_preview_path) {
+        setEndPreviewPath(r.end_preview_path)
+        setEndPreviewUrl(fileUrl(r.end_preview_path) + `&t=${Date.now()}`)
+      }
+      onSaved()
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   const rerender = async (component, targetResolution = '', mode = '') => {
     await persist()
     setBusy(component)
@@ -200,6 +239,7 @@ function SceneCard({
   const selectedVersion = history?.versions?.find((v) => v.id === history.selected)
   const previewUrl = selectedVersion ? fileUrl(selectedVersion.path)
     : (scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : ''))
+  const effectiveEndPreviewUrl = endPreviewUrl || (endPreviewPath ? fileUrl(endPreviewPath) : '')
   // Prefer the selected kept take (each has a unique URL, so switching updates the
   // player instantly without cache-busting); fall back to the canonical final.
   const selectedTake = videoHistory?.versions?.find((v) => v.id === videoHistory.selected)
@@ -326,6 +366,11 @@ function SceneCard({
                         <span style={{ fontWeight: 600, marginRight: 4 }}>Image:</span>{imagePrompt}
                       </div>
                     )}
+                    {endImagePrompt && (
+                      <div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
+                        <span style={{ fontWeight: 600, marginRight: 4 }}>End:</span>{endImagePrompt}
+                      </div>
+                    )}
                     {videoPrompt && (
                       <div style={{ fontSize: 11.5, color: 'var(--ink-3)', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>
                         <span style={{ fontWeight: 600, marginRight: 4 }}>Video:</span>{videoPrompt}
@@ -351,6 +396,13 @@ function SceneCard({
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={() => regenField('image_prompt')} icon="image">Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
+                <Field label={<RegenLabel busy={fieldBusy === 'end_image_prompt'} onRegen={() => regenField('end_image_prompt')} icon="image">End image prompt</RegenLabel>} hint="Optional FLUX final frame">
+                  <textarea className="textarea" rows={3} value={endImagePrompt} onChange={(e) => setEndImagePrompt(e.target.value)} />
+                </Field>
+                <label className="row center gap-10" style={{ fontSize: 13, color: 'var(--ink-2)' }}>
+                  <input type="checkbox" checked={usePreviousEnd} disabled={index === 0} onChange={(e) => setUsePreviousEnd(e.target.checked)} />
+                  <span>Start from previous scene's end image</span>
+                </label>
                 <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={() => regenField('video_prompt')} icon="film">Video prompt</RegenLabel>} hint="LTX — motion & camera">
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
@@ -379,6 +431,10 @@ function SceneCard({
               <Button variant="ghost" icon="image" size="sm" disabled={isRendering}
                 onClick={() => rerender('image')}>
                 {busy === 'image' ? 'Rendering…' : 'Image'}
+              </Button>
+              <Button variant="ghost" icon="image" size="sm" disabled={isRendering || !endImagePrompt.trim()}
+                onClick={regenEndImage}>
+                {busy === 'end-image' ? 'Rendering…' : 'End image'}
               </Button>
               <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
                 onClick={() => { setInpaintErr(''); setInpaint(true) }}>
@@ -426,6 +482,22 @@ function SceneCard({
 
             <VersionStrip versions={history?.versions} selected={history?.selected}
               onSelect={selectVersion} aspect={aspect} busy={selecting || isRendering} />
+
+            {(effectiveEndPreviewUrl || endImagePrompt) && (
+              <div style={{ marginTop: 10, display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 104, aspectRatio: aspect, position: 'relative', overflow: 'hidden', borderRadius: 6, background: 'var(--paper-2)', border: '1px solid var(--line)' }}>
+                  {effectiveEndPreviewUrl
+                    ? <img src={effectiveEndPreviewUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+                    : <div className={`gfill ${busy === 'end-image' ? 'skel' : 'g' + ((index + 2) % 6)}`} style={{ position: 'absolute', inset: 0 }} />}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: 'var(--ink-2)', textTransform: 'uppercase' }}>End frame</div>
+                  <div style={{ fontSize: 11.5, color: 'var(--ink-3)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {endImagePrompt || 'No end image prompt'}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
               onSelect={selectVideoVersion} aspect={aspect} busy={selecting || isRendering} />

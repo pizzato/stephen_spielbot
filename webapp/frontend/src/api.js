@@ -90,8 +90,8 @@ export const api = {
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
-  regenPreview: (jobId, sceneId, resolution, style) =>
-    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
+  regenPreview: (jobId, sceneId, resolution, style, frame = 'start') =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}&frame=${encodeURIComponent(frame || 'start')}`),
   generateAllPreviews: (jobId, resolution, style) =>
     req('POST', `/jobs/${jobId}/previews?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
   regenAllPreviews: (jobId, resolution, style) =>

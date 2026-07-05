@@ -252,8 +252,11 @@ class DurableStore:
                     title TEXT NOT NULL DEFAULT '',
                     image_prompt TEXT NOT NULL DEFAULT '',
                     video_prompt TEXT NOT NULL DEFAULT '',
+                    end_image_prompt TEXT NOT NULL DEFAULT '',
+                    use_previous_scene_end_image INTEGER NOT NULL DEFAULT 0,
                     narration TEXT NOT NULL DEFAULT '',
                     preview_path TEXT NOT NULL DEFAULT '',
+                    end_preview_path TEXT NOT NULL DEFAULT '',
                     metadata_json TEXT NOT NULL DEFAULT '{}',
                     created_at REAL NOT NULL,
                     updated_at REAL NOT NULL,
@@ -295,6 +298,21 @@ class DurableStore:
                     ON scenes(job_id, scene_id);
                 """
             )
+            self._ensure_scene_columns()
+
+    def _ensure_scene_columns(self) -> None:
+        columns = {
+            row["name"]
+            for row in self._conn.execute("PRAGMA table_info(scenes)").fetchall()
+        }
+        migrations = {
+            "end_image_prompt": "ALTER TABLE scenes ADD COLUMN end_image_prompt TEXT NOT NULL DEFAULT ''",
+            "use_previous_scene_end_image": "ALTER TABLE scenes ADD COLUMN use_previous_scene_end_image INTEGER NOT NULL DEFAULT 0",
+            "end_preview_path": "ALTER TABLE scenes ADD COLUMN end_preview_path TEXT NOT NULL DEFAULT ''",
+        }
+        for name, sql in migrations.items():
+            if name not in columns:
+                self._conn.execute(sql)
 
     def create_or_update_job(
         self,
@@ -441,6 +459,19 @@ class DurableStore:
                 (json_dumps(payload), now_ts(), task_id_value),
             )
 
+    def task_dependencies(self, task_id_value: str) -> list[str]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT depends_on_id
+                FROM task_dependencies
+                WHERE task_id=?
+                ORDER BY depends_on_id ASC
+                """,
+                (task_id_value,),
+            ).fetchall()
+        return [str(row["depends_on_id"]) for row in rows]
+
     def ensure_generation_plan(
         self,
         job_id: str,
@@ -501,6 +532,8 @@ class DurableStore:
                 "title": _scene_value(scene, "title", f"Scene {sid}"),
                 "image_prompt": _scene_value(scene, "image_prompt", ""),
                 "video_prompt": _scene_value(scene, "video_prompt", ""),
+                "end_image_prompt": _scene_value(scene, "end_image_prompt", ""),
+                "use_previous_scene_end_image": bool(_scene_value(scene, "use_previous_scene_end_image", False)),
                 "negative_prompt": _scene_value(scene, "negative_prompt", ""),
                 "narration": _scene_value(scene, "narration", ""),
             }
@@ -512,6 +545,10 @@ class DurableStore:
             narration_task_ids.append(narration_task)
             mux_task_ids.append(mux_task)
 
+            image_deps = [root]
+            if scene_payload["use_previous_scene_end_image"] and sid > 1:
+                image_deps.append(task_id(job_id, "scene", sid - 1, "video"))
+
             self.create_task(
                 image_task,
                 job_id,
@@ -519,13 +556,13 @@ class DurableStore:
                 f"Scene {sid} image",
                 worker_kind="comfy",
                 payload={**scene_payload, "resource_class": resource_classes.get("image", "comfy:image")},
-                dependencies=[root],
+                dependencies=image_deps,
                 priority=10 + sid,
                 max_attempts=3,
             )
             stored_scene = self.get_scene(job_id, sid) or {}
             preview_path = stored_scene.get("preview_path", "")
-            if preview_path:
+            if preview_path and not scene_payload["use_previous_scene_end_image"]:
                 self.skip_task_if_artifact_exists(
                     image_task,
                     preview_path,
@@ -617,8 +654,11 @@ class DurableStore:
         title: str = "",
         image_prompt: str = "",
         video_prompt: str = "",
+        end_image_prompt: str = "",
+        use_previous_scene_end_image: bool = False,
         narration: str = "",
         preview_path: Path | str | None = None,
+        end_preview_path: Path | str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         ts = now_ts()
@@ -627,17 +667,25 @@ class DurableStore:
                 """
                 INSERT INTO scenes (
                     job_id, scene_id, title, image_prompt, video_prompt,
-                    narration, preview_path, metadata_json, created_at, updated_at
+                    end_image_prompt, use_previous_scene_end_image,
+                    narration, preview_path, end_preview_path, metadata_json,
+                    created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(job_id, scene_id) DO UPDATE SET
                     title=excluded.title,
                     image_prompt=excluded.image_prompt,
                     video_prompt=excluded.video_prompt,
+                    end_image_prompt=excluded.end_image_prompt,
+                    use_previous_scene_end_image=excluded.use_previous_scene_end_image,
                     narration=excluded.narration,
                     preview_path=CASE
                         WHEN excluded.preview_path != '' THEN excluded.preview_path
                         ELSE scenes.preview_path
+                    END,
+                    end_preview_path=CASE
+                        WHEN excluded.end_preview_path != '' THEN excluded.end_preview_path
+                        ELSE scenes.end_preview_path
                     END,
                     metadata_json=excluded.metadata_json,
                     updated_at=excluded.updated_at
@@ -648,8 +696,11 @@ class DurableStore:
                     title or "",
                     image_prompt or "",
                     video_prompt or "",
+                    end_image_prompt or "",
+                    1 if use_previous_scene_end_image else 0,
                     narration or "",
                     str(preview_path or ""),
+                    str(end_preview_path or ""),
                     json_dumps(metadata),
                     ts,
                     ts,
@@ -664,9 +715,12 @@ class DurableStore:
                 title=_scene_value(scene, "title", ""),
                 image_prompt=_scene_value(scene, "image_prompt", ""),
                 video_prompt=_scene_value(scene, "video_prompt", ""),
+                end_image_prompt=_scene_value(scene, "end_image_prompt", ""),
+                use_previous_scene_end_image=bool(_scene_value(scene, "use_previous_scene_end_image", False)),
                 narration=_scene_value(scene, "narration", ""),
                 preview_path=_scene_value(scene, "preview_path", "")
                 or _scene_value(scene, "preview", ""),
+                end_preview_path=_scene_value(scene, "end_preview_path", ""),
                 metadata=_scene_value(scene, "metadata", {}),
             )
 
@@ -676,6 +730,17 @@ class DurableStore:
                 """
                 UPDATE scenes
                 SET preview_path=?, updated_at=?
+                WHERE job_id=? AND scene_id=?
+                """,
+                (str(preview_path), now_ts(), job_id, int(scene_id)),
+            )
+
+    def update_scene_end_preview(self, job_id: str, scene_id: int, preview_path: Path | str) -> None:
+        with self._lock:
+            self._conn.execute(
+                """
+                UPDATE scenes
+                SET end_preview_path=?, updated_at=?
                 WHERE job_id=? AND scene_id=?
                 """,
                 (str(preview_path), now_ts(), job_id, int(scene_id)),
@@ -1312,8 +1377,11 @@ class DurableStore:
             "title": row["title"],
             "image_prompt": row["image_prompt"],
             "video_prompt": row["video_prompt"],
+            "end_image_prompt": row["end_image_prompt"],
+            "use_previous_scene_end_image": bool(row["use_previous_scene_end_image"]),
             "narration": row["narration"],
             "preview_path": row["preview_path"],
+            "end_preview_path": row["end_preview_path"],
             "metadata": json_loads(row["metadata_json"]),
         }
 
