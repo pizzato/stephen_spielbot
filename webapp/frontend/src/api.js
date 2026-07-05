@@ -115,6 +115,7 @@ export const api = {
   deleteFilm: (workDir) => req('POST', '/films/delete', { work_dir: workDir }),
   loadRemix: (workDir) => req('GET', `/remix?work_dir=${encodeURIComponent(workDir || '')}`),
   applyRemix: (body) => req('POST', '/remix', body),
+  regenNarrator: (body) => req('POST', '/remix/narrator', body),
   regenMusic: (body) => req('POST', '/remix/music', body),
   selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),
 
