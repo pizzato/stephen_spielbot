@@ -43,7 +43,10 @@ Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 The Remix screen's `Upscale video → AI temporal` mode runs as a packaged ComfyUI
 workflow on the render workers. The ComfyUI image installs Video Helper Suite,
 and `make install` downloads/syncs the LTX 2.3 spatial upscaler model with the
-rest of the default model set. No manual command template is required.
+rest of the default model set. Large finished MP4s are staged into the worker's
+ComfyUI input folder over SSH/Docker instead of uploaded through ComfyUI's HTTP
+upload route, so request-size limits do not apply. No manual command template is
+required.
 
 Re-deploy or add one host later (from the controller):
 
@@ -83,6 +86,7 @@ the value must be an `http://host:8189` URL.
 | Var | Default | Notes |
 |---|---|---|
 | `MODELS_DIR` | — (required) | Host path to the ComfyUI `models/` dir, mounted into the ComfyUI container |
+| `COMFYUI_INPUT_DIR` | `./input` | Host path mounted into `/opt/ComfyUI/input`; `make install` sets this to `~/github/ComfyUI/input` |
 | `COMFYUI_REF` | `master` | Pin ComfyUI to a tag/branch/commit for reproducible workers |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
