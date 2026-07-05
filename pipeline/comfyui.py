@@ -744,7 +744,14 @@ def upscale_video_ltx(
 
     video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    return _download_output(video_item, output_path, comfy_url=comfy_url)
+    downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+    return _ensure_exact_video_resolution(downloaded, int(width), int(height))
+
+
+def _ensure_exact_video_resolution(video_path: Path, width: int, height: int) -> Path:
+    from pipeline.assembler import ensure_video_resolution
+
+    return ensure_video_resolution(video_path, width, height)
 
 
 def generate_scene_image(
