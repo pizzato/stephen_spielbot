@@ -4,7 +4,7 @@ import { api, fileUrl } from '../api.js'
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
-  voices, filmVoice, meta,
+  voices, filmVoice,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -22,8 +22,6 @@ function SceneCard({
   const [confirmDel, setConfirmDel] = useState(false)
   const [history, setHistory] = useState(scene.history)
   const [videoHistory, setVideoHistory] = useState(scene.video_history)
-  const [upscaleResolution, setUpscaleResolution] = useState('')
-  const [upscaleMode, setUpscaleMode] = useState('fast')
   const [selecting, setSelecting] = useState(false)
   const [inpaint, setInpaint] = useState(false)
   const [inpaintErr, setInpaintErr] = useState('')
@@ -120,25 +118,6 @@ function SceneCard({
   useEffect(() => { setHistory(scene.history) }, [scene.history])
   useEffect(() => { setVideoHistory(scene.video_history) }, [scene.video_history])
 
-  const resPixels = (name) => {
-    const m = /\((\d+)[×x](\d+)\)/.exec(name || '')
-    return m ? Number(m[1]) * Number(m[2]) : 0
-  }
-  const orientation = String(resolution || '').split(' ')[0]
-  const currentPixels = resPixels(resolution)
-  const upscaleOptions = (meta?.resolutions || [])
-    .filter((r) => String(r || '').startsWith(`${orientation} `) || String(r || '').startsWith(`${orientation} (`))
-    .filter((r) => resPixels(r) > currentPixels)
-  useEffect(() => {
-    if (!upscaleOptions.length) {
-      setUpscaleResolution('')
-      return
-    }
-    if (!upscaleOptions.includes(upscaleResolution)) {
-      setUpscaleResolution(upscaleOptions[0])
-    }
-  }, [upscaleOptions.join('|')])
-
   const selectVersion = async (versionId) => {
     setSelecting(true)
     setError('')
@@ -174,13 +153,13 @@ function SceneCard({
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
   }
 
-  const rerender = async (component, targetResolution = '', mode = '') => {
+  const rerender = async (component) => {
     await persist()
     setBusy(component)
     setError('')
     onRerenderStart(component)
     try {
-      const r = await api.rerenderFilmScene(workDir, scene.id, component, targetResolution, mode)
+      const r = await api.rerenderFilmScene(workDir, scene.id, component)
       if (r.task_id) {
         startPolling(r.task_id)
       } else {
@@ -388,24 +367,6 @@ function SceneCard({
                 onClick={() => rerender('video')}>
                 {busy === 'video' ? 'Rendering…' : 'Video'}
               </Button>
-              <select className="select" value={upscaleResolution} disabled={isRendering || !videoUrl || upscaleOptions.length === 0}
-                onChange={(e) => setUpscaleResolution(e.target.value)}
-                style={{ width: 185, minHeight: 34, paddingTop: 5, paddingBottom: 5, fontSize: 12 }}>
-                {upscaleOptions.length === 0
-                  ? <option value="">No larger target</option>
-                  : upscaleOptions.map((r) => <option key={r} value={r}>{r.replace(`${orientation} `, '')}</option>)}
-              </select>
-              <select className="select" value={upscaleMode} disabled={isRendering || !videoUrl || !upscaleResolution}
-                onChange={(e) => setUpscaleMode(e.target.value)}
-                style={{ width: 130, minHeight: 34, paddingTop: 5, paddingBottom: 5, fontSize: 12 }}>
-                <option value="fast">Fast</option>
-                <option value="temporal_ai">AI temporal</option>
-              </select>
-              <Button variant="ghost" icon="up-right-and-down-left-from-center" size="sm" disabled={isRendering || !videoUrl || !upscaleResolution}
-                onClick={() => rerender('upscale', upscaleResolution, upscaleMode)}>
-                {busy === 'upscale' ? 'Upscaling…' : 'Upscale'}
-              </Button>
-
               {/* Spacer */}
               <div style={{ flex: 1 }} />
 
@@ -436,7 +397,7 @@ function SceneCard({
   )
 }
 
-export default function EditFilm({ workDir, go, meta = {} }) {
+export default function EditFilm({ workDir, go }) {
   const [scenes, setScenes] = useState([])
   const [jobId, setJobId] = useState('')
   const [title, setTitle] = useState('')
@@ -588,7 +549,6 @@ export default function EditFilm({ workDir, go, meta = {} }) {
               style={style}
               voices={voices}
               filmVoice={filmVoice}
-              meta={meta}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}

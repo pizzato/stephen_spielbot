@@ -92,9 +92,9 @@ class FilmUpscaleTests(unittest.TestCase):
         backend._film_task_meta.clear()
         backend._film_cancelled_tids.clear()
 
-    def test_video_upscale_replaces_final_and_records_take(self):
+    def test_final_video_upscale_replaces_final_and_records_version(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
-        final = wd / "scene_01_final.mp4"
+        final = wd.with_suffix(".mp4")
         final.write_bytes(b"low-res-final")
 
         def fake_upscale(src, out, width, height):
@@ -106,24 +106,18 @@ class FilmUpscaleTests(unittest.TestCase):
         with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.upscale_video", side_effect=fake_upscale):
-            backend._film_tasks["tid"] = {"status": "running", "step": "upscale"}
-            backend._run_video_upscale(
-                "tid",
-                wd,
-                1,
-                {"_upscale_resolution": "Landscape FHD (1920×1080)"},
-                {},
-            )
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "fast")
 
         self.assertEqual(final.read_bytes(), b"upscaled-final")
-        self.assertEqual(backend._film_tasks["tid"], {"status": "done"})
-        history = backend.video_history.history(wd, 1)
+        self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+        history = backend.final_video_history.history(wd)
         self.assertEqual(len(history["versions"]), 2)
         self.assertEqual(history["selected"], 2)
 
-    def test_video_upscale_temporal_mode_uses_ai_upscaler(self):
+    def test_final_video_upscale_temporal_mode_uses_ai_upscaler(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
-        final = wd / "scene_01_final.mp4"
+        final = wd.with_suffix(".mp4")
         final.write_bytes(b"low-res-final")
 
         def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None):
@@ -142,34 +136,17 @@ class FilmUpscaleTests(unittest.TestCase):
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
              mock.patch("pipeline.assembler.upscale_video") as fast:
-            backend._film_tasks["tid"] = {"status": "running", "step": "upscale"}
-            backend._run_video_upscale(
-                "tid",
-                wd,
-                1,
-                {
-                    "_upscale_resolution": "Landscape FHD (1920×1080)",
-                    "_upscale_mode": "temporal_ai",
-                },
-                {},
-            )
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
 
         self.assertEqual(final.read_bytes(), b"temporal-upscaled-final")
-        self.assertEqual(backend._film_tasks["tid"], {"status": "done"})
+        self.assertEqual(backend._film_tasks["tid"]["status"], "done")
         temporal.assert_called_once()
         fast.assert_not_called()
 
-    def test_rerender_endpoint_accepts_upscale_target(self):
+    def test_remix_upscale_endpoint_accepts_target_and_mode(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
-        (wd / "scene_01_final.mp4").write_bytes(b"low-res-final")
-        row = {"id": 1, "title": "Scene 1"}
-
-        class FakeStore:
-            def scene_rows(self, job_id):
-                return [row]
-
-            def close(self):
-                pass
+        wd.with_suffix(".mp4").write_bytes(b"low-res-final")
 
         started = []
 
@@ -177,22 +154,36 @@ class FilmUpscaleTests(unittest.TestCase):
             started.append(args)
             return mock.Mock(start=lambda: None)
 
-        with mock.patch.object(backend, "DurableStore", mock.Mock(default=mock.Mock(return_value=FakeStore()))), \
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
              mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
-            result = backend.rerender_film_scene(
-                1,
-                backend.RerenderSceneBody(
+            result = backend.remix_upscale_video(
+                backend.RemixUpscaleBody(
                     work_dir=str(wd),
-                    component="upscale",
                     target_resolution="Landscape FHD (1920×1080)",
                     upscale_mode="temporal_ai",
                 ),
             )
 
-        self.assertTrue(result["task_id"].startswith("rerender_01_upscale_"))
-        self.assertEqual(started[0][4], "upscale")
-        self.assertEqual(started[0][5]["_upscale_resolution"], "Landscape FHD (1920×1080)")
-        self.assertEqual(started[0][5]["_upscale_mode"], "temporal_ai")
+        self.assertTrue(result["task_id"].startswith("final_upscale_"))
+        self.assertEqual(started[0][1], wd)
+        self.assertEqual(started[0][2], "Landscape FHD (1920×1080)")
+        self.assertEqual(started[0][3], "temporal_ai")
+
+    def test_remix_video_select_restores_chosen_master(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd.with_suffix(".mp4")
+        final.write_bytes(b"original")
+        backend.final_video_history.record(wd, final, "Original")
+        final.write_bytes(b"upscaled")
+        h = backend.final_video_history.record(wd, final, "Upscaled")
+
+        result = backend.select_remix_video(
+            backend.RemixVideoSelectBody(work_dir=str(wd), version_id=h["versions"][0]["id"])
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(final.read_bytes(), b"original")
+        self.assertEqual(result["video_history"]["selected"], h["versions"][0]["id"])
 
 
 if __name__ == "__main__":

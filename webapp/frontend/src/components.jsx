@@ -204,11 +204,11 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
 // Like VersionStrip, but for rendered video takes: each thumbnail is a muted
 // <video> (preload=metadata shows the first frame) so the user can flip between
 // re-renders of a scene and pick the best one.
-export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy }) {
+export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy, label = 'Video takes', hint = 'click to use' }) {
   if (!versions || versions.length < 2) return null
   return (
     <div className="mt-16">
-      <span className="label-sm">Video takes <span className="muted">· click to use</span></span>
+      <span className="label-sm">{label} <span className="muted">· {hint}</span></span>
       <div className="row gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
         {versions.map((v) => {
           const isSel = v.id === selected

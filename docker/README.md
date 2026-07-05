@@ -40,11 +40,11 @@ models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
 Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 
-The Film editor's `Upscale → AI temporal` command runs on the controller backend,
-not in these worker containers. Set it in Settings → Infrastructure, or seed it
-while installing with `TEMPORAL_VIDEO_UPSCALER_CMD=... make install`. No ComfyUI
-or TTS Dockerfile change is needed unless you deliberately point that command at
-a custom containerized upscaler.
+The Remix screen's `Upscale video → AI temporal` command runs on the controller
+backend, not in these worker containers. Set it in Settings → Infrastructure, or
+seed it while installing with `TEMPORAL_VIDEO_UPSCALER_CMD=... make install`.
+No ComfyUI or TTS Dockerfile change is needed unless you deliberately point that
+command at a custom containerized upscaler.
 
 Re-deploy or add one host later (from the controller):
 
@@ -90,8 +90,8 @@ the value must be an `http://host:8189` URL.
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
 
 Temporal AI upscaling is configured in the controller's `config.yaml`, not
-`docker/.env`, because the command is executed by the web backend after a scene
-take has been reviewed.
+`docker/.env`, because the command is executed by the web backend after the
+finished film has been reviewed on the Remix screen.
 
 ### GPU / arch notes
 
