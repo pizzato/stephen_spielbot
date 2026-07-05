@@ -64,6 +64,38 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             self.assertNotIn("vae", workflow["7"]["inputs"])
             self.assertEqual(workflow["7"]["inputs"]["frame_rate"], 24)
 
+    def test_upscale_video_ltx_retries_dropped_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=["prompt-1", "prompt-2"]) as queue, \
+                 mock.patch.object(comfyui, "_wait_for_completion", side_effect=[
+                     comfyui.DroppedJobError("Job prompt-1 vanished from queue"),
+                     None,
+                 ]) as wait, \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-ltx-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                result = comfyui.upscale_video_ltx(
+                    src,
+                    out,
+                    1920,
+                    1080,
+                    fps=24,
+                    timeout_seconds=456,
+                    comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(result, out)
+            self.assertEqual(queue.call_count, 2)
+            self.assertEqual(wait.call_count, 2)
+            self.assertEqual(wait.call_args.args[0], "prompt-2")
+
     def test_stage_video_for_remote_worker_uses_rsync_and_docker_cp(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.mp4"

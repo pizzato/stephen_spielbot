@@ -252,6 +252,12 @@ _HEARTBEAT_INITIAL_DELAY   = 120   # seconds to skip heartbeat after job start (
 _HEARTBEAT_IDLE_THRESHOLD  = 15    # GPU utilisation % below this is considered idle
 _HEARTBEAT_IDLE_SAMPLES    = 2     # consecutive idle heartbeats required to declare stuck (was 3)
 _HEARTBEAT_SSH_FAIL_LIMIT  = 5     # consecutive SSH failures before logging a WARNING
+_QUEUE_ABSENT_GRACE        = 90    # seconds to wait for /history after a job leaves /queue
+_COMFY_PROMPT_ATTEMPTS     = 3     # initial submit + bounded retries for dropped/stuck prompts
+
+
+def _final_retryable_message(exc: Exception) -> str:
+    return str(exc).replace(" — will re-submit", "").replace(" — worker appears hung, will re-submit", "")
 
 
 def _hostname_from_url(url: str) -> str:
@@ -324,6 +330,7 @@ def _wait_for_completion(
     consecutive_idle  = 0
     consecutive_ssh_failures = 0
     host              = _hostname_from_url(comfy_url)
+    queue_absent_since: float | None = None
 
     try:
         while time.time() < deadline:
@@ -344,10 +351,19 @@ def _wait_for_completion(
                         return
                     if h_status == "error":
                         raise RuntimeError(f"ComfyUI job {prompt_id} failed (history error)")
+                    if queue_absent_since is None:
+                        queue_absent_since = now
+                        logger.warning(
+                            "[comfy] job %s… left queue on %s; waiting for history",
+                            prompt_id[:8], comfy_url,
+                        )
+                        continue
+                    if now - queue_absent_since < _QUEUE_ABSENT_GRACE:
+                        continue
                     raise DroppedJobError(
                         f"Job {prompt_id} vanished from queue on {comfy_url} without completing"
-                        f" — will re-submit"
                     )
+                queue_absent_since = None
 
                 # Pending timeout: worker's queue is blocked by another job.
                 if q_status == "pending" and now - start > _PENDING_TIMEOUT:
@@ -734,9 +750,27 @@ def upscale_video_ltx(
         "[comfy] upscale_video_ltx %s -> %dx%d fps=%.3f timeout=%ds on %s",
         Path(input_path).name, width, height, fps, timeout_seconds, comfy_url,
     )
-    client_id = str(uuid.uuid4())
-    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+    last_retryable: Exception | None = None
+    prompt_id = ""
+    for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
+        client_id = str(uuid.uuid4())
+        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+        try:
+            _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+            break
+        except (DroppedJobError, StuckJobError) as exc:
+            last_retryable = exc
+            if attempt >= _COMFY_PROMPT_ATTEMPTS:
+                raise RuntimeError(
+                    f"ComfyUI LTX upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                    f"{_final_retryable_message(exc)}"
+                ) from exc
+            logger.warning(
+                "[comfy] LTX upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
+            )
+    else:
+        raise RuntimeError(f"ComfyUI LTX upscale did not complete: {last_retryable}")
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
