@@ -61,6 +61,7 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$TARGET:~/$REMOTE_BUILD_DIR/.dock
 # ── 3. Write docker/.env on the host (mount existing models, GB10 CUDA defaults)
 ssh "$TARGET" "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
+COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
 COMFYUI_REF=master
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
