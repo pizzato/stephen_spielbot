@@ -39,6 +39,7 @@ def _resolve_media_tool(name: str) -> str:
 
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
+_TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "4"))
 
 # Open-source attribution stamped into the published final video's container
 # metadata. A plain `comment` tag survives the downstream re-encode/upscale
@@ -217,6 +218,24 @@ def temporal_ai_upscale_video(
     if not template.strip():
         from pipeline.comfyui import upscale_video_ltx
 
+        duration = _get_duration(input_path)
+        chunk_seconds = max(1.0, float(os.environ.get(
+            "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
+            str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
+        )))
+        if duration > chunk_seconds + 0.25:
+            return _chunked_comfy_temporal_upscale(
+                input_path,
+                output_path,
+                width,
+                height,
+                fps=_get_video_fps(input_path),
+                timeout_seconds=timeout,
+                comfy_url=comfy_url or "http://localhost:8188",
+                chunk_seconds=chunk_seconds,
+                upscale_fn=upscale_video_ltx,
+            )
+
         return upscale_video_ltx(
             input_path,
             output_path,
@@ -248,6 +267,90 @@ def temporal_ai_upscale_video(
     _run(cmd, timeout=timeout, max_retries=1)
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("Temporal AI upscaler did not produce an output video.")
+    return output_path
+
+
+def _chunked_comfy_temporal_upscale(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    *,
+    fps: float,
+    timeout_seconds: int,
+    comfy_url: str,
+    chunk_seconds: float,
+    upscale_fn,
+) -> Path:
+    """Upscale long videos in bounded chunks so ComfyUI does not hold all frames."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = _get_duration(input_path)
+    n_chunks = max(1, int((duration + chunk_seconds - 0.001) // chunk_seconds))
+    logger.info(
+        "[comfy] chunked temporal upscale: %.1fs in %d chunks of %.1fs",
+        duration, n_chunks, chunk_seconds,
+    )
+    with tempfile.TemporaryDirectory(prefix="spielbot-upscale-", dir=str(output_path.parent)) as tmp:
+        tmp_dir = Path(tmp)
+        upscaled: list[Path] = []
+        for idx in range(n_chunks):
+            start = idx * chunk_seconds
+            remaining = max(0.0, duration - start)
+            if remaining <= 0:
+                break
+            segment_duration = min(chunk_seconds, remaining)
+            src_chunk = tmp_dir / f"chunk_{idx:04d}.mp4"
+            out_chunk = tmp_dir / f"chunk_{idx:04d}.upscaled.mp4"
+            _extract_temporal_chunk(input_path, src_chunk, start, segment_duration)
+            upscale_fn(
+                src_chunk,
+                out_chunk,
+                width,
+                height,
+                fps=fps,
+                timeout_seconds=timeout_seconds,
+                comfy_url=comfy_url,
+            )
+            upscaled.append(out_chunk)
+        if not upscaled:
+            raise RuntimeError("Temporal AI upscaler did not produce any chunks.")
+        _concat_video_chunks(upscaled, output_path)
+    return output_path
+
+
+def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, duration: float) -> Path:
+    _run([
+        _FFMPEG, "-y",
+        "-ss", f"{start:.3f}",
+        "-i", str(input_path),
+        "-t", f"{duration:.3f}",
+        "-map", "0:v:0",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ], timeout=1800)
+    return output_path
+
+
+def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
+    list_path = output_path.with_suffix(".concat.txt")
+    try:
+        list_path.write_text(
+            "".join(f"file {shlex.quote(str(chunk))}\n" for chunk in chunks),
+            encoding="utf-8",
+        )
+        _run([
+            _FFMPEG, "-y",
+            "-f", "concat", "-safe", "0",
+            "-i", str(list_path),
+            "-c", "copy",
+            "-movflags", "+faststart",
+            str(output_path),
+        ], timeout=1800)
+    finally:
+        list_path.unlink(missing_ok=True)
     return output_path
 
 
