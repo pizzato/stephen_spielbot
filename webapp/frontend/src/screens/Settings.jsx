@@ -1323,6 +1323,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
                 <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
               </Field>
+              <Field label="Attribution footer" hint="Credit line appended to every YouTube description for this style. Cleared = no credit line.">
+                <textarea className="textarea" rows={2} value={st.attribution_description || ''} onChange={(e) => setStyleField('attribution_description', e.target.value)} />
+              </Field>
+              <Field label="Attribution X hashtags" hint="Extra hashtags appended to X posts for this style — space or comma separated, the “#” is optional. e.g. “stephenspielbot”.">
+                <input className="input" value={st.attribution_hashtags || ''} onChange={(e) => setStyleField('attribution_hashtags', e.target.value)} />
+              </Field>
+              <Field label="Attribution YouTube tags" hint="Extra keyword tags appended to YouTube uploads for this style — comma separated. e.g. “stephenspielbot”.">
+                <input className="input" value={st.attribution_youtube_tags || ''} onChange={(e) => setStyleField('attribution_youtube_tags', e.target.value)} />
+              </Field>
               {/* Voice model (TTS engine) — which narration model synthesises this style */}
               <Field label="Voice model" hint="Which TTS model synthesises this style's narration. OpenF5 is Apache-2.0 (commercial-safe); non-commercial models are flagged. Download models under Infrastructure.">
                 <select className="select" value={st.tts_engine || 'openf5'} onChange={(e) => setStyleField('tts_engine', e.target.value)}>
