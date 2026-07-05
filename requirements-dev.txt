@@ -1,3 +1,4 @@
-# Development-only dependencies (linting). Install with: make lint (auto) or
+# Development-only dependencies (linting/tests). Install with: make lint (auto) or
 #   .venv/bin/pip install -r requirements-dev.txt
 ruff
+pytest
