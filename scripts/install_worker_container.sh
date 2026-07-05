@@ -75,7 +75,7 @@ echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 # The container mounts the host's existing models (it does not download them).
 # If they're missing and a MODEL_SOURCE host is given, rsync them over (host↔host
 # via SSH agent forwarding); otherwise warn — the build works, but renders need them.
-if ssh "$TARGET" "[ -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' ]" 2>/dev/null; then
+if ssh "$TARGET" "[[ -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null; then
     echo "[deploy] models present on $TARGET"
 elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
     echo "[deploy] models missing on $TARGET — rsyncing from $MODEL_SOURCE (this can take a while) ..."

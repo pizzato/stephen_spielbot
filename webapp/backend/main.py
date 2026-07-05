@@ -2314,14 +2314,36 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
         if mode == "temporal_ai":
-            temporal_ai_upscale_video(
-                final_path,
-                staged,
-                target_w,
-                target_h,
-                command_template=cfg.get("temporal_video_upscaler_cmd") or None,
-                timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
-            )
+            command_template = cfg.get("temporal_video_upscaler_cmd") or None
+            if command_template:
+                temporal_ai_upscale_video(
+                    final_path,
+                    staged,
+                    target_w,
+                    target_h,
+                    command_template=command_template,
+                    timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
+                )
+            else:
+                worker_urls = gapp._preview_worker_urls()
+                if not worker_urls:
+                    raise RuntimeError("No ComfyUI workers reachable for temporal AI upscale.")
+                from pipeline.worker_pool import WorkerPool
+
+                pool = WorkerPool(worker_urls)
+                url = pool.acquire()
+                try:
+                    _film_checkpoint(task_id)
+                    temporal_ai_upscale_video(
+                        final_path,
+                        staged,
+                        target_w,
+                        target_h,
+                        timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
+                        comfy_url=url,
+                    )
+                finally:
+                    pool.release(url)
         else:
             upscale_video(final_path, staged, target_w, target_h)
 

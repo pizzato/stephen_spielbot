@@ -1,0 +1,97 @@
+{
+  "1": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
+    }
+  },
+  "2": {
+    "class_type": "VHS_LoadVideoFFmpeg",
+    "inputs": {
+      "video": "{{VIDEO_NAME}}",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "start_time": 0,
+      "vae": [
+        "1",
+        2
+      ],
+      "format": "LTXV"
+    }
+  },
+  "3": {
+    "class_type": "LatentUpscaleModelLoader",
+    "inputs": {
+      "model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "LTXVLatentUpsampler",
+    "inputs": {
+      "samples": [
+        "2",
+        0
+      ],
+      "upscale_model": [
+        "3",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    }
+  },
+  "5": {
+    "class_type": "VHS_VAEDecodeBatched",
+    "inputs": {
+      "samples": [
+        "4",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "per_batch": 8
+    }
+  },
+  "6": {
+    "class_type": "ImageScale",
+    "inputs": {
+      "image": [
+        "5",
+        0
+      ],
+      "upscale_method": "lanczos",
+      "width": "{{WIDTH}}",
+      "height": "{{HEIGHT}}",
+      "crop": "disabled"
+    }
+  },
+  "7": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": [
+        "6",
+        0
+      ],
+      "frame_rate": "{{FPS}}",
+      "loop_count": 0,
+      "filename_prefix": "spielbot-ltx-upscale",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 16,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "audio": [
+        "2",
+        2
+      ]
+    }
+  }
+}

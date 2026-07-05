@@ -66,12 +66,6 @@ React build), and seeds `config.yaml` with your workers. Omit `WORKERS=...` for 
 single-machine (localhost) setup, or run `make install` with no args to be
 prompted. Then open [http://localhost:8001](http://localhost:8001).
 
-Optional: seed the Remix screen's AI-temporal final-video upscale command during install:
-
-```bash
-TEMPORAL_VIDEO_UPSCALER_CMD='your-upscaler -i {input} -o {output} --width {width} --height {height}' make install
-```
-
 > The interface is a React + FastAPI web app (`webapp/`) served from a single
 > uvicorn process on port 8001. `make install` builds the frontend; after later
 > frontend changes run `make web-build`, or use `make web-dev` for hot reload.
@@ -167,16 +161,14 @@ cluster status panel). Worker lists are part of this file:
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `FFMPEG_PATH` | `$(which ffmpeg)` | Path to the ffmpeg binary (set when it isn't on `PATH`) |
 | `FFMPEG_TIMEOUT` | `600` | Per-call ffmpeg timeout, seconds |
-| `TEMPORAL_VIDEO_UPSCALER_CMD` | unset | Optional install/env fallback for the saved Settings value. Seeds `temporal_video_upscaler_cmd` during `make install`. |
-| `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Optional install/env fallback for the saved Settings timeout, in seconds |
+| `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Optional timeout for the packaged Remix temporal AI upscaler, in seconds |
 | `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
-The temporal upscaler command is also editable in Settings → Infrastructure.
-Use it from the Remix screen after reviewing the finished film; each upscale is
-kept as a selectable final-video version so you can switch back to the original.
-It runs on the controller backend, not inside the ComfyUI/TTS worker containers,
-so use an absolute command path if the app runs under launchd.
+The temporal upscaler runs from the Remix screen after reviewing the finished
+film. It uses the packaged ComfyUI worker workflow with the LTX 2.3 spatial
+upscaler model downloaded by `make install`; each upscale is kept as a selectable
+final-video version so you can switch back to the original.
 
 ## Models
 

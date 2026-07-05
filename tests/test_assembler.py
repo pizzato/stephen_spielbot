@@ -61,15 +61,35 @@ class AssemblerToolResolutionTests(unittest.TestCase):
 
             self.assertEqual(result, out)
 
-    def test_temporal_ai_upscale_requires_command(self):
+    def test_temporal_ai_upscale_uses_packaged_comfy_workflow_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
             src.write_bytes(b"video")
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as comfy_upscale, \
                  mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
-                with self.assertRaises(RuntimeError):
-                    assembler.temporal_ai_upscale_video(src, Path(tmp) / "out.mp4", 1920, 1080)
+                result = assembler.temporal_ai_upscale_video(
+                    src,
+                    out,
+                    1920,
+                    1080,
+                    timeout_seconds=123,
+                    comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(result, out)
+            comfy_upscale.assert_called_once_with(
+                src,
+                out,
+                1920,
+                1080,
+                fps=25.0,
+                timeout_seconds=123,
+                comfy_url="http://worker:8188",
+            )
 
 
 if __name__ == "__main__":

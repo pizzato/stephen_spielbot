@@ -45,6 +45,13 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
     fi \
     && pip install -r requirements.txt
 
+# Video Helper Suite gives the backend a packaged way to load an existing MP4,
+# run it through the LTX latent upscaler, and save the upscaled MP4. This makes
+# Remix's temporal AI upscaler self-contained instead of requiring a local CLI.
+RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
+        custom_nodes/ComfyUI-VideoHelperSuite \
+    && pip install -r custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~33 GB).

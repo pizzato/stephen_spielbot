@@ -471,7 +471,7 @@ def _get_outputs(prompt_id: str, comfy_url: str = COMFYUI_URL) -> list[dict]:
 
     outputs = []
     for node_outputs in history.get(prompt_id, {}).get("outputs", {}).values():
-        for key in ("videos", "images", "audio"):
+        for key in ("videos", "images", "audio", "gifs"):
             for item in node_outputs.get(key, []):
                 outputs.append(item)
     return outputs
@@ -485,14 +485,15 @@ def _download_output(item: dict, dest: Path, comfy_url: str = COMFYUI_URL) -> Pa
     return dest
 
 
-def _upload_image(image_path: Path, comfy_url: str = COMFYUI_URL) -> str:
-    """Upload an image to ComfyUI input. Returns the filename ComfyUI assigned."""
-    data = image_path.read_bytes()
-    filename = image_path.name
+def _upload_input_file(path: Path, field_name: str = "image", content_type: str = "application/octet-stream",
+                       comfy_url: str = COMFYUI_URL) -> str:
+    """Upload a file to ComfyUI's input folder and return its assigned name."""
+    data = Path(path).read_bytes()
+    filename = Path(path).name
     body = (
         f"--{_BOUNDARY}\r\n"
-        f'Content-Disposition: form-data; name="image"; filename="{filename}"\r\n'
-        f"Content-Type: image/jpeg\r\n\r\n"
+        f'Content-Disposition: form-data; name="{field_name}"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
     ).encode() + data + f"\r\n--{_BOUNDARY}--\r\n".encode()
 
     req = urllib.request.Request(
@@ -501,9 +502,19 @@ def _upload_image(image_path: Path, comfy_url: str = COMFYUI_URL) -> str:
         headers={"Content-Type": f"multipart/form-data; boundary={_BOUNDARY}"},
         method="POST",
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=300) as resp:
         result = json.loads(resp.read())
     return result["name"]
+
+
+def _upload_image(image_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Upload an image to ComfyUI input. Returns the filename ComfyUI assigned."""
+    return _upload_input_file(image_path, content_type="image/jpeg", comfy_url=comfy_url)
+
+
+def _upload_video(video_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Upload a video to ComfyUI input. Returns the filename ComfyUI assigned."""
+    return _upload_input_file(video_path, content_type="video/mp4", comfy_url=comfy_url)
 
 
 def _apply_second_pass(workflow: dict, cfg: float, steps: int) -> None:
@@ -632,6 +643,42 @@ def generate_video_continuation(
         raise RuntimeError(f"No output files from ComfyUI for I2V prompt {prompt_id} ({comfy_url})")
 
     video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
+def upscale_video_ltx(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    timeout_seconds: int = 7200,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Upscale an existing MP4 through the packaged LTX temporal workflow."""
+    video_name = _upload_video(Path(input_path), comfy_url=comfy_url)
+    workflow = _load_workflow("ltx23_video_upscale.json")
+    workflow = _fill_template(workflow, {
+        "VIDEO_NAME": video_name,
+        "WIDTH": int(width),
+        "HEIGHT": int(height),
+        "FPS": max(1.0, float(fps or LTX_FPS)),
+    })
+
+    logger.info(
+        "[comfy] upscale_video_ltx %s -> %dx%d fps=%.3f timeout=%ds on %s",
+        Path(input_path).name, width, height, fps, timeout_seconds, comfy_url,
+    )
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for LTX upscale prompt {prompt_id} ({comfy_url})")
+
+    video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 

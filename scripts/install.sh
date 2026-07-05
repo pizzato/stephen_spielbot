@@ -95,16 +95,19 @@ HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 FIRST_HOST="$(remote_hosts | head -1)"
 MODEL_SOURCE="${MODEL_SOURCE:-${FIRST_HOST:-}}"
 
-# Sentinel files — if all exist, the default model set (LTX + ACE + FLUX.2 Klein)
-# is assumed present. FLUX.1 is opt-in, so it is NOT part of the sentinel.
+# Sentinel files — if all exist, the default model set (LTX + LTX upscaler + ACE
+# + FLUX.2 Klein) is assumed present. FLUX.1 is opt-in, so it is NOT part of the
+# sentinel.
 _models_present_on() {
     local host="$1"
     if [[ "$host" == "localhost" ]]; then
         [[ -f "$COMFY_DIR/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors" ]] && \
+        [[ -f "$COMFY_DIR/models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors" ]] && \
         [[ -f "$COMFY_DIR/models/diffusion_models/acestep_v1.5_turbo.safetensors" ]] && \
         [[ -f "$COMFY_DIR/models/diffusion_models/flux-2-klein-4b.safetensors" ]]
     else
         ssh "$host" "[[ -f \$HOME/github/ComfyUI/models/checkpoints/ltx-2.3-22b-dev-fp8.safetensors && \
+                        -f \$HOME/github/ComfyUI/models/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors && \
                         -f \$HOME/github/ComfyUI/models/diffusion_models/acestep_v1.5_turbo.safetensors && \
                         -f \$HOME/github/ComfyUI/models/diffusion_models/flux-2-klein-4b.safetensors ]]" 2>/dev/null
     fi
