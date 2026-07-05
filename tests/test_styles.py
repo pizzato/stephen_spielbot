@@ -924,10 +924,12 @@ class CharacterTests(TempConfigCase):
 
     def test_characters_default_empty_on_fresh_install(self):
         cfg = app.load_config()
-        self.assertEqual(cfg["styles"][0]["characters"], [])
-        self.assertEqual(cfg["default_characters"], [])
+        self.assertEqual(cfg["styles"][0]["character_ids"], [])
+        self.assertEqual(cfg["characters"], [])
 
-    def test_characters_round_trip_through_ensure_styles(self):
+    def test_legacy_per_style_characters_migrate_to_global_library(self):
+        # A pre-global config kept characters on each style; loading migrates
+        # them into the shared library and opts each style into its own ids.
         self.write_config({
             "styles": [_style("Hero", characters=[
                 {"name": "Robot XYZ", "aliases": ["XYZ"],
@@ -936,23 +938,43 @@ class CharacterTests(TempConfigCase):
             "default_style": "Hero",
         })
         cfg = app.load_config()
-        chars = cfg["styles"][0]["characters"]
+        chars = cfg["characters"]
         self.assertEqual(len(chars), 1)
         self.assertEqual(chars[0]["name"], "Robot XYZ")
         self.assertEqual(chars[0]["aliases"], ["XYZ"])
         self.assertTrue(chars[0]["id"])
-        # mirrored onto the flat key like every other default-style field
-        self.assertEqual(cfg["default_characters"], chars)
+        # the style opted into its migrated character…
+        self.assertEqual(cfg["styles"][0]["character_ids"], [chars[0]["id"]])
+        # …and the per-style "characters" field is gone (global now)
+        self.assertNotIn("characters", cfg["styles"][0])
+        # flat mirror tracks the default style's id list
+        self.assertEqual(cfg["default_character_ids"], [chars[0]["id"]])
+
+    def test_global_characters_round_trip_and_prune_stale_ids(self):
+        self.write_config({
+            "characters": [
+                {"id": "char_a", "name": "Ana", "description": "a woman"},
+                {"id": "char_b", "name": "Ben", "description": "a man"},
+            ],
+            "styles": [_style("Hero", character_ids=["char_a", "char_gone", "char_a"])],
+            "default_style": "Hero",
+            "characters_migrated_v2": True,   # already global — no migration
+        })
+        cfg = app.load_config()
+        self.assertEqual([c["id"] for c in cfg["characters"]], ["char_a", "char_b"])
+        # stale id dropped, duplicate collapsed, order preserved
+        self.assertEqual(cfg["styles"][0]["character_ids"], ["char_a"])
 
     def test_no_style_imposes_no_characters(self):
         self.write_config({
-            "styles": [_style("Hero", characters=[
-                {"name": "Bob", "description": "a man"}])],
+            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"}],
+            "styles": [_style("Hero", character_ids=["char_bob"])],
             "default_style": "Hero",
+            "characters_migrated_v2": True,
         })
         cfg = app.load_config()
         ss = app.style_settings(cfg, app.NO_STYLE)
-        self.assertEqual(ss["characters"], [])
+        self.assertEqual(ss["character_ids"], [])
 
     def test_character_sheet_lists_enabled_described_only(self):
         sheet = app._character_sheet([
@@ -1011,6 +1033,35 @@ class CharacterTests(TempConfigCase):
         out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
         self.assertEqual(out, "Robot XYZ stands still.")
 
+    def test_inject_respects_per_style_opt_in(self):
+        # One global character; "Hero" opts in, "Villain" does not — only the
+        # opted-in style injects the appearance, even for the same scene text.
+        self.write_config({
+            "characters": [{"id": "char_xyz", "name": "Robot XYZ",
+                            "description": "matte-black humanoid chassis"}],
+            "styles": [_style("Hero", character_ids=["char_xyz"]),
+                       _style("Villain", character_ids=[])],
+            "default_style": "Hero",
+            "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        scene = {"image_prompt": "Robot XYZ stands on a ridge.", "narration": ""}
+        self.assertIn("matte-black humanoid chassis",
+                      app._inject_characters(scene["image_prompt"], scene, cfg, "Hero"))
+        self.assertEqual(app._inject_characters(scene["image_prompt"], scene, cfg, "Villain"),
+                         "Robot XYZ stands on a ridge.")
+
+    def test_style_characters_resolves_only_opted_in(self):
+        self.write_config({
+            "characters": [{"id": "char_a", "name": "Ana", "description": "a"},
+                           {"id": "char_b", "name": "Ben", "description": "b"}],
+            "styles": [_style("Hero", character_ids=["char_b"])],
+            "default_style": "Hero",
+            "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Hero")], ["char_b"])
+
 
 class CharacterReferenceImageTests(TempConfigCase):
     """Phase 2 — reference-image conditioning: workflow builder, scene matching,
@@ -1060,8 +1111,14 @@ class CharacterReferenceImageTests(TempConfigCase):
     def _hero_with_chars(self, chars):
         # Explicit ids mirror a saved config: ids are minted on save and then
         # stable, which is what the image ops (gated on a saved form) rely on.
+        # Characters live in the global library; "Hero" opts into all of them.
         chars = [{"id": f"char_test_{i}", **c} for i, c in enumerate(chars)]
-        self.write_config({"styles": [_style("Hero", characters=chars)], "default_style": "Hero"})
+        self.write_config({
+            "characters": chars,
+            "styles": [_style("Hero", character_ids=[c["id"] for c in chars])],
+            "default_style": "Hero",
+            "characters_migrated_v2": True,
+        })
         return app.load_config()
 
     def _write_ref(self, char_id):
@@ -1074,9 +1131,9 @@ class CharacterReferenceImageTests(TempConfigCase):
         cfg = self._hero_with_chars([
             {"name": "Bob", "description": "a man", "ref_image": "x"},
         ])
-        cid = cfg["styles"][0]["characters"][0]["id"]
+        cid = cfg["characters"][0]["id"]
         # ensure the stored filename is the canonical <id>.png and the file exists
-        cfg = app.set_character_image("Hero", cid, self._png_bytes())
+        cfg = app.set_character_image(cid, self._png_bytes())
         scene = {"image_prompt": "Bob waves.", "narration": ""}
         paths = app._scene_reference_images(scene["image_prompt"], scene, cfg, "Hero")
         self.assertEqual([p.name for p in paths], [f"{cid}.png"])
@@ -1089,8 +1146,8 @@ class CharacterReferenceImageTests(TempConfigCase):
         self.assertEqual(app._scene_reference_images("Bob waves.", scene, cfg, "Hero"), [])
         # unmatched name → empty even when the file exists
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man", "ref_image": "x"}])
-        cid = cfg["styles"][0]["characters"][0]["id"]
-        cfg = app.set_character_image("Hero", cid, self._png_bytes())
+        cid = cfg["characters"][0]["id"]
+        cfg = app.set_character_image(cid, self._png_bytes())
         scene = {"image_prompt": "An empty room.", "narration": "Nobody."}
         self.assertEqual(app._scene_reference_images("An empty room.", scene, cfg, "Hero"), [])
 
@@ -1100,34 +1157,34 @@ class CharacterReferenceImageTests(TempConfigCase):
             {"name": "Ben", "description": "b", "ref_image": "x"},
             {"name": "Cid", "description": "c", "ref_image": "x"},
         ])
-        for ch in cfg["styles"][0]["characters"]:
-            cfg = app.set_character_image("Hero", ch["id"], self._png_bytes())
+        for ch in cfg["characters"]:
+            cfg = app.set_character_image(ch["id"], self._png_bytes())
         scene = {"image_prompt": "Ana, Ben and Cid meet.", "narration": ""}
         paths = app._scene_reference_images(scene["image_prompt"], scene, cfg, "Hero")
         self.assertEqual(len(paths), app._MAX_SCENE_REFERENCES)
 
     def test_set_and_clear_character_image(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])
-        cid = cfg["styles"][0]["characters"][0]["id"]
-        cfg = app.set_character_image("Hero", cid, self._png_bytes())
-        char = cfg["styles"][0]["characters"][0]
+        cid = cfg["characters"][0]["id"]
+        cfg = app.set_character_image(cid, self._png_bytes())
+        char = cfg["characters"][0]
         self.assertEqual(char["ref_image"], f"{cid}.png")
         p = app._character_image_path(char["ref_image"])
         self.assertTrue(p.exists())
-        cfg = app.clear_character_image("Hero", cid)
-        self.assertEqual(cfg["styles"][0]["characters"][0]["ref_image"], "")
+        cfg = app.clear_character_image(cid)
+        self.assertEqual(cfg["characters"][0]["ref_image"], "")
         self.assertFalse(p.exists())
 
     def test_image_ops_reject_unknown_character(self):
         self._hero_with_chars([{"name": "Bob", "description": "a man"}])
         with self.assertRaises(ValueError):
-            app.set_character_image("Hero", "not-an-id", self._png_bytes())
+            app.set_character_image("not-an-id", self._png_bytes())
         with self.assertRaises(ValueError):
-            app.clear_character_image("Nope", "x")
+            app.clear_character_image("nope")
 
     def test_ref_strength_defaults_to_one(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])
-        self.assertEqual(cfg["styles"][0]["characters"][0]["ref_strength"], 1.0)
+        self.assertEqual(cfg["characters"][0]["ref_strength"], 1.0)
 
     @staticmethod
     def _png_bytes() -> bytes:
