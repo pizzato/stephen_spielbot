@@ -4,12 +4,14 @@ import { api, fileUrl } from '../api.js'
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
+  voices, filmVoice,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
   const [lightbox, setLightbox] = useState(false)
   const [title, setTitle] = useState(scene.title || '')
   const [narration, setNarration] = useState(scene.narration || '')
+  const [voice, setVoice] = useState(scene.voice || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
   const [busy, setBusy] = useState('')
@@ -29,6 +31,7 @@ function SceneCard({
   useEffect(() => {
     setTitle(scene.title || '')
     setNarration(scene.narration || '')
+    setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
     setEditing(false)
@@ -36,7 +39,7 @@ function SceneCard({
 
   const persist = async () => {
     try {
-      await api.saveScene(jobId, scene.id, { title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      await api.saveScene(jobId, scene.id, { title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt })
     } catch (e) {
       setError(e.message)
     }
@@ -283,6 +286,7 @@ function SceneCard({
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 6 }}>
                   <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{title || `Scene ${index + 1}`}</div>
                   <div className="row gap-6" style={{ flexShrink: 0 }}>
+                    <Chip>{scene.effective_voice || filmVoice || 'Default (F5-TTS)'}</Chip>
                     {videoUrl
                       ? <Chip tone={scene.has_final ? 'ok' : 'warn'} dot>{scene.has_final ? 'Rendered' : 'Partial'}</Chip>
                       : <Chip tone="warn">No video</Chip>
@@ -316,6 +320,12 @@ function SceneCard({
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={() => regenField('narration')} icon="microphone-lines">Narration</RegenLabel>}>
                   <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
+                </Field>
+                <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
+                  <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
+                    <option value="">Film narrator ({filmVoice || 'Default (F5-TTS)'})</option>
+                    {(voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                  </select>
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={() => regenField('image_prompt')} icon="image">Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
@@ -394,6 +404,8 @@ export default function EditFilm({ workDir, go }) {
   const [title, setTitle] = useState('')
   const [resolution, setResolution] = useState('')
   const [style, setStyle] = useState('')
+  const [voices, setVoices] = useState([])
+  const [filmVoice, setFilmVoice] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [assembling, setAssembling] = useState(false)
@@ -410,6 +422,8 @@ export default function EditFilm({ workDir, go }) {
       setTitle(r.title || '')
       setResolution(r.resolution || '')
       setStyle(r.style || '')
+      setVoices(r.voices || [])
+      setFilmVoice(r.voice || 'Default (F5-TTS)')
     } catch (e) {
       setError(e.message)
     } finally {
@@ -534,6 +548,8 @@ export default function EditFilm({ workDir, go }) {
               workDir={workDir}
               resolution={resolution}
               style={style}
+              voices={voices}
+              filmVoice={filmVoice}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}
