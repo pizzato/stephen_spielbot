@@ -193,6 +193,10 @@ DEFAULT_CFG = {
     # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
     # render pool once the UI has been idle this many seconds.
     "ui_idle_timeout_seconds": 300,
+    # Optional external temporal AI video upscaler. Used by Film editor →
+    # Upscale → AI temporal. Leave command blank to disable that mode.
+    "temporal_video_upscaler_cmd": "",
+    "temporal_video_upscaler_timeout": 7200,
     # Generation defaults
     "default_voice": "",
     "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
@@ -2299,7 +2303,6 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
 
     logger.info("Auto-picked suggestion: %r (id=%s)", suggestion["title"], queue_item.get("id"))
     return queue_item
-
 
 
 

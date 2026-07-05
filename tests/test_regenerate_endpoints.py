@@ -83,5 +83,117 @@ class PostTitleTests(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 404)
 
 
+class FilmUpscaleTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        backend._film_tasks.clear()
+        backend._film_task_meta.clear()
+        backend._film_cancelled_tids.clear()
+
+    def test_video_upscale_replaces_final_and_records_take(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd / "scene_01_final.mp4"
+        final.write_bytes(b"low-res-final")
+
+        def fake_upscale(src, out, width, height):
+            self.assertEqual(src, final)
+            self.assertEqual((width, height), (1920, 1080))
+            out.write_bytes(b"upscaled-final")
+            return out
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
+             mock.patch("pipeline.assembler.upscale_video", side_effect=fake_upscale):
+            backend._film_tasks["tid"] = {"status": "running", "step": "upscale"}
+            backend._run_video_upscale(
+                "tid",
+                wd,
+                1,
+                {"_upscale_resolution": "Landscape FHD (1920×1080)"},
+                {},
+            )
+
+        self.assertEqual(final.read_bytes(), b"upscaled-final")
+        self.assertEqual(backend._film_tasks["tid"], {"status": "done"})
+        history = backend.video_history.history(wd, 1)
+        self.assertEqual(len(history["versions"]), 2)
+        self.assertEqual(history["selected"], 2)
+
+    def test_video_upscale_temporal_mode_uses_ai_upscaler(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd / "scene_01_final.mp4"
+        final.write_bytes(b"low-res-final")
+
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None):
+            self.assertEqual(src, final)
+            self.assertEqual((width, height), (1920, 1080))
+            self.assertEqual(command_template, "temporal-cli -i {input} -o {output}")
+            self.assertEqual(timeout_seconds, 1234)
+            out.write_bytes(b"temporal-upscaled-final")
+            return out
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch.object(backend.gapp, "load_config", return_value={
+                 "temporal_video_upscaler_cmd": "temporal-cli -i {input} -o {output}",
+                 "temporal_video_upscaler_timeout": 1234,
+             }), \
+             mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
+             mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
+             mock.patch("pipeline.assembler.upscale_video") as fast:
+            backend._film_tasks["tid"] = {"status": "running", "step": "upscale"}
+            backend._run_video_upscale(
+                "tid",
+                wd,
+                1,
+                {
+                    "_upscale_resolution": "Landscape FHD (1920×1080)",
+                    "_upscale_mode": "temporal_ai",
+                },
+                {},
+            )
+
+        self.assertEqual(final.read_bytes(), b"temporal-upscaled-final")
+        self.assertEqual(backend._film_tasks["tid"], {"status": "done"})
+        temporal.assert_called_once()
+        fast.assert_not_called()
+
+    def test_rerender_endpoint_accepts_upscale_target(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        (wd / "scene_01_final.mp4").write_bytes(b"low-res-final")
+        row = {"id": 1, "title": "Scene 1"}
+
+        class FakeStore:
+            def scene_rows(self, job_id):
+                return [row]
+
+            def close(self):
+                pass
+
+        started = []
+
+        def fake_thread(target, args, daemon):
+            started.append(args)
+            return mock.Mock(start=lambda: None)
+
+        with mock.patch.object(backend, "DurableStore", mock.Mock(default=mock.Mock(return_value=FakeStore()))), \
+             mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
+            result = backend.rerender_film_scene(
+                1,
+                backend.RerenderSceneBody(
+                    work_dir=str(wd),
+                    component="upscale",
+                    target_resolution="Landscape FHD (1920×1080)",
+                    upscale_mode="temporal_ai",
+                ),
+            )
+
+        self.assertTrue(result["task_id"].startswith("rerender_01_upscale_"))
+        self.assertEqual(started[0][4], "upscale")
+        self.assertEqual(started[0][5]["_upscale_resolution"], "Landscape FHD (1920×1080)")
+        self.assertEqual(started[0][5]["_upscale_mode"], "temporal_ai")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -262,7 +262,7 @@ export default function App() {
       case 'publish': return <Publishing go={go} meta={meta} initialWorkDir={publishWorkDir} />
       case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} onNewVersion={onNewVersion} />
-      case 'editfilm': return <EditFilm workDir={workDir} go={go} />
+      case 'editfilm': return <EditFilm workDir={workDir} go={go} meta={meta} />
       case 'engagement': return <ChannelAnalytics meta={meta} go={go} initialTab="predictive" />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} />
       default: return <Home go={go} />

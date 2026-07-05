@@ -50,6 +50,33 @@ else
     "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
 fi
 
+if [[ -n "${TEMPORAL_VIDEO_UPSCALER_CMD:-}" || -n "${TEMPORAL_VIDEO_UPSCALER_TIMEOUT:-}" ]]; then
+    "$VENV/bin/python" - "$CONFIG_YAML" <<'PY'
+import os
+import sys
+import yaml
+
+path = sys.argv[1]
+data = yaml.safe_load(open(path)) or {}
+changed = False
+cmd = os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
+timeout = os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "")
+if cmd:
+    data["temporal_video_upscaler_cmd"] = cmd
+    changed = True
+if timeout:
+    try:
+        data["temporal_video_upscaler_timeout"] = int(timeout)
+        changed = True
+    except ValueError:
+        print(f"[config] WARNING: ignoring invalid TEMPORAL_VIDEO_UPSCALER_TIMEOUT={timeout!r}")
+if changed:
+    with open(path, "w") as f:
+        yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
+    print("[config] temporal AI upscaler settings updated")
+PY
+fi
+
 # F5-TTS runs in the worker containers, so the controller needs no local F5-TTS
 # environment (the workers handle narration over HTTP).
 

@@ -196,6 +196,7 @@ _RERENDER_STEP_LABELS = {
     "narration": "recording narration",
     "image": "painting first frame",
     "video": "rendering video",
+    "upscale": "upscaling video",
     "mux": "muxing audio",
 }
 
@@ -6208,7 +6209,9 @@ def reassemble_film(body: ReassembleBody) -> dict:
 
 class RerenderSceneBody(BaseModel):
     work_dir: str
-    component: str  # "narration", "image", or "video"
+    component: str  # "narration", "image", "video", or "upscale"
+    target_resolution: str | None = None
+    upscale_mode: str | None = None
 
 
 def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
@@ -6463,6 +6466,69 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _finish_film_task_error(task_id, e)
 
 
+def _run_video_upscale(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: upscale the selected scene take without regenerating it."""
+    from pipeline.assembler import _get_video_dimensions, temporal_ai_upscale_video, upscale_video
+
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    raw_video = wd / f"scene_{sid:02d}_video.mp4"
+    clip = wd / f"scene_{sid:02d}_clip_01.mp4"
+    source = (
+        final_path if (final_path.exists() and final_path.stat().st_size > 0)
+        else raw_video if (raw_video.exists() and raw_video.stat().st_size > 0)
+        else clip if (clip.exists() and clip.stat().st_size > 0)
+        else None
+    )
+    if source is None:
+        _film_tasks[task_id] = {"status": "error", "error": "This scene has no video to upscale."}
+        return
+
+    target_name = (jc.get("_upscale_resolution") or jc.get("resolution") or "").strip()
+    target_dims = gapp._RESOLUTIONS.get(target_name)
+    if not target_dims:
+        _film_tasks[task_id] = {"status": "error", "error": "Choose a valid upscale resolution."}
+        return
+    upscale_mode = str(jc.get("_upscale_mode") or "fast").strip().lower()
+    if upscale_mode not in {"fast", "temporal_ai"}:
+        _film_tasks[task_id] = {"status": "error", "error": "Choose a valid upscale mode."}
+        return
+    cfg = gapp.load_config()
+
+    try:
+        _film_checkpoint(task_id)
+        target_w, target_h = target_dims
+        actual_w, actual_h = _get_video_dimensions(source)
+        if actual_w >= target_w and actual_h >= target_h:
+            raise RuntimeError(
+                f"Scene is already {actual_w}x{actual_h}; choose a larger target than {target_w}x{target_h}."
+            )
+
+        # Preserve the current selected take before replacing scene_NN_final.mp4.
+        if final_path.exists():
+            video_history.seed_if_empty(wd, sid, final_path)
+
+        _film_tasks[task_id] = {"status": "running", "step": "upscale", "scene_id": sid}
+        staged = wd / f"scene_{sid:02d}_upscale.staging.mp4"
+        if upscale_mode == "temporal_ai":
+            temporal_ai_upscale_video(
+                source,
+                staged,
+                target_w,
+                target_h,
+                command_template=cfg.get("temporal_video_upscaler_cmd") or None,
+                timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
+            )
+        else:
+            upscale_video(source, staged, target_w, target_h)
+        _film_checkpoint(task_id)
+        staged.replace(final_path)
+        video_history.record(wd, sid, final_path)
+        _film_tasks[task_id] = {"status": "done"}
+    except Exception as e:
+        (wd / f"scene_{sid:02d}_upscale.staging.mp4").unlink(missing_ok=True)
+        _finish_film_task_error(task_id, e)
+
+
 def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict) -> None:
     """Run a re-render worker, then record a completion entry in the Activity log.
 
@@ -6477,9 +6543,11 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
         if status == "error":
-            name = f"Re-render failed — scene {sid}"
+            name = f"Upscale failed — scene {sid}" if component == "upscale" else f"Re-render failed — scene {sid}"
         elif status == "cancelled":
-            name = f"Re-render cancelled — scene {sid}"
+            name = f"Upscale cancelled — scene {sid}" if component == "upscale" else f"Re-render cancelled — scene {sid}"
+        elif component == "upscale":
+            name = f"Upscaled scene {sid}"
         else:
             name = f"Re-rendered scene {sid}"
         with _op_lock:
@@ -6495,7 +6563,7 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Path is outside the output folder.")
-    if body.component not in ("narration", "image", "video"):
+    if body.component not in ("narration", "image", "video", "upscale"):
         raise HTTPException(400, f"Unknown component: {body.component!r}")
 
     sid = scene_id
@@ -6511,6 +6579,12 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         raise HTTPException(404, f"Scene {sid} not found.")
 
     jc = _film_job_config(wd)
+    if body.component == "upscale":
+        jc = {
+            **jc,
+            "_upscale_resolution": (body.target_resolution or "").strip(),
+            "_upscale_mode": (body.upscale_mode or "fast").strip(),
+        }
 
     # Delete stale files for the component and its dependents
     if body.component == "narration":
@@ -6536,6 +6610,8 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         # render runs — leaving the scene with no video at all. Snapshot the current
         # video as a take so the user can flip back to it.
         video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
+    elif body.component == "upscale":
+        video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
 
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
@@ -6545,6 +6621,8 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         target = _run_narration_rerender
     elif body.component == "image":
         target = _run_image_rerender
+    elif body.component == "upscale":
+        target = _run_video_upscale
     else:
         target = _run_video_rerender
     threading.Thread(
