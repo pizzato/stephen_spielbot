@@ -3,6 +3,7 @@
 import json
 import logging
 import random
+import shutil
 import subprocess
 import time
 import urllib.parse
@@ -517,6 +518,70 @@ def _upload_video(video_path: Path, comfy_url: str = COMFYUI_URL) -> str:
     return _upload_input_file(video_path, content_type="video/mp4", comfy_url=comfy_url)
 
 
+def _is_local_host(host: str) -> bool:
+    return host in {"", "localhost", "127.0.0.1", "::1"}
+
+
+def _safe_stage_name(path: Path) -> str:
+    suffix = path.suffix if path.suffix.lower() in {".mp4", ".mov", ".mkv", ".webm"} else ".mp4"
+    return f"spielbot-upscale-{uuid.uuid4().hex[:12]}{suffix}"
+
+
+def _run_stage_cmd(cmd: list[str], what: str) -> None:
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(f"{what} failed: {detail[-1000:]}")
+
+
+def _stage_video_for_load(video_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Place a large video in ComfyUI's input folder without using HTTP upload.
+
+    ComfyUI's upload endpoint can reject finished films with 413 Request Entity
+    Too Large. The worker stack is SSH/Docker-managed already, so stage the MP4
+    into /opt/ComfyUI/input and let the Video Helper Suite loader read it by
+    filename. Falls back to a native ComfyUI input folder when no container is
+    available.
+    """
+    video_path = Path(video_path)
+    name = _safe_stage_name(video_path)
+    host = _hostname_from_url(comfy_url)
+    container_dest = f"spielbot-worker-comfyui-1:/opt/ComfyUI/input/{name}"
+
+    if _is_local_host(host):
+        try:
+            _run_stage_cmd(["docker", "cp", str(video_path), container_dest], "docker cp to local ComfyUI")
+            return name
+        except Exception as exc:
+            logger.info("[comfy] local docker cp unavailable, using native input folder: %s", exc)
+        native_input = Path.home() / "github" / "ComfyUI" / "input"
+        native_input.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(video_path, native_input / name)
+        return name
+
+    if host.startswith("-"):
+        raise RuntimeError(f"Refusing to stage video to unsafe worker host: {host!r}")
+
+    remote_tmp_dir = f"/tmp/spielbot-comfy-input-{uuid.uuid4().hex[:8]}"
+    remote_tmp = f"{remote_tmp_dir}/{name}"
+    try:
+        _run_stage_cmd(["ssh", "--", host, "mkdir", "-p", remote_tmp_dir], "create remote staging dir")
+        _run_stage_cmd(["rsync", "-az", str(video_path), f"{host}:{remote_tmp}"], "copy video to worker")
+        try:
+            _run_stage_cmd(["ssh", "--", host, "docker", "cp", remote_tmp, container_dest], "docker cp to worker ComfyUI")
+            return name
+        except Exception as exc:
+            logger.info("[comfy] remote docker cp unavailable, using native input folder on %s: %s", host, exc)
+        _run_stage_cmd(["ssh", "--", host, "mkdir", "-p", "$HOME/github/ComfyUI/input"], "create remote ComfyUI input")
+        _run_stage_cmd(["ssh", "--", host, "cp", remote_tmp, f"$HOME/github/ComfyUI/input/{name}"], "stage video in remote input")
+        return name
+    finally:
+        try:
+            subprocess.run(["ssh", "--", host, "rm", "-rf", remote_tmp_dir], capture_output=True, text=True, timeout=60)
+        except Exception:
+            pass
+
+
 def _apply_second_pass(workflow: dict, cfg: float, steps: int) -> None:
     """Patch second-pass CFG and sigma schedule in-place (T2V and I2V share node IDs 25/28)."""
     workflow["25"]["inputs"]["cfg"] = float(cfg)
@@ -656,7 +721,7 @@ def upscale_video_ltx(
     comfy_url: str = COMFYUI_URL,
 ) -> Path:
     """Upscale an existing MP4 through the packaged LTX temporal workflow."""
-    video_name = _upload_video(Path(input_path), comfy_url=comfy_url)
+    video_name = _stage_video_for_load(Path(input_path), comfy_url=comfy_url)
     workflow = _load_workflow("ltx23_video_upscale.json")
     workflow = _fill_template(workflow, {
         "VIDEO_NAME": video_name,
@@ -679,7 +744,14 @@ def upscale_video_ltx(
 
     video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    return _download_output(video_item, output_path, comfy_url=comfy_url)
+    downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+    return _ensure_exact_video_resolution(downloaded, int(width), int(height))
+
+
+def _ensure_exact_video_resolution(video_path: Path, width: int, height: int) -> Path:
+    from pipeline.assembler import ensure_video_resolution
+
+    return ensure_video_resolution(video_path, width, height)
 
 
 def generate_scene_image(

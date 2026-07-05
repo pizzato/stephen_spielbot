@@ -29,6 +29,9 @@ services:
     volumes:
       # ~33 GB of models live on the host; populate once (see docker/README.md).
       - ${MODELS_DIR:?set MODELS_DIR in docker/.env}:/opt/ComfyUI/models
+      # Large finished-film upscales are staged here instead of HTTP-uploaded
+      # to ComfyUI, avoiding request-size limits on /upload/image.
+      - ${COMFYUI_INPUT_DIR:-./input}:/opt/ComfyUI/input
       - comfyui-output:/opt/ComfyUI/output
     # Let autoheal restart this container if its GPU-aware healthcheck fails
     # (silent CPU fallback after a host daemon-reload — see the autoheal service).

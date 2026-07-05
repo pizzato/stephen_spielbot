@@ -13,12 +13,20 @@
       "custom_width": 0,
       "custom_height": 0,
       "frame_load_cap": 0,
-      "start_time": 0,
+      "start_time": 0
+    }
+  },
+  "8": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "2",
+        0
+      ],
       "vae": [
         "1",
         2
-      ],
-      "format": "LTXV"
+      ]
     }
   },
   "3": {
@@ -31,7 +39,7 @@
     "class_type": "LTXVLatentUpsampler",
     "inputs": {
       "samples": [
-        "2",
+        "8",
         0
       ],
       "upscale_model": [
@@ -45,7 +53,7 @@
     }
   },
   "5": {
-    "class_type": "VHS_VAEDecodeBatched",
+    "class_type": "VAEDecode",
     "inputs": {
       "samples": [
         "4",
@@ -54,28 +62,14 @@
       "vae": [
         "1",
         2
-      ],
-      "per_batch": 8
-    }
-  },
-  "6": {
-    "class_type": "ImageScale",
-    "inputs": {
-      "image": [
-        "5",
-        0
-      ],
-      "upscale_method": "lanczos",
-      "width": "{{WIDTH}}",
-      "height": "{{HEIGHT}}",
-      "crop": "disabled"
+      ]
     }
   },
   "7": {
     "class_type": "VHS_VideoCombine",
     "inputs": {
       "images": [
-        "6",
+        "5",
         0
       ],
       "frame_rate": "{{FPS}}",
