@@ -208,6 +208,11 @@ DEFAULT_CFG = {
     # tracks the default style like every other STYLE_FIELD_TO_FLAT mirror.
     "default_size_presets": _DEFAULT_SIZE_PRESETS,
     "default_visual_style": "",
+    # Recurring characters (consistent look across scenes/videos). Mirror of the
+    # DEFAULT style's list; per-style values live on each style. Each entry is
+    # {id, name, aliases[], description, ref_image, ref_strength, enabled} — see
+    # _norm_characters. Empty by default, so styles behave exactly as before.
+    "default_characters": [],
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
@@ -286,6 +291,8 @@ DEFAULT_CFG = {
 STYLE_FIELD_TO_FLAT = {
     # Script & content
     "visual_style":         "default_visual_style",
+    # Recurring characters with a consistent look (see _norm_characters)
+    "characters":           "default_characters",
     "video_style":          "default_video_style",
     "extra_instructions":   "script_extra_instructions",
     "title_style":          "title_style",
@@ -368,6 +375,46 @@ def _norm_size_presets(value) -> dict:
     return out
 
 
+def _norm_characters(value) -> list[dict]:
+    """Normalize a style's recurring-character list into complete, valid entries.
+
+    Drops non-dicts and entries with a blank name; gives each a stable id;
+    coerces aliases to a list of non-empty strings and the scalar fields to their
+    types; clamps ref_strength to 0.0–1.0. Always returns fresh dicts (never the
+    shared default object), so callers can mutate freely. An empty/invalid input
+    yields an empty list, which means "no characters" — identical to today."""
+    rows = value if isinstance(value, list) else []
+    out, seen = [], set()
+    for raw in rows:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        cid = str(raw.get("id") or "").strip() or f"char_{uuid.uuid4().hex[:8]}"
+        while cid in seen:
+            cid = f"char_{uuid.uuid4().hex[:8]}"
+        seen.add(cid)
+        aliases = raw.get("aliases")
+        aliases = aliases if isinstance(aliases, list) else []
+        aliases = [str(a).strip() for a in aliases if str(a).strip()]
+        try:
+            strength = float(raw.get("ref_strength", 1.0))
+        except (TypeError, ValueError):
+            strength = 1.0
+        strength = max(0.0, min(1.0, strength))
+        out.append({
+            "id": cid,
+            "name": name,
+            "aliases": aliases,
+            "description": str(raw.get("description") or "").strip(),
+            "ref_image": str(raw.get("ref_image") or "").strip(),
+            "ref_strength": strength,
+            "enabled": bool(raw.get("enabled", True)),
+        })
+    return out
+
+
 def _norm_engine(value, slot: str) -> str:
     """Coerce an engine key to a valid one for *slot* ('generate' or 'edit'),
     falling back to the default engine when unknown or not capable of that slot."""
@@ -428,6 +475,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     # mirror below snapshots the default style's onto the flat key.
     for row in normalized:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
+        row["characters"] = _norm_characters(row.get("characters"))
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
@@ -621,7 +669,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", extra_instructions="", description_suffix="",
-                   title_style="", voice="", voice_robotic=False, voice_speed=1.0)
+                   title_style="", voice="", voice_robotic=False, voice_speed=1.0, characters=[])
         out["name"] = NO_STYLE
         out["description"] = ""
         return out
@@ -1451,6 +1499,67 @@ def _compose_visual_style(style: str, cfg: dict, style_name: str = "") -> str:
     return ". ".join(parts)
 
 
+def _character_sheet(characters: list[dict]) -> str:
+    """Format a style's enabled, described characters into a prompt block for the
+    script LLM, or "" when there are none. Passed to generate_script so scenes
+    describe recurring characters with a fixed appearance."""
+    rows = [c for c in (characters or [])
+            if c.get("enabled", True) and c.get("name") and c.get("description")]
+    if not rows:
+        return ""
+    lines = "\n".join(f"- {c['name']}: {c['description']}" for c in rows)
+    return (
+        "RECURRING CHARACTERS — when a scene features one of these, describe their "
+        "appearance EXACTLY as written here, every time, so they look identical "
+        "across scenes:\n"
+        f"{lines}\n"
+        "Only mention a character when the narration involves them; leave other "
+        "scenes unaffected."
+    )
+
+
+def _character_mentions(text: str, character: dict) -> bool:
+    """True if the character's name or any alias appears in *text* as a whole
+    word (case-insensitive)."""
+    tokens = [character.get("name", "")] + list(character.get("aliases") or [])
+    for tok in tokens:
+        tok = (tok or "").strip()
+        if tok and re.search(rf"\b{re.escape(tok)}\b", text, re.IGNORECASE):
+            return True
+    return False
+
+
+def _characters_for_scene(scene_text: str, cfg: dict, style_name: str) -> list[dict]:
+    """Enabled characters (with a description) whose name/alias appears in the
+    scene text. The single source of truth for both the text injection below and
+    Phase 2's reference-image matching."""
+    chars = style_settings(cfg, style_name).get("characters") or []
+    return [c for c in chars
+            if c.get("enabled", True) and c.get("description")
+            and _character_mentions(scene_text, c)]
+
+
+def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str) -> str:
+    """Append each matched character's canonical appearance to the image prompt so
+    the same subject looks consistent across scenes, even if the LLM paraphrased.
+
+    A character matches when its name/alias appears in the scene's image prompt or
+    narration. Its description is only appended when not already present, so
+    re-generating a scene never stacks duplicate clauses. No match → unchanged."""
+    scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
+    scene_text = f"{base_prompt} {scene_text}"
+    clauses = []
+    for c in _characters_for_scene(scene_text, cfg, style_name):
+        desc = c["description"]
+        if desc.lower() not in base_prompt.lower():
+            clauses.append(f"{c['name']}: {desc}")
+    if not clauses:
+        return base_prompt
+    tail = " ".join(f"{c}." for c in clauses)
+    sep = " " if base_prompt.rstrip().endswith((".", "!", "?")) else ". "
+    return f"{base_prompt.rstrip()}{sep}{tail}"
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,
@@ -1507,6 +1616,9 @@ def _generate_active_scene_preview(
     img_width, img_height = ltx_dimensions(img_width, img_height)
     combined_style = _compose_visual_style(style, cfg, style_name)
     base_prompt = image_prompt or scene.get("image_prompt") or title
+    # Re-inject any recurring character's canonical appearance so the same named
+    # subject looks consistent across scenes even when the LLM paraphrased it.
+    base_prompt = _inject_characters(base_prompt, scene, cfg, style_name)
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
 
     url = worker_pool.acquire()
