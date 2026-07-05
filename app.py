@@ -208,11 +208,11 @@ DEFAULT_CFG = {
     # tracks the default style like every other STYLE_FIELD_TO_FLAT mirror.
     "default_size_presets": _DEFAULT_SIZE_PRESETS,
     "default_visual_style": "",
-    # Recurring characters (consistent look across scenes/videos). Mirror of the
-    # DEFAULT style's list; per-style values live on each style. Each entry is
-    # {id, name, aliases[], description, ref_image, ref_strength, enabled} — see
-    # _norm_characters. Empty by default, so styles behave exactly as before.
-    "default_characters": [],
+    # Recurring characters are a GLOBAL library (see the top-level "characters"
+    # key below); each style opts into the ones it uses via "character_ids".
+    # This flat key mirrors the DEFAULT style's id list, like every other
+    # STYLE_FIELD_TO_FLAT mirror. Empty by default, so styles behave as before.
+    "default_character_ids": [],
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
@@ -278,6 +278,13 @@ DEFAULT_CFG = {
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
     "engagement_data_lag_days": 3,       # exclude videos newer than this (no full prediction window yet)
     "engagement_short_max_seconds": 180, # videos this long (s) or shorter count as a Short
+    # Recurring characters — a GLOBAL library shared across every style (each
+    # style opts into the ones it uses via its per-style character_ids). Each
+    # entry is {id, name, aliases[], description, ref_image, ref_strength,
+    # enabled} — see _norm_characters. Empty by default, so styles behave
+    # exactly as before. Normalized (and migrated up from the old per-style
+    # lists) by _ensure_characters.
+    "characters": [],
     # Style profiles (issue #66) — named bundles of the script/content, render
     # quality and audio-mix settings above. load/save normalize this list and
     # mirror the default style back onto the flat keys (see _ensure_styles).
@@ -291,8 +298,8 @@ DEFAULT_CFG = {
 STYLE_FIELD_TO_FLAT = {
     # Script & content
     "visual_style":         "default_visual_style",
-    # Recurring characters with a consistent look (see _norm_characters)
-    "characters":           "default_characters",
+    # Which global characters (by id) this style opts into (see _ensure_characters)
+    "character_ids":        "default_character_ids",
     "video_style":          "default_video_style",
     "extra_instructions":   "script_extra_instructions",
     "title_style":          "title_style",
@@ -415,6 +422,52 @@ def _norm_characters(value) -> list[dict]:
     return out
 
 
+def _norm_character_ids(value, valid_ids: set) -> list[str]:
+    """Normalize a style's opted-in character-id list: keep only ids that exist
+    in the global library, deduped and order-preserving. Drops stale ids left
+    behind when a character is deleted from the library."""
+    out, seen = [], set()
+    for cid in value if isinstance(value, list) else []:
+        cid = str(cid or "").strip()
+        if cid and cid in valid_ids and cid not in seen:
+            seen.add(cid)
+            out.append(cid)
+    return out
+
+
+def _ensure_characters(cfg: dict) -> dict:
+    """Normalize the GLOBAL character library in place, migrating the old
+    per-style lists up on first run.
+
+    Characters used to live on each style (cfg["styles"][i]["characters"]); they
+    are now one shared library (cfg["characters"]) that styles opt into by id
+    (cfg["styles"][i]["character_ids"]). The one-time migration collects every
+    per-style character into the library (deduped by id — a style duplicated via
+    "New style" shares the same ids, so it becomes a shared character) and seeds
+    each style's character_ids. Runs BEFORE _ensure_styles, which then strips the
+    obsolete per-style "characters" field and normalizes character_ids."""
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    if not cfg.get("characters_migrated_v2"):
+        library, seen = [], set()
+        for s in styles:
+            ids = []
+            for c in _norm_characters(s.get("characters")):
+                if c["id"] not in seen:
+                    seen.add(c["id"])
+                    library.append(c)
+                ids.append(c["id"])
+            # Preserve any character_ids already present (idempotent re-runs)
+            # ahead of the migrated ones, deduped.
+            existing = [str(x) for x in (s.get("character_ids") or []) if str(x)]
+            s["character_ids"] = list(dict.fromkeys([*existing, *ids]))
+        if library:
+            cfg["characters"] = library + _norm_characters(cfg.get("characters"))
+        cfg.pop("default_characters", None)  # obsolete flat mirror
+        cfg["characters_migrated_v2"] = True
+    cfg["characters"] = _norm_characters(cfg.get("characters"))
+    return cfg
+
+
 def _norm_engine(value, slot: str) -> str:
     """Coerce an engine key to a valid one for *slot* ('generate' or 'edit'),
     falling back to the default engine when unknown or not capable of that slot."""
@@ -473,9 +526,10 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     # size_presets is a nested dict, not a scalar: coerce each style's copy into
     # a complete, valid structure (and give every row its own object) before the
     # mirror below snapshots the default style's onto the flat key.
+    valid_char_ids = {c["id"] for c in (cfg.get("characters") or []) if isinstance(c, dict) and c.get("id")}
     for row in normalized:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
-        row["characters"] = _norm_characters(row.get("characters"))
+        row["character_ids"] = _norm_character_ids(row.get("character_ids"), valid_char_ids)
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
@@ -669,7 +723,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", extra_instructions="", description_suffix="",
-                   title_style="", voice="", voice_robotic=False, voice_speed=1.0, characters=[])
+                   title_style="", voice="", voice_robotic=False, voice_speed=1.0, character_ids=[])
         out["name"] = NO_STYLE
         out["description"] = ""
         return out
@@ -768,12 +822,14 @@ def load_config() -> dict:
     fresh = not any(flat in data for flat in STYLE_FIELD_TO_FLAT.values())
     _ensure_channels(cfg)
     _ensure_x_accounts(cfg)
+    _ensure_characters(cfg)
     return _ensure_styles(cfg, fresh=fresh)
 
 
 def save_config(cfg: dict) -> None:
     _ensure_channels(cfg)
     _ensure_x_accounts(cfg)
+    _ensure_characters(cfg)
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
@@ -1547,11 +1603,18 @@ def _character_mentions(text: str, character: dict) -> bool:
     return False
 
 
+def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
+    """The global characters a style has opted into, in library order. Resolves
+    the style's character_ids against the shared cfg["characters"] library."""
+    ids = set(style_settings(cfg, style_name).get("character_ids") or [])
+    return [c for c in (cfg.get("characters") or []) if c.get("id") in ids]
+
+
 def _characters_for_scene(scene_text: str, cfg: dict, style_name: str) -> list[dict]:
     """Enabled characters (with a description) whose name/alias appears in the
     scene text. The single source of truth for both the text injection below and
     Phase 2's reference-image matching."""
-    chars = style_settings(cfg, style_name).get("characters") or []
+    chars = _style_characters(cfg, style_name)
     return [c for c in chars
             if c.get("enabled", True) and c.get("description")
             and _character_mentions(scene_text, c)]
@@ -1583,7 +1646,7 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
     at _MAX_SCENE_REFERENCES. A character contributes its image when it's enabled,
     has a stored ref_image, and its name/alias appears in the scene (Phase 2 —
     FLUX.2 reference conditioning). Empty list when nothing matches."""
-    chars = style_settings(cfg, style_name).get("characters") or []
+    chars = _style_characters(cfg, style_name)
     scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
     scene_text = f"{base_prompt} {scene_text}"
     paths = []
@@ -1602,25 +1665,23 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
     return paths
 
 
-def _find_character(cfg: dict, style_name: str, char_id: str) -> tuple[dict, dict]:
-    """Return (style, character) for the given ids, raising ValueError if either
-    is unknown. The character must already be persisted (ids are assigned on save
-    by _norm_characters), so image ops require a saved character."""
-    style = next((s for s in (cfg.get("styles") or []) if s.get("name") == style_name), None)
-    if style is None:
-        raise ValueError(f"Unknown style {style_name!r}.")
-    char = next((c for c in (style.get("characters") or []) if c.get("id") == char_id), None)
+def _find_character(cfg: dict, char_id: str) -> dict:
+    """Return the character with the given id from the global library, raising
+    ValueError if unknown. The character must already be persisted (ids are
+    assigned on save by _norm_characters), so image ops require a saved
+    character."""
+    char = next((c for c in (cfg.get("characters") or []) if c.get("id") == char_id), None)
     if char is None:
-        raise ValueError(f"Unknown character {char_id!r} in style {style_name!r}. Save the style first.")
-    return style, char
+        raise ValueError(f"Unknown character {char_id!r}. Save it first.")
+    return char
 
 
-def set_character_image(style_name: str, char_id: str, raw: bytes) -> dict:
+def set_character_image(char_id: str, raw: bytes) -> dict:
     """Store uploaded image bytes as the character's PNG reference and persist.
     Returns the reloaded config."""
     from PIL import Image
     cfg = load_config()
-    _, char = _find_character(cfg, style_name, char_id)
+    char = _find_character(cfg, char_id)
     d = _characters_dir()
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{char_id}.png"
@@ -1634,10 +1695,10 @@ def set_character_image(style_name: str, char_id: str, raw: bytes) -> dict:
     return load_config()
 
 
-def clear_character_image(style_name: str, char_id: str) -> dict:
+def clear_character_image(char_id: str) -> dict:
     """Delete a character's reference image and clear the field. Returns config."""
     cfg = load_config()
-    _, char = _find_character(cfg, style_name, char_id)
+    char = _find_character(cfg, char_id)
     p = _character_image_path(char.get("ref_image"))
     if p and p.exists():
         try:
@@ -1649,12 +1710,14 @@ def clear_character_image(style_name: str, char_id: str) -> dict:
     return load_config()
 
 
-def generate_character_portrait(style_name: str, char_id: str, extra_prompt: str = "") -> dict:
-    """Generate a portrait from the character's description via the style's engine
-    and lock it in as the reference image (re-callable to re-roll). Needs a worker.
-    Returns the reloaded config."""
+def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
+    """Generate a portrait from the character's description and lock it in as the
+    reference image (re-callable to re-roll). Characters are global, so the
+    default style's image engine + visual look anchors the portrait. Needs a
+    worker. Returns the reloaded config."""
     cfg = load_config()
-    _, char = _find_character(cfg, style_name, char_id)
+    char = _find_character(cfg, char_id)
+    style_name = cfg.get("default_style") or ""
     parts = [p for p in (char.get("name"), char.get("description"), (extra_prompt or "").strip()) if p]
     prompt = ", ".join(parts) or char.get("name") or "character portrait"
     combined = _compose_visual_style("", cfg, style_name)

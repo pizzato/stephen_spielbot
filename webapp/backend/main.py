@@ -363,24 +363,21 @@ def voices_delete(body: VoiceDelete) -> dict:
 
 
 # ── Character reference images (consistent characters, Phase 2) ──────────────
-# Identify a saved character by (style_name, char_id). These persist immediately
-# (mirroring voice ops) and return the fresh config; the client merges just the
-# affected style's characters back into any staged edits.
+# Characters are a global library, identified by char_id. These persist
+# immediately (mirroring voice ops) and return the fresh config; the client
+# merges the global characters list back into any staged edits.
 
 class CharacterImage(BaseModel):
-    style_name: str
     char_id: str
     filename: str = ""
     data: str
 
 
 class CharacterRef(BaseModel):
-    style_name: str
     char_id: str
 
 
 class CharacterPortrait(BaseModel):
-    style_name: str
     char_id: str
     extra_prompt: str = ""
 
@@ -408,7 +405,7 @@ def _character_response(cfg: dict) -> dict:
 def characters_set_image(body: CharacterImage) -> dict:
     raw = _decode_image(body.data)
     try:
-        cfg = gapp.set_character_image(body.style_name, body.char_id, raw)
+        cfg = gapp.set_character_image(body.char_id, raw)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _character_response(cfg)
@@ -417,7 +414,7 @@ def characters_set_image(body: CharacterImage) -> dict:
 @api.post("/api/characters/image/clear")
 def characters_clear_image(body: CharacterRef) -> dict:
     try:
-        cfg = gapp.clear_character_image(body.style_name, body.char_id)
+        cfg = gapp.clear_character_image(body.char_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _character_response(cfg)
@@ -426,7 +423,7 @@ def characters_clear_image(body: CharacterRef) -> dict:
 @api.post("/api/characters/portrait")
 def characters_portrait(body: CharacterPortrait) -> dict:
     try:
-        cfg = gapp.generate_character_portrait(body.style_name, body.char_id, body.extra_prompt)
+        cfg = gapp.generate_character_portrait(body.char_id, body.extra_prompt)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except RuntimeError as e:
@@ -725,7 +722,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
-    character_sheet = gapp._character_sheet(ss.get("characters")) or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
