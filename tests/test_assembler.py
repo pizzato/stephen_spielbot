@@ -39,6 +39,38 @@ class AssemblerToolResolutionTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     assembler.upscale_video(src, Path(tmp) / "out.mp4", 1280, 720)
 
+    def test_concatenate_scenes_hard_cut_uses_stream_copy(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene_1 = Path(tmp) / "scene_1.mp4"
+            scene_2 = Path(tmp) / "scene_2.mp4"
+            out = Path(tmp) / "out.mp4"
+            scene_1.write_bytes(b"one")
+            scene_2.write_bytes(b"two")
+
+            with mock.patch.object(assembler, "_concat_video_chunks", return_value=out) as concat, \
+                 mock.patch.object(assembler, "concatenate_scenes") as fallback:
+                result = assembler.concatenate_scenes_hard_cut([scene_1, scene_2], out)
+
+            self.assertEqual(result, out)
+            concat.assert_called_once_with([scene_1, scene_2], out)
+            fallback.assert_not_called()
+
+    def test_concatenate_scenes_hard_cut_falls_back_without_fades(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene_1 = Path(tmp) / "scene_1.mp4"
+            scene_2 = Path(tmp) / "scene_2.mp4"
+            out = Path(tmp) / "out.mp4"
+            scene_1.write_bytes(b"one")
+            scene_2.write_bytes(b"two")
+            out.write_bytes(b"partial")
+
+            with mock.patch.object(assembler, "_concat_video_chunks", side_effect=RuntimeError("copy failed")), \
+                 mock.patch.object(assembler, "concatenate_scenes", return_value=out) as fallback:
+                result = assembler.concatenate_scenes_hard_cut([scene_1, scene_2], out)
+
+            self.assertEqual(result, out)
+            fallback.assert_called_once_with([scene_1, scene_2], out, fade=0.0)
+
     def test_temporal_ai_upscale_uses_configured_command_template(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"

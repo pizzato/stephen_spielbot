@@ -354,6 +354,19 @@ def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
     return output_path
 
 
+def concatenate_scenes_hard_cut(scene_paths: list[Path], output_path: Path) -> Path:
+    """Join scene clips back-to-back without fades or overlap."""
+    if len(scene_paths) == 1:
+        shutil.copy2(scene_paths[0], output_path)
+        return output_path
+    try:
+        return _concat_video_chunks(scene_paths, output_path)
+    except Exception as exc:
+        output_path.unlink(missing_ok=True)
+        logger.warning("[ffmpeg] hard-cut stream concat failed; retrying with no-fade re-encode: %s", exc)
+        return concatenate_scenes(scene_paths, output_path, fade=0.0)
+
+
 def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:
     """Concatenate multiple short clips with stream copy (hard cuts, no re-encode)."""
     with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
@@ -505,7 +518,7 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         inputs += ["-i", str(p)]
 
     filters = []
-    fade_a = 0.05
+    fade_a = 0.05 if fade > 0 else 0.0
 
     for i in range(n):
         dur = durations[i]
@@ -515,16 +528,16 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # clips muxed with -c:v copy retain the original ComfyUI PTS (which may
         # be non-zero), causing the first frame(s) to flash through un-faded.
         vf = ["setpts=PTS-STARTPTS"]
-        if i > 0:
+        if fade > 0 and i > 0:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
-        if i < n - 1:
+        if fade > 0 and i < n - 1:
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
         filters.append(f"[{i}:v]{','.join(vf)}[fv{i}]")
 
         af = ["asetpts=PTS-STARTPTS"]
-        if i > 0:
+        if fade_a > 0 and i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
-        if i < n - 1:
+        if fade_a > 0 and i < n - 1:
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
         filters.append(f"[{i}:a]{','.join(af)}[fa{i}]")
 

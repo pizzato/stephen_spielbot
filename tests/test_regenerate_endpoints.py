@@ -134,7 +134,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"temporal-upscaled-scene")
             return out
 
-        def fake_concat(paths, out, fade=0.3):
+        def fake_concat(paths, out):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4"])
             out.write_bytes(b"temporal-upscaled-final")
             return out
@@ -146,7 +146,7 @@ class FilmUpscaleTests(unittest.TestCase):
              }), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
-             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.upscale_video") as fast:
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
@@ -179,7 +179,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(f"upscaled:{src.name}".encode())
             return out
 
-        def fake_concat(paths, out, fade=0.3):
+        def fake_concat(paths, out):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
             out.write_bytes(b"combined-scenes")
             return out
@@ -200,7 +200,7 @@ class FilmUpscaleTests(unittest.TestCase):
              mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w1:8188", "http://w2:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
-             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.mix_background_music", side_effect=fake_mix):
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
