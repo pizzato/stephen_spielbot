@@ -66,7 +66,7 @@ React build), and seeds `config.yaml` with your workers. Omit `WORKERS=...` for 
 single-machine (localhost) setup, or run `make install` with no args to be
 prompted. Then open [http://localhost:8001](http://localhost:8001).
 
-Optional: seed the Film editor's AI-temporal upscale command during install:
+Optional: seed the Remix screen's AI-temporal final-video upscale command during install:
 
 ```bash
 TEMPORAL_VIDEO_UPSCALER_CMD='your-upscaler -i {input} -o {output} --width {width} --height {height}' make install
@@ -173,6 +173,8 @@ cluster status panel). Worker lists are part of this file:
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
 The temporal upscaler command is also editable in Settings → Infrastructure.
+Use it from the Remix screen after reviewing the finished film; each upscale is
+kept as a selectable final-video version so you can switch back to the original.
 It runs on the controller backend, not inside the ComfyUI/TTS worker containers,
 so use an absolute command path if the app runs under launchd.
 

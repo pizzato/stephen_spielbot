@@ -1062,7 +1062,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 <UiWorkerStatus ui={workers?.ui} />
               </Field>
               <Field label="Temporal AI upscaler command"
-                hint="Optional command template for Film editor → Upscale → AI temporal. Use {input}, {output}, {width}, and {height}. Use an absolute binary path when running under launchd.">
+                hint="Optional command template for Remix → Upscale video → AI temporal. Use {input}, {output}, {width}, and {height}. Use an absolute binary path when running under launchd.">
                 <input className="input"
                   value={cfg.temporal_video_upscaler_cmd || ''}
                   placeholder="video2x -i {input} -o {output} --width {width} --height {height}"

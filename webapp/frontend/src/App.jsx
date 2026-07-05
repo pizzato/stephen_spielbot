@@ -255,14 +255,14 @@ export default function App() {
       case 'create': return <Create seed={createSeed} meta={meta} onGenerated={onScriptGenerated} />
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
       case 'progress': return <Progress workDir={workDir} job={job} go={go} onOpenScript={onOpenScript} />
-      case 'remix': return <Remix workDir={workDir} go={go} />
+      case 'remix': return <Remix workDir={workDir} go={go} meta={meta} />
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />
       case 'analytics': return <ChannelAnalytics meta={meta} go={go} initialTab="analytics" />
       case 'community': return <Community />
       case 'publish': return <Publishing go={go} meta={meta} initialWorkDir={publishWorkDir} />
       case 'ideas': return <Ideas go={go} meta={meta} />
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenRemix={(wd) => go('remix', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} onNewVersion={onNewVersion} />
-      case 'editfilm': return <EditFilm workDir={workDir} go={go} meta={meta} />
+      case 'editfilm': return <EditFilm workDir={workDir} go={go} />
       case 'engagement': return <ChannelAnalytics meta={meta} go={go} initialTab="predictive" />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} />
       default: return <Home go={go} />

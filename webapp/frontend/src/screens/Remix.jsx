@@ -1,15 +1,24 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, MusicVersionStrip } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, MusicVersionStrip, VideoVersionStrip } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function Remix({ workDir, go }) {
+const resPixels = (name) => {
+  const m = /\((\d+)[×x](\d+)\)/.exec(name || '')
+  return m ? Number(m[1]) * Number(m[2]) : 0
+}
+
+export default function Remix({ workDir, go, meta = {} }) {
   const [data, setData] = useState(null)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
   const [musicDesc, setMusicDesc] = useState('')
   const [voice, setVoice] = useState('')
   const [musicHistory, setMusicHistory] = useState(null)
+  const [videoHistory, setVideoHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
   const [narratorBusy, setNarratorBusy] = useState(false)
+  const [upscaleBusy, setUpscaleBusy] = useState(false)
+  const [upscaleResolution, setUpscaleResolution] = useState('')
+  const [upscaleMode, setUpscaleMode] = useState('fast')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -19,18 +28,42 @@ export default function Remix({ workDir, go }) {
   // Aspect ratio is read from the actual video so portrait films aren't letterboxed.
   const [aspect, setAspect] = useState('16 / 9')
   const [portrait, setPortrait] = useState(false)
+  const [videoDims, setVideoDims] = useState(null)
   const onVideoMeta = (e) => {
     const w = e.target.videoWidth, h = e.target.videoHeight
-    if (w && h) { setAspect(`${w} / ${h}`); setPortrait(h > w) }
+    if (w && h) { setAspect(`${w} / ${h}`); setPortrait(h > w); setVideoDims({ w, h }) }
   }
 
   useEffect(() => {
     api.loadRemix(workDir)
-      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setVoice(d.voice || d.voices?.[0] || ''); setMusicDesc(d.music_desc || ''); setMusicHistory(d.music_history) })
+      .then((d) => {
+        setData(d)
+        setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol })
+        setVoice(d.voice || d.voices?.[0] || '')
+        setMusicDesc(d.music_desc || '')
+        setMusicHistory(d.music_history)
+        setVideoHistory(d.video_history)
+      })
       .catch((e) => setError(e.message))
   }, [workDir])
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
+  const currentResolution = data?.resolution || meta.default_resolution || ''
+  const orientation = videoDims ? (videoDims.h > videoDims.w ? 'Portrait' : 'Landscape') : String(currentResolution || '').split(' ')[0]
+  const currentPixels = videoDims ? videoDims.w * videoDims.h : resPixels(currentResolution)
+  const upscaleOptions = (meta?.resolutions || [])
+    .filter((r) => String(r || '').startsWith(`${orientation} `) || String(r || '').startsWith(`${orientation} (`))
+    .filter((r) => resPixels(r) > currentPixels)
+
+  useEffect(() => {
+    if (!upscaleOptions.length) {
+      setUpscaleResolution('')
+      return
+    }
+    if (!upscaleOptions.includes(upscaleResolution)) {
+      setUpscaleResolution(upscaleOptions[0])
+    }
+  }, [upscaleOptions.join('|')])
 
   const regenMusic = async () => {
     setMusicBusy(true); setError(''); setStatus('')
@@ -68,6 +101,45 @@ export default function Remix({ workDir, go }) {
       if (chosen && chosen.desc) setMusicDesc(chosen.desc)
       setStatus('Switched the soundtrack and re-muxed the film.')
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const upscaleVideo = async () => {
+    setUpscaleBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.upscaleRemixVideo({
+        work_dir: data.work_dir,
+        target_resolution: upscaleResolution,
+        upscale_mode: upscaleMode,
+      })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url, resolution: upscaleResolution }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setStatus('Created an upscaled final-video version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Video upscale ${t.status}.`))
+            } else if (t.step === 'final_upscale') {
+              setStatus('Upscaling the final video…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
+  }
+
+  const selectVideoVersion = async (versionId) => {
+    setUpscaleBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.selectRemixVideo(data.work_dir, versionId)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      if (r.video_history) setVideoHistory(r.video_history)
+      setStatus('Switched the final-video version.')
+    } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
   }
 
   const regenNarrator = async () => {
@@ -147,7 +219,7 @@ export default function Remix({ workDir, go }) {
         </div>
         <div className="row gap-10 reveal reveal-d1 row--wrap">
           {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
-          <Button variant="ghost" icon="film" onClick={() => go('editfilm', { workDir: data.work_dir || workDir })}>Edit</Button>
+          <Button variant="ghost" icon="film" disabled={upscaleBusy} onClick={() => go('editfilm', { workDir: data.work_dir || workDir })}>Edit</Button>
           {data.awaiting_approval && (
             <Button variant="primary" icon="check" disabled={approving} onClick={approve}>{approving ? 'Approving…' : 'Approve'}</Button>
           )}
@@ -175,6 +247,13 @@ export default function Remix({ workDir, go }) {
             <Chip tone="ok" dot>Final cut</Chip>
             <span className="muted mono">{data.work_dir}</span>
           </div>
+          {(videoHistory?.versions?.length || 0) > 1 && (
+            <div style={{ padding: '0 20px 18px' }}>
+              <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
+                onSelect={selectVideoVersion} aspect={aspect} busy={upscaleBusy || busy || musicBusy || narratorBusy}
+                label="Final versions" hint="click to use" />
+            </div>
+          )}
         </Card>
 
         <Card span={4} padLg className="reveal reveal-d2">
@@ -187,7 +266,7 @@ export default function Remix({ workDir, go }) {
               </Field>
             ))}
           </div>
-          <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={busy || musicBusy || narratorBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
+          <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={busy || musicBusy || narratorBusy || upscaleBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
         </Card>
 
         <Card span={4} padLg className="reveal reveal-d2">
@@ -195,15 +274,44 @@ export default function Remix({ workDir, go }) {
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
           <div className="mt-24">
             <Field label="Narrator voice">
-              <select className="select" value={voice} disabled={narratorBusy || busy || musicBusy}
+              <select className="select" value={voice} disabled={narratorBusy || busy || musicBusy || upscaleBusy}
                 onChange={(e) => setVoice(e.target.value)}>
                 {(data.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
             </Field>
           </div>
           <div className="mt-24">
-            <Button variant="primary" block icon="microphone-lines" disabled={narratorBusy || busy || musicBusy} onClick={regenNarrator}>
+            <Button variant="primary" block icon="microphone-lines" disabled={narratorBusy || busy || musicBusy || upscaleBusy} onClick={regenNarrator}>
               {narratorBusy ? 'Regenerating…' : 'Regenerate narration'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="up-right-and-down-left-from-center" style={{ color: 'var(--ink-3)', width: 16 }} /> Upscale video</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Upscale the whole finished film and keep it as a selectable final version.</p>
+          <div className="stack gap-14 mt-24">
+            <Field label="Target resolution">
+              <select className="select" value={upscaleResolution} disabled={upscaleBusy || busy || musicBusy || narratorBusy || upscaleOptions.length === 0}
+                onChange={(e) => setUpscaleResolution(e.target.value)}>
+                {upscaleOptions.length === 0
+                  ? <option value="">No larger target</option>
+                  : upscaleOptions.map((r) => <option key={r} value={r}>{r.replace(`${orientation} `, '')}</option>)}
+              </select>
+            </Field>
+            <Field label="Mode">
+              <select className="select" value={upscaleMode} disabled={upscaleBusy || busy || musicBusy || narratorBusy || !upscaleResolution}
+                onChange={(e) => setUpscaleMode(e.target.value)}>
+                <option value="fast">Fast</option>
+                <option value="temporal_ai">AI temporal</option>
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="up-right-and-down-left-from-center"
+              disabled={upscaleBusy || busy || musicBusy || narratorBusy || !upscaleResolution}
+              onClick={upscaleVideo}>
+              {upscaleBusy ? 'Upscaling…' : 'Upscale film'}
             </Button>
           </div>
         </Card>
@@ -213,14 +321,14 @@ export default function Remix({ workDir, go }) {
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
           <div className="mt-24">
             <Field label="Music prompt" hint="What the soundtrack should sound like">
-              <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy}
+              <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy || upscaleBusy}
                 onChange={(e) => setMusicDesc(e.target.value)}
                 placeholder="cinematic orchestral background music, atmospheric, instrumental" />
             </Field>
           </div>
-          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy || busy || narratorBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy || busy || narratorBusy || upscaleBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
-            onSelect={selectMusic} busy={musicBusy || busy || narratorBusy} />
+            onSelect={selectMusic} busy={musicBusy || busy || narratorBusy || upscaleBusy} />
         </Card>
       </div>
     </div>
