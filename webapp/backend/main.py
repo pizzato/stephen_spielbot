@@ -2394,7 +2394,7 @@ def select_music(body: MusicSelectBody) -> dict:
 
 def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_mode: str) -> None:
     """Background thread: upscale the completed film, preserving selectable masters."""
-    from pipeline.assembler import _get_video_dimensions, temporal_ai_upscale_video, upscale_video
+    from pipeline.assembler import _get_video_dimensions, upscale_video
 
     final_path = gapp._final_path_for_work_dir(wd)
     staged = wd / "final_upscale.staging.mp4"
@@ -2423,35 +2423,9 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         cfg = gapp.load_config()
         if mode == "temporal_ai":
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
-            if command_template:
-                temporal_ai_upscale_video(
-                    final_path,
-                    staged,
-                    target_w,
-                    target_h,
-                    command_template=command_template,
-                    timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
-                )
-            else:
-                worker_urls = gapp._preview_worker_urls()
-                if not worker_urls:
-                    raise RuntimeError("No ComfyUI workers reachable for temporal AI upscale.")
-                from pipeline.worker_pool import WorkerPool
-
-                pool = WorkerPool(worker_urls)
-                url = pool.acquire()
-                try:
-                    _film_checkpoint(task_id)
-                    temporal_ai_upscale_video(
-                        final_path,
-                        staged,
-                        target_w,
-                        target_h,
-                        timeout_seconds=int(cfg.get("temporal_video_upscaler_timeout") or 7200),
-                        comfy_url=url,
-                    )
-                finally:
-                    pool.release(url)
+            _temporal_upscale_scenes_to_final(
+                task_id, wd, staged, target_w, target_h, cfg, command_template=command_template
+            )
         else:
             upscale_video(final_path, staged, target_w, target_h)
 
@@ -2476,6 +2450,122 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             cancelled_name="Final video upscale cancelled",
             detail=target_name or wd.name,
         )
+
+
+def _rendered_scene_finals(wd: Path) -> list[Path]:
+    order = _load_scene_order(wd) or []
+    ordered: list[Path] = []
+    for sid in order:
+        try:
+            p = wd / f"scene_{int(sid):02d}_final.mp4"
+        except (TypeError, ValueError):
+            continue
+        if p.exists() and p.stat().st_size > 10_000:
+            ordered.append(p)
+    if ordered:
+        return ordered
+    return sorted(
+        p for p in wd.glob("scene_*_final.mp4")
+        if p.exists() and p.stat().st_size > 10_000
+    )
+
+
+def _temporal_upscale_scenes_to_final(
+    task_id: str,
+    wd: Path,
+    staged_final: Path,
+    target_w: int,
+    target_h: int,
+    cfg: dict,
+    command_template: str | None = None,
+) -> Path:
+    """Upscale rendered scene clips as separate worker jobs, then rebuild final."""
+    import concurrent.futures
+    import shutil
+    import tempfile
+    from pipeline.assembler import concatenate_scenes, mix_background_music, temporal_ai_upscale_video
+    from pipeline.worker_pool import WorkerPool
+
+    scene_finals = _rendered_scene_finals(wd)
+    if not scene_finals:
+        raise RuntimeError("No rendered scene clips found for scene-level temporal upscale.")
+
+    worker_urls = [] if command_template else gapp._preview_worker_urls()
+    if not command_template and not worker_urls:
+        raise RuntimeError("No ComfyUI workers reachable for temporal AI upscale.")
+
+    timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
+    pool = WorkerPool(worker_urls) if worker_urls else None
+    tmp_root = wd / "final_upscale_scenes"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="run-", dir=str(tmp_root)) as tmp:
+        tmp_dir = Path(tmp)
+        upscaled_by_index: list[Path | None] = [None] * len(scene_finals)
+
+        def upscale_one(index: int, scene_path: Path) -> tuple[int, Path]:
+            _film_checkpoint(task_id)
+            url = pool.acquire() if pool else None
+            try:
+                out = tmp_dir / f"{scene_path.stem}.upscaled.mp4"
+                _film_tasks[task_id] = {
+                    "status": "running",
+                    "step": "final_upscale",
+                    "scene_id": index + 1,
+                    "current": index + 1,
+                    "total": len(scene_finals),
+                }
+                temporal_ai_upscale_video(
+                    scene_path,
+                    out,
+                    target_w,
+                    target_h,
+                    command_template=command_template,
+                    timeout_seconds=timeout,
+                    comfy_url=url,
+                )
+                return index, out
+            finally:
+                if pool and url:
+                    pool.release(url)
+
+        if command_template:
+            max_workers = min(max(1, int(cfg.get("temporal_video_upscaler_jobs") or 1)), len(scene_finals))
+        else:
+            max_workers = min(len(worker_urls), len(scene_finals))
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(upscale_one, idx, scene_path)
+                for idx, scene_path in enumerate(scene_finals)
+            ]
+            for fut in concurrent.futures.as_completed(futures):
+                idx, out = fut.result()
+                upscaled_by_index[idx] = out
+
+        upscaled = [p for p in upscaled_by_index if p is not None]
+        if len(upscaled) != len(scene_finals):
+            raise RuntimeError("Temporal scene upscale did not produce every scene.")
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "finalize"}
+        combined = tmp_dir / "combined.upscaled.mp4"
+        concatenate_scenes(upscaled, combined)
+
+        jc = _film_job_config(wd)
+        music_path = wd / "background_music.wav"
+        ambient = wd / "ambient.wav"
+        if music_path.exists():
+            mix_background_music(
+                combined,
+                music_path,
+                staged_final,
+                volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
+                voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+                ambient_path=ambient if ambient.exists() else None,
+                ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+            )
+        else:
+            shutil.copy2(combined, staged_final)
+    return staged_final
 
 
 @api.post("/api/remix/upscale")
