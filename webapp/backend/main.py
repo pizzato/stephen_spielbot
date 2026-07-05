@@ -2483,7 +2483,7 @@ def _temporal_upscale_scenes_to_final(
     import concurrent.futures
     import shutil
     import tempfile
-    from pipeline.assembler import concatenate_scenes, mix_background_music, temporal_ai_upscale_video
+    from pipeline.assembler import concatenate_scenes_hard_cut, mix_background_music, temporal_ai_upscale_video
     from pipeline.worker_pool import WorkerPool
 
     scene_finals = _rendered_scene_finals(wd)
@@ -2548,7 +2548,7 @@ def _temporal_upscale_scenes_to_final(
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "finalize"}
         combined = tmp_dir / "combined.upscaled.mp4"
-        concatenate_scenes(upscaled, combined)
+        concatenate_scenes_hard_cut(upscaled, combined)
 
         jc = _film_job_config(wd)
         music_path = wd / "background_music.wav"
