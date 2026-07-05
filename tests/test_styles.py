@@ -886,5 +886,131 @@ class ScriptGenerateTaskTests(unittest.TestCase):
         self.assertEqual(cm.exception.status_code, 404)
 
 
+class CharacterTests(TempConfigCase):
+    """Recurring-character registry: normalization, the LLM sheet, and the
+    deterministic injection into a scene's image prompt."""
+
+    def test_norm_characters_assigns_ids_and_drops_blank(self):
+        rows = app._norm_characters([
+            {"name": "Robot XYZ", "description": "matte-black chassis"},
+            {"name": "  ", "description": "no name — dropped"},
+            "not a dict",
+            {"description": "also no name"},
+        ])
+        self.assertEqual([c["name"] for c in rows], ["Robot XYZ"])
+        self.assertTrue(rows[0]["id"].startswith("char_"))
+        self.assertEqual(rows[0]["aliases"], [])
+        self.assertTrue(rows[0]["enabled"])
+
+    def test_norm_characters_coerces_and_clamps(self):
+        rows = app._norm_characters([{
+            "id": "keep-me", "name": "Bob", "aliases": ["Bobby", "  ", 42],
+            "description": " a man ", "ref_image": "bob.png",
+            "ref_strength": 5.0, "enabled": 0,
+        }])
+        c = rows[0]
+        self.assertEqual(c["id"], "keep-me")
+        self.assertEqual(c["aliases"], ["Bobby", "42"])
+        self.assertEqual(c["description"], "a man")
+        self.assertEqual(c["ref_strength"], 1.0)  # clamped 5.0 -> 1.0
+        self.assertFalse(c["enabled"])
+
+    def test_norm_characters_dedupes_ids(self):
+        rows = app._norm_characters([
+            {"id": "dup", "name": "A", "description": "a"},
+            {"id": "dup", "name": "B", "description": "b"},
+        ])
+        self.assertEqual(len({c["id"] for c in rows}), 2)
+
+    def test_characters_default_empty_on_fresh_install(self):
+        cfg = app.load_config()
+        self.assertEqual(cfg["styles"][0]["characters"], [])
+        self.assertEqual(cfg["default_characters"], [])
+
+    def test_characters_round_trip_through_ensure_styles(self):
+        self.write_config({
+            "styles": [_style("Hero", characters=[
+                {"name": "Robot XYZ", "aliases": ["XYZ"],
+                 "description": "matte-black humanoid chassis, cyan optic"},
+            ])],
+            "default_style": "Hero",
+        })
+        cfg = app.load_config()
+        chars = cfg["styles"][0]["characters"]
+        self.assertEqual(len(chars), 1)
+        self.assertEqual(chars[0]["name"], "Robot XYZ")
+        self.assertEqual(chars[0]["aliases"], ["XYZ"])
+        self.assertTrue(chars[0]["id"])
+        # mirrored onto the flat key like every other default-style field
+        self.assertEqual(cfg["default_characters"], chars)
+
+    def test_no_style_imposes_no_characters(self):
+        self.write_config({
+            "styles": [_style("Hero", characters=[
+                {"name": "Bob", "description": "a man"}])],
+            "default_style": "Hero",
+        })
+        cfg = app.load_config()
+        ss = app.style_settings(cfg, app.NO_STYLE)
+        self.assertEqual(ss["characters"], [])
+
+    def test_character_sheet_lists_enabled_described_only(self):
+        sheet = app._character_sheet([
+            {"name": "Robot XYZ", "description": "matte-black chassis", "enabled": True},
+            {"name": "Ghost", "description": "", "enabled": True},        # no description
+            {"name": "Bob", "description": "a man", "enabled": False},     # disabled
+        ])
+        self.assertIn("Robot XYZ: matte-black chassis", sheet)
+        self.assertNotIn("Ghost", sheet)
+        self.assertNotIn("Bob", sheet)
+
+    def test_character_sheet_empty_without_usable_characters(self):
+        self.assertEqual(app._character_sheet([]), "")
+        self.assertEqual(app._character_sheet([{"name": "X", "description": ""}]), "")
+
+    def _cfg_with_hero(self, **char):
+        base = {"name": "Robot XYZ", "description": "matte-black humanoid chassis"}
+        base.update(char)
+        self.write_config({
+            "styles": [_style("Hero", characters=[base])],
+            "default_style": "Hero",
+        })
+        return app.load_config()
+
+    def test_inject_appends_description_on_name_match(self):
+        cfg = self._cfg_with_hero()
+        scene = {"image_prompt": "Robot XYZ stands on a ridge.", "narration": ""}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertIn("matte-black humanoid chassis", out)
+        self.assertTrue(out.startswith("Robot XYZ stands on a ridge."))
+
+    def test_inject_matches_alias_and_narration(self):
+        cfg = self._cfg_with_hero(aliases=["the machine"])
+        # name/alias only in the narration, not the base prompt
+        scene = {"image_prompt": "A wide desert vista.",
+                 "narration": "Then the machine appeared."}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertIn("matte-black humanoid chassis", out)
+
+    def test_inject_noop_when_character_absent(self):
+        cfg = self._cfg_with_hero()
+        scene = {"image_prompt": "An empty canyon at dawn.", "narration": "Silence."}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual(out, "An empty canyon at dawn.")
+
+    def test_inject_does_not_double_stack_description(self):
+        cfg = self._cfg_with_hero()
+        base = "Robot XYZ, matte-black humanoid chassis, walks forward."
+        scene = {"image_prompt": base, "narration": ""}
+        out = app._inject_characters(base, scene, cfg, "Hero")
+        self.assertEqual(out, base)  # description already present → unchanged
+
+    def test_inject_skips_disabled_character(self):
+        cfg = self._cfg_with_hero(enabled=False)
+        scene = {"image_prompt": "Robot XYZ stands still.", "narration": ""}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertEqual(out, "Robot XYZ stands still.")
+
+
 if __name__ == "__main__":
     unittest.main()

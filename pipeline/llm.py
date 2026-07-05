@@ -155,7 +155,8 @@ def _fill_empty_narrations(client, model: str, scenes: list[Scene],
 def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str,
                      video_title: str | None = None,
-                     video_style_hint: str | None = None) -> tuple[list[Scene], str, str]:
+                     video_style_hint: str | None = None,
+                     character_sheet: str | None = None) -> tuple[list[Scene], str, str]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -175,6 +176,10 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         f'\nMOTION DIRECTION — apply to EVERY scene\'s "video_prompt": {video_style_hint.strip()}'
         if video_style_hint and video_style_hint.strip() else ""
     )
+    character_note = (
+        f"\n{character_sheet.strip()}"
+        if character_sheet and character_sheet.strip() else ""
+    )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
@@ -190,6 +195,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         first_batch=first_batch,
         style_note=style_note,
         video_style_note=video_style_note,
+        character_note=character_note,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
@@ -239,6 +245,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             batch_end=batch_end,
             ctx_str=ctx_str,
             video_style_note=video_style_note,
+            character_note=character_note,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
@@ -343,11 +350,16 @@ def _get_field(text: str, key: str) -> str:
 
 def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
                           url: str, model: str,
-                          video_title: str | None = None) -> dict:
+                          video_title: str | None = None,
+                          character_sheet: str | None = None) -> dict:
     style_note = (
         f"\nIMPORTANT: Use exactly this text for the STYLE line: {style_hint}"
         if style_hint and style_hint.strip()
         else ""
+    )
+    character_note = (
+        f"\n{character_sheet.strip()}"
+        if character_sheet and character_sheet.strip() else ""
     )
     title_context = (
         f'YouTube Video Title: "{video_title}"\nTopic/Description: "{title}"'
@@ -359,6 +371,7 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
         n_scenes=n_scenes,
         title_context=title_context,
         style_note=style_note,
+        character_note=character_note,
     )
     raw = _local_llm(
         [
@@ -447,10 +460,15 @@ def _fill_empty_outlines_local(outlines: list[dict], title: str, video_title: st
 def _local_generate_visual(title: str, style: str,
                             scene_id: int, scene_title: str, narration: str,
                             url: str, model: str,
-                            video_style_hint: str | None = None) -> tuple[str, str]:
+                            video_style_hint: str | None = None,
+                            character_sheet: str | None = None) -> tuple[str, str]:
     video_style_note = (
         f"\nMOTION DIRECTION for the VIDEO line: {video_style_hint.strip()}"
         if video_style_hint and video_style_hint.strip() else ""
+    )
+    character_note = (
+        f"\n{character_sheet.strip()}"
+        if character_sheet and character_sheet.strip() else ""
     )
     user_msg = _prompts.user(
         "script_local_visual",
@@ -459,6 +477,7 @@ def _local_generate_visual(title: str, style: str,
         scene_title=scene_title,
         narration=narration,
         video_style_note=video_style_note,
+        character_note=character_note,
     )
     raw = _local_llm(
         [
@@ -481,7 +500,8 @@ def _local_generate_visual(title: str, style: str,
 def _local_generate(title: str, n_scenes: int,
                     style_hint: str | None,
                     video_title: str | None = None,
-                    video_style_hint: str | None = None) -> tuple[list[Scene], str, str]:
+                    video_style_hint: str | None = None,
+                    character_sheet: str | None = None) -> tuple[list[Scene], str, str]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -492,7 +512,8 @@ def _local_generate(title: str, n_scenes: int,
             "Set the URL in Config → LLM Backend → Local LLM URL."
         )
 
-    story      = _local_generate_story(title, n_scenes, style_hint, url, model, video_title=video_title)
+    story      = _local_generate_story(title, n_scenes, style_hint, url, model,
+                                       video_title=video_title, character_sheet=character_sheet)
     style      = (style_hint.strip() if style_hint and style_hint.strip()
                   else story.get("style", ""))
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
@@ -512,6 +533,7 @@ def _local_generate(title: str, n_scenes: int,
             outline.get("narration", ""),
             url=url, model=model,
             video_style_hint=video_style_hint,
+            character_sheet=character_sheet,
         )
         return outline["id"], img_p, vid_p
 
@@ -554,6 +576,7 @@ def generate_script(
     style_hint: str | None = None,
     video_title: str | None = None,
     video_style_hint: str | None = None,
+    character_sheet: str | None = None,
 ) -> tuple[list[Scene], str, str]:
     """Return (scenes, music_description, style).
 
@@ -561,6 +584,9 @@ def generate_script(
     video_title is the short YouTube title; title is the full topic/description.
     video_style_hint is per-style motion/cinematography guidance steering each
     scene's video_prompt (camera + subject movement).
+    character_sheet is a pre-formatted block describing recurring characters and
+    their fixed appearance, injected into every batch/scene so named characters
+    look consistent (see app._character_sheet).
     """
     cfg     = _load_cfg()
     backend = cfg.get("llm_backend", "local")
@@ -574,11 +600,12 @@ def generate_script(
         model = cfg.get("claude_model", "claude-sonnet-4-6")
         logger.info("Using Claude backend: model=%s", model)
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
-                                video_title=video_title, video_style_hint=video_style_hint)
+                                video_title=video_title, video_style_hint=video_style_hint,
+                                character_sheet=character_sheet)
 
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
-                           video_style_hint=video_style_hint)
+                           video_style_hint=video_style_hint, character_sheet=character_sheet)
 
 
 # ── YouTube video prompt generation (director's brief) ───────────────────────

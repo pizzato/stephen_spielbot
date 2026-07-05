@@ -833,6 +833,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     presets[bucket] = { ...(presets[bucket] || {}), [key]: value }
     setStyleField('size_presets', presets)
   }
+  // Recurring characters (consistent look). The backend normalizes/ids these on
+  // save (_norm_characters), so the UI can add bare rows and drop blank aliases.
+  const chars = st.characters || []
+  const addChar = () => setStyleField('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
+  const updateChar = (i, patch) => setStyleField('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  const removeChar = (i) => setStyleField('characters', chars.filter((_, j) => j !== i))
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -1322,6 +1328,42 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 </Field></div>
               </div>
               <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} engine={st.tts_engine} onError={setError} />
+            </div>
+          </Card>
+
+          {/* ── Characters (consistent look) ── */}
+          <Card span={12} className="reveal reveal-d3">
+            <span className="label-sm">Characters</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              Recurring people or things that should look the same across every scene and video. When a scene mentions a character by name (or an alias), its appearance is written into the image prompt so it stays consistent.
+            </div>
+            <div className="stack gap-16 mt-16">
+              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add one to keep a subject looking the same across scenes.</div>}
+              {chars.map((c, i) => (
+                <div key={c.id || i} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <div className="grow"><Field label="Name">
+                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                        onChange={(e) => updateChar(i, { name: e.target.value })} />
+                    </Field></div>
+                    <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
+                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                        key={`alias-${styleIdx}-${c.id || i}`}
+                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                    </Field></div>
+                  </div>
+                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                    <textarea className="textarea" rows={3} value={c.description || ''}
+                      onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                  <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
+                      label="Enabled — include this character in new scripts and renders" />
+                    <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
+                  </div>
+                </div>
+              ))}
+              <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
             </div>
           </Card>
 
