@@ -6,8 +6,10 @@ export default function Remix({ workDir, go }) {
   const [data, setData] = useState(null)
   const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
   const [musicDesc, setMusicDesc] = useState('')
+  const [voice, setVoice] = useState('')
   const [musicHistory, setMusicHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
+  const [narratorBusy, setNarratorBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -24,7 +26,7 @@ export default function Remix({ workDir, go }) {
 
   useEffect(() => {
     api.loadRemix(workDir)
-      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setMusicDesc(d.music_desc || ''); setMusicHistory(d.music_history) })
+      .then((d) => { setData(d); setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol }); setVoice(d.voice || d.voices?.[0] || ''); setMusicDesc(d.music_desc || ''); setMusicHistory(d.music_history) })
       .catch((e) => setError(e.message))
   }, [workDir])
 
@@ -66,6 +68,33 @@ export default function Remix({ workDir, go }) {
       if (chosen && chosen.desc) setMusicDesc(chosen.desc)
       setStatus('Switched the soundtrack and re-muxed the film.')
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const regenNarrator = async () => {
+    setNarratorBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.regenNarrator({ work_dir: data.work_dir, voice })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              setStatus('Regenerated narration and reassembled the film.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Narrator regen ${t.status}.`))
+            } else if (t.step === 'narration' && t.scene_id) {
+              setStatus(`Regenerating narration for scene ${t.scene_id}${t.total ? ` (${t.current}/${t.total})` : ''}…`)
+            } else if (t.step === 'finalize') {
+              setStatus('Reassembling the film…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+      setData((d) => ({ ...d, voice }))
+    } catch (e) { setError(e.message) } finally { setNarratorBusy(false) }
   }
 
   const remix = async () => {
@@ -158,7 +187,25 @@ export default function Remix({ workDir, go }) {
               </Field>
             ))}
           </div>
-          <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={busy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
+          <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={busy || musicBusy || narratorBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narrator</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
+          <div className="mt-24">
+            <Field label="Narrator voice">
+              <select className="select" value={voice} disabled={narratorBusy || busy || musicBusy}
+                onChange={(e) => setVoice(e.target.value)}>
+                {(data.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="microphone-lines" disabled={narratorBusy || busy || musicBusy} onClick={regenNarrator}>
+              {narratorBusy ? 'Regenerating…' : 'Regenerate narration'}
+            </Button>
+          </div>
         </Card>
 
         <Card span={12} padLg className="reveal reveal-d2">
@@ -171,9 +218,9 @@ export default function Remix({ workDir, go }) {
                 placeholder="cinematic orchestral background music, atmospheric, instrumental" />
             </Field>
           </div>
-          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={musicBusy || busy || narratorBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
-            onSelect={selectMusic} busy={musicBusy} />
+            onSelect={selectMusic} busy={musicBusy || busy || narratorBusy} />
         </Card>
       </div>
     </div>
