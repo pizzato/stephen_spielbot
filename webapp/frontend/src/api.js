@@ -241,7 +241,7 @@ export const api = {
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
-  rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
+  rerenderFilmScene: (workDir, sceneId, component, targetResolution, upscaleMode) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component, target_resolution: targetResolution || null, upscale_mode: upscaleMode || null }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
   selectFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-select`, { work_dir: workDir, version_id: versionId }),
   inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),

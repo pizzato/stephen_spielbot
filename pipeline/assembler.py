@@ -2,6 +2,7 @@
 
 import logging
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -118,6 +119,92 @@ def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
     ], timeout=1800)
     tmp_path.replace(video_path)
     return video_path
+
+
+def upscale_video(input_path: Path, output_path: Path, width: int, height: int) -> Path:
+    """Upscale a rendered video to an exact target frame size.
+
+    This is a post-render path: it preserves timing/audio, uses high-quality
+    Lanczos scaling, and writes to a separate output so callers can atomically
+    swap it in only after ffmpeg succeeds.
+    """
+    actual_w, actual_h = _get_video_dimensions(input_path)
+    if actual_w >= width and actual_h >= height:
+        raise ValueError(
+            f"Target {width}x{height} is not larger than source {actual_w}x{actual_h}."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[ffmpeg] upscale_video: %dx%d -> %dx%d (%s)",
+        actual_w, actual_h, width, height, input_path.name,
+    )
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-vf", (
+            f"scale={width}:{height}:flags=lanczos:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1"
+        ),
+        "-c:v", "libx264", "-crf", "16", "-preset", "slow",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_path),
+    ], timeout=3600)
+    return output_path
+
+
+def temporal_ai_upscale_video(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    command_template: str | None = None,
+    timeout_seconds: int | None = None,
+) -> Path:
+    """Run a configured temporal AI video upscaler command.
+
+    The command is intentionally configured at runtime because the useful
+    temporal upscalers are external tools with different CLIs, licensing, and
+    install locations. Set ``TEMPORAL_VIDEO_UPSCALER_CMD`` to a shell-style
+    template containing ``{input}``, ``{output}``, ``{width}``, and ``{height}``.
+    """
+    actual_w, actual_h = _get_video_dimensions(input_path)
+    if actual_w >= width and actual_h >= height:
+        raise ValueError(
+            f"Target {width}x{height} is not larger than source {actual_w}x{actual_h}."
+        )
+
+    template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
+    if not template.strip():
+        raise RuntimeError(
+            "Temporal AI upscale requires TEMPORAL_VIDEO_UPSCALER_CMD with "
+            "{input}, {output}, {width}, and {height} placeholders."
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    values = {
+        "input": shlex.quote(str(input_path)),
+        "output": shlex.quote(str(output_path)),
+        "width": str(int(width)),
+        "height": str(int(height)),
+    }
+    try:
+        cmd = shlex.split(template.format(**values))
+    except KeyError as exc:
+        raise RuntimeError(f"Unknown temporal upscaler placeholder: {exc}") from exc
+    if not cmd:
+        raise RuntimeError("Temporal AI upscaler command is empty.")
+
+    logger.info(
+        "[upscale] temporal_ai: %dx%d -> %dx%d (%s)",
+        actual_w, actual_h, width, height, input_path.name,
+    )
+    timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
+    _run(cmd, timeout=timeout, max_retries=1)
+    if not output_path.exists() or output_path.stat().st_size == 0:
+        raise RuntimeError("Temporal AI upscaler did not produce an output video.")
+    return output_path
 
 
 def concat_clips(clip_paths: list[Path], output_path: Path) -> Path:

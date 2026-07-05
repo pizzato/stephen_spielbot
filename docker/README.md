@@ -40,6 +40,12 @@ models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
 Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 
+The Film editor's `Upscale → AI temporal` command runs on the controller backend,
+not in these worker containers. Set it in Settings → Infrastructure, or seed it
+while installing with `TEMPORAL_VIDEO_UPSCALER_CMD=... make install`. No ComfyUI
+or TTS Dockerfile change is needed unless you deliberately point that command at
+a custom containerized upscaler.
+
 Re-deploy or add one host later (from the controller):
 
 ```bash
@@ -82,6 +88,10 @@ the value must be an `http://host:8189` URL.
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
+
+Temporal AI upscaling is configured in the controller's `config.yaml`, not
+`docker/.env`, because the command is executed by the web backend after a scene
+take has been reviewed.
 
 ### GPU / arch notes
 

@@ -6,6 +6,7 @@ comma-separated); comfy/tts worker lists are derived from them. With no hosts,
 writes a single-machine (localhost) config. Everything else is filled in at
 runtime from app.DEFAULT_CFG, so only the worker lists are seeded here.
 """
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,13 @@ def main(argv: list[str]) -> int:
     tts = list(hosts)
 
     cfg = {"comfy_workers": comfy, "tts_workers": tts}
+    if os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD"):
+        cfg["temporal_video_upscaler_cmd"] = os.environ["TEMPORAL_VIDEO_UPSCALER_CMD"]
+    if os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT"):
+        try:
+            cfg["temporal_video_upscaler_timeout"] = int(os.environ["TEMPORAL_VIDEO_UPSCALER_TIMEOUT"])
+        except ValueError:
+            print(f"  warning: ignoring invalid TEMPORAL_VIDEO_UPSCALER_TIMEOUT={os.environ['TEMPORAL_VIDEO_UPSCALER_TIMEOUT']!r}")
     CONFIG.parent.mkdir(parents=True, exist_ok=True)
     CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
 
