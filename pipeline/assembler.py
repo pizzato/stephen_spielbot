@@ -94,6 +94,38 @@ def _get_video_dimensions(path: Path) -> tuple[int, int]:
     return int(width_s), int(height_s)
 
 
+def _get_video_fps(path: Path) -> float:
+    result = subprocess.run(
+        [
+            _FFPROBE, "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+            "-of", "json",
+            str(path),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffprobe failed:\n{result.stderr[-2000:]}")
+    try:
+        import json
+
+        streams = json.loads(result.stdout or "{}").get("streams") or []
+        stream = streams[0] if streams else {}
+        for key in ("avg_frame_rate", "r_frame_rate"):
+            value = str(stream.get(key) or "")
+            if "/" in value:
+                num, den = value.split("/", 1)
+                fps = float(num) / float(den)
+            else:
+                fps = float(value)
+            if fps > 0:
+                return fps
+    except Exception:
+        pass
+    return 25.0
+
+
 def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
     """Reframe final output to the exact selected resolution when a backend rounds it."""
     actual_w, actual_h = _get_video_dimensions(video_path)
@@ -161,13 +193,13 @@ def temporal_ai_upscale_video(
     height: int,
     command_template: str | None = None,
     timeout_seconds: int | None = None,
+    comfy_url: str | None = None,
 ) -> Path:
-    """Run a configured temporal AI video upscaler command.
+    """Run a temporal AI video upscaler.
 
-    The command is intentionally configured at runtime because the useful
-    temporal upscalers are external tools with different CLIs, licensing, and
-    install locations. Set ``TEMPORAL_VIDEO_UPSCALER_CMD`` to a shell-style
-    template containing ``{input}``, ``{output}``, ``{width}``, and ``{height}``.
+    By default this uses the packaged ComfyUI LTX latent-upscale workflow. An
+    explicit command template remains supported as an advanced override for
+    existing installs that already configured one.
     """
     actual_w, actual_h = _get_video_dimensions(input_path)
     if actual_w >= width and actual_h >= height:
@@ -176,10 +208,18 @@ def temporal_ai_upscale_video(
         )
 
     template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
+    timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
     if not template.strip():
-        raise RuntimeError(
-            "Temporal AI upscale requires TEMPORAL_VIDEO_UPSCALER_CMD with "
-            "{input}, {output}, {width}, and {height} placeholders."
+        from pipeline.comfyui import upscale_video_ltx
+
+        return upscale_video_ltx(
+            input_path,
+            output_path,
+            width,
+            height,
+            fps=_get_video_fps(input_path),
+            timeout_seconds=timeout,
+            comfy_url=comfy_url or "http://localhost:8188",
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -200,7 +240,6 @@ def temporal_ai_upscale_video(
         "[upscale] temporal_ai: %dx%d -> %dx%d (%s)",
         actual_w, actual_h, width, height, input_path.name,
     )
-    timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
     _run(cmd, timeout=timeout, max_retries=1)
     if not output_path.exists() or output_path.stat().st_size == 0:
         raise RuntimeError("Temporal AI upscaler did not produce an output video.")

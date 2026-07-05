@@ -1061,14 +1061,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   onChange={(e) => set('ui_idle_timeout_seconds', Math.max(1, +e.target.value || 1) * 60)} />
                 <UiWorkerStatus ui={workers?.ui} />
               </Field>
-              <Field label="Temporal AI upscaler command"
-                hint="Optional command template for Remix → Upscale video → AI temporal. Use {input}, {output}, {width}, and {height}. Use an absolute binary path when running under launchd.">
-                <input className="input"
-                  value={cfg.temporal_video_upscaler_cmd || ''}
-                  placeholder="video2x -i {input} -o {output} --width {width} --height {height}"
-                  onChange={(e) => set('temporal_video_upscaler_cmd', e.target.value)} />
-              </Field>
-              <Field label="Temporal AI timeout (min)">
+              <Field label="Temporal AI upscale timeout (min)" hint="Maximum time for the packaged ComfyUI LTX upscaler to process a finished film.">
                 <input className="input" type="number" min={1} step={1}
                   value={Math.max(1, Math.round((cfg.temporal_video_upscaler_timeout ?? 7200) / 60))}
                   onChange={(e) => set('temporal_video_upscaler_timeout', Math.max(1, +e.target.value || 1) * 60)} />
