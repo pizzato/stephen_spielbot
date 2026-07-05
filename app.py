@@ -1518,6 +1518,24 @@ def _character_sheet(characters: list[dict]) -> str:
     )
 
 
+# A scene rarely centres on more than a couple of named characters; cap the
+# reference images per scene to bound VRAM on the workers (drops are logged).
+_MAX_SCENE_REFERENCES = 2
+
+
+def _characters_dir() -> Path:
+    """Directory holding character reference images (sibling of the config YAML).
+    Read from CONFIG_FILE at call time so tests that patch it are respected."""
+    return CONFIG_FILE.parent / "characters"
+
+
+def _character_image_path(filename: str) -> Path | None:
+    """Absolute path of a stored character reference image, or None if the name
+    is blank. The filename is basename-only (guards against path traversal)."""
+    name = Path(str(filename or "")).name
+    return _characters_dir() / name if name else None
+
+
 def _character_mentions(text: str, character: dict) -> bool:
     """True if the character's name or any alias appears in *text* as a whole
     word (case-insensitive)."""
@@ -1558,6 +1576,105 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     tail = " ".join(f"{c}." for c in clauses)
     sep = " " if base_prompt.rstrip().endswith((".", "!", "?")) else ". "
     return f"{base_prompt.rstrip()}{sep}{tail}"
+
+
+def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name: str) -> list[Path]:
+    """Existing reference images for the characters featured in this scene, capped
+    at _MAX_SCENE_REFERENCES. A character contributes its image when it's enabled,
+    has a stored ref_image, and its name/alias appears in the scene (Phase 2 —
+    FLUX.2 reference conditioning). Empty list when nothing matches."""
+    chars = style_settings(cfg, style_name).get("characters") or []
+    scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
+    scene_text = f"{base_prompt} {scene_text}"
+    paths = []
+    for c in chars:
+        if not c.get("enabled", True) or not c.get("ref_image"):
+            continue
+        if not _character_mentions(scene_text, c):
+            continue
+        p = _character_image_path(c["ref_image"])
+        if p and p.exists():
+            paths.append(p)
+    if len(paths) > _MAX_SCENE_REFERENCES:
+        logger.info("Scene matched %d character reference images; using first %d.",
+                    len(paths), _MAX_SCENE_REFERENCES)
+        paths = paths[:_MAX_SCENE_REFERENCES]
+    return paths
+
+
+def _find_character(cfg: dict, style_name: str, char_id: str) -> tuple[dict, dict]:
+    """Return (style, character) for the given ids, raising ValueError if either
+    is unknown. The character must already be persisted (ids are assigned on save
+    by _norm_characters), so image ops require a saved character."""
+    style = next((s for s in (cfg.get("styles") or []) if s.get("name") == style_name), None)
+    if style is None:
+        raise ValueError(f"Unknown style {style_name!r}.")
+    char = next((c for c in (style.get("characters") or []) if c.get("id") == char_id), None)
+    if char is None:
+        raise ValueError(f"Unknown character {char_id!r} in style {style_name!r}. Save the style first.")
+    return style, char
+
+
+def set_character_image(style_name: str, char_id: str, raw: bytes) -> dict:
+    """Store uploaded image bytes as the character's PNG reference and persist.
+    Returns the reloaded config."""
+    from PIL import Image
+    cfg = load_config()
+    _, char = _find_character(cfg, style_name, char_id)
+    d = _characters_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{char_id}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    char["ref_image"] = out.name
+    save_config(cfg)
+    return load_config()
+
+
+def clear_character_image(style_name: str, char_id: str) -> dict:
+    """Delete a character's reference image and clear the field. Returns config."""
+    cfg = load_config()
+    _, char = _find_character(cfg, style_name, char_id)
+    p = _character_image_path(char.get("ref_image"))
+    if p and p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    char["ref_image"] = ""
+    save_config(cfg)
+    return load_config()
+
+
+def generate_character_portrait(style_name: str, char_id: str, extra_prompt: str = "") -> dict:
+    """Generate a portrait from the character's description via the style's engine
+    and lock it in as the reference image (re-callable to re-roll). Needs a worker.
+    Returns the reloaded config."""
+    cfg = load_config()
+    _, char = _find_character(cfg, style_name, char_id)
+    parts = [p for p in (char.get("name"), char.get("description"), (extra_prompt or "").strip()) if p]
+    prompt = ", ".join(parts) or char.get("name") or "character portrait"
+    combined = _compose_visual_style("", cfg, style_name)
+    full = f"{combined}. {prompt}" if combined else prompt
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    worker_urls = _preview_worker_urls()
+    if not worker_urls:
+        raise RuntimeError("No cluster workers reachable to generate a portrait.")
+    pool = WorkerPool(worker_urls)
+    d = _characters_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{char_id}.png"
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        pool.release(url)
+    char["ref_image"] = out.name
+    save_config(cfg)
+    return load_config()
 
 
 def _generate_active_scene_preview(
@@ -1620,6 +1737,9 @@ def _generate_active_scene_preview(
     # subject looks consistent across scenes even when the LLM paraphrased it.
     base_prompt = _inject_characters(base_prompt, scene, cfg, style_name)
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+    # Anchor featured characters to their reference image (FLUX.2 only; the engine
+    # ignores these otherwise).
+    reference_images = _scene_reference_images(base_prompt, scene, cfg, style_name)
 
     url = worker_pool.acquire()
     try:
@@ -1629,6 +1749,7 @@ def _generate_active_scene_preview(
             out,
             width=img_width,
             height=img_height,
+            reference_images=reference_images,
             comfy_url=url,
         )
         store = DurableStore.default()

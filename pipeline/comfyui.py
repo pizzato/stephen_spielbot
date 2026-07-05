@@ -783,15 +783,44 @@ def _weight_dtype(engine: dict, comfy_url: str) -> str:
     return "fp8_e4m3fn" if has_cuda else "default"
 
 
+def _build_flux2_ref_workflow(engine: dict, repl: dict, ref_names: list[str]) -> dict:
+    """FLUX.2 reference-conditioned t2i workflow for one or more reference images.
+
+    Starts from ``t2i_ref_workflow`` (a single-reference graph: nodes 20 LoadImage
+    → 21 VAEEncode → 22 ReferenceLatent feeding BasicGuider node 8) and chains an
+    extra LoadImage/VAEEncode/ReferenceLatent triple per additional reference, so
+    several characters can condition the same image. The last ReferenceLatent is
+    wired into the guider."""
+    wf = _fill_template(_load_workflow(engine["t2i_ref_workflow"]),
+                        {**repl, "REF_IMAGE": ref_names[0]})
+    last_ref, nid = "22", 23
+    for name in ref_names[1:]:
+        load, enc, ref = str(nid), str(nid + 1), str(nid + 2)
+        wf[load] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        wf[enc] = {"class_type": "VAEEncode", "inputs": {"pixels": [load, 0], "vae": ["3", 0]}}
+        wf[ref] = {"class_type": "ReferenceLatent",
+                   "inputs": {"conditioning": [last_ref, 0], "latent": [enc, 0]}}
+        last_ref, nid = ref, nid + 3
+    wf["8"]["inputs"]["conditioning"] = [last_ref, 0]
+    return wf
+
+
 def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
                          width: int, height: int, seed: int | None = None,
+                         reference_images: list[Path] | None = None,
                          comfy_url: str = COMFYUI_URL) -> Path:
     """Text→image for the given engine. Dispatches by engine family.
 
-    flux1 reuses :func:`generate_scene_image`; flux2 runs ``flux2_t2i.json``."""
+    flux1 reuses :func:`generate_scene_image`; flux2 runs ``flux2_t2i.json``, or
+    ``flux2_t2i_ref.json`` when *reference_images* are given (character reference
+    conditioning — FLUX.2 only; ignored by flux1)."""
     if not engine.get("can_generate"):
         raise RuntimeError(f"Engine {engine.get('key')!r} cannot generate images.")
+    refs = [Path(p) for p in (reference_images or []) if p]
     if engine.get("family") != "flux2":
+        if refs:
+            logger.debug("Engine %r has no reference conditioning — ignoring %d reference image(s).",
+                         engine.get("key"), len(refs))
         return generate_scene_image(
             prompt, output_path, width=width, height=height, seed=seed,
             steps=int(engine["steps"]), flux_model=engine["model_file"],
@@ -799,13 +828,18 @@ def generate_with_engine(engine: dict, prompt: str, output_path: Path, *,
             comfy_url=comfy_url)
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
-    workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), {
+    repl = {
         "FLUX_MODEL": engine["model_file"], "CLIP_T5": engine["clip_t5"],
         "FLUX_VAE": engine["vae"], "WEIGHT_DTYPE": _weight_dtype(engine, comfy_url),
         "POSITIVE_PROMPT": prompt, "WIDTH": width, "HEIGHT": height,
         "STEPS": int(engine["steps"]), "GUIDANCE": float(engine.get("guidance") or 4.0),
         "SEED": seed,
-    })
+    }
+    if refs and engine.get("t2i_ref_workflow"):
+        ref_names = [_upload_image(p, comfy_url=comfy_url) for p in refs]
+        workflow = _build_flux2_ref_workflow(engine, repl, ref_names)
+    else:
+        workflow = _fill_template(_load_workflow(engine["t2i_workflow"]), repl)
     return _run_and_save(workflow, output_path, comfy_url)
 
 
