@@ -1,7 +1,13 @@
 # Consistent Characters — Feature Plan
 
 > **Status (implementation).**
-> - **Phase 1 (text consistency): DONE** — per-style character registry, character
+> - **Scope update (supersedes §3.3): characters are now a GLOBAL library with
+>   per-style opt-in.** The registry lives at `cfg["characters"]`; each style
+>   holds a `character_ids` list of the ones it uses (`_ensure_characters`
+>   migrates the old per-style lists up on first load). The library has its own
+>   Settings → **Characters** tab; styles opt in via checkboxes. (Voices got
+>   their own Settings tab too, and YouTube + X merged into a **Channels** tab.)
+> - **Phase 1 (text consistency): DONE** — character registry, character
 >   sheet into both LLM backends, deterministic injection at generation, Settings
 >   Characters card. Shipped.
 > - **Phase 2 (reference images): CODE DONE, PENDING LIVE VALIDATION** — `flux2_t2i_ref.json`

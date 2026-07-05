@@ -248,8 +248,9 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
 const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
-  { id: 'youtube', label: 'YouTube' },
-  { id: 'x', label: 'X' },
+  { id: 'characters', label: 'Characters' },
+  { id: 'voices', label: 'Voices' },
+  { id: 'channels', label: 'Channels' },
   { id: 'automation', label: 'Automation' },
 ]
 
@@ -838,34 +839,33 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     presets[bucket] = { ...(presets[bucket] || {}), [key]: value }
     setStyleField('size_presets', presets)
   }
-  // Recurring characters (consistent look). The backend normalizes/ids these on
+  // Recurring characters are a GLOBAL library (their own Characters tab); each
+  // style opts into the ones it uses by id. The backend normalizes/ids these on
   // save (_norm_characters), so the UI can add bare rows and drop blank aliases.
-  const chars = st.characters || []
-  const addChar = () => setStyleField('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
-  const updateChar = (i, patch) => setStyleField('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
-  const removeChar = (i) => setStyleField('characters', chars.filter((_, j) => j !== i))
+  const chars = cfg.characters || []
+  const addChar = () => set('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
+  const updateChar = (i, patch) => set('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
+  const removeChar = (i) => set('characters', chars.filter((_, j) => j !== i))
+  // Which global characters the selected style opts into.
+  const styleCharIds = st.character_ids || []
+  const toggleStyleChar = (id, on) => setStyleField('character_ids',
+    on ? [...new Set([...styleCharIds, id])] : styleCharIds.filter((x) => x !== id))
   // Character reference images persist server-side immediately (like voice ops),
-  // so they're gated on a clean form. Merge just the affected style's characters
-  // back into the working copy and bump the thumbnail cache-bust token.
+  // so they're gated on a clean form. Merge the fresh global library back into
+  // the working copy and bump the thumbnail cache-bust token.
   const characterOp = async (charId, run) => {
     setError(''); setStatus(''); setCharBusy(charId)
     try {
       const r = await run()
-      setCfg((c) => ({
-        ...c,
-        styles: (c.styles || []).map((s) => {
-          const srv = (r.config.styles || []).find((x) => x.name === s.name)
-          return srv ? { ...s, characters: srv.characters } : s
-        }),
-      }))
+      setCfg((c) => ({ ...c, characters: r.config.characters }))
       setMeta((m) => ({ ...m, config: r.config }))
       setCharBust((n) => n + 1)
     } catch (e) { setError(e.message) } finally { setCharBusy('') }
   }
   const uploadCharImage = (char, file) => characterOp(char.id, async () =>
-    api.setCharacterImage(st.name, char.id, file.name, await fileToDataUrl(file)))
-  const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(st.name, char.id))
-  const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(st.name, char.id, ''))
+    api.setCharacterImage(char.id, file.name, await fileToDataUrl(file)))
+  const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(char.id))
+  const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(char.id, ''))
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -1198,9 +1198,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
           </Card>
 
-          {/* ── Voices ── */}
-          <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
-
           {/* ── Backup & restore (issue #106) ── */}
           <Card span={12} className="reveal reveal-d2">
             <div className="row center between">
@@ -1282,13 +1279,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="Description" hint="What this style is for — shown when choosing a style for a video.">
                 <textarea className="textarea" rows={2} value={st.description || ''} onChange={(e) => setStyleField('description', e.target.value)} />
               </Field>
-              <Field label="YouTube channel" hint="Where videos in this style are published — connect channels in the YouTube tab.">
+              <Field label="YouTube channel" hint="Where videos in this style are published — connect channels in the Channels tab.">
                 <select className="select" value={st.channel || ''} onChange={(e) => setStyleField('channel', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="">(first connected channel)</option>
                   {(cfg.youtube_channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
               </Field>
-              <Field label="X account" hint="Which X account this style posts to (or none) — connect accounts in the X tab.">
+              <Field label="X account" hint="Which X account this style posts to (or none) — connect accounts in the Channels tab.">
                 <select className="select" value={st.x_account || ''} onChange={(e) => setStyleField('x_account', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="">(none — don’t post to X)</option>
                   {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
@@ -1358,60 +1355,22 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
             </div>
           </Card>
 
-          {/* ── Characters (consistent look) ── */}
+          {/* ── Characters (opt-in from the global library) ── */}
           <Card span={12} className="reveal reveal-d3">
-            <span className="label-sm">Characters</span>
-            <div className="field__hint" style={{ marginTop: 6 }}>
-              Recurring people or things that should look the same across every scene and video. When a scene mentions a character by name (or an alias), its appearance is written into the image prompt so it stays consistent.
+            <div className="row center between">
+              <span className="label-sm">Characters</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>define them under <strong>Characters</strong></span>
             </div>
-            <div className="stack gap-16 mt-16">
-              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add one to keep a subject looking the same across scenes.</div>}
-              {chars.map((c, i) => (
-                <div key={c.id || i} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
-                    <div className="grow"><Field label="Name">
-                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
-                        onChange={(e) => updateChar(i, { name: e.target.value })} />
-                    </Field></div>
-                    <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
-                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
-                        key={`alias-${styleIdx}-${c.id || i}`}
-                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-                    </Field></div>
-                  </div>
-                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
-                    <textarea className="textarea" rows={3} value={c.description || ''}
-                      onChange={(e) => updateChar(i, { description: e.target.value })} />
-                  </Field>
-                  <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
-                      label="Enabled — include this character in new scripts and renders" />
-                    <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
-                  </div>
-                  {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
-                  {c.id && !dirty ? (
-                    <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
-                      {c.ref_image
-                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
-                            style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
-                        : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
-                      <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
-                        <Icon name="upload" /> Upload image
-                        <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
-                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
-                      </label>
-                      <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
-                        onClick={() => genCharPortrait(c)}>
-                        {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
-                      </Button>
-                      {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
-                    </div>
-                  ) : (
-                    <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
-                  )}
-                </div>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              Pick which recurring characters can appear in this style. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos.
+            </div>
+            <div className="stack gap-10 mt-16">
+              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add some under the <strong>Characters</strong> tab, then enable them here.</div>}
+              {chars.filter((c) => c.id).map((c) => (
+                <Check key={c.id} checked={styleCharIds.includes(c.id)} onChange={(v) => toggleStyleChar(c.id, v)}
+                  label={`${c.name || '(unnamed)'}${c.enabled === false ? ' — disabled in the library' : ''}${c.description ? ` · ${c.description.slice(0, 70)}${c.description.length > 70 ? '…' : ''}` : ''}`} />
               ))}
-              <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
+              {chars.some((c) => !c.id) && <div className="muted" style={{ fontSize: 12 }}>Save settings to enable newly added characters here.</div>}
             </div>
           </Card>
 
@@ -1499,7 +1458,74 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           </Card>
         </>)}
 
-        {tab === 'youtube' && (<>
+        {tab === 'characters' && (<>
+          {/* ── Characters (global library) ── */}
+          <Card span={12} className="reveal reveal-d1">
+            <div className="row center between">
+              <span className="label-sm">Characters</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>shared across styles · enable per style under <strong>Styles</strong></span>
+            </div>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              Recurring people or things that should look the same across every scene and video. Define a character once here, then enable it on any style under <strong>Styles</strong>. When a scene mentions it by name (or an alias), its appearance is written into the image prompt so it stays consistent. A generated portrait uses the default style's image model.
+            </div>
+            <div className="stack gap-16 mt-16">
+              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add one to keep a subject looking the same across scenes.</div>}
+              {chars.map((c, i) => (
+                <div key={c.id || i} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                    <div className="grow"><Field label="Name">
+                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                        onChange={(e) => updateChar(i, { name: e.target.value })} />
+                    </Field></div>
+                    <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
+                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                        key={`alias-${c.id || i}`}
+                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                    </Field></div>
+                  </div>
+                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                    <textarea className="textarea" rows={3} value={c.description || ''}
+                      onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                  <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                    <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
+                      label="Enabled — available to use in scripts and renders" />
+                    <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
+                  </div>
+                  {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
+                  {c.id && !dirty ? (
+                    <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+                      {c.ref_image
+                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                            style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
+                        : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                      <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                        <Icon name="upload" /> Upload image
+                        <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                      </label>
+                      <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                        onClick={() => genCharPortrait(c)}>
+                        {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
+                      </Button>
+                      {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                    </div>
+                  ) : (
+                    <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
+                  )}
+                </div>
+              ))}
+              <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
+            </div>
+          </Card>
+        </>)}
+
+        {tab === 'voices' && (<>
+          {/* ── Voices (narrator reference clips) ── */}
+          <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+        </>)}
+
+        {tab === 'channels' && (<>
           {/* ── YouTube channels (issue #22) ── */}
           <ChannelsCard onConfigChanged={reloadChannels} onError={setError} />
           <Card span={12} className="reveal reveal-d2">
@@ -1510,9 +1536,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               </Field>
             </div>
           </Card>
-        </>)}
-
-        {tab === 'x' && (<>
           {/* ── X (Twitter) accounts (issue #107) ── */}
           <XAccountsCard onConfigChanged={reloadXAccounts} onError={setError} />
           <Card span={12} className="reveal reveal-d2">
