@@ -148,12 +148,14 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     sid = int(row["id"])
     preview = row.get("preview_path") or ""
     has_preview = bool(preview and Path(preview).exists())
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     out = {
         "id": sid,
         "title": row.get("title", ""),
         "image_prompt": row.get("image_prompt", ""),
         "video_prompt": row.get("video_prompt", ""),
         "narration": row.get("narration", ""),
+        "voice": meta.get("voice", ""),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
@@ -903,13 +905,38 @@ class SceneUpdate(BaseModel):
     image_prompt: str = ""
     video_prompt: str = ""
     narration: str = ""
+    voice: str | None = None
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
 def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
-    # Reuse app's saver — it both upserts the DB row and rewrites script.json.
-    gapp._save_active_scene(job_id, scene_id, body.title, body.image_prompt,
-                            body.video_prompt, body.narration)
+    sid = int(scene_id)
+    store = DurableStore.default()
+    try:
+        current = store.get_scene(job_id, sid) or {}
+        meta = dict(current.get("metadata") or {})
+        if body.voice is not None:
+            voice = (body.voice or "").strip()
+            if voice:
+                meta["voice"] = voice
+            else:
+                meta.pop("voice", None)
+        store.upsert_scene(
+            job_id,
+            sid,
+            title=body.title,
+            image_prompt=body.image_prompt,
+            video_prompt=body.video_prompt,
+            narration=body.narration,
+            preview_path=current.get("preview_path", ""),
+            metadata=meta,
+        )
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    work_dir = gapp._job_work_dir(job_id)
+    if work_dir:
+        gapp._persist_script_snapshot(work_dir, rows)
     return {"ok": True}
 
 
@@ -1850,6 +1877,11 @@ class RemixBody(BaseModel):
     ambient_vol: float = 0
 
 
+class RemixNarratorBody(BaseModel):
+    work_dir: str
+    voice: str = ""
+
+
 @api.get("/api/remix")
 def remix_load(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
@@ -1877,6 +1909,8 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
+        "voice": jc.get("default_voice", ""),
+        "voices": gapp.get_voice_choices(),
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         # Same publish/approval status the Films tab shows, so the review screen
@@ -1902,6 +1936,115 @@ def remix_apply(body: RemixBody) -> dict:
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": f"/api/file?path={final_path}"}
+
+
+def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
+    from pipeline.assembler import concatenate_scenes, mix_background_music
+
+    try:
+        voice_name = (voice or "").strip()
+        jc = _film_job_config(wd)
+        jc["default_voice"] = voice_name
+        jc["voice_ref"] = str(_voice_ref_for_name(voice_name) or "")
+        _write_film_job_config(wd, jc)
+
+        job_id = job_id_from_work_dir(wd)
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+            if not rows:
+                raise RuntimeError("No scene data found.")
+            for row in rows:
+                meta = dict(row.get("metadata") or {})
+                if voice_name:
+                    meta["voice"] = voice_name
+                else:
+                    meta.pop("voice", None)
+                store.upsert_scene(
+                    job_id,
+                    int(row["id"]),
+                    title=row.get("title", ""),
+                    image_prompt=row.get("image_prompt", ""),
+                    video_prompt=row.get("video_prompt", ""),
+                    narration=row.get("narration", ""),
+                    preview_path=row.get("preview_path", ""),
+                    metadata=meta,
+                )
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        gapp._persist_script_snapshot(wd, rows)
+
+        order = _load_scene_order(wd) or [int(r.get("id") or 0) for r in rows]
+        row_by_id = {int(r.get("id") or 0): r for r in rows}
+        for idx, sid in enumerate(order, start=1):
+            row = row_by_id.get(int(sid))
+            if not row:
+                continue
+            _film_tasks[task_id] = {
+                "status": "running",
+                "step": "narration",
+                "scene_id": int(sid),
+                "current": idx,
+                "total": len(order),
+            }
+            video_history.seed_if_empty(wd, int(sid), wd / f"scene_{int(sid):02d}_final.mp4")
+            _render_scene_narration(task_id, wd, int(sid), jc, row, voice_name)
+
+        scene_finals = [
+            wd / f"scene_{int(sid):02d}_final.mp4"
+            for sid in order
+            if (wd / f"scene_{int(sid):02d}_final.mp4").exists()
+            and (wd / f"scene_{int(sid):02d}_final.mp4").stat().st_size > 10_000
+        ]
+        if not scene_finals:
+            raise RuntimeError("No rendered scenes found after narrator regeneration.")
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "finalize"}
+        combined = wd / "combined.mp4"
+        final_path = gapp._final_path_for_work_dir(wd)
+        music_path = wd / "background_music.wav"
+        if not music_path.exists():
+            raise RuntimeError("No background music found in this film folder.")
+        cfg = gapp.load_config()
+        ambient = wd / "ambient.wav"
+        concatenate_scenes(scene_finals, combined)
+        mix_background_music(
+            combined, music_path, final_path,
+            volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
+            voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+            ambient_path=ambient if ambient.exists() else None,
+            ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+        )
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "voice": voice_name,
+            "scene_count": len(scene_finals),
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+
+
+@api.post("/api/remix/narrator")
+def remix_narrator(body: RemixNarratorBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not (wd / "combined.mp4").exists():
+        raise HTTPException(404, f"combined.mp4 not found in {wd.name}.")
+    voice = (body.voice or "").strip()
+    if voice and voice not in gapp.get_voice_choices():
+        raise HTTPException(400, f"Unknown narrator: {voice}")
+
+    tid = f"narrator_regen_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "narration"}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "narrator"}
+    threading.Thread(
+        target=_run_remix_narrator, args=(tid, wd, voice), daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid}
 
 
 class MusicRegenBody(BaseModel):
@@ -5759,6 +5902,29 @@ def _film_job_config(work_dir: Path) -> dict:
         return {}
 
 
+def _write_film_job_config(work_dir: Path, jc: dict) -> None:
+    (work_dir / "job_config.json").write_text(json.dumps(jc, indent=2))
+
+
+def _scene_voice_name(row: dict, jc: dict) -> str:
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    voice = str(meta.get("voice") or "").strip()
+    if voice:
+        return voice
+    return str(jc.get("default_voice") or "").strip()
+
+
+def _voice_ref_for_name(name: str) -> Path | None:
+    if not name or name == gapp.F5TTS_DEFAULT_OPTION:
+        return None
+    ref = gapp.voice_path_for(name)
+    return Path(ref).expanduser() if ref else None
+
+
+def _voice_label(name: str) -> str:
+    return name if name and name != gapp.F5TTS_DEFAULT_OPTION else gapp.F5TTS_DEFAULT_OPTION
+
+
 def _film_dimensions(work_dir: Path) -> tuple[int, int]:
     """Best-effort (width, height) of the rendered video for a work dir.
 
@@ -5814,12 +5980,14 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
     else:
         ordered = rows
 
+    jc = _film_job_config(wd)
     result = []
     for r in ordered:
         sid = int(r.get("id") or r.get("scene_id") or 0)
-        result.append({**_scene_to_json(r, wd), **_film_scene_files(wd, sid)})
+        scene_json = {**_scene_to_json(r, wd), **_film_scene_files(wd, sid)}
+        scene_json["effective_voice"] = _voice_label(_scene_voice_name(r, jc))
+        result.append(scene_json)
 
-    jc = _film_job_config(wd)
     title = ""
     style = ""
     if job_row:
@@ -5841,6 +6009,8 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
         "title": title,
         "style": style,
         "resolution": resolution,
+        "voice": jc.get("default_voice", ""),
+        "voices": gapp.get_voice_choices(),
     }
 
 
@@ -5968,8 +6138,8 @@ class RerenderSceneBody(BaseModel):
     component: str  # "narration", "image", or "video"
 
 
-def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
-    """Background thread: re-render narration then re-mux the scene."""
+def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                            voice_name: str | None = None) -> None:
     from pipeline.assembler import mux_video_audio
     from pipeline.tts_worker import generate_narration
 
@@ -5977,39 +6147,43 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     final_path = wd / f"scene_{sid:02d}_final.mp4"
     cfg = gapp.load_config()
 
-    try:
-        _film_checkpoint(task_id)
-        narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
+    _film_checkpoint(task_id)
+    narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
+    selected_voice = voice_name if voice_name is not None else _scene_voice_name(row, jc)
+    voice_ref = _voice_ref_for_name(selected_voice)
+    if voice_ref is None and not selected_voice:
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
-        voice_robotic = bool(jc.get("voice_robotic", False))
-        voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
-        voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
-        tts_engine = jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
-        tts_hosts = cfg.get("tts_workers") or []
-        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+    voice_robotic = bool(jc.get("voice_robotic", False))
+    voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
+    voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
+    tts_engine = jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
+    tts_hosts = cfg.get("tts_workers") or []
+    tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
-        _film_tasks[task_id] = {"status": "running", "step": "narration"}
-        generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine)
+    _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
+    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine)
 
-        # Re-mux narration with the existing scene video
-        video_path = wd / f"scene_{sid:02d}_video.mp4"
-        clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"
-        actual_video = (
-            video_path if (video_path.exists() and video_path.stat().st_size > 10_000)
-            else clip_path if (clip_path.exists() and clip_path.stat().st_size > 10_000)
-            else None
-        )
-        if actual_video:
-            _film_checkpoint(task_id)
-            _film_tasks[task_id]["step"] = "mux"
-            # Mux to a staging file and swap atomically so an interrupted re-mux
-            # never destroys the existing final.mp4. The .mp4 extension lets ffmpeg
-            # infer the container format.
-            staged_final = wd / f"scene_{sid:02d}_final.staging.mp4"
-            mux_video_audio(actual_video, narration_path, staged_final)
-            staged_final.replace(final_path)
-            video_history.record(wd, sid, final_path)
+    video_path = wd / f"scene_{sid:02d}_video.mp4"
+    clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"
+    actual_video = (
+        video_path if (video_path.exists() and video_path.stat().st_size > 10_000)
+        else clip_path if (clip_path.exists() and clip_path.stat().st_size > 10_000)
+        else None
+    )
+    if actual_video:
+        _film_checkpoint(task_id)
+        _film_tasks[task_id]["step"] = "mux"
+        staged_final = wd / f"scene_{sid:02d}_final.staging.mp4"
+        mux_video_audio(actual_video, narration_path, staged_final)
+        staged_final.replace(final_path)
+        video_history.record(wd, sid, final_path)
+
+
+def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+    """Background thread: re-render narration then re-mux the scene."""
+    try:
+        _render_scene_narration(task_id, wd, sid, jc, row)
 
         _film_tasks[task_id] = {"status": "done"}
     except Exception as e:
