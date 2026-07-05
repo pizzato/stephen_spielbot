@@ -40,6 +40,11 @@ def _resolve_media_tool(name: str) -> str:
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
 
+# Open-source attribution stamped into the published final video's container
+# metadata. A plain `comment` tag survives the downstream re-encode/upscale
+# steps (ffmpeg copies global metadata from the first input by default).
+_ATTRIBUTION_COMMENT = "Generated with Stephen Spielbot (https://github.com/pizzato/stephen_spielbot)"
+
 
 def _run(cmd: list[str], timeout: int = _FFMPEG_TIMEOUT, max_retries: int = 2) -> None:
     label = f"ffmpeg {' '.join(str(a) for a in cmd[1:4])}…"
@@ -480,6 +485,7 @@ def mix_background_music(
             "-map", "[aout]",
             "-c:v", "copy",
             "-c:a", "aac", "-b:a", "192k",
+            "-metadata", f"comment={_ATTRIBUTION_COMMENT}",
             str(output_path),
         ])
     except Exception as e:

@@ -44,6 +44,7 @@ import pipeline.x as xt  # noqa: E402
 import pipeline.publish_queue as pq  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
+import pipeline.c2pa as _c2pa  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
@@ -4015,6 +4016,10 @@ def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
     suffix = (ss.get("description_suffix") or "").strip()
     if suffix and suffix not in str(desc):
         desc = f"{desc}\n\n{suffix}"
+    # Open-source attribution footer (per-style, defaults to crediting the repo).
+    attribution = (ss.get("attribution_description") or "").strip()
+    if attribution and attribution not in str(desc):
+        desc = f"{desc}\n\n{attribution}"
     return str(desc)
 
 
@@ -4128,7 +4133,9 @@ def _youtube_tags_for(wd: Path | None, cfg: dict) -> list[str]:
         voice = str(ss.get("voice") or "").strip()
         if voice and voice != gapp.F5TTS_DEFAULT_OPTION:
             extra.append(voice)
-        return _dedupe_cap_tags(topics + extra)
+        # Open-source attribution keyword tags (per-style, comma/newline list).
+        attribution = [t.strip() for t in re.split(r"[,\n]+", str(ss.get("attribution_youtube_tags") or "")) if t.strip()]
+        return _dedupe_cap_tags(topics + extra + attribution)
     except Exception:
         return []
 
@@ -4167,6 +4174,15 @@ def _x_hashtags_for(wd: Path | None, cfg: dict, limit: int = 3) -> str:
         out.append("#" + h)
         if len(out) >= limit:
             break
+    # Open-source attribution hashtag(s) — appended after the capped topic tags
+    # so they always land (per-style, defaults to #stephenspielbot).
+    ss = gapp.style_settings(cfg, _work_dir_style_name(wd))
+    for tok in re.split(r"[\s,]+", str(ss.get("attribution_hashtags") or "")):
+        h = _hashtagify(tok.lstrip("#"))
+        if not h or h.lower() in seen:
+            continue
+        seen.add(h.lower())
+        out.append("#" + h)
     return " ".join(out)
 
 
@@ -4539,6 +4555,10 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 caption_file = None
         # Keyword tags (topic tags + style + narrator); best-effort.
         yt_tags = _youtube_tags_for(wd, gapp.load_config())
+        # Content Credentials (C2PA): sign the final in place before it leaves
+        # the machine — the last step, since a later re-encode breaks the
+        # manifest. Best-effort, never blocks the upload.
+        _c2pa.sign_if_enabled(final, gapp.load_config())
         # Track around the actual upload (the slow part) so it shows as
         # in-progress in the Activity panel and lands in the recent log.
         with _track_op("Uploading to YouTube", body_dict["title"]):
@@ -4961,6 +4981,10 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
                 caption_file = str(_srt) if _srt else ""
             except Exception:
                 caption_file = ""
+        # Content Credentials (C2PA): sign the final in place before it leaves
+        # the machine — the last step, since a later re-encode breaks the
+        # manifest. Best-effort, never blocks the post.
+        _c2pa.sign_if_enabled(final, cfg)
         with _track_op("Posting to X", body_dict.get("title", "")):
             result = xt.post_video(
                 cid, secret, str(final), text, account=account,
