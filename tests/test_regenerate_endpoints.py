@@ -91,6 +91,8 @@ class FilmUpscaleTests(unittest.TestCase):
         backend._film_tasks.clear()
         backend._film_task_meta.clear()
         backend._film_cancelled_tids.clear()
+        backend._activity_log.clear()
+        backend._current_ops.clear()
 
     def test_final_video_upscale_replaces_final_and_records_version(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
@@ -168,6 +170,33 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(started[0][1], wd)
         self.assertEqual(started[0][2], "Landscape FHD (1920×1080)")
         self.assertEqual(started[0][3], "temporal_ai")
+
+    def test_activity_surfaces_running_final_upscale(self):
+        backend._film_tasks["final_upscale_123"] = {"status": "running", "step": "final_upscale"}
+        backend._film_task_meta["final_upscale_123"] = {
+            "work_dir": str(_OUT / "film-a"),
+            "scene_id": 0,
+            "component": "final_upscale",
+            "started_at": 123.0,
+        }
+
+        with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[]):
+            activity = backend.get_activity()
+
+        self.assertEqual(activity["current_op"]["name"], "Upscaling final video")
+        self.assertEqual(activity["active_ops"][0]["name"], "Upscaling final video")
+        self.assertIn("upscaling final video", activity["active_ops"][0]["detail"])
+
+    def test_track_op_keeps_concurrent_operations_visible(self):
+        with backend._track_op("First task", "a"):
+            with backend._track_op("Second task", "b"):
+                with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+                     mock.patch.object(backend.yt, "load_queue", return_value=[]):
+                    activity = backend.get_activity()
+
+        names = {op["name"] for op in activity["active_ops"]}
+        self.assertEqual(names, {"First task", "Second task"})
 
     def test_remix_video_select_restores_chosen_master(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))

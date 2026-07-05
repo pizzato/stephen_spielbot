@@ -35,16 +35,12 @@ export default function Home({ go }) {
   }, [])
 
   const op = activity.current_op || {}
-  const isActive = !!(op.name || activity.render_active)
-
-  let statusLabel = '', statusDetail = ''
-  if (op.name) {
-    statusLabel = op.name
-    statusDetail = op.detail || ''
-  } else if (activity.render_active) {
-    statusLabel = `Rendering ${activity.render_pct}%`
-    statusDetail = activity.render_title || activity.render_msg || ''
-  }
+  const activeOps = (activity.active_ops || []).length ? activity.active_ops : (op.name ? [op] : [])
+  const renderOp = activity.render_active
+    ? { name: `Rendering ${activity.render_pct}%`, detail: activity.render_title || activity.render_msg || '', render: true }
+    : null
+  const visibleOps = activeOps.length ? [...activeOps, ...(renderOp ? [renderOp] : [])] : (renderOp ? [renderOp] : [])
+  const isActive = visibleOps.length > 0
 
   return (
     <div>
@@ -97,24 +93,24 @@ export default function Home({ go }) {
               : <span style={{ fontSize: 12, color: 'var(--ink-4)' }}>Idle</span>}
           </div>
           <div className="stream" style={{ marginTop: 4 }}>
-            {isActive && (
-              <div className="stream-entry">
+            {visibleOps.map((active, i) => (
+              <div className="stream-entry" key={`${active.name || 'active'}-${active.started_at || i}`}>
                 <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
                   <Icon name="rotate" spin />
                 </span>
                 <div className="grow">
-                  <span className="stream-title">{statusLabel}</span>
-                  {statusDetail && (
-                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{statusDetail}</span>
+                  <span className="stream-title">{active.name}</span>
+                  {active.detail && (
+                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{active.detail}</span>
                   )}
                 </div>
-                {activity.render_active && !op.name && (
+                {active.render && (
                   <span style={{ fontSize: 12, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums', minWidth: 36, textAlign: 'right' }}>
                     {activity.render_pct}%
                   </span>
                 )}
               </div>
-            )}
+            ))}
             {activity.recent.slice(0, 5).map((ev, i) => (
               <div key={i} className="stream-entry">
                 <span className="stream-ico" style={{ background: 'var(--paper-2)', color: 'var(--ink-3)' }}>

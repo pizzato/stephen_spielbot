@@ -169,37 +169,117 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
 # ── activity tracker ─────────────────────────────────────────────────────────
 
 _op_lock = threading.Lock()
-_current_op: dict = {}    # {name, detail, started_at} — cleared when done
+_current_ops: dict = {}   # op_id -> {name, detail, started_at}
 _activity_log: list = []  # [{name, detail, ts, duration_s}], newest first, max 20
 
 
 @contextmanager
 def _track_op(name: str, detail: str = ""):
     started = time.time()
+    op_id = uuid.uuid4().hex
     with _op_lock:
-        _current_op.clear()
-        _current_op.update({"name": name, "detail": detail, "started_at": started})
+        _current_ops[op_id] = {"name": name, "detail": detail, "started_at": started}
     try:
         yield
     finally:
         end = time.time()
         with _op_lock:
-            _current_op.clear()
-            _activity_log.insert(0, {
-                "name": name, "detail": detail,
-                "ts": end, "duration_s": round(end - started, 1),
-            })
+            _current_ops.pop(op_id, None)
+            _append_activity_locked(name, detail, end, started)
             del _activity_log[20:]
 
 
-# Live sub-phase labels for scene re-render tasks (keyed by _film_tasks["step"]).
+# Live sub-phase labels for film edit tasks (keyed by _film_tasks["step"]).
 _RERENDER_STEP_LABELS = {
     "narration": "recording narration",
     "image": "painting first frame",
     "video": "rendering video",
     "final_upscale": "upscaling final video",
+    "music": "composing music",
+    "finalize": "assembling film",
     "mux": "muxing audio",
 }
+
+
+def _append_activity_locked(name: str, detail: str, end: float, started: float) -> None:
+    _activity_log.insert(0, {
+        "name": name, "detail": detail,
+        "ts": end, "duration_s": round(max(0.0, end - started), 1),
+    })
+
+
+def _film_task_started_at(task_id: str) -> float:
+    meta = (_film_task_meta.get(task_id) or {}) if "_film_task_meta" in globals() else {}
+    try:
+        return float(meta.get("started_at") or 0.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        return float(str(task_id).rsplit("_", 1)[1])
+    except (IndexError, ValueError):
+        return 0.0
+
+
+def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
+    if task.get("status") != "running":
+        return None
+
+    meta = _film_task_meta.get(task_id) or {}
+    component = str(meta.get("component") or "").strip()
+    started = _film_task_started_at(task_id) or time.time()
+    step = str(task.get("step") or component or "").strip()
+    detail = _RERENDER_STEP_LABELS.get(step, step)
+
+    scene_id = int(meta.get("scene_id") or task.get("scene_id") or 0)
+    if task_id.startswith("rerender_") and not scene_id:
+        parts = task_id.split("_")
+        if len(parts) >= 2:
+            try:
+                scene_id = int(parts[1])
+            except ValueError:
+                scene_id = 0
+    if scene_id > 0 and component != "narrator":
+        return {"name": f"Re-rendering scene {scene_id}", "detail": detail, "started_at": started}
+
+    if component == "final_upscale" or task_id.startswith("final_upscale_"):
+        name = "Upscaling final video"
+    elif component == "music" or task_id.startswith("music_regen_"):
+        name = "Regenerating music"
+    elif component == "narrator" or task_id.startswith("narrator_regen_"):
+        name = "Changing narrator"
+        current, total = task.get("current"), task.get("total")
+        if current and total:
+            detail = f"scene {current}/{total} · {detail}" if detail else f"scene {current}/{total}"
+    else:
+        name = "Updating film"
+
+    work_dir = str(meta.get("work_dir") or "")
+    if work_dir:
+        film = Path(work_dir).name
+        detail = f"{detail} · {film}" if detail else film
+    return {"name": name, "detail": detail, "started_at": started}
+
+
+def _record_film_task_activity(
+    task_id: str,
+    *,
+    started: float,
+    done_name: str,
+    failed_name: str,
+    cancelled_name: str,
+    detail: str = "",
+) -> None:
+    end = time.time()
+    status = (_film_tasks.get(task_id) or {}).get("status")
+    if status == "error":
+        name = failed_name
+    elif status == "cancelled":
+        name = cancelled_name
+    else:
+        name = done_name
+    with _op_lock:
+        _append_activity_locked(name, detail, end, started)
+        del _activity_log[20:]
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -2029,6 +2109,7 @@ def remix_apply(body: RemixBody) -> dict:
 def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
     from pipeline.assembler import concatenate_scenes, mix_background_music
 
+    started = _film_task_started_at(task_id) or time.time()
     try:
         voice_name = (voice or "").strip()
         jc = _film_job_config(wd)
@@ -2113,6 +2194,15 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         }
     except Exception as e:
         _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Changed narrator",
+            failed_name="Narrator change failed",
+            cancelled_name="Narrator change cancelled",
+            detail=wd.name,
+        )
 
 
 @api.post("/api/remix/narrator")
@@ -2128,7 +2218,10 @@ def remix_narrator(body: RemixNarratorBody) -> dict:
 
     tid = f"narrator_regen_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "narration"}
-    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "narrator"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "narrator",
+        "started_at": time.time(),
+    }
     threading.Thread(
         target=_run_remix_narrator, args=(tid, wd, voice), daemon=True,
     ).start()
@@ -2154,6 +2247,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
     combined = wd / "combined.mp4"
     music_path = wd / "background_music.wav"
     staged = wd / "background_music.staging.wav"
+    started = _film_task_started_at(task_id) or time.time()
     try:
         _film_checkpoint(task_id)
         worker_urls = gapp._preview_worker_urls()
@@ -2204,6 +2298,15 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
     except Exception as e:
         staged.unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Regenerated music",
+            failed_name="Music regeneration failed",
+            cancelled_name="Music regeneration cancelled",
+            detail=wd.name,
+        )
 
 
 @api.post("/api/remix/music")
@@ -2235,7 +2338,10 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
 
     tid = f"music_regen_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "music"}
-    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "music"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "music",
+        "started_at": time.time(),
+    }
     threading.Thread(
         target=_run_music_regen, args=(tid, wd, body.music_desc or ""), daemon=True,
     ).start()
@@ -2291,6 +2397,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
 
     final_path = gapp._final_path_for_work_dir(wd)
     staged = wd / "final_upscale.staging.mp4"
+    started = _film_task_started_at(task_id) or time.time()
     try:
         _film_checkpoint(task_id)
         if not final_path.exists() or final_path.stat().st_size <= 0:
@@ -2359,6 +2466,15 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
     except Exception as e:
         staged.unlink(missing_ok=True)
         _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Upscaled final video",
+            failed_name="Final video upscale failed",
+            cancelled_name="Final video upscale cancelled",
+            detail=target_name or wd.name,
+        )
 
 
 @api.post("/api/remix/upscale")
@@ -2377,7 +2493,10 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
 
     tid = f"final_upscale_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "final_upscale"}
-    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": 0, "component": "final_upscale"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "final_upscale",
+        "started_at": time.time(),
+    }
     threading.Thread(
         target=_run_final_video_upscale,
         args=(tid, wd, target_name, mode),
@@ -3375,33 +3494,18 @@ def badges() -> dict:
 def get_activity() -> dict:
     """What the system is doing right now, plus recent event log."""
     with _op_lock:
-        op = dict(_current_op)
+        active_ops = [dict(op) for op in _current_ops.values()]
         log = list(_activity_log[:10])
 
-    # Scene re-renders run in daemon threads that record progress in _film_tasks
-    # (not via _track_op), so surface the most recent running one as the current
-    # op when nothing else is tracked — otherwise the Activity panel shows nothing.
-    if not op:
-        best = None  # (started_ts, scene_id, step)
-        for key, task in list(_film_tasks.items()):
-            if not key.startswith("rerender_") or task.get("status") != "running":
-                continue
-            parts = key.split("_")  # rerender_<sid>_<component>_<ts>
-            if len(parts) < 4:
-                continue
-            try:
-                sid, started = int(parts[1]), int(parts[3])
-            except ValueError:
-                continue
-            if best is None or started > best[0]:
-                best = (started, sid, task.get("step", ""))
-        if best is not None:
-            started, sid, step = best
-            op = {
-                "name": f"Re-rendering scene {sid}",
-                "detail": _RERENDER_STEP_LABELS.get(step, step),
-                "started_at": started,
-            }
+    # Film edit tasks run in daemon threads that record progress in _film_tasks
+    # rather than _track_op. Surface all running ones so final upscales, music
+    # regeneration, narrator changes, and concurrent scene re-renders all appear.
+    for key, task in list(_film_tasks.items()):
+        op = _film_task_activity_op(key, task)
+        if op:
+            active_ops.append(op)
+    active_ops.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
+    op = dict(active_ops[0]) if active_ops else {}
 
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
     try:
@@ -3428,6 +3532,7 @@ def get_activity() -> dict:
 
     return {
         "current_op": op,
+        "active_ops": active_ops,
         "recent": log,
         "render_active": render_active,
         "render_pct": render_pct,
