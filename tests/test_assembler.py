@@ -68,6 +68,7 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             src.write_bytes(b"video")
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=3.0), \
                  mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
                  mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as comfy_upscale, \
                  mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
@@ -90,6 +91,41 @@ class AssemblerToolResolutionTests(unittest.TestCase):
                 timeout_seconds=123,
                 comfy_url="http://worker:8188",
             )
+
+    def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            def fake_concat(chunks, output_path):
+                self.assertEqual(len(chunks), 3)
+                output_path.write_bytes(b"joined")
+                return output_path
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=9.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch.object(assembler, "_extract_temporal_chunk") as extract, \
+                 mock.patch.object(assembler, "_concat_video_chunks", side_effect=fake_concat) as concat, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=lambda _src, dst, *_args, **_kw: dst) as comfy_upscale, \
+                 mock.patch.dict("os.environ", {
+                     "TEMPORAL_VIDEO_UPSCALER_CMD": "",
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "4",
+                 }, clear=False):
+                result = assembler.temporal_ai_upscale_video(
+                    src,
+                    out,
+                    1920,
+                    1080,
+                    timeout_seconds=123,
+                    comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(result, out)
+            self.assertEqual(extract.call_count, 3)
+            self.assertEqual(comfy_upscale.call_count, 3)
+            concat.assert_called_once()
 
 
 if __name__ == "__main__":
