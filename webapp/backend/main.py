@@ -4015,6 +4015,10 @@ def _generate_youtube_description(work_dir: str = "", title: str = "") -> str:
     suffix = (ss.get("description_suffix") or "").strip()
     if suffix and suffix not in str(desc):
         desc = f"{desc}\n\n{suffix}"
+    # Open-source attribution footer (per-style, defaults to crediting the repo).
+    attribution = (ss.get("attribution_description") or "").strip()
+    if attribution and attribution not in str(desc):
+        desc = f"{desc}\n\n{attribution}"
     return str(desc)
 
 
@@ -4128,7 +4132,9 @@ def _youtube_tags_for(wd: Path | None, cfg: dict) -> list[str]:
         voice = str(ss.get("voice") or "").strip()
         if voice and voice != gapp.F5TTS_DEFAULT_OPTION:
             extra.append(voice)
-        return _dedupe_cap_tags(topics + extra)
+        # Open-source attribution keyword tags (per-style, comma/newline list).
+        attribution = [t.strip() for t in re.split(r"[,\n]+", str(ss.get("attribution_youtube_tags") or "")) if t.strip()]
+        return _dedupe_cap_tags(topics + extra + attribution)
     except Exception:
         return []
 
@@ -4167,6 +4173,15 @@ def _x_hashtags_for(wd: Path | None, cfg: dict, limit: int = 3) -> str:
         out.append("#" + h)
         if len(out) >= limit:
             break
+    # Open-source attribution hashtag(s) — appended after the capped topic tags
+    # so they always land (per-style, defaults to #stephenspielbot).
+    ss = gapp.style_settings(cfg, _work_dir_style_name(wd))
+    for tok in re.split(r"[\s,]+", str(ss.get("attribution_hashtags") or "")):
+        h = _hashtagify(tok.lstrip("#"))
+        if not h or h.lower() in seen:
+            continue
+        seen.add(h.lower())
+        out.append("#" + h)
     return " ".join(out)
 
 
