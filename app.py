@@ -217,6 +217,9 @@ DEFAULT_CFG = {
     # This flat key mirrors the DEFAULT style's id list, like every other
     # STYLE_FIELD_TO_FLAT mirror. Empty by default, so styles behave as before.
     "default_character_ids": [],
+    # When set, a style opts into EVERY library character (incl. ones added
+    # later) instead of its hand-picked character_ids list — see _style_characters.
+    "default_auto_accept_characters": False,
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     "script_extra_instructions": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
@@ -319,6 +322,8 @@ STYLE_FIELD_TO_FLAT = {
     "visual_style":         "default_visual_style",
     # Which global characters (by id) this style opts into (see _ensure_characters)
     "character_ids":        "default_character_ids",
+    # Opt into EVERY library character automatically instead of character_ids
+    "auto_accept_characters": "default_auto_accept_characters",
     "video_style":          "default_video_style",
     "extra_instructions":   "script_extra_instructions",
     "title_style":          "title_style",
@@ -553,6 +558,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     for row in normalized:
         row["size_presets"] = _norm_size_presets(row.get("size_presets"))
         row["character_ids"] = _norm_character_ids(row.get("character_ids"), valid_char_ids)
+        row["auto_accept_characters"] = bool(row.get("auto_accept_characters"))
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
@@ -746,7 +752,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", extra_instructions="", description_suffix="",
-                   title_style="", voice="", voice_robotic=False, voice_speed=1.0, character_ids=[])
+                   title_style="", voice="", voice_robotic=False, voice_speed=1.0,
+                   character_ids=[], auto_accept_characters=False)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out
@@ -1627,10 +1634,17 @@ def _character_mentions(text: str, character: dict) -> bool:
 
 
 def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
-    """The global characters a style has opted into, in library order. Resolves
-    the style's character_ids against the shared cfg["characters"] library."""
-    ids = set(style_settings(cfg, style_name).get("character_ids") or [])
-    return [c for c in (cfg.get("characters") or []) if c.get("id") in ids]
+    """The global characters a style has opted into, in library order.
+
+    A style with auto_accept_characters set includes every library character
+    (so characters added later are picked up automatically); otherwise it
+    resolves its character_ids against the shared cfg["characters"] library."""
+    settings = style_settings(cfg, style_name)
+    chars = cfg.get("characters") or []
+    if settings.get("auto_accept_characters"):
+        return list(chars)
+    ids = set(settings.get("character_ids") or [])
+    return [c for c in chars if c.get("id") in ids]
 
 
 def _characters_for_scene(scene_text: str, cfg: dict, style_name: str) -> list[dict]:
