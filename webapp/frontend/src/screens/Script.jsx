@@ -10,6 +10,15 @@ const LB_BTN = {
   display: 'flex', alignItems: 'center', justifyContent: 'center',
 }
 
+// Read a picked file into a base64 data-URL for upload (same shape the backend's
+// image endpoints expect).
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(r.result)
+  r.onerror = () => reject(new Error('Could not read that file.'))
+  r.readAsDataURL(file)
+})
+
 export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
@@ -33,6 +42,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [coverEdit, setCoverEdit] = useState(false)
   const [coverEditErr, setCoverEditErr] = useState('')
 
+  // Characters tab — per-script cast the LLM identified (lives in the work dir,
+  // not the global catalogue). charBusy holds the char id currently mutating.
+  const [characters, setCharacters] = useState(job?.characters || [])
+  const [charBusy, setCharBusy] = useState('')
+  const [charMsg, setCharMsg] = useState('')
+  const [aliasDraft, setAliasDraft] = useState({})
+
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
   const [cur, setCur] = useState(0)
@@ -48,6 +64,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Sync state and switch to Cover when a new job loads
   useEffect(() => {
     setScenes(job?.scenes || [])
+    setCharacters(job?.characters || [])
+    setAliasDraft({})
+    setCharMsg('')
     setCur(0)
     setStyle(job?.style || '')
     setResolution(job?.resolution || meta.config?.resolution || meta.default_resolution || '')
@@ -104,6 +123,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       .catch((e) => setError(e.message))
       .finally(() => setGenAll(false))
   }, [job?.job_id])
+
+  // Character look images are rendered by a background task right after the
+  // script is created, so on the Characters tab keep polling briefly while any
+  // character is still missing its look. Skips while the user is mid-edit.
+  useEffect(() => {
+    if (view !== 'characters' || !job?.job_id) return
+    if (charBusy) return
+    if (!characters.some((c) => !c.has_image)) return
+    let alive = true
+    let tries = 0
+    let timer = null
+    const poll = async () => {
+      try {
+        const r = await api.scriptCharacters(job.job_id)
+        if (!alive) return
+        setCharacters(r.characters || [])
+        if ((r.characters || []).some((c) => !c.has_image) && tries++ < 12) timer = setTimeout(poll, 4000)
+      } catch { /* best-effort */ }
+    }
+    timer = setTimeout(poll, 4000)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [view, job?.job_id, characters, charBusy])
 
   // ── Scripts tab ──────────────────────────────────────────────────────────────
   // Drop a loaded/duplicated script into the editor (fills voice/resolution
@@ -381,6 +422,44 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message); setBusy('') }
   }
 
+  // ── Characters tab ─────────────────────────────────────────────────────────────
+  // Every mutating call returns the fresh { characters } list; charBusy locks the
+  // affected card while its op runs. Field edits are local until blur (saveCharacter).
+  const charOp = async (id, run) => {
+    setCharBusy(id); setError(''); setCharMsg('')
+    try { const r = await run(); setCharacters(r.characters || []) }
+    catch (e) { setError(e.message) } finally { setCharBusy('') }
+  }
+  const setCharField = (id, key, val) =>
+    setCharacters((arr) => arr.map((c) => (c.id === id ? { ...c, [key]: val } : c)))
+  const saveCharacter = (c) => charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, {
+    name: c.name || '', aliases: c.aliases || [], description: c.description || '',
+  }))
+  const addCharacter = () => charOp('add', () =>
+    api.addScriptCharacter(job.job_id, { name: '', aliases: [], description: '' }))
+  const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(job.job_id, c.id))
+  const genCharLook = (c) => charOp(c.id, () => api.generateScriptCharacterPortrait(job.job_id, c.id, ''))
+  const clearCharLook = (c) => charOp(c.id, () => api.clearScriptCharacterImage(job.job_id, c.id))
+  const uploadCharLook = (c, file) => file && charOp(c.id, async () =>
+    api.setScriptCharacterImage(job.job_id, c.id, file.name, await fileToDataUrl(file)))
+  const promoteCharacter = (c) => charOp(c.id, async () => {
+    const r = await api.promoteScriptCharacter(job.job_id, c.id)
+    setCharMsg(`Saved “${c.name || 'character'}” to your character catalogue.`)
+    return r
+  })
+  // Aliases edit as a comma-separated string; parse to an array only on blur.
+  const aliasValue = (c) => (aliasDraft[c.id] ?? (c.aliases || []).join(', '))
+  const commitAliases = (c) => {
+    const raw = aliasDraft[c.id]
+    setAliasDraft((d) => { const n = { ...d }; delete n[c.id]; return n })
+    if (raw === undefined) return
+    const aliases = raw.split(',').map((s) => s.trim()).filter(Boolean)
+    setCharField(c.id, 'aliases', aliases)
+    charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, {
+      name: c.name || '', aliases, description: c.description || '',
+    }))
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
     <div>
@@ -415,6 +494,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
               onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
           )}
+          {view === 'characters' && job && (
+            <Button variant="primary" icon="user-plus" disabled={!!charBusy} onClick={addCharacter}>
+              {charBusy === 'add' ? 'Adding…' : 'Add character'}
+            </Button>
+          )}
         </div>
       </div>
 
@@ -423,11 +507,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
       {view === 'cover' && coverMsg && <Banner tone="ok">{coverMsg}</Banner>}
+      {view === 'characters' && charMsg && <Banner tone="ok">{charMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
           { value: 'cover', label: 'Cover' },
+          { value: 'characters', label: 'Characters' },
           { value: 'scenes', label: 'Scenes' },
         ]} />
       </div>
@@ -675,6 +761,96 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               onApply={applyInpaint} onClose={() => setInpaint(false)} />
           )}
         </>
+      )}
+
+      {/* ── Characters tab ───────────────────────────────────────────────────── */}
+      {view === 'characters' && !job && (
+        <div className="bento">
+          <Card span={7} well>
+            <p className="body-1" style={{ margin: 0 }}>Load a script first to manage its characters.</p>
+            <div className="row gap-10 mt-16">
+              <Button variant="primary" icon="folder-open" onClick={() => setView('scripts')}>Browse scripts</Button>
+              <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {view === 'characters' && job && (
+        <div className="bento">
+          <Card span={12} well className="reveal reveal-d1">
+            <div className="row center gap-10">
+              <Icon name="user-group" style={{ color: 'var(--ink-3)' }} />
+              <span className="muted" style={{ fontSize: 12.5 }}>
+                The main characters for this video. Their name and look are woven into the scene images so they
+                stay consistent across the film. Edit them or accept as is — they stay with this script unless you
+                <strong> save one to your catalogue</strong> to reuse in future videos.
+              </span>
+            </div>
+          </Card>
+
+          {characters.length === 0 && (
+            <Card span={12} well className="reveal reveal-d2">
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+                No recurring characters were identified for this script. Click <strong>Add character</strong> to define one.
+              </p>
+            </Card>
+          )}
+
+          {characters.map((c, i) => {
+            const b = charBusy === c.id
+            return (
+              <Card key={c.id} span={6} padLg className={`reveal reveal-d${(i % 3) + 1}`}>
+                <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
+                  <div style={{ width: 132, flex: '0 0 auto' }}>
+                    <div style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '1 / 1', background: 'var(--paper-2)' }}>
+                      {c.has_image
+                        ? <img src={c.image_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                        : <div className={`gfill ${b ? 'skel' : 'g' + (i % 6)}`} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            {!b && <Icon name="user" style={{ color: 'var(--ink-3)', fontSize: 26 }} />}
+                          </div>}
+                    </div>
+                    <div className="stack gap-6 mt-10">
+                      <Button variant="ghost" size="sm" block icon="rotate-right" disabled={b} onClick={() => genCharLook(c)}>
+                        {b ? 'Painting…' : c.has_image ? 'Regenerate look' : 'Generate look'}
+                      </Button>
+                      <label className="btn btn--ghost btn--sm btn--block" style={{ cursor: b ? 'default' : 'pointer' }}>
+                        <Icon name="upload" /> Upload
+                        <input type="file" accept="image/*" hidden disabled={b}
+                          onChange={(e) => { uploadCharLook(c, e.target.files?.[0]); e.target.value = '' }} />
+                      </label>
+                      {c.has_image && (
+                        <Button variant="quiet" size="sm" block icon="trash-can" disabled={b} onClick={() => clearCharLook(c)}>Remove look</Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="stack gap-14" style={{ flex: 1, minWidth: 200 }}>
+                    <Field label="Name">
+                      <input className="input" value={c.name || ''}
+                        onChange={(e) => setCharField(c.id, 'name', e.target.value)}
+                        onBlur={() => saveCharacter(c)} />
+                    </Field>
+                    <Field label="Also called" hint="Comma-separated aliases the narration may use.">
+                      <input className="input" value={aliasValue(c)}
+                        onChange={(e) => setAliasDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+                        onBlur={() => commitAliases(c)} />
+                    </Field>
+                    <Field label="Appearance" hint="Fixed look — drawn the same way in every scene.">
+                      <textarea className="textarea" rows={4} value={c.description || ''}
+                        onChange={(e) => setCharField(c.id, 'description', e.target.value)}
+                        onBlur={() => saveCharacter(c)} />
+                    </Field>
+                    <div className="row gap-10 row--wrap">
+                      <Button variant="ghost" icon="bookmark" disabled={b || !(c.name || '').trim()} onClick={() => promoteCharacter(c)}>Save to catalogue</Button>
+                      <Button variant="quiet" icon="trash-can" disabled={b} onClick={() => removeCharacter(c)}>Delete</Button>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            )
+          })}
+        </div>
       )}
     </div>
   )
