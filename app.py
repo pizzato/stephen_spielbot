@@ -16,6 +16,7 @@ import logging
 import logging.handlers
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -1647,17 +1648,84 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     return [c for c in chars if c.get("id") in ids]
 
 
-def _characters_for_scene(scene_text: str, cfg: dict, style_name: str) -> list[dict]:
+# ── Per-script characters ────────────────────────────────────────────────────
+# A script can carry its OWN characters — identified by the LLM at generation
+# time (see llm.generate_script) and living entirely inside the work dir, NOT
+# the shared cfg["characters"] catalogue. They ride into that job's renders via
+# _job_characters and can be promoted into the catalogue on demand.
+
+def _script_characters_dir(work_dir: Path) -> Path:
+    """Directory holding a script's own character reference images."""
+    return Path(work_dir) / "characters"
+
+
+def _script_characters_path(work_dir: Path) -> Path:
+    """The script's own character list (sidecar of script.json)."""
+    return Path(work_dir) / "characters.json"
+
+
+def _read_script_characters(work_dir: Path) -> list[dict]:
+    """The script's own characters (normalized), or [] when none are saved."""
+    try:
+        data = json.loads(_script_characters_path(work_dir).read_text())
+    except (OSError, ValueError):
+        return []
+    return _norm_characters(data)
+
+
+def _write_script_characters(work_dir: Path, characters) -> list[dict]:
+    """Normalize and persist the script's own characters; returns the saved list."""
+    norm = _norm_characters(characters)
+    path = _script_characters_path(work_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(norm, indent=2))
+    return norm
+
+
+def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
+    """Absolute path of a script character's reference image, or None if the name
+    is blank. Basename-only (guards against path traversal), resolved inside the
+    work dir rather than the global characters directory."""
+    name = Path(str(filename or "")).name
+    return _script_characters_dir(work_dir) / name if name else None
+
+
+def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:
+    """The characters a single job can use: the style's opted-in catalogue
+    characters plus the script's own (per-script) characters. Each entry carries
+    a resolved absolute reference-image path under '_ref_path', so callers need
+    not know where a character's image is stored. A per-script character shadows
+    a catalogue character of the same name (the editor's edits win). Returns fresh
+    shallow copies so '_ref_path' never leaks back into persisted config."""
+    out: list[dict] = []
+    for c in _style_characters(cfg, style_name):
+        c = dict(c)
+        c["_ref_path"] = _character_image_path(c.get("ref_image"))
+        out.append(c)
+    if work_dir is not None:
+        for c in _read_script_characters(work_dir):
+            c = dict(c)
+            c["_ref_path"] = _script_character_image_path(work_dir, c.get("ref_image"))
+            name = (c.get("name") or "").strip().lower()
+            out = [m for m in out if (m.get("name") or "").strip().lower() != name]
+            out.append(c)
+    return out
+
+
+def _characters_for_scene(scene_text: str, cfg: dict, style_name: str,
+                          work_dir: Path | None = None) -> list[dict]:
     """Enabled characters (with a description) whose name/alias appears in the
     scene text. The single source of truth for both the text injection below and
-    Phase 2's reference-image matching."""
-    chars = _style_characters(cfg, style_name)
+    Phase 2's reference-image matching. Includes the script's own characters when
+    a work_dir is given."""
+    chars = _job_characters(cfg, style_name, work_dir)
     return [c for c in chars
             if c.get("enabled", True) and c.get("description")
             and _character_mentions(scene_text, c)]
 
 
-def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str) -> str:
+def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                       work_dir: Path | None = None) -> str:
     """Append each matched character's canonical appearance to the image prompt so
     the same subject looks consistent across scenes, even if the LLM paraphrased.
 
@@ -1667,7 +1735,7 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
     scene_text = f"{base_prompt} {scene_text}"
     clauses = []
-    for c in _characters_for_scene(scene_text, cfg, style_name):
+    for c in _characters_for_scene(scene_text, cfg, style_name, work_dir):
         desc = c["description"]
         if desc.lower() not in base_prompt.lower():
             clauses.append(f"{c['name']}: {desc}")
@@ -1678,12 +1746,14 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     return f"{base_prompt.rstrip()}{sep}{tail}"
 
 
-def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name: str) -> list[Path]:
+def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                            work_dir: Path | None = None) -> list[Path]:
     """Existing reference images for the characters featured in this scene, capped
     at _MAX_SCENE_REFERENCES. A character contributes its image when it's enabled,
     has a stored ref_image, and its name/alias appears in the scene (Phase 2 —
-    FLUX.2 reference conditioning). Empty list when nothing matches."""
-    chars = _style_characters(cfg, style_name)
+    FLUX.2 reference conditioning). Includes the script's own characters when a
+    work_dir is given. Empty list when nothing matches."""
+    chars = _job_characters(cfg, style_name, work_dir)
     scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
     scene_text = f"{base_prompt} {scene_text}"
     paths = []
@@ -1692,7 +1762,7 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
             continue
         if not _character_mentions(scene_text, c):
             continue
-        p = _character_image_path(c["ref_image"])
+        p = c.get("_ref_path") or _character_image_path(c.get("ref_image"))
         if p and p.exists():
             paths.append(p)
     if len(paths) > _MAX_SCENE_REFERENCES:
@@ -1777,6 +1847,203 @@ def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
     return load_config()
 
 
+def _generate_script_portrait(work_dir: Path, cfg: dict, style_name: str, char: dict,
+                              extra_prompt: str = "",
+                              worker_pool: "WorkerPool | None" = None) -> Path:
+    """Render a look portrait for one per-script character into the work dir and
+    set its ref_image (basename). Mutates *char* in place; the caller persists
+    characters.json. The style's image engine + visual look anchor the portrait,
+    mirroring the global generate_character_portrait."""
+    parts = [p for p in (char.get("name"), char.get("description"), (extra_prompt or "").strip()) if p]
+    prompt = ", ".join(parts) or char.get("name") or "character portrait"
+    combined = _compose_visual_style("", cfg, style_name)
+    full = f"{combined}. {prompt}" if combined else prompt
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    d = _script_characters_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{char['id']}.png"
+    own_pool = worker_pool is None
+    if own_pool:
+        urls = _preview_worker_urls()
+        if not urls:
+            raise RuntimeError("No cluster workers reachable to generate a portrait.")
+        worker_pool = WorkerPool(urls)
+    url = worker_pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        worker_pool.release(url)
+    char["ref_image"] = out.name
+    return out
+
+
+def generate_script_character_portrait(work_dir, char_id: str, style_name: str,
+                                       extra_prompt: str = "") -> list[dict]:
+    """Regenerate one per-script character's look (editor 'Generate look'). Needs
+    a worker. Persists characters.json and returns the saved list."""
+    work_dir = Path(work_dir)
+    cfg = load_config()
+    chars = _read_script_characters(work_dir)
+    char = next((c for c in chars if c.get("id") == char_id), None)
+    if char is None:
+        raise ValueError(f"Unknown character {char_id!r} for this script.")
+    _generate_script_portrait(work_dir, cfg, style_name, char, extra_prompt)
+    return _write_script_characters(work_dir, chars)
+
+
+def generate_all_script_portraits(work_dir, style_name: str) -> int:
+    """Best-effort: render a look for every per-script character that lacks one.
+    Runs in a background thread right after script creation, so a missing worker
+    or a single failure just leaves that character imageless (the editor offers a
+    manual 'Generate look'). Persists after each success. Returns the count made."""
+    work_dir = Path(work_dir)
+    cfg = load_config()
+    chars = _read_script_characters(work_dir)
+    todo = [c for c in chars if c.get("description") and not c.get("ref_image")]
+    if not todo:
+        return 0
+    urls = _preview_worker_urls()
+    if not urls:
+        logger.info("No workers reachable — skipping script portraits for %s", work_dir)
+        return 0
+    pool = WorkerPool(urls)
+    made = 0
+    for char in todo:
+        try:
+            _generate_script_portrait(work_dir, cfg, style_name, char, worker_pool=pool)
+            _write_script_characters(work_dir, chars)
+            made += 1
+        except Exception as exc:
+            logger.warning("Script portrait failed for %r: %s", char.get("name"), exc)
+    return made
+
+
+def promote_script_character(work_dir, char_id: str, style_name: str = "") -> dict:
+    """Copy a per-script character into the GLOBAL catalogue (with its look image)
+    and opt the given style into it, so the user can reuse it across future
+    videos. The per-script copy stays put — this is a one-way "save to catalogue".
+    Returns the reloaded config."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    src = next((c for c in chars if c.get("id") == char_id), None)
+    if src is None:
+        raise ValueError(f"Unknown character {char_id!r} for this script.")
+    cfg = load_config()
+    library = cfg.setdefault("characters", [])
+    new_id = f"char_{uuid.uuid4().hex[:8]}"
+    entry = {
+        "id": new_id,
+        "name": src.get("name", ""),
+        "aliases": list(src.get("aliases") or []),
+        "description": src.get("description", ""),
+        "ref_image": "",
+        "ref_strength": src.get("ref_strength", 1.0),
+        "enabled": True,
+    }
+    # Copy the look image into the global characters dir under the new id.
+    sp = _script_character_image_path(work_dir, src.get("ref_image"))
+    if sp and sp.exists():
+        d = _characters_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        dest = d / f"{new_id}.png"
+        try:
+            shutil.copy2(sp, dest)
+            entry["ref_image"] = dest.name
+        except OSError as exc:
+            logger.warning("Could not copy portrait while promoting %r: %s", entry["name"], exc)
+    library.append(entry)
+    # Opt the current style into the new catalogue character so it's used again.
+    # Mutate the real style dict in cfg["styles"] (style_settings returns a copy).
+    if style_name:
+        target = next((s for s in cfg.get("styles", [])
+                       if isinstance(s, dict) and s.get("name") == style_name), None)
+        if target is not None and not target.get("auto_accept_characters"):
+            ids = list(target.get("character_ids") or [])
+            if new_id not in ids:
+                ids.append(new_id)
+                target["character_ids"] = ids
+    save_config(cfg)
+    return load_config()
+
+
+def _find_script_character(chars: list[dict], char_id: str) -> dict:
+    """The per-script character with *char_id*, raising ValueError if unknown."""
+    char = next((c for c in chars if c.get("id") == char_id), None)
+    if char is None:
+        raise ValueError(f"Unknown character {char_id!r} for this script.")
+    return char
+
+
+def add_script_character(work_dir, name: str = "", aliases=None, description: str = "") -> list[dict]:
+    """Append a manually-created character to the script and return the saved list."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    chars.append({"name": name, "aliases": list(aliases or []), "description": description})
+    return _write_script_characters(work_dir, chars)
+
+
+def update_script_character(work_dir, char_id: str, *, name=None, aliases=None,
+                            description=None) -> list[dict]:
+    """Patch a per-script character's editable fields; returns the saved list."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    char = _find_script_character(chars, char_id)
+    if name is not None:
+        char["name"] = name
+    if aliases is not None:
+        char["aliases"] = aliases
+    if description is not None:
+        char["description"] = description
+    return _write_script_characters(work_dir, chars)
+
+
+def delete_script_character(work_dir, char_id: str) -> list[dict]:
+    """Remove a per-script character (and its look image); returns the saved list."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    char = next((c for c in chars if c.get("id") == char_id), None)
+    p = _script_character_image_path(work_dir, char.get("ref_image")) if char else None
+    if p and p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    return _write_script_characters(work_dir, [c for c in chars if c.get("id") != char_id])
+
+
+def set_script_character_image(work_dir, char_id: str, raw: bytes) -> list[dict]:
+    """Store uploaded bytes as a per-script character's look image; returns list."""
+    from PIL import Image
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    char = _find_script_character(chars, char_id)
+    d = _script_characters_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{char_id}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    char["ref_image"] = out.name
+    return _write_script_characters(work_dir, chars)
+
+
+def clear_script_character_image(work_dir, char_id: str) -> list[dict]:
+    """Delete a per-script character's look image and clear the field."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    char = _find_script_character(chars, char_id)
+    p = _script_character_image_path(work_dir, char.get("ref_image"))
+    if p and p.exists():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+    char["ref_image"] = ""
+    return _write_script_characters(work_dir, chars)
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,
@@ -1835,11 +2102,13 @@ def _generate_active_scene_preview(
     base_prompt = image_prompt or scene.get("image_prompt") or title
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it.
-    base_prompt = _inject_characters(base_prompt, scene, cfg, style_name)
+    # work_dir folds in the script's own (per-script) characters, not just the
+    # global catalogue ones the style opted into.
+    base_prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
     # Anchor featured characters to their reference image (FLUX.2 only; the engine
     # ignores these otherwise).
-    reference_images = _scene_reference_images(base_prompt, scene, cfg, style_name)
+    reference_images = _scene_reference_images(base_prompt, scene, cfg, style_name, work_dir)
 
     url = worker_pool.acquire()
     try:

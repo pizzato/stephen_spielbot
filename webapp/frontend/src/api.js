@@ -68,6 +68,18 @@ export const api = {
   clearCharacterImage: (charId) => req('POST', '/characters/image/clear', { char_id: charId }),
   generateCharacterPortrait: (charId, extraPrompt) => req('POST', '/characters/portrait', { char_id: charId, extra_prompt: extraPrompt || '' }),
 
+  // Per-script characters (main-character consistency). Job-scoped: they live in
+  // the script's own work dir, separate from the global catalogue above. Each
+  // mutating call returns the fresh { characters } list. `data` is base64/data-URL.
+  scriptCharacters: (jobId) => req('GET', `/jobs/${jobId}/characters`),
+  addScriptCharacter: (jobId, body) => req('POST', `/jobs/${jobId}/characters`, body),
+  updateScriptCharacter: (jobId, charId, body) => req('PUT', `/jobs/${jobId}/characters/${charId}`, body),
+  deleteScriptCharacter: (jobId, charId) => req('DELETE', `/jobs/${jobId}/characters/${charId}`),
+  setScriptCharacterImage: (jobId, charId, filename, data) => req('POST', `/jobs/${jobId}/characters/${charId}/image`, { filename, data }),
+  clearScriptCharacterImage: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/clear`),
+  generateScriptCharacterPortrait: (jobId, charId, extraPrompt) => req('POST', `/jobs/${jobId}/characters/${charId}/portrait`, { extra_prompt: extraPrompt || '' }),
+  promoteScriptCharacter: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/promote`),
+
   // Script generation is several Claude calls (tens of seconds). Holding one long
   // POST open meant any blip on that connection surfaced as a "NetworkError" even
   // though the script was created — so kick it off, then poll the status (short

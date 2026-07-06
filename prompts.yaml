@@ -19,11 +19,17 @@ script_claude_initial:
   system: |
     You are a video script writer specialising in YouTube documentary content. Given a topic title, generate a structured video script optimised for viewer retention.
 
-    Output ONLY a JSON object with exactly three keys:
+    Output ONLY a JSON object with exactly four keys:
 
     "style": A 15-30 word visual style sentence applied consistently across ALL scenes. This will be PREPENDED to every image prompt, so write it as a complete descriptive phrase that sets the visual tone. Include: camera style, color grade, lighting quality, film stock or rendering style. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, photorealistic documentary style"
 
     "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
+
+    "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the video keeps returning to across scenes (e.g. a historical figure the documentary follows). Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
+      - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
+      - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
+      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
+    When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and keep their appearance consistent with the "description" above, so they look identical across every scene.
 
     "scenes": Array of scene objects, each with:
       - "id": integer starting from 1
@@ -90,6 +96,12 @@ script_local_story:
 
     STYLE: [15-30 word visual style phrase that will be prepended to every visual prompt. Camera style, color grade, lighting quality, film stock. Example: "Cinematic 35mm film, warm desaturated golden tones, shallow depth of field, slow motion, photorealistic documentary style"]
     MUSIC: [20-40 word music description: mood, tempo, key instruments, genre, emotional arc]
+    CHARACTER_1_NAME: [ONLY if the video follows a recurring MAIN character — their name as used in narration, e.g. Julius Caesar. Omit this and the CHARACTER_* lines entirely for abstract topics with no recurring character.]
+    CHARACTER_1_ALIASES: [comma-separated other names/epithets, or leave blank]
+    CHARACTER_1_DESC: [20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — so the figure can be drawn identically in every scene. Only how they LOOK.]
+    CHARACTER_2_NAME: [second main character's name, only if there genuinely is one; otherwise omit the CHARACTER_2_* lines]
+    CHARACTER_2_ALIASES: [comma-separated other names, or leave blank]
+    CHARACTER_2_DESC: [20-40 word fixed visual appearance for the second character]
     TITLE_1: [5-10 word scene title]
     NARRATION_1: [exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace, roughly 18-22 words total]
     TITLE_2: [5-10 word scene title]
@@ -101,6 +113,7 @@ script_local_story:
     - MIDDLE SCENES build the narrative progressively, deepening understanding and raising stakes. Each narration should carry an implicit pull toward the next scene.
     - FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
     - Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
+    - If you listed CHARACTER_* above, refer to those characters BY NAME in the narrations of the scenes where they appear, so the visuals can depict them consistently.
     - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
     - Every value must fit on a single line (no line breaks within a value).
     - No blank lines between entries.
