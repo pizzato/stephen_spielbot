@@ -352,7 +352,7 @@ class QueueItemStyleTests(TempConfigCase):
             updates.setdefault(item_id, {}).update(kw)
 
         with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "B-vision")) as gen, \
+                               return_value=(scenes, "calm piano", "B-vision", [])) as gen, \
              mock.patch.object(backend.yt, "load_queue", return_value=[dict(item)]), \
              mock.patch.object(backend.yt, "update_queue_item", side_effect=fake_update), \
              mock.patch.object(backend.gapp, "_launch_generation_job") as launch:
@@ -427,7 +427,7 @@ class DescriptionSuffixTests(TempConfigCase):
         scenes = [backend.Scene(id=1, title="One", image_prompt="i", video_prompt="v",
                                 narration="n")]
         with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "A visual")), \
+                               return_value=(scenes, "calm piano", "A visual", [])), \
              mock.patch.object(backend.threading, "Thread") as Thread:
             backend._do_script_generate(backend.GenerateScriptBody(
                 video_title="Threaded", topic="Threaded", n_scenes=1))
