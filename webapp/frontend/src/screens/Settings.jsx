@@ -1379,12 +1379,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               Pick which recurring characters can appear in this style. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos.
             </div>
             <div className="stack gap-10 mt-16">
-              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add some under the <strong>Characters</strong> tab, then enable them here.</div>}
-              {chars.filter((c) => c.id).map((c) => (
-                <Check key={c.id} checked={styleCharIds.includes(c.id)} onChange={(v) => toggleStyleChar(c.id, v)}
-                  label={`${c.name || '(unnamed)'}${c.enabled === false ? ' — disabled in the library' : ''}${c.description ? ` · ${c.description.slice(0, 70)}${c.description.length > 70 ? '…' : ''}` : ''}`} />
-              ))}
-              {chars.some((c) => !c.id) && <div className="muted" style={{ fontSize: 12 }}>Save settings to enable newly added characters here.</div>}
+              <Check checked={!!st.auto_accept_characters} onChange={(v) => setStyleField('auto_accept_characters', v)}
+                label="Accept all characters automatically — every character in the library, including ones added later, can appear in this style." />
+              {st.auto_accept_characters ? (
+                <div className="muted" style={{ fontSize: 12 }}>All {chars.filter((c) => c.id && c.enabled !== false).length} character(s) in the library are accepted. Turn this off to pick specific ones.</div>
+              ) : (<>
+                {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add some under the <strong>Characters</strong> tab, then enable them here.</div>}
+                {chars.filter((c) => c.id).map((c) => (
+                  <Check key={c.id} checked={styleCharIds.includes(c.id)} onChange={(v) => toggleStyleChar(c.id, v)}
+                    label={`${c.name || '(unnamed)'}${c.enabled === false ? ' — disabled in the library' : ''}${c.description ? ` · ${c.description.slice(0, 70)}${c.description.length > 70 ? '…' : ''}` : ''}`} />
+                ))}
+                {chars.some((c) => !c.id) && <div className="muted" style={{ fontSize: 12 }}>Save settings to enable newly added characters here.</div>}
+              </>)}
             </div>
           </Card>
 
