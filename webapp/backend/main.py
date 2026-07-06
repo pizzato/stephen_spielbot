@@ -167,6 +167,26 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     return out
 
 
+def _character_to_json(wd: Path, c: dict) -> dict:
+    """Serialize one per-script character for the editor's Characters tab,
+    attaching a cache-busted image URL when its look image exists on disk."""
+    img = gapp._script_character_image_path(wd, c.get("ref_image"))
+    has_image = bool(img and img.exists() and img.stat().st_size > 0)
+    return {
+        "id": c.get("id", ""),
+        "name": c.get("name", ""),
+        "aliases": c.get("aliases") or [],
+        "description": c.get("description", ""),
+        "has_image": has_image,
+        "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has_image else "",
+    }
+
+
+def _script_characters_payload(wd: Path) -> list[dict]:
+    """All of a script's own characters, serialized for the frontend."""
+    return [_character_to_json(wd, c) for c in gapp._read_script_characters(wd)]
+
+
 # ── activity tracker ─────────────────────────────────────────────────────────
 
 _op_lock = threading.Lock()
@@ -514,6 +534,125 @@ def characters_portrait(body: CharacterPortrait) -> dict:
     return _character_response(cfg)
 
 
+# ── Per-script characters (main-character consistency) ───────────────────────
+# A script carries its OWN cast, identified by the LLM at generation time and
+# living in the work dir (not the global catalogue). The editor's Characters tab
+# edits them here; "Save to catalogue" promotes one into the shared library.
+
+class ScriptCharacterCreate(BaseModel):
+    name: str = ""
+    aliases: list[str] = []
+    description: str = ""
+
+
+class ScriptCharacterUpdate(BaseModel):
+    name: str | None = None
+    aliases: list[str] | None = None
+    description: str | None = None
+
+
+class ScriptCharacterImage(BaseModel):
+    filename: str = ""
+    data: str
+
+
+class ScriptCharacterPortrait(BaseModel):
+    extra_prompt: str = ""
+
+
+def _job_wd_or_404(job_id: str) -> Path:
+    wd = gapp._job_work_dir(job_id)
+    if wd is None or not Path(wd).exists() or not _safe_under(Path(wd), gapp.OUTPUT_DIR):
+        raise HTTPException(404, "Script not found.")
+    return Path(wd)
+
+
+def _job_style_name(job_id: str) -> str:
+    return _script_source_meta(job_id, "")[3]
+
+
+def _script_chars_ok(wd: Path) -> dict:
+    return {"ok": True, "characters": _script_characters_payload(wd)}
+
+
+@api.get("/api/jobs/{job_id}/characters")
+def list_script_characters(job_id: str) -> dict:
+    return _script_chars_ok(_job_wd_or_404(job_id))
+
+
+@api.post("/api/jobs/{job_id}/characters")
+def create_script_character(job_id: str, body: ScriptCharacterCreate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.add_script_character(wd, body.name, body.aliases, body.description)
+    return _script_chars_ok(wd)
+
+
+@api.put("/api/jobs/{job_id}/characters/{char_id}")
+def edit_script_character(job_id: str, char_id: str, body: ScriptCharacterUpdate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.update_script_character(wd, char_id, name=body.name, aliases=body.aliases,
+                                     description=body.description)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.delete("/api/jobs/{job_id}/characters/{char_id}")
+def remove_script_character(job_id: str, char_id: str) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.delete_script_character(wd, char_id)
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/image")
+def set_script_character_image(job_id: str, char_id: str, body: ScriptCharacterImage) -> dict:
+    wd = _job_wd_or_404(job_id)
+    raw = _decode_image(body.data)
+    try:
+        gapp.set_script_character_image(wd, char_id, raw)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/image/clear")
+def clear_script_character_image(job_id: str, char_id: str) -> dict:
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.clear_script_character_image(wd, char_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/portrait")
+def script_character_portrait(job_id: str, char_id: str, body: ScriptCharacterPortrait) -> dict:
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.generate_script_character_portrait(wd, char_id, _job_style_name(job_id), body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/promote")
+def promote_script_character(job_id: str, char_id: str) -> dict:
+    """Save a per-script character into the global catalogue and opt this job's
+    style into it (non-destructive — the script keeps its own copy)."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        cfg = gapp.promote_script_character(wd, char_id, _job_style_name(job_id))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except RuntimeError as e:
+        raise HTTPException(503, str(e))
+    return {"ok": True, "config": gapp.public_config(cfg),
+            "characters": _script_characters_payload(wd)}
+
+
 class VoiceTest(BaseModel):
     voice: str = ""
     robotic: bool = False
@@ -809,7 +948,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
-            scenes, music_desc, style = generate_script(
+            scenes, music_desc, style, characters = generate_script(
                 topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
             )
@@ -833,6 +972,19 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         for s in scenes
     ]
     gapp._persist_script_snapshot(work_dir, scenes_list)
+
+    # Persist the 0-2 main characters the LLM identified for THIS script (living
+    # in the work dir, not the global catalogue) and render their look images in
+    # the background so the editor's Characters tab shows them ready to accept or
+    # edit. Best-effort: skipped/partial when no worker is up (editor offers a
+    # manual "Generate look").
+    saved_characters = gapp._write_script_characters(work_dir, characters)
+    if saved_characters:
+        threading.Thread(
+            target=gapp.generate_all_script_portraits,
+            args=(str(work_dir), ss["name"]),
+            daemon=True,
+        ).start()
 
     store = DurableStore.default()
     try:
@@ -864,6 +1016,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "style_name": ss["name"],
         "music_desc": music_desc,
         "scenes": [_scene_to_json(s, work_dir) for s in scenes_list],
+        "characters": _script_characters_payload(work_dir),
     }
     # Attach the script to the queue. Auto-approve enqueues a fresh slot (and may
     # auto-start a render). Editing a queued request (queue_item_id set) links the
@@ -977,6 +1130,7 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
         "voice_robotic": bool(ss.get("voice_robotic", False)),
         "resolution": ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
         "scenes": [_scene_to_json(r, wd) for r in rows],
+        "characters": _script_characters_payload(wd),
     }
 
 
@@ -1037,10 +1191,15 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
             sp = src / suffix
             if sp.exists():
                 shutil.copy2(sp, new_wd / suffix)
-    for extra in ("description.txt", "cover.png"):
+    for extra in ("description.txt", "cover.png", "characters.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
+    # Carry the per-script character look images so the duplicate keeps the same
+    # cast (characters.json copied above references these by basename).
+    src_chars = gapp._script_characters_dir(src)
+    if src_chars.is_dir():
+        shutil.copytree(src_chars, gapp._script_characters_dir(new_wd), dirs_exist_ok=True)
 
     return _register_script_into(new_wd, scenes_list, video_title=title,
                                  style=style, music_desc=music_desc, style_name=style_name)

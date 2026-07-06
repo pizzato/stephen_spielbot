@@ -61,6 +61,63 @@ class Scene:
 
 _CLAUDE_BATCH_SIZE = 10  # max scenes per API call
 
+# A video centres on at most one or two recurring figures; cap what we keep.
+_MAX_MAIN_CHARACTERS = 2
+
+
+def _norm_identified_characters(raw_list) -> list[dict]:
+    """Coerce the LLM's identified main characters into {name, aliases, description}.
+
+    Drops entries without a name, coerces aliases to a clean string list (accepts
+    a comma-separated string too), and caps the list at _MAX_MAIN_CHARACTERS. An
+    empty/invalid input yields [] — meaning "this video has no recurring
+    character", which leaves the rest of the pipeline unchanged."""
+    out: list[dict] = []
+    for raw in (raw_list if isinstance(raw_list, list) else []):
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            continue
+        aliases = raw.get("aliases")
+        if isinstance(aliases, str):
+            aliases = aliases.split(",")
+        aliases = [str(a).strip() for a in (aliases or []) if str(a).strip()]
+        out.append({
+            "name": name,
+            "aliases": aliases,
+            "description": str(raw.get("description") or "").strip(),
+        })
+        if len(out) >= _MAX_MAIN_CHARACTERS:
+            break
+    return out
+
+
+def _identified_sheet(chars: list[dict]) -> str:
+    """A RECURRING CHARACTERS block for characters just established for this video,
+    appended to the later batches / visual prompts so the same figure is drawn
+    consistently after the batch that introduced them. "" when none have a
+    description."""
+    rows = [c for c in chars if c.get("name") and c.get("description")]
+    if not rows:
+        return ""
+    lines = "\n".join(f"- {c['name']}: {c['description']}" for c in rows)
+    return (
+        "RECURRING CHARACTERS — refer to each BY NAME when a scene features them and "
+        "describe their appearance EXACTLY as written here every time, so they look "
+        "identical across scenes:\n"
+        f"{lines}"
+    )
+
+
+def _merge_character_note(character_note: str, identified: list[dict]) -> str:
+    """Fold freshly-identified main characters into the character note that rides
+    along in continuation/visual prompts, preserving any opted-in catalogue sheet."""
+    extra = _identified_sheet(identified)
+    if not extra:
+        return character_note
+    return f"{character_note}\n{extra}" if character_note else f"\n{extra}"
+
 
 def _parse_claude_response(content: str, label: str):
     """Strip fences, remove trailing commas, parse JSON. Raises RuntimeError on failure."""
@@ -156,7 +213,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str,
                      video_title: str | None = None,
                      video_style_hint: str | None = None,
-                     character_sheet: str | None = None) -> tuple[list[Scene], str, str]:
+                     character_sheet: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -207,6 +264,11 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
     scenes_data = outer.get("scenes", [])
     if not scenes_data:
         raise RuntimeError("Claude returned empty scene list")
+
+    # Main characters the model established for this video (0-2). Fold them into
+    # the note carried to later batches so scenes past the first stay consistent.
+    identified = _norm_identified_characters(outer.get("characters"))
+    character_note = _merge_character_note(character_note, identified)
 
     scenes = [
         Scene(
@@ -271,7 +333,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after Claude fill — used title", s.id)
-    return final_scenes, music_desc, style
+    return final_scenes, music_desc, style, identified
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -384,13 +446,25 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
     logger.debug("Story raw (%d chars):\n%s", len(raw), raw[:800])
     style  = _get_field(raw, "STYLE")
     music  = _get_field(raw, "MUSIC")
+    characters = []
+    for i in range(1, _MAX_MAIN_CHARACTERS + 1):
+        cname = _get_field(raw, f"CHARACTER_{i}_NAME")
+        if not cname:
+            continue
+        calias = _get_field(raw, f"CHARACTER_{i}_ALIASES")
+        aliases = [a.strip() for a in calias.split(",") if a.strip()] if calias else []
+        characters.append({
+            "name": cname,
+            "aliases": aliases,
+            "description": _get_field(raw, f"CHARACTER_{i}_DESC"),
+        })
     scenes = []
     for i in range(1, n_scenes + 1):
         title_val = _get_field(raw, f"TITLE_{i}")
         narr_val  = _get_field(raw, f"NARRATION_{i}")
         if title_val or narr_val:
             scenes.append({"id": i, "title": title_val, "narration": narr_val})
-    result = {"style": style, "music": music, "scenes": scenes}
+    result = {"style": style, "music": music, "scenes": scenes, "characters": characters}
     if not scenes:
         raise RuntimeError(f"Story call returned no scenes.\nRaw response:\n{raw[:600]}")
     return result
@@ -501,7 +575,7 @@ def _local_generate(title: str, n_scenes: int,
                     style_hint: str | None,
                     video_title: str | None = None,
                     video_style_hint: str | None = None,
-                    character_sheet: str | None = None) -> tuple[list[Scene], str, str]:
+                    character_sheet: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -519,6 +593,12 @@ def _local_generate(title: str, n_scenes: int,
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
     outlines   = story["scenes"]
 
+    # Main characters the story stage established (0-2). Fold them into the sheet
+    # the per-scene visual stage sees so each scene's IMAGE prompt names them and
+    # describes their appearance consistently.
+    identified   = _norm_identified_characters(story.get("characters"))
+    visual_sheet = _merge_character_note(character_sheet or "", identified).strip() or None
+
     # Critical: fill any empty narrations BEFORE visual generation so the image/video
     # prompts get proper context. Scene 1 is particularly prone to being left blank.
     _fill_empty_outlines_local(outlines, title, video_title, url, model)
@@ -533,7 +613,7 @@ def _local_generate(title: str, n_scenes: int,
             outline.get("narration", ""),
             url=url, model=model,
             video_style_hint=video_style_hint,
-            character_sheet=character_sheet,
+            character_sheet=visual_sheet,
         )
         return outline["id"], img_p, vid_p
 
@@ -563,7 +643,7 @@ def _local_generate(title: str, n_scenes: int,
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still had empty narration at assembly — used title", s.id)
 
-    return scenes, music_desc, style
+    return scenes, music_desc, style, identified
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -577,8 +657,8 @@ def generate_script(
     video_title: str | None = None,
     video_style_hint: str | None = None,
     character_sheet: str | None = None,
-) -> tuple[list[Scene], str, str]:
-    """Return (scenes, music_description, style).
+) -> tuple[list[Scene], str, str, list[dict]]:
+    """Return (scenes, music_description, style, characters).
 
     Backend is chosen from config: llm_backend = "claude" | "local".
     video_title is the short YouTube title; title is the full topic/description.
@@ -587,6 +667,10 @@ def generate_script(
     character_sheet is a pre-formatted block describing recurring characters and
     their fixed appearance, injected into every batch/scene so named characters
     look consistent (see app._character_sheet).
+    characters is the list of 0-2 main characters the model identified for THIS
+    video, each {name, aliases, description}; [] when the topic has no recurring
+    character. These are per-script (not the global catalogue) — the caller
+    persists and can later promote them (see app._read/_write_script_characters).
     """
     cfg     = _load_cfg()
     backend = cfg.get("llm_backend", "local")
