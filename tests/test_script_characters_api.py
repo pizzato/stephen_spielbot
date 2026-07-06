@@ -1,0 +1,112 @@
+"""End-to-end backend tests for the per-script character endpoints.
+
+Drives the real FastAPI app: generate a script (LLM mocked to identify a
+character), then exercise the job-scoped Characters CRUD + promote the editor's
+tab uses. No workers, so portrait generation is expected to 503."""
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import yaml
+from fastapi.testclient import TestClient
+
+import app as gapp
+from pipeline.llm import Scene
+from webapp.backend import main as backend
+from test_styles import _style
+
+
+class ScriptCharacterApiTests(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(prefix="spielbot-charapi-")
+        self.addCleanup(self._tmp.cleanup)
+        tmp = Path(self._tmp.name)
+        self.config_file = tmp / "config" / "config.yaml"
+        self.config_file.parent.mkdir(parents=True)
+        self.output_dir = tmp / "videos"
+        self.output_dir.mkdir()
+        for attr, value in [("CONFIG_FILE", self.config_file),
+                            ("VOICES_DIR", self.config_file.parent / "voices"),
+                            ("OUTPUT_DIR", self.output_dir)]:
+            p = mock.patch.object(gapp, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db = mock.patch.dict(os.environ, {"VIDEO_GEN_DB": str(tmp / "orchestrator.sqlite3")})
+        db.start()
+        self.addCleanup(db.stop)
+        self.config_file.write_text(yaml.safe_dump({
+            "styles": [_style("Hero", character_ids=[])],
+            "default_style": "Hero", "characters": [], "characters_migrated_v2": True,
+        }))
+        self.client = TestClient(backend.api)
+
+    def _make_job(self, characters):
+        scene = Scene(id=1, title="T", image_prompt="Caesar stands.", video_prompt="v", narration="n")
+        with mock.patch.object(backend, "generate_script",
+                               return_value=([scene], "music", "vis", characters)), \
+             mock.patch.object(backend, "_describe_in_background"):
+            res = backend._do_script_generate(backend.GenerateScriptBody(
+                topic="Julius Caesar", n_scenes=1, style_name="Hero"))
+        return res
+
+    def test_generate_persists_and_lists_identified_character(self):
+        res = self._make_job([{"name": "Julius Caesar", "aliases": ["Caesar"],
+                               "description": "a lean Roman general in a red toga"}])
+        self.assertEqual(len(res["characters"]), 1)
+        job_id = res["job_id"]
+        r = self.client.get(f"/api/jobs/{job_id}/characters")
+        self.assertEqual(r.status_code, 200)
+        chars = r.json()["characters"]
+        self.assertEqual(chars[0]["name"], "Julius Caesar")
+        self.assertEqual(chars[0]["aliases"], ["Caesar"])
+        self.assertFalse(chars[0]["has_image"])  # no worker → no look yet
+
+    def test_crud_roundtrip(self):
+        job_id = self._make_job([{"name": "Caesar", "description": "a general"}])["job_id"]
+        cid = self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"][0]["id"]
+
+        # edit
+        r = self.client.put(f"/api/jobs/{job_id}/characters/{cid}",
+                            json={"description": "a lean general in a red toga"})
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("red toga", r.json()["characters"][0]["description"])
+
+        # add
+        r = self.client.post(f"/api/jobs/{job_id}/characters",
+                            json={"name": "Brutus", "aliases": [], "description": "a senator"})
+        self.assertEqual({c["name"] for c in r.json()["characters"]}, {"Caesar", "Brutus"})
+
+        # delete the added one
+        bid = next(c["id"] for c in r.json()["characters"] if c["name"] == "Brutus")
+        r = self.client.delete(f"/api/jobs/{job_id}/characters/{bid}")
+        self.assertEqual([c["name"] for c in r.json()["characters"]], ["Caesar"])
+
+    def test_portrait_without_workers_returns_503(self):
+        job_id = self._make_job([{"name": "Caesar", "description": "a general"}])["job_id"]
+        cid = self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"][0]["id"]
+        with mock.patch.object(gapp, "_preview_worker_urls", return_value=[]):
+            r = self.client.post(f"/api/jobs/{job_id}/characters/{cid}/portrait", json={})
+        self.assertEqual(r.status_code, 503)
+
+    def test_promote_to_catalogue(self):
+        job_id = self._make_job([{"name": "Caesar", "description": "a general"}])["job_id"]
+        cid = self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"][0]["id"]
+        r = self.client.post(f"/api/jobs/{job_id}/characters/{cid}/promote")
+        self.assertEqual(r.status_code, 200)
+        lib = r.json()["config"]["characters"]
+        self.assertEqual([c["name"] for c in lib], ["Caesar"])
+        # style opted into the new catalogue character
+        hero = next(s for s in r.json()["config"]["styles"] if s["name"] == "Hero")
+        self.assertIn(lib[0]["id"], hero["character_ids"])
+        # per-script copy remains (non-destructive)
+        self.assertEqual(len(self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"]), 1)
+
+    def test_unknown_job_404(self):
+        r = self.client.get("/api/jobs/deadbeef/characters")
+        self.assertEqual(r.status_code, 404)
+
+
+if __name__ == "__main__":
+    unittest.main()
