@@ -1881,6 +1881,28 @@ def start_generation(body: GenerateBody) -> dict:
          "video_prompt": s.video_prompt, "narration": s.narration} for s in scenes
     ])
 
+    # Character-first pre-build (main-character consistency). BEFORE the render
+    # plan is registered — so it holds even for a fully headless/automated render
+    # — make sure every character in play has a look image, then generate
+    # reference-conditioned scene previews. ensure_generation_plan then reuses
+    # those previews as scene first frames (it skips the image task of any scene
+    # with a preview_path), so the character is built and imaged before the scene
+    # images are, and stays consistent across scenes. Runs in-process here
+    # (start_generation is only ever called by the automation loop, never a
+    # blocking HTTP request). No-op when the job has no characters, and a no-op
+    # fast path when previews already exist (the interactive editor already made
+    # them). Best-effort: any failure falls back to the normal first-frame path.
+    try:
+        if gapp._job_characters(cfg, ss["name"], work_dir):
+            (work_dir / "progress.json").write_text(json.dumps(
+                {"pct": 0, "msg": "Building character looks…", "ts": time.time()}))
+            gapp.generate_all_script_portraits(work_dir, ss["name"])
+            (work_dir / "progress.json").write_text(json.dumps(
+                {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
+            generate_all_previews(job_id, resolution, body.style or "")
+    except Exception as e:
+        gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
+
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({
         "resolution": resolution, "max_clip_secs": 0,

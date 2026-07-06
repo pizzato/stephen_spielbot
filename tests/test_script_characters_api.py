@@ -107,6 +107,36 @@ class ScriptCharacterApiTests(unittest.TestCase):
         r = self.client.get("/api/jobs/deadbeef/characters")
         self.assertEqual(r.status_code, 404)
 
+    def _run_start_generation(self, job):
+        """Drive start_generation with the heavy steps stubbed, recording the
+        order of the character pre-build vs the render-plan registration."""
+        calls = []
+        with mock.patch.object(gapp, "generate_all_script_portraits",
+                               side_effect=lambda *a, **k: calls.append("portraits")), \
+             mock.patch.object(backend, "generate_all_previews",
+                               side_effect=lambda *a, **k: calls.append("previews")), \
+             mock.patch.object(backend.DurableStore, "ensure_generation_plan",
+                               side_effect=lambda self, *a, **k: calls.append("plan")), \
+             mock.patch.object(gapp, "_launch_generation_job",
+                               side_effect=lambda *a, **k: calls.append("launch") or {}):
+            backend.start_generation(backend.GenerateBody(
+                job_id=job["job_id"], work_dir=job["work_dir"], n_scenes=1, style_name="Hero"))
+        return calls
+
+    def test_render_builds_character_before_scene_plan(self):
+        job = self._make_job([{"name": "Caesar", "description": "a lean general"}])
+        calls = self._run_start_generation(job)
+        # Portraits + reference-conditioned previews happen BEFORE the plan (and
+        # thus before any scene image task), then the worker launches.
+        self.assertEqual(calls, ["portraits", "previews", "plan", "launch"])
+
+    def test_render_skips_prebuild_without_characters(self):
+        job = self._make_job([])  # abstract topic — no recurring characters
+        calls = self._run_start_generation(job)
+        self.assertNotIn("portraits", calls)
+        self.assertNotIn("previews", calls)
+        self.assertEqual(calls, ["plan", "launch"])
+
 
 if __name__ == "__main__":
     unittest.main()

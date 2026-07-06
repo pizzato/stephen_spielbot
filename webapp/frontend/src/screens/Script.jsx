@@ -513,8 +513,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
           { value: 'cover', label: 'Cover' },
-          { value: 'scenes', label: 'Scenes' },
           { value: 'characters', label: 'Characters' },
+          { value: 'scenes', label: 'Scenes' },
         ]} />
       </div>
 
