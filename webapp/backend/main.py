@@ -6797,6 +6797,25 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         _finish_film_task_error(task_id, e)
 
 
+def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path) -> tuple[str, list[Path]]:
+    """Styled image prompt + character reference images for a film-scene re-render.
+
+    Mirrors _generate_active_scene_preview so a frame regenerated from the edit
+    video screen keeps its recurring characters' looks: re-inject each featured
+    character's canonical appearance into the prompt and gather their reference
+    images (FLUX.2 conditioning). work_dir folds in the script's own per-script
+    characters, not just the catalogue ones the style opted into. The style
+    prefix is applied last, matching the plain (character-less) re-render path."""
+    style_name = jc.get("style_name", "")
+    base_prompt = (row.get("image_prompt") or "").strip()
+    base_prompt = gapp._inject_characters(base_prompt, row, cfg, style_name, wd)
+    reference_images = gapp._scene_reference_images(base_prompt, row, cfg, style_name, wd)
+    style_clean = (jc.get("style") or "").strip().rstrip(".")
+    if style_clean and base_prompt and not base_prompt.startswith(style_clean):
+        base_prompt = f"{style_clean}. {base_prompt}"
+    return base_prompt, reference_images
+
+
 def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
@@ -6818,10 +6837,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     try:
         _film_checkpoint(task_id)
-        image_prompt = (row.get("image_prompt") or "").strip()
-        style_clean = jc.get("style", "").strip().rstrip(".")
-        if style_clean and image_prompt and not image_prompt.startswith(style_clean):
-            image_prompt = f"{style_clean}. {image_prompt}"
+        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -6840,6 +6856,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
                 first_frame,
                 width=vid_w, height=vid_h,
                 seed=new_seed,
+                reference_images=reference_images,
                 comfy_url=url,
             )
         finally:
@@ -6871,11 +6888,12 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     Reuses the already-made first frame; only regenerates it when none is usable."""
     from pipeline.assembler import mux_video_audio, _get_duration
-    from pipeline.comfyui import generate_scene_image, ltx_dimensions
+    from pipeline.comfyui import generate_with_engine, ltx_dimensions
     from pipeline.llm import Scene
     from pipeline.scene_video import generate_scene_video as gen_scene_video
 
     cfg = gapp.load_config()
+    engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
     worker_urls = gapp._preview_worker_urls()
     if not worker_urls:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
@@ -6889,14 +6907,13 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     try:
         _film_checkpoint(task_id)
-        image_prompt = (row.get("image_prompt") or "").strip()
+        # Character-consistent, styled image prompt + reference images, so a
+        # regenerated first frame keeps the scene's recurring characters' looks.
+        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd)
         video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
-        if style_clean:
-            if image_prompt and not image_prompt.startswith(style_clean):
-                image_prompt = f"{style_clean}. {image_prompt}"
-            if video_prompt and not video_prompt.startswith(style_clean):
-                video_prompt = f"{style_clean}. {video_prompt}"
+        if style_clean and video_prompt and not video_prompt.startswith(style_clean):
+            video_prompt = f"{style_clean}. {video_prompt}"
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -6921,15 +6938,12 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
             url = pool.acquire()
             try:
                 _film_checkpoint(task_id)
-                generate_scene_image(
+                generate_with_engine(
+                    engine,
                     image_prompt or row.get("title") or f"Scene {sid}",
                     first_frame,
                     width=vid_w, height=vid_h,
-                    steps=int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
-                    flux_model=jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-                    clip_t5=jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-                    clip_l=jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
-                    flux_vae=jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
+                    reference_images=reference_images,
                     comfy_url=url,
                 )
             finally:
