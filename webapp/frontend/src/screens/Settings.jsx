@@ -685,6 +685,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
+  const [playlists, setPlaylists] = useState({})  // channel key -> {loading, items:[{id,title}], error}
   const [newOpen, setNewOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [newDesc, setNewDesc] = useState('')
@@ -823,6 +824,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   useEffect(() => {
     if (styleIdx >= styles.length && styles.length) setStyleIdx(styles.length - 1)
   }, [styles.length, styleIdx])
+
+  // Playlists for the active style's channel (per-style playlist picker below).
+  // Effective channel mirrors the backend's channel_for_style fallback (own
+  // channel, else first connected) so the list matches the real upload target.
+  const stChannel = st.channel || (cfg.youtube_channels?.[0]?.id || '')
+  useEffect(() => {
+    if (tab !== 'styles' || stChannel in playlists) return
+    setPlaylists((p) => ({ ...p, [stChannel]: { loading: true, items: [], error: '' } }))
+    api.ytPlaylists(stChannel)
+      .then((r) => setPlaylists((p) => ({ ...p, [stChannel]: { loading: false, items: r.playlists || [], error: r.error || '' } })))
+      .catch((e) => setPlaylists((p) => ({ ...p, [stChannel]: { loading: false, items: [], error: String(e.message || e) } })))
+  }, [tab, stChannel, playlists])
+  const stPlaylists = playlists[stChannel] || { loading: true, items: [], error: '' }
 
   const setStyleField = (k, v) => editCfg((c) => {
     const list = c.styles || []
@@ -1289,6 +1303,21 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   <option value="">(first connected channel)</option>
                   {(cfg.youtube_channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
+              </Field>
+              <Field label="YouTube playlist" hint="Add every upload in this style to a playlist on its channel. “Auto-create” makes (or reuses) one named after the style.">
+                <select className="select" value={st.youtube_playlist_id || ''} onChange={(e) => setStyleField('youtube_playlist_id', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="">(none — don’t add to a playlist)</option>
+                  <option value="__auto__">Auto-create playlist named after the style</option>
+                  {stPlaylists.items.map((p) => <option key={p.id} value={p.id}>{p.title || p.id}</option>)}
+                  {st.youtube_playlist_id && st.youtube_playlist_id !== '__auto__'
+                    && !stPlaylists.items.some((p) => p.id === st.youtube_playlist_id)
+                    && <option value={st.youtube_playlist_id}>{stPlaylists.loading ? 'Loading…' : `${st.youtube_playlist_id} (not on this channel)`}</option>}
+                </select>
+                {stPlaylists.error
+                  ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Couldn’t load playlists: {stPlaylists.error}</div>
+                  : stPlaylists.loading
+                    ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Loading playlists…</div>
+                    : null}
               </Field>
               <Field label="X account" hint="Which X account this style posts to (or none) — connect accounts in the Channels tab.">
                 <select className="select" value={st.x_account || ''} onChange={(e) => setStyleField('x_account', e.target.value)} style={{ maxWidth: 320 }}>
