@@ -201,6 +201,68 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
   )
 }
 
+// Full-screen image viewer with optional version navigation. `versions` is a
+// [{id, path}] list (as VersionStrip takes); `start` is the index to open on;
+// `fallback` is shown when there are no versions. ← → (or ↑ ↓) flip versions,
+// Esc closes, clicking the backdrop closes. View-only — selection stays with the
+// VersionStrip on the card.
+const LB_BTN = {
+  position: 'absolute', zIndex: 2, border: 'none', color: '#fff',
+  background: 'rgba(20,22,24,.55)', backdropFilter: 'blur(6px)',
+  width: 46, height: 46, borderRadius: '50%', fontSize: 18,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+}
+
+export function ImageLightbox({ versions = [], start = 0, fallback = '', title = '', onClose }) {
+  const [i, setI] = useState(start)
+  const idx = Math.min(Math.max(0, i), Math.max(0, versions.length - 1))
+  const multi = versions.length > 1
+  const move = (d) => setI(() => Math.min(Math.max(0, idx + d), versions.length - 1))
+  useEffect(() => {
+    const onKey = (e) => {
+      const k = e.key
+      if (k === 'ArrowLeft' || k === 'ArrowUp') { e.preventDefault(); move(-1) }
+      else if (k === 'ArrowRight' || k === 'ArrowDown') { e.preventDefault(); move(1) }
+      else if (k === 'Escape') { e.preventDefault(); onClose() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [idx, versions.length])
+  const src = versions[idx] ? fileUrl(versions[idx].path) : fallback
+  const arrow = (icon, ttl, disabled, onPress, pos) => (
+    <button type="button" title={ttl} disabled={disabled}
+      onClick={(e) => { e.stopPropagation(); onPress() }}
+      style={{ ...LB_BTN, ...pos, opacity: disabled ? 0.28 : 1, cursor: disabled ? 'default' : 'pointer' }}>
+      <Icon name={icon} />
+    </button>
+  )
+  return (
+    <div onClick={onClose}
+      style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
+      {src
+        ? <img src={src} alt="" onClick={(e) => e.stopPropagation()}
+            style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)', cursor: 'default' }} />
+        : <span onClick={(e) => e.stopPropagation()} style={{ color: 'rgba(255,255,255,.8)', fontSize: 14, cursor: 'default' }}>No image yet.</span>}
+
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ position: 'absolute', top: 18, left: 22, color: 'rgba(255,255,255,.92)', fontSize: 13, fontWeight: 600, display: 'flex', gap: 10, cursor: 'default' }}>
+        {title && <span>{title}</span>}
+        {multi && <span style={{ opacity: 0.65 }}>· {idx + 1} / {versions.length}</span>}
+      </div>
+
+      <button type="button" title="Close (Esc)" onClick={(e) => { e.stopPropagation(); onClose() }}
+        style={{ ...LB_BTN, top: 14, right: 16, width: 40, height: 40, fontSize: 16, cursor: 'pointer' }}>
+        <Icon name="xmark" />
+      </button>
+
+      {multi && arrow('chevron-left', 'Previous (←)', idx <= 0, () => move(-1),
+        { left: 18, top: '50%', transform: 'translateY(-50%)' })}
+      {multi && arrow('chevron-right', 'Next (→)', idx >= versions.length - 1, () => move(1),
+        { right: 18, top: '50%', transform: 'translateY(-50%)' })}
+    </div>
+  )
+}
+
 // Like VersionStrip, but for rendered video takes: each thumbnail is a muted
 // <video> (preload=metadata shows the first frame) so the user can flip between
 // re-renders of a scene and pick the best one.
