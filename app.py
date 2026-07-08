@@ -232,6 +232,10 @@ DEFAULT_CFG = {
     # Settings → YouTube; each style picks one via its `channel` field.
     "youtube_channels": [],
     "youtube_channel": "",   # flat mirror of the DEFAULT style's channel key
+    # Per-style playlist the style's uploads are added to. "" = none; a playlist
+    # id (PL…) = that playlist; "__auto__" = find-or-create one named after the
+    # style on its channel. Flat key mirrors the DEFAULT style (see _ensure_styles).
+    "youtube_playlist_id": "",
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
     "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
@@ -342,6 +346,8 @@ STYLE_FIELD_TO_FLAT = {
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
     "channel":              "youtube_channel",
+    # Playlist this style's uploads are added to ("" / PL… id / "__auto__")
+    "youtube_playlist_id":  "youtube_playlist_id",
     # Publishing (issue #107) — which connected X account this style posts to
     "x_account":            "x_account",
     # Image engine selection (generation vs edit) — see pipeline/engines.py
@@ -726,6 +732,13 @@ def x_account_for_style(cfg: dict, style_name: str = "") -> str:
             if isinstance(a, dict) and a.get("id")]
     acc = str(style_settings(cfg, style_name).get("x_account") or "")
     return acc if acc in keys else ""
+
+
+def playlist_for_style(cfg: dict, style_name: str = "") -> str:
+    """Raw playlist choice for a style: "" (none), a playlist id, or the
+    "__auto__" sentinel (find-or-create one named after the style). The sentinel
+    is resolved to a real id at upload time, since that needs a YouTube API call."""
+    return str(style_settings(cfg, style_name).get("youtube_playlist_id") or "")
 
 
 def style_settings(cfg: dict, name: str = "") -> dict:
