@@ -48,6 +48,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [charBusy, setCharBusy] = useState('')
   const [charMsg, setCharMsg] = useState('')
   const [aliasDraft, setAliasDraft] = useState({})
+  // Character look lightbox — { id, ver }: which character and which of its kept
+  // look versions is shown full-resolution.
+  const [charLightbox, setCharLightbox] = useState(null)
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -447,6 +450,40 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCharMsg(`Saved “${c.name || 'character'}” to your character catalogue.`)
     return r
   })
+  const selectCharVersion = (c, versionId) =>
+    charOp(c.id, () => api.selectScriptCharacterImage(job.job_id, c.id, versionId))
+
+  // ── Character look lightbox ─────────────────────────────────────────────────
+  // Open on the selected version; up/down (and arrow keys) flip between the looks
+  // kept for that character so the user can compare them at full resolution.
+  const charSelVerIdx = (c) => {
+    const vs = c?.history?.versions || []
+    const i = vs.findIndex((v) => v.id === c?.history?.selected)
+    return i < 0 ? Math.max(0, vs.length - 1) : i
+  }
+  const openCharLightbox = (c) => c.has_image && setCharLightbox({ id: c.id, ver: charSelVerIdx(c) })
+  const clbVerMove = (delta) => setCharLightbox((lb) => {
+    if (!lb) return lb
+    const vs = characters.find((x) => x.id === lb.id)?.history?.versions || []
+    const nv = Math.min(vs.length - 1, Math.max(0, lb.ver + delta))
+    return nv === lb.ver ? lb : { ...lb, ver: nv }
+  })
+  useEffect(() => {
+    if (!charLightbox) return
+    const onKey = (e) => {
+      const k = e.key
+      if (k === 'ArrowUp' || k === 'ArrowLeft') { e.preventDefault(); clbVerMove(-1) }
+      else if (k === 'ArrowDown' || k === 'ArrowRight') { e.preventDefault(); clbVerMove(1) }
+      else if (k === 'Escape') { e.preventDefault(); setCharLightbox(null) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [charLightbox, characters])
+  const clbChar = charLightbox ? characters.find((c) => c.id === charLightbox.id) : null
+  const clbVersions = clbChar?.history?.versions || []
+  const clbSrc = charLightbox
+    ? (clbVersions[charLightbox.ver] ? fileUrl(clbVersions[charLightbox.ver].path) : (clbChar?.image_url || ''))
+    : ''
   // Aliases edit as a comma-separated string; parse to an array only on blur.
   const aliasValue = (c) => (aliasDraft[c.id] ?? (c.aliases || []).join(', '))
   const commitAliases = (c) => {
@@ -802,13 +839,19 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             return (
               <Card key={c.id} span={6} padLg className={`reveal reveal-d${(i % 3) + 1}`}>
                 <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
-                  <div style={{ width: 132, flex: '0 0 auto' }}>
-                    <div style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '1 / 1', background: 'var(--paper-2)' }}>
+                  <div style={{ width: 176, flex: '0 0 auto' }}>
+                    <div onClick={() => openCharLightbox(c)}
+                      style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '1 / 1', background: 'var(--paper-2)', cursor: c.has_image ? 'zoom-in' : 'default' }}>
                       {c.has_image
                         ? <img src={c.image_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                         : <div className={`gfill ${b ? 'skel' : 'g' + (i % 6)}`} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                             {!b && <Icon name="user" style={{ color: 'var(--ink-3)', fontSize: 26 }} />}
                           </div>}
+                      {c.has_image && (
+                        <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
+                          <Icon name="up-right-and-down-left-from-center" /> Full size
+                        </span>
+                      )}
                     </div>
                     <div className="stack gap-6 mt-10">
                       <Button variant="ghost" size="sm" block icon="rotate-right" disabled={b} onClick={() => genCharLook(c)}>
@@ -847,9 +890,40 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     </div>
                   </div>
                 </div>
+                <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
+                  onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={b} />
               </Card>
             )
           })}
+
+          {charLightbox && (
+            <div onClick={() => setCharLightbox(null)}
+              style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
+              {clbSrc
+                ? <img src={clbSrc} alt="" onClick={(e) => e.stopPropagation()}
+                    style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)', cursor: 'default' }} />
+                : <span onClick={(e) => e.stopPropagation()} style={{ color: 'rgba(255,255,255,.8)', fontSize: 14, cursor: 'default' }}>No look for this character yet.</span>}
+
+              {/* Character name / look counter */}
+              <div onClick={(e) => e.stopPropagation()}
+                style={{ position: 'absolute', top: 18, left: 22, color: 'rgba(255,255,255,.92)', fontSize: 13, fontWeight: 600, display: 'flex', gap: 10, cursor: 'default' }}>
+                <span>{clbChar?.name || 'Character'}</span>
+                {clbVersions.length > 1 && <span style={{ opacity: 0.65 }}>· Look {charLightbox.ver + 1} / {clbVersions.length}</span>}
+              </div>
+
+              {/* Close */}
+              <button type="button" title="Close (Esc)" onClick={(e) => { e.stopPropagation(); setCharLightbox(null) }}
+                style={{ ...LB_BTN, top: 14, right: 16, width: 40, height: 40, fontSize: 16, cursor: 'pointer' }}>
+                <Icon name="xmark" />
+              </button>
+
+              {/* Flip between kept looks for this character */}
+              {clbVersions.length > 1 && lbArrow('chevron-left', 'Previous look (←)', charLightbox.ver <= 0,
+                () => clbVerMove(-1), { left: 18, top: '50%', transform: 'translateY(-50%)' })}
+              {clbVersions.length > 1 && lbArrow('chevron-right', 'Next look (→)', charLightbox.ver >= clbVersions.length - 1,
+                () => clbVerMove(1), { right: 18, top: '50%', transform: 'translateY(-50%)' })}
+            </div>
+          )}
         </div>
       )}
     </div>

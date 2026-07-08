@@ -1862,6 +1862,8 @@ def _generate_script_portrait(work_dir: Path, cfg: dict, style_name: str, char: 
     d = _script_characters_dir(work_dir)
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{char['id']}.png"
+    # Keep any current look so re-rolling doesn't silently discard it.
+    image_history.char_seed_if_empty(work_dir, char["id"], out)
     own_pool = worker_pool is None
     if own_pool:
         urls = _preview_worker_urls()
@@ -1874,6 +1876,7 @@ def _generate_script_portrait(work_dir: Path, cfg: dict, style_name: str, char: 
     finally:
         worker_pool.release(url)
     char["ref_image"] = out.name
+    image_history.char_record(work_dir, char["id"], out)
     return out
 
 
@@ -2020,12 +2023,26 @@ def set_script_character_image(work_dir, char_id: str, raw: bytes) -> list[dict]
     d = _script_characters_dir(work_dir)
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{char_id}.png"
+    # Keep any current look so uploading a new one doesn't silently discard it.
+    image_history.char_seed_if_empty(work_dir, char_id, out)
     try:
         with Image.open(io.BytesIO(raw)) as im:
             im.convert("RGB").save(out, "PNG")
     except Exception as e:
         raise ValueError(f"Could not read that image: {e}")
     char["ref_image"] = out.name
+    image_history.char_record(work_dir, char_id, out)
+    return _write_script_characters(work_dir, chars)
+
+
+def select_script_character_image(work_dir, char_id: str, version_id: int) -> list[dict]:
+    """Make a kept look version the character's current image (the one woven into
+    scene generation) and persist. Returns the saved list."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    char = _find_script_character(chars, char_id)
+    image_history.char_select(work_dir, char_id, version_id)
+    char["ref_image"] = f"{char_id}.png"
     return _write_script_characters(work_dir, chars)
 
 
