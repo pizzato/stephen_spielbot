@@ -486,6 +486,11 @@ class CharacterPortrait(BaseModel):
     extra_prompt: str = ""
 
 
+class CharacterSelect(BaseModel):
+    char_id: str
+    version_id: int
+
+
 def _decode_image(data: str) -> bytes:
     """Decode a base64 (optionally data-URL) image payload to bytes."""
     if not data:
@@ -521,6 +526,16 @@ def characters_clear_image(body: CharacterRef) -> dict:
         cfg = gapp.clear_character_image(body.char_id)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return _character_response(cfg)
+
+
+@api.post("/api/characters/image/select")
+def characters_select_image(body: CharacterSelect) -> dict:
+    """Make a previously-kept look version this catalogue character's reference."""
+    try:
+        cfg = gapp.select_character_image(body.char_id, int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(404, str(e))
     return _character_response(cfg)
 
 
