@@ -47,7 +47,7 @@ script_claude_initial:
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    ${title_line}Total video length: ${n_scenes} scenes. THIS REQUEST: generate ONLY scenes 1 to ${first_batch} (the remaining scenes will be requested separately). Output exactly ${first_batch} scene objects in the 'scenes' array — no more, no fewer.${style_note}${video_style_note}${character_note}${conclusion_note}
+    ${title_line}Total video length: ${n_scenes} scenes. THIS REQUEST: generate ONLY scenes 1 to ${first_batch} (the remaining scenes will be requested separately). Output exactly ${first_batch} scene objects in the 'scenes' array — no more, no fewer.${style_note}${video_style_note}${avoid_note}${character_note}${conclusion_note}
 
 
 script_claude_continuation:
@@ -69,7 +69,7 @@ script_claude_continuation:
     Generate scenes ${batch_start} to ${batch_end} (scene IDs ${batch_start}–${batch_end}).
 
     Previous scenes for narrative continuity:
-    ${ctx_str}${video_style_note}${character_note}${conclusion_note}
+    ${ctx_str}${video_style_note}${avoid_note}${character_note}${conclusion_note}
 
 
 script_claude_fill_narration:
@@ -120,7 +120,7 @@ script_local_story:
     - No text outside the key: value lines.
   user: |
     Write a ${n_scenes}-scene narrated story for ${title_context}
-    Output exactly ${n_scenes} scenes using the TITLE_N / NARRATION_N pattern.${style_note}${character_note}
+    Output exactly ${n_scenes} scenes using the TITLE_N / NARRATION_N pattern.${style_note}${avoid_note}${character_note}
 
 
 script_local_visual:

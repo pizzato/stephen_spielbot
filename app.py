@@ -222,7 +222,13 @@ DEFAULT_CFG = {
     # later) instead of its hand-picked character_ids list — see _style_characters.
     "default_auto_accept_characters": False,
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
+    # Per-style LTX video negative prompt (mirror of the DEFAULT style). Blank
+    # means "use the built-in quality default" — resolved at render time.
+    "default_video_negative_prompt": "",
     "script_extra_instructions": "",
+    # Per-style "avoid" instruction for the script LLM (things to keep OUT of the
+    # generated script). Blank = no extra avoid directive.
+    "script_avoid": "",
     "title_style": "",                # how generated video titles should be phrased (issue #82)
     # YouTube integration
     "youtube_client_secrets": "~/.config/video-generator/client_secrets.json",
@@ -330,7 +336,12 @@ STYLE_FIELD_TO_FLAT = {
     # Opt into EVERY library character automatically instead of character_ids
     "auto_accept_characters": "default_auto_accept_characters",
     "video_style":          "default_video_style",
+    # Negative prompt applied to every LTX video render in this style (blank →
+    # the built-in quality default, see pipeline/llm.py NEGATIVE_PROMPT)
+    "video_negative_prompt": "default_video_negative_prompt",
     "extra_instructions":   "script_extra_instructions",
+    # "Avoid" instruction fed to the script LLM for every video in this style
+    "script_avoid":         "script_avoid",
     "title_style":          "title_style",
     "description_suffix":   "description_suffix",
     # Open-source attribution appended to every published video (see DEFAULT_CFG)
@@ -765,7 +776,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     if target:
         out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
     if requested == NO_STYLE:
-        out.update(visual_style="", video_style="", extra_instructions="", description_suffix="",
+        out.update(visual_style="", video_style="", video_negative_prompt="",
+                   extra_instructions="", script_avoid="", description_suffix="",
                    title_style="", voice="", voice_robotic=False, voice_speed=1.0,
                    character_ids=[], auto_accept_characters=False)
         out["name"] = NO_STYLE
