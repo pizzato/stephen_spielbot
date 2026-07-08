@@ -1314,11 +1314,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="Video / motion style" hint="Steers how each scene moves — camera and subject motion in every scene's video prompt. e.g. “Favour dynamic action and visible movement over static shots and slow pans.”">
                 <textarea className="textarea" rows={2} value={st.video_style || ''} onChange={(e) => setStyleField('video_style', e.target.value)} />
               </Field>
+              <Field label="Video negative prompt" hint="Things to keep OUT of every video render in this style (artifacts, unwanted objects, styles). Leave blank to use the built-in quality default (blur, watermark, distortion, …).">
+                <textarea className="textarea" rows={3} value={st.video_negative_prompt || ''} onChange={(e) => setStyleField('video_negative_prompt', e.target.value)} />
+              </Field>
               <Field label="Title style" hint="How AI-suggested video titles are worded — e.g. “short and punchy” or “pose an intriguing question”.">
                 <textarea className="textarea" rows={2} value={st.title_style || ''} onChange={(e) => setStyleField('title_style', e.target.value)} />
               </Field>
               <Field label="Extra script instructions" hint="Appended to every topic.">
                 <textarea className="textarea" rows={8} value={st.extra_instructions || ''} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
+              </Field>
+              <Field label="Script — avoid" hint="Tell the writer what to keep OUT of the script for this style (topics, words, tropes, tone). e.g. “no politics, avoid the word ‘journey’, don't be preachy.”">
+                <textarea className="textarea" rows={4} value={st.script_avoid || ''} onChange={(e) => setStyleField('script_avoid', e.target.value)} />
               </Field>
               <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
                 <textarea className="textarea" rows={3} value={st.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
