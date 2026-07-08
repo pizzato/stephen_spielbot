@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
@@ -671,6 +671,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
   const [dirty, setDirty] = useState(false)
   const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
   const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
+  const [charLightbox, setCharLightbox] = useState(null)  // character being viewed full-res
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -880,6 +881,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     api.setCharacterImage(char.id, file.name, await fileToDataUrl(file)))
   const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(char.id))
   const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(char.id, ''))
+  const selectCharVersion = (char, versionId) => characterOp(char.id, () => api.selectCharacterImage(char.id, versionId))
+  // Index of the selected look within a character's version list — where the
+  // full-res lightbox opens.
+  const charSelVerIdx = (c) => {
+    const vs = c.history?.versions || []
+    const i = vs.findIndex((v) => v.id === c.history?.selected)
+    return i < 0 ? Math.max(0, vs.length - 1) : i
+  }
   // "(none)" is the reserved "No style" option on Create/Queue — not claimable.
   const nameTaken = (n) => n === '(none)' || styles.some((s) => s.name === n)
   const addStyle = () => {
@@ -1549,21 +1558,31 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   </div>
                   {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
                   {c.id && !dirty ? (
-                    <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
-                      {c.ref_image
-                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
-                            style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--border)' }} />
-                        : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
-                      <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
-                        <Icon name="upload" /> Upload image
-                        <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
-                          onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
-                      </label>
-                      <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
-                        onClick={() => genCharPortrait(c)}>
-                        {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
-                      </Button>
-                      {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                    <div className="stack gap-12">
+                      <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+                        {c.ref_image
+                          ? <div onClick={() => setCharLightbox(c.id)}
+                              style={{ position: 'relative', width: 120, height: 120, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
+                              <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                                style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              <span style={{ position: 'absolute', right: 6, bottom: 6, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 10.5, fontWeight: 600, padding: '2px 7px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)' }}>
+                                <Icon name="up-right-and-down-left-from-center" /> Full size
+                              </span>
+                            </div>
+                          : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                        <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                          <Icon name="upload" /> Upload image
+                          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                        </label>
+                        <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                          onClick={() => genCharPortrait(c)}>
+                          {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
+                        </Button>
+                        {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                      </div>
+                      <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
+                        onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={charBusy === c.id} />
                     </div>
                   ) : (
                     <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
@@ -1573,6 +1592,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
             </div>
           </Card>
+
+          {charLightbox && (() => {
+            const c = chars.find((x) => x.id === charLightbox)
+            if (!c) return null
+            return (
+              <ImageLightbox versions={c.history?.versions || []} start={charSelVerIdx(c)}
+                fallback={c.ref_image ? `${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}` : ''}
+                title={c.name || 'Character'} onClose={() => setCharLightbox(null)} />
+            )
+          })()}
         </>)}
 
         {tab === 'voices' && (<>

@@ -909,6 +909,13 @@ def public_config(cfg: dict) -> dict:
         val = safe.get(key)
         safe[f"{key}_set"] = bool(isinstance(val, str) and val.strip())
         safe[key] = ""
+    # Attach each catalogue character's look-version history for the Settings UI.
+    # Copies (never the persisted dicts), and _norm_characters drops it on save.
+    root = _global_char_hist_root()
+    safe["characters"] = [
+        {**c, "history": image_history.char_history(root, c.get("id", ""))}
+        for c in (cfg.get("characters") or [])
+    ]
     return safe
 
 
@@ -1650,6 +1657,13 @@ def _character_image_path(filename: str) -> Path | None:
     return _characters_dir() / name if name else None
 
 
+def _global_char_hist_root() -> Path:
+    """Root handed to image_history's char_* helpers for GLOBAL catalogue looks.
+    Chosen so the canonical path (<root>/characters/<id>.png) is exactly
+    _characters_dir()/<id>.png; versions land in <root>/image_history/."""
+    return _characters_dir().parent
+
+
 def _character_mentions(text: str, character: dict) -> bool:
     """True if the character's name or any alias appears in *text* as a whole
     word (case-insensitive)."""
@@ -1819,12 +1833,26 @@ def set_character_image(char_id: str, raw: bytes) -> dict:
     d = _characters_dir()
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{char_id}.png"
+    # Keep any current look so uploading a new one doesn't silently discard it.
+    image_history.char_seed_if_empty(_global_char_hist_root(), char_id, out)
     try:
         with Image.open(io.BytesIO(raw)) as im:
             im.convert("RGB").save(out, "PNG")
     except Exception as e:
         raise ValueError(f"Could not read that image: {e}")
     char["ref_image"] = out.name
+    save_config(cfg)
+    image_history.char_record(_global_char_hist_root(), char_id, out)
+    return load_config()
+
+
+def select_character_image(char_id: str, version_id: int) -> dict:
+    """Make a previously-kept look version the character's current reference image
+    (the one FLUX.2 anchors to) and persist. Returns the reloaded config."""
+    cfg = load_config()
+    char = _find_character(cfg, char_id)
+    image_history.char_select(_global_char_hist_root(), char_id, version_id)
+    char["ref_image"] = f"{char_id}.png"
     save_config(cfg)
     return load_config()
 
@@ -1864,6 +1892,8 @@ def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
     d = _characters_dir()
     d.mkdir(parents=True, exist_ok=True)
     out = d / f"{char_id}.png"
+    # Keep the current look so re-rolling doesn't silently discard it.
+    image_history.char_seed_if_empty(_global_char_hist_root(), char_id, out)
     url = pool.acquire()
     try:
         generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
@@ -1871,6 +1901,7 @@ def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
         pool.release(url)
     char["ref_image"] = out.name
     save_config(cfg)
+    image_history.char_record(_global_char_hist_root(), char_id, out)
     return load_config()
 
 
