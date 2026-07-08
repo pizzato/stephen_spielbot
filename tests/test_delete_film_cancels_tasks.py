@@ -160,7 +160,7 @@ class WorkerCheckpointTests(FilmTaskCase):
         wd = self.make_work_dir("img")
         tid = self.register_task(wd, "rerender_01_image_4000", component="image")
         backend._film_cancelled_tids.add(tid)
-        with mock.patch.object(app, "_preview_worker_urls", return_value=["http://stub:8188"]), \
+        with mock.patch.object(backend, "_shared_edit_render_pool", return_value=mock.MagicMock()), \
                 mock.patch("pipeline.comfyui.generate_scene_image") as gen:
             backend._run_image_rerender(tid, wd, 1, {}, {})
         gen.assert_not_called()
@@ -170,7 +170,7 @@ class WorkerCheckpointTests(FilmTaskCase):
         wd = self.make_work_dir("vid")
         tid = self.register_task(wd, "rerender_01_video_5000", component="video")
         backend._film_cancelled_tids.add(tid)
-        with mock.patch.object(app, "_preview_worker_urls", return_value=["http://stub:8188"]), \
+        with mock.patch.object(backend, "_shared_edit_render_pool", return_value=mock.MagicMock()), \
                 mock.patch("pipeline.scene_video.generate_scene_video") as gen:
             backend._run_video_rerender(tid, wd, 1, {}, {})
         gen.assert_not_called()
