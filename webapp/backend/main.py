@@ -960,6 +960,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
     display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
     try:
@@ -967,6 +968,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
             scenes, music_desc, style, characters = generate_script(
                 topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
+                avoid_hint=avoid_hint,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
@@ -1879,6 +1881,9 @@ def start_generation(body: GenerateBody) -> dict:
 
     style_clean = body.style.strip().rstrip(".") if body.style and body.style.strip() else ""
     combined_style = gapp._compose_visual_style(body.style, cfg, style_name)
+    # Per-style LTX video negative prompt; blank falls back to the built-in
+    # quality default so styles keep it unless they explicitly override.
+    video_neg = (ss.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT
 
     n = int(body.n_scenes) if body.n_scenes else len(scene_rows)
     title = body.title or body.video_title
@@ -1889,6 +1894,7 @@ def start_generation(body: GenerateBody) -> dict:
             image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
+            negative_prompt=video_neg,
         )
         for row in scene_rows[:n]
     ]
@@ -1931,6 +1937,9 @@ def start_generation(body: GenerateBody) -> dict:
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
         "style_name": ss["name"],
+        # Resolved per-style LTX video negative (blank → built-in default). Stamped
+        # into job_config.json so a resumed render (resume_generation.py) reuses it.
+        "video_negative_prompt": video_neg,
         "lora_strength": ss.get("lora_strength"),
         "first_pass_cfg": ss.get("first_pass_cfg"),
         "first_pass_steps": ss.get("first_pass_steps"),
@@ -7014,6 +7023,9 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
             image_prompt=image_prompt,
             video_prompt=video_prompt,
             narration=row.get("narration") or "",
+            # Per-style video negative (blank → built-in default); job_config carries
+            # the value stamped at render time so a re-render stays consistent.
+            negative_prompt=(jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT,
         )
         url = pool.acquire()
         try:
