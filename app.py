@@ -778,6 +778,8 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", video_negative_prompt="",
                    extra_instructions="", script_avoid="", description_suffix="",
+                   attribution_description="", attribution_hashtags="",
+                   attribution_youtube_tags="",
                    title_style="", voice="", voice_robotic=False, voice_speed=1.0,
                    character_ids=[], auto_accept_characters=False)
         out["name"] = NO_STYLE
