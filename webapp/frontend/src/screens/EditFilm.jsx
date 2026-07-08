@@ -108,8 +108,15 @@ function SceneCard({
   useEffect(() => {
     if (initialTask && initialTask.task_id !== resumedRef.current && !pollRef.current) {
       resumedRef.current = initialTask.task_id
-      setBusy(initialTask.component || '')
-      startPolling(initialTask.task_id)
+      if (initialTask.status === 'error') {
+        // A re-render that failed while we were away — surface it so the user
+        // knows to retry instead of silently seeing the old frame/clip. It's
+        // terminal, so don't start polling; the next re-render clears it.
+        setError(initialTask.error || 'Re-render failed')
+      } else {
+        setBusy(initialTask.component || '')
+        startPolling(initialTask.task_id)
+      }
     }
   }, [initialTask, startPolling])
 
@@ -432,15 +439,21 @@ export default function EditFilm({ workDir, go }) {
 
   useEffect(() => { load() }, [load])
 
-  // On (re)load, pick up any re-render still running on the server so returning
-  // to this page resumes the per-scene spinner + the "Re-rendering…" banner.
+  // On (re)load, pick up re-renders the server still knows about so returning to
+  // this page restores state: running ones resume the per-scene spinner + the
+  // "Re-rendering…" banner; recently-failed ones surface their error on the
+  // scene (otherwise a failure while we were away just shows the old frame/clip).
   useEffect(() => {
     api.filmTasksForWorkDir(workDir).then((r) => {
       const tasks = r.tasks || []
       const byScene = {}
-      tasks.forEach((t) => { byScene[t.scene_id] = t })
+      tasks.forEach((t) => {
+        // A running re-render always wins over a stale error for the same scene.
+        const prev = byScene[t.scene_id]
+        if (!prev || (prev.status === 'error' && t.status === 'running')) byScene[t.scene_id] = t
+      })
       setResumeTasks(byScene)
-      setActiveRenders(tasks.length)
+      setActiveRenders(tasks.filter((t) => t.status === 'running').length)
     }).catch(() => {})
   }, [workDir])
 

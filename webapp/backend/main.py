@@ -6469,6 +6469,11 @@ _film_task_meta: dict = {}
 # resume_generation.py) — so deletion flags them here and they abort at the
 # next checkpoint instead of feeding ComfyUI/TTS more work for a dead film.
 _film_cancelled_tids: set = set()
+# How long a failed re-render stays visible on the edit page after the fact, so a
+# failure that happened while the user was on another screen is still surfaced on
+# their return rather than silently vanishing. In-memory only — a backend restart
+# clears it, and starting a fresh re-render for the scene clears it immediately.
+_FILM_ERROR_TTL_S = 6 * 3600
 
 # One process-wide ComfyUI pool shared by every edit-screen scene re-render.
 # Without it, each re-render built its own WorkerPool, whose per-worker
@@ -6522,7 +6527,26 @@ def _finish_film_task_error(task_id: str, e: Exception) -> None:
     if task_id in _film_cancelled_tids:
         _film_tasks[task_id] = {"status": "cancelled"}
     else:
-        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+        # finished_at lets /films/tasks re-surface this failure (bounded by
+        # _FILM_ERROR_TTL_S) when the user returns to the editor, instead of the
+        # scene silently showing its old frame/clip.
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200],
+                                "finished_at": time.time()}
+
+
+def _clear_finished_film_tasks(work_dir: str, scene_id: int) -> None:
+    """Drop terminal (error/cancelled/done) re-render records for a scene. Called
+    when a fresh re-render starts so it supersedes any earlier failed attempt on
+    that scene (clears the stale 'failed' badge) and terminal records don't pile
+    up in the in-memory task stores."""
+    for tid, meta in list(_film_task_meta.items()):
+        if meta.get("work_dir") != work_dir or meta.get("scene_id") != scene_id:
+            continue
+        if (_film_tasks.get(tid) or {}).get("status") == "running":
+            continue
+        _film_tasks.pop(tid, None)
+        _film_task_meta.pop(tid, None)
+        _film_cancelled_tids.discard(tid)
 
 
 def _cancel_film_tasks(work_dir: Path) -> int:
@@ -7176,6 +7200,10 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         # video as a take so the user can flip back to it.
         video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
 
+    # A fresh re-render supersedes any earlier attempt shown on this scene —
+    # clear a stale "failed" badge and stop terminal records accumulating.
+    _clear_finished_film_tasks(str(wd), sid)
+
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
     _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": body.component}
@@ -7283,23 +7311,37 @@ def film_task_status(task_id: str = Query(...)) -> dict:
 
 @api.get("/api/films/tasks")
 def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
-    """Running re-render tasks for a film, so the edit page can resume its
-    progress indicators after a reload (the task ids live only in client state
-    otherwise)."""
+    """Re-render tasks for a film so the edit page can restore state after a
+    reload (the task ids live only in client state otherwise): running ones
+    resume their spinner, and recently-failed ones re-surface their error so a
+    failure that happened while the user was on another screen isn't lost —
+    otherwise the scene silently shows its old frame/clip."""
     wd = str(Path(work_dir))
+    now = time.time()
     out = []
     for tid, meta in list(_film_task_meta.items()):
         if meta.get("work_dir") != wd:
             continue
         task = _film_tasks.get(tid)
-        if not task or task.get("status") != "running":
+        if not task:
             continue
-        out.append({
-            "task_id": tid,
-            "scene_id": meta.get("scene_id"),
-            "component": meta.get("component"),
-            "step": task.get("step", ""),
-        })
+        status = task.get("status")
+        if status == "running":
+            out.append({
+                "task_id": tid,
+                "scene_id": meta.get("scene_id"),
+                "component": meta.get("component"),
+                "status": "running",
+                "step": task.get("step", ""),
+            })
+        elif status == "error" and now - task.get("finished_at", 0) < _FILM_ERROR_TTL_S:
+            out.append({
+                "task_id": tid,
+                "scene_id": meta.get("scene_id"),
+                "component": meta.get("component"),
+                "status": "error",
+                "error": task.get("error", "Re-render failed"),
+            })
     return {"ok": True, "tasks": out}
 
 
