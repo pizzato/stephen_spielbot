@@ -213,6 +213,16 @@ class StyleSettingsTests(TempConfigCase):
         self.assertEqual(ss["title_style"], "")
         self.assertEqual(ss["voice"], "")
         self.assertFalse(ss["voice_robotic"])
+        # …including the open-source attribution family (footer / X hashtags /
+        # YouTube keyword tags): experiment mode carries no "Generated with…" credit
+        self.assertEqual(ss["attribution_description"], "")
+        self.assertEqual(ss["attribution_hashtags"], "")
+        self.assertEqual(ss["attribution_youtube_tags"], "")
+        # but a real style still gets the default attribution — only NO_STYLE is affected
+        real = app.style_settings(cfg, "A")
+        self.assertTrue(real["attribution_description"])
+        self.assertTrue(real["attribution_hashtags"])
+        self.assertTrue(real["attribution_youtube_tags"])
         # …but render quality + audio mix still come from the default style
         self.assertEqual(ss["music_vol"], 77)
         self.assertEqual(ss["resolution"], "Landscape HD (1024×576)")
