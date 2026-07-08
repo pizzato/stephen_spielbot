@@ -66,6 +66,7 @@ export const api = {
   // Character reference images (global character library). `data` is a base64 / data-URL.
   setCharacterImage: (charId, filename, data) => req('POST', '/characters/image', { char_id: charId, filename, data }),
   clearCharacterImage: (charId) => req('POST', '/characters/image/clear', { char_id: charId }),
+  selectCharacterImage: (charId, versionId) => req('POST', '/characters/image/select', { char_id: charId, version_id: versionId }),
   generateCharacterPortrait: (charId, extraPrompt) => req('POST', '/characters/portrait', { char_id: charId, extra_prompt: extraPrompt || '' }),
 
   // Per-script characters (main-character consistency). Job-scoped: they live in
