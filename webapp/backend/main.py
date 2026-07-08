@@ -6470,6 +6470,41 @@ _film_task_meta: dict = {}
 # next checkpoint instead of feeding ComfyUI/TTS more work for a dead film.
 _film_cancelled_tids: set = set()
 
+# One process-wide ComfyUI pool shared by every edit-screen scene re-render.
+# Without it, each re-render built its own WorkerPool, whose per-worker
+# semaphore then gated nothing across requests: clicking regenerate on many
+# scenes submitted them all to ComfyUI at once, piling extra jobs onto the busy
+# workers. Anything left *pending* behind a running job for >_PENDING_TIMEOUT
+# (180s, see pipeline/comfyui.py) is deleted by the worker-stuck safety valve,
+# so every re-render past the worker count failed silently. Sharing one pool
+# makes acquire() a real FIFO queue — extra re-renders wait for a free worker
+# instead of being killed.
+_edit_render_pool = None
+_edit_render_pool_key: tuple = ()
+_edit_render_pool_lock = threading.Lock()
+
+
+def _shared_edit_render_pool():
+    """Get-or-create the shared re-render WorkerPool over the reachable workers,
+    or None when none are reachable. Rebuilt only when the reachable set changes."""
+    global _edit_render_pool, _edit_render_pool_key
+    from pipeline.worker_pool import WorkerPool, alive_workers
+    # Re-rendering means the UI is in use — keep the main render reserving a
+    # worker for UI work (issue #98), mirroring _preview_worker_urls().
+    ui_activity.mark_active()
+    cfg = gapp.load_config()
+    try:
+        urls = alive_workers(cfg.get("comfy_workers", []))
+    except Exception as exc:
+        gapp.logger.warning("Re-render worker probe failed: %s", exc)
+        return None
+    key = tuple(sorted(urls))
+    with _edit_render_pool_lock:
+        if _edit_render_pool is None or _edit_render_pool_key != key:
+            _edit_render_pool = WorkerPool(list(urls))
+            _edit_render_pool_key = key
+        return _edit_render_pool
+
 
 class _FilmTaskCancelled(Exception):
     """Raised inside a re-render worker when its film was deleted mid-task."""
@@ -6884,13 +6919,10 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     cfg = gapp.load_config()
     engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
-    worker_urls = gapp._preview_worker_urls()
-    if not worker_urls:
+    pool = _shared_edit_render_pool()
+    if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
         return
-
-    from pipeline.worker_pool import WorkerPool
-    pool = WorkerPool(worker_urls)
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     preview = wd / f"scene_{sid:02d}_preview.png"
@@ -6954,13 +6986,10 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
 
     cfg = gapp.load_config()
     engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
-    worker_urls = gapp._preview_worker_urls()
-    if not worker_urls:
+    pool = _shared_edit_render_pool()
+    if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
         return
-
-    from pipeline.worker_pool import WorkerPool
-    pool = WorkerPool(worker_urls)
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     final_path = wd / f"scene_{sid:02d}_final.mp4"
