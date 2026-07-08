@@ -77,6 +77,7 @@ export const api = {
   deleteScriptCharacter: (jobId, charId) => req('DELETE', `/jobs/${jobId}/characters/${charId}`),
   setScriptCharacterImage: (jobId, charId, filename, data) => req('POST', `/jobs/${jobId}/characters/${charId}/image`, { filename, data }),
   clearScriptCharacterImage: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/clear`),
+  selectScriptCharacterImage: (jobId, charId, versionId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/select`, { version_id: versionId }),
   generateScriptCharacterPortrait: (jobId, charId, extraPrompt) => req('POST', `/jobs/${jobId}/characters/${charId}/portrait`, { extra_prompt: extraPrompt || '' }),
   promoteScriptCharacter: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/promote`),
 
