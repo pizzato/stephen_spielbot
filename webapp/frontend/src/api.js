@@ -206,6 +206,7 @@ export const api = {
   },
   // multi-channel management (issue #22) — channels live in Settings → YouTube
   ytChannels: () => req('GET', '/youtube/channels'),
+  ytPlaylists: (channel) => req('GET', '/youtube/playlists' + (channel ? `?channel=${encodeURIComponent(channel)}` : '')),
   ytAuthStart: () => req('POST', '/youtube/auth/start'),
   ytAuthPoll: () => req('POST', '/youtube/auth/poll'),
   ytDisconnect: (channel) => req('POST', '/youtube/disconnect', { channel: channel || '' }),
