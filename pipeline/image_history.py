@@ -245,3 +245,97 @@ def cover_history(work_dir: Path) -> dict:
     if selected not in valid:
         selected = versions[-1]["id"] if versions else None
     return {"versions": versions, "selected": selected}
+
+
+# ── per-script character look history ─────────────────────────────────────────
+# Each per-script character has one look image at ``{work_dir}/characters/{id}.png``.
+# We keep prior looks so the user can flip back and choose which one anchors scene
+# generation. Versions live in the same image_history/ dir as ``char_{id}_v{n}.png``;
+# the manifest key is ``char:{id}``. Mirrors the cover helpers above.
+
+
+def _char_key(char_id: str) -> str:
+    return f"char:{char_id}"
+
+
+def _char_canonical(work_dir: Path, char_id: str) -> Path:
+    return Path(work_dir) / "characters" / f"{char_id}.png"
+
+
+def _add_char_version(work_dir: Path, char_id: str, image: Path, entry: dict) -> dict:
+    hist = _hist_dir(work_dir)
+    hist.mkdir(parents=True, exist_ok=True)
+    vid = int(entry.get("next_id", 1))
+    fname = f"char_{char_id}_v{vid}.png"
+    shutil.copy2(image, hist / fname)
+    entry.setdefault("versions", []).append({"id": vid, "file": fname})
+    entry["selected"] = vid
+    entry["next_id"] = vid + 1
+    return entry
+
+
+def char_seed_if_empty(work_dir: Path, char_id: str, current: Path) -> None:
+    """Capture an existing look as the first kept version before it's overwritten."""
+    work_dir, current = Path(work_dir), Path(current)
+    if not current.exists():
+        return
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_char_key(char_id)) or {"versions": [], "selected": None, "next_id": 1}
+        if entry.get("versions"):
+            return
+        _add_char_version(work_dir, char_id, current, entry)
+        data[_char_key(char_id)] = entry
+        _save(work_dir, data)
+
+
+def char_record(work_dir: Path, char_id: str, image: Path) -> dict:
+    """Add the just-generated/uploaded look as a new selected version."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_char_key(char_id)) or {"versions": [], "selected": None, "next_id": 1}
+        _add_char_version(work_dir, char_id, Path(image), entry)
+        data[_char_key(char_id)] = entry
+        _save(work_dir, data)
+    return char_history(work_dir, char_id)
+
+
+def char_select(work_dir: Path, char_id: str, version_id: int) -> Path:
+    """Copy a kept look version onto the canonical characters/{id}.png and return it."""
+    work_dir = Path(work_dir)
+    version_id = int(version_id)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_char_key(char_id)) or {"versions": [], "selected": None, "next_id": 1}
+        match = next((v for v in entry.get("versions", []) if int(v["id"]) == version_id), None)
+        if match is None:
+            raise ValueError(f"No character look version {version_id} for {char_id}")
+        src = _hist_dir(work_dir) / match["file"]
+        if not src.exists():
+            raise FileNotFoundError(f"Character look version file missing: {src}")
+        canonical = _char_canonical(work_dir, char_id)
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, canonical)
+        entry["selected"] = version_id
+        data[_char_key(char_id)] = entry
+        _save(work_dir, data)
+        return canonical
+
+
+def char_history(work_dir: Path, char_id: str) -> dict:
+    """Return ``{"versions": [{"id", "path"}], "selected": id|None}`` for a character."""
+    work_dir = Path(work_dir)
+    data = _load(work_dir)
+    entry = data.get(_char_key(char_id)) or {"versions": [], "selected": None, "next_id": 1}
+    hist = _hist_dir(work_dir)
+    versions = []
+    for v in entry.get("versions", []):
+        f = hist / v["file"]
+        if f.exists():
+            versions.append({"id": int(v["id"]), "path": str(f)})
+    selected = entry.get("selected")
+    valid = {v["id"] for v in versions}
+    if selected not in valid:
+        selected = versions[-1]["id"] if versions else None
+    return {"versions": versions, "selected": selected}

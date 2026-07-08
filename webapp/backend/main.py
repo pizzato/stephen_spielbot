@@ -179,6 +179,7 @@ def _character_to_json(wd: Path, c: dict) -> dict:
         "description": c.get("description", ""),
         "has_image": has_image,
         "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has_image else "",
+        "history": image_history.char_history(wd, c.get("id", "")),
     }
 
 
@@ -560,6 +561,10 @@ class ScriptCharacterPortrait(BaseModel):
     extra_prompt: str = ""
 
 
+class ScriptCharacterSelect(BaseModel):
+    version_id: int
+
+
 def _job_wd_or_404(job_id: str) -> Path:
     wd = gapp._job_work_dir(job_id)
     if wd is None or not Path(wd).exists() or not _safe_under(Path(wd), gapp.OUTPUT_DIR):
@@ -622,6 +627,17 @@ def clear_script_character_image(job_id: str, char_id: str) -> dict:
     try:
         gapp.clear_script_character_image(wd, char_id)
     except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/image/select")
+def select_script_character_image(job_id: str, char_id: str, body: ScriptCharacterSelect) -> dict:
+    """Make a previously-kept look version this character's current image."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.select_script_character_image(wd, char_id, int(body.version_id))
+    except (ValueError, FileNotFoundError) as e:
         raise HTTPException(404, str(e))
     return _script_chars_ok(wd)
 
