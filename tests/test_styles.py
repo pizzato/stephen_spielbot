@@ -97,6 +97,15 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(cfg["default_visual_style"], "")
         self.assertEqual(cfg["music_vol"], app.DEFAULT_CFG["music_vol"])
 
+    def test_negative_prompt_and_script_avoid_default_blank_and_mirror(self):
+        cfg = app.load_config()
+        st = cfg["styles"][0]
+        self.assertEqual(st["video_negative_prompt"], "")
+        self.assertEqual(st["script_avoid"], "")
+        # flat keys mirror the (blank) default style
+        self.assertEqual(cfg["default_video_negative_prompt"], "")
+        self.assertEqual(cfg["script_avoid"], "")
+
     def test_install_seeded_worker_lists_still_count_as_fresh(self):
         self.write_config({"comfy_workers": ["http://s1:8188"], "tts_workers": ["s1"]})
         cfg = app.load_config()
@@ -208,6 +217,23 @@ class StyleSettingsTests(TempConfigCase):
         self.assertEqual(ss["music_vol"], 77)
         self.assertEqual(ss["resolution"], "Landscape HD (1024×576)")
         self.assertEqual(ss["lora_strength"], 0.4)
+
+    def test_negative_prompt_and_script_avoid_resolve_per_style(self):
+        self.write_config({
+            "styles": [_style("A"),
+                       _style("B", video_negative_prompt="blurry, watermark",
+                              script_avoid="no politics")],
+            "default_style": "A",
+        })
+        cfg = app.load_config()
+        ss = app.style_settings(cfg, "B")
+        self.assertEqual(ss["video_negative_prompt"], "blurry, watermark")
+        self.assertEqual(ss["script_avoid"], "no politics")
+        # NO_STYLE imposes nothing content-shaped: both blank here (the render-time
+        # video negative then falls back to the built-in default downstream).
+        ns = app.style_settings(cfg, app.NO_STYLE)
+        self.assertEqual(ns["script_avoid"], "")
+        self.assertEqual(ns["video_negative_prompt"], "")
 
     def test_no_style_suppresses_profile_visual_style_merge(self):
         self.write_config({
@@ -331,6 +357,44 @@ class StartGenerationStyleTests(TempConfigCase):
         self.assertEqual(jc["default_voice"], "")    # no voice imposed → F5 default
         self.assertFalse(jc["voice_robotic"])
         self.assertEqual(jc["voice_speed"], 1.0)     # natural pace, not style A's
+
+    def _seed_with_negative(self, negative):
+        """Seed a job whose style carries a custom video negative prompt."""
+        self.write_config({
+            "styles": [_style("A"), _style("B", video_negative_prompt=negative)],
+            "default_style": "A",
+        })
+        work_dir = self.output_dir / "neg-job-20260610-101010"
+        work_dir.mkdir()
+        job_id = job_id_from_work_dir(work_dir)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(job_id, work_dir, "Neg job", config={"style_name": "B"})
+            store.upsert_scenes(job_id, [{
+                "id": 1, "title": "One", "image_prompt": "a frame",
+                "video_prompt": "a move", "narration": "words",
+            }])
+        finally:
+            store.close()
+        return job_id, work_dir
+
+    def test_job_config_carries_the_styles_video_negative(self):
+        job_id, work_dir = self._seed_with_negative("blurry, watermark, logo")
+        with mock.patch.object(app, "_launch_generation_job", return_value={}):
+            backend.start_generation(backend.GenerateBody(
+                job_id=job_id, work_dir=str(work_dir), video_title="Neg job",
+            ))
+        jc = json.loads((work_dir / "job_config.json").read_text())
+        self.assertEqual(jc["video_negative_prompt"], "blurry, watermark, logo")
+
+    def test_blank_video_negative_falls_back_to_builtin_default(self):
+        job_id, work_dir = self._seed_with_negative("")   # style B leaves it blank
+        with mock.patch.object(app, "_launch_generation_job", return_value={}):
+            backend.start_generation(backend.GenerateBody(
+                job_id=job_id, work_dir=str(work_dir), video_title="Neg job",
+            ))
+        jc = json.loads((work_dir / "job_config.json").read_text())
+        self.assertEqual(jc["video_negative_prompt"], backend.llm.NEGATIVE_PROMPT)
 
 
 class QueueItemStyleTests(TempConfigCase):

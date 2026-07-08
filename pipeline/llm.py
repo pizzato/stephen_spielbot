@@ -213,7 +213,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      api_key: str, model: str,
                      video_title: str | None = None,
                      video_style_hint: str | None = None,
-                     character_sheet: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                     character_sheet: str | None = None,
+                     avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -232,6 +233,11 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
     video_style_note = (
         f'\nMOTION DIRECTION — apply to EVERY scene\'s "video_prompt": {video_style_hint.strip()}'
         if video_style_hint and video_style_hint.strip() else ""
+    )
+    avoid_note = (
+        f"\nAVOID — do NOT mention, depict, or reference any of the following anywhere "
+        f"in the script (narration, titles, or prompts): {avoid_hint.strip()}"
+        if avoid_hint and avoid_hint.strip() else ""
     )
     character_note = (
         f"\n{character_sheet.strip()}"
@@ -252,6 +258,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         first_batch=first_batch,
         style_note=style_note,
         video_style_note=video_style_note,
+        avoid_note=avoid_note,
         character_note=character_note,
         conclusion_note=conclusion_note,
     )
@@ -307,6 +314,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             batch_end=batch_end,
             ctx_str=ctx_str,
             video_style_note=video_style_note,
+            avoid_note=avoid_note,
             character_note=character_note,
             conclusion_note=conclusion_note,
         )
@@ -413,11 +421,17 @@ def _get_field(text: str, key: str) -> str:
 def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
                           url: str, model: str,
                           video_title: str | None = None,
-                          character_sheet: str | None = None) -> dict:
+                          character_sheet: str | None = None,
+                          avoid_hint: str | None = None) -> dict:
     style_note = (
         f"\nIMPORTANT: Use exactly this text for the STYLE line: {style_hint}"
         if style_hint and style_hint.strip()
         else ""
+    )
+    avoid_note = (
+        f"\nAVOID — do NOT mention, depict, or reference any of the following anywhere "
+        f"in the script: {avoid_hint.strip()}"
+        if avoid_hint and avoid_hint.strip() else ""
     )
     character_note = (
         f"\n{character_sheet.strip()}"
@@ -433,6 +447,7 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
         n_scenes=n_scenes,
         title_context=title_context,
         style_note=style_note,
+        avoid_note=avoid_note,
         character_note=character_note,
     )
     raw = _local_llm(
@@ -575,7 +590,8 @@ def _local_generate(title: str, n_scenes: int,
                     style_hint: str | None,
                     video_title: str | None = None,
                     video_style_hint: str | None = None,
-                    character_sheet: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                    character_sheet: str | None = None,
+                    avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -587,7 +603,8 @@ def _local_generate(title: str, n_scenes: int,
         )
 
     story      = _local_generate_story(title, n_scenes, style_hint, url, model,
-                                       video_title=video_title, character_sheet=character_sheet)
+                                       video_title=video_title, character_sheet=character_sheet,
+                                       avoid_hint=avoid_hint)
     style      = (style_hint.strip() if style_hint and style_hint.strip()
                   else story.get("style", ""))
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
@@ -657,6 +674,7 @@ def generate_script(
     video_title: str | None = None,
     video_style_hint: str | None = None,
     character_sheet: str | None = None,
+    avoid_hint: str | None = None,
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
@@ -667,6 +685,8 @@ def generate_script(
     character_sheet is a pre-formatted block describing recurring characters and
     their fixed appearance, injected into every batch/scene so named characters
     look consistent (see app._character_sheet).
+    avoid_hint is the per-style "avoid" instruction — topics/words/tropes to keep
+    OUT of the generated script; woven into every batch (see style.script_avoid).
     characters is the list of 0-2 main characters the model identified for THIS
     video, each {name, aliases, description}; [] when the topic has no recurring
     character. These are per-script (not the global catalogue) — the caller
@@ -685,11 +705,12 @@ def generate_script(
         logger.info("Using Claude backend: model=%s", model)
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
-                                character_sheet=character_sheet)
+                                character_sheet=character_sheet, avoid_hint=avoid_hint)
 
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
-                           video_style_hint=video_style_hint, character_sheet=character_sheet)
+                           video_style_hint=video_style_hint, character_sheet=character_sheet,
+                           avoid_hint=avoid_hint)
 
 
 # ── YouTube video prompt generation (director's brief) ───────────────────────

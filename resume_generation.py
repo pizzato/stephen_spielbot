@@ -34,7 +34,7 @@ from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import Scene
+from pipeline.llm import Scene, NEGATIVE_PROMPT
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_scene_image, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
@@ -275,6 +275,9 @@ def main(work_dir: Path) -> None:
             image_prompt=s.get("image_prompt") or s.get("visual_prompt", s["title"]),
             video_prompt=s.get("video_prompt") or s.get("visual_prompt", s["title"]),
             narration=s.get("narration", ""),
+            # Per-style video negative (blank → built-in default). job_config.json
+            # carries the resolved value stamped at render time.
+            negative_prompt=(cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT,
         )
         for s in script_data
     ]
