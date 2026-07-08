@@ -513,6 +513,7 @@ def upload_video(
     default_language: str = "en",
     default_audio_language: str = "en",
     captions_path: str | None = None,
+    playlist_id: str = "",
 ) -> dict:
     """Upload video to YouTube. Returns {video_id, url, error}.
 
@@ -521,6 +522,8 @@ def upload_video(
     ``default_language``/``default_audio_language`` declare the metadata and
     spoken language (BCP-47, e.g. "en"). ``captions_path`` is an optional SRT
     file uploaded as a subtitle track once the video is in place.
+    ``playlist_id`` (optional) adds the finished video to that playlist (which
+    must belong to ``channel``); best-effort, never fails the upload.
     """
     creds = _load_credentials(client_secrets_path, channel)
     if not creds:
@@ -592,6 +595,19 @@ def upload_video(
             except Exception as exc:
                 logger.warning("Caption upload failed: %s", exc)
 
+        if playlist_id and video_id:
+            try:
+                youtube.playlistItems().insert(
+                    part="snippet",
+                    body={"snippet": {
+                        "playlistId": playlist_id,
+                        "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                    }},
+                ).execute()
+                logger.info("Added video %s to playlist %s", video_id, playlist_id)
+            except Exception as exc:
+                logger.warning("Add to playlist %s failed: %s", playlist_id, exc)
+
         logger.info("YouTube upload complete: %s (video_id=%s)", title, video_id)
         return {
             "video_id": video_id,
@@ -605,6 +621,73 @@ def upload_video(
                                        "rateLimitExceeded", "Video Uploads per day")):
             return {"video_id": "", "url": "", "error": f"UPLOAD_LIMIT_EXCEEDED: {err_str[:300]}"}
         return {"video_id": "", "url": "", "error": err_str[:400]}
+
+
+def list_playlists(client_secrets_path: str, channel: str = "") -> dict:
+    """Return {playlists: [{id, title, item_count}], error} for one channel.
+
+    Lists the connected account's own playlists so a style can pick which one its
+    uploads are added to. Read-only; covered by the youtube.force-ssl scope.
+    """
+    creds = _load_credentials(client_secrets_path, channel)
+    if not creds:
+        return {"playlists": [], "error": "Not authenticated. Connect YouTube first."}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        youtube = build("youtube", "v3", credentials=creds)
+        out: list[dict] = []
+        next_page: str | None = None
+        while True:
+            resp = youtube.playlists().list(
+                part="snippet,contentDetails", mine=True,
+                maxResults=50, pageToken=next_page,
+            ).execute()
+            for item in resp.get("items", []):
+                out.append({
+                    "id": item["id"],
+                    "title": item.get("snippet", {}).get("title", ""),
+                    "item_count": item.get("contentDetails", {}).get("itemCount", 0),
+                })
+            next_page = resp.get("nextPageToken")
+            if not next_page:
+                break
+        return {"playlists": out, "error": ""}
+    except Exception as exc:
+        logger.warning("List playlists failed: %s", exc)
+        return {"playlists": [], "error": str(exc)[:300]}
+
+
+def ensure_playlist(client_secrets_path: str, title: str, channel: str = "",
+                    description: str = "", privacy_status: str = "public") -> dict:
+    """Find the channel's playlist titled ``title`` (case-insensitive), or create
+    it. Returns {playlist_id, created, error}. Used for per-style auto-create.
+    """
+    title = (title or "").strip()
+    if not title:
+        return {"playlist_id": "", "created": False, "error": "Empty playlist title."}
+    existing = list_playlists(client_secrets_path, channel)
+    if existing.get("error"):
+        return {"playlist_id": "", "created": False, "error": existing["error"]}
+    for pl in existing["playlists"]:
+        if pl["title"].strip().lower() == title.lower():
+            return {"playlist_id": pl["id"], "created": False, "error": ""}
+    try:
+        _Creds, _Req, _Flow, build, _MFU = _google_imports()
+        creds = _load_credentials(client_secrets_path, channel)
+        youtube = build("youtube", "v3", credentials=creds)
+        resp = youtube.playlists().insert(
+            part="snippet,status",
+            body={
+                "snippet": {"title": title, "description": description},
+                "status": {"privacyStatus": privacy_status},
+            },
+        ).execute()
+        pid = resp.get("id", "")
+        logger.info("Created playlist %s (%s) on channel %s", pid, title, channel or "default")
+        return {"playlist_id": pid, "created": True, "error": ""}
+    except Exception as exc:
+        logger.warning("Create playlist %r failed: %s", title, exc)
+        return {"playlist_id": "", "created": False, "error": str(exc)[:300]}
 
 
 def set_thumbnail(client_secrets_path: str, video_id: str, thumbnail_path: str, channel: str = "") -> dict:

@@ -3976,6 +3976,15 @@ def yt_auth_status(channel: str = Query("")) -> dict:
         return {"connected": False, "channel_name": "", "error": str(e)[:200]}
 
 
+@api.get("/api/youtube/playlists")
+def yt_playlists(channel: str = Query("")) -> dict:
+    """A channel's playlists, for the per-style playlist picker in Settings."""
+    try:
+        return yt.list_playlists(_client_secrets_path(), channel=channel)
+    except Exception as e:
+        return {"playlists": [], "error": str(e)[:200]}
+
+
 @api.post("/api/youtube/auth/start")
 def yt_auth_start() -> dict:
     """Start the OAuth flow that connects a (new or re-connected) channel."""
@@ -4824,11 +4833,36 @@ def _post_completion_reply(queue_item_id: str, title: str, url: str) -> dict:
 _upload_tasks: dict = {}
 
 
+def _resolve_upload_playlist(cfg: dict, wd: Path, channel: str) -> str:
+    """Concrete playlist id this film should be added to, or "".
+
+    Reads the style's youtube_playlist_id: "" → none; "__auto__" → find-or-create
+    a playlist named after the style on its channel; anything else → that id.
+    Best-effort — a lookup/creation failure just skips the playlist step.
+    """
+    style = _work_dir_style_name(wd)
+    choice = gapp.playlist_for_style(cfg, style)
+    if not choice:
+        return ""
+    if choice == "__auto__":
+        try:
+            res = yt.ensure_playlist(_client_secrets_path(), title=style or "Uploads",
+                                     channel=channel)
+            return res.get("playlist_id", "")
+        except Exception as exc:
+            gapp.logger.warning("Auto playlist for style %r failed: %s", style, exc)
+            return ""
+    return choice
+
+
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
         channel = body_dict.get("channel", "")
         language, attach_captions = _upload_prefs_for_channel(gapp.load_config(), channel)
+        # Per-style playlist the finished video is added to (resolved here so the
+        # "__auto__" find-or-create can hit the API off the render path).
+        playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
         # Build a subtitle track from the known script so YouTube shows accurate
         # captions instead of relying on speech recognition. Best-effort, and
         # only when the channel has captions enabled.
@@ -4861,6 +4895,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 channel=channel, tags=yt_tags, keywords=yt_tags,
                 captions_path=caption_file, captions=caption_file,
                 default_language=language, default_audio_language=language,
+                playlist_id=playlist_id,
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
