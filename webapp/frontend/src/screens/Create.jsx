@@ -101,10 +101,10 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [videoTitle, direction, resolution, styleName])
 
   // Improve the title or direction in place via the LLM (issue #88).
-  const improve = async (field) => {
+  const improve = async (field, instruction = '') => {
     setImproving(field); setError('')
     try {
-      const r = await api.improveBrief(field, videoTitle, direction, profile ? (profile.name || '') : NO_STYLE)
+      const r = await api.improveBrief(field, videoTitle, direction, profile ? (profile.name || '') : NO_STYLE, instruction)
       if (field === 'title') setVideoTitle(r.value)
       else setDirection(r.value)
     } catch (e) { setError(e.message) } finally { setImproving('') }
@@ -163,11 +163,11 @@ export default function Create({ seed, meta, onGenerated }) {
                 </select>
               </Field>
             )}
-            <Field label={<RegenLabel busy={improving === 'title'} disabled={busy} onRegen={() => improve('title')}>Title</RegenLabel>}>
+            <Field label={<RegenLabel busy={improving === 'title'} disabled={busy} onRegen={(instr) => improve('title', instr)} chips={['Shorter', 'Punchier', 'More specific']}>Title</RegenLabel>}>
               <input className="input input--xl" placeholder="The rise and fall of the Roman Empire"
                 value={videoTitle} onChange={(e) => setVideoTitle(e.target.value)} />
             </Field>
-            <Field label={<RegenLabel busy={improving === 'direction'} disabled={busy} onRegen={() => improve('direction')}>Direction</RegenLabel>}
+            <Field label={<RegenLabel busy={improving === 'direction'} disabled={busy} onRegen={(instr) => improve('direction', instr)} chips={['Sharper angle', 'More detail', 'Simpler']}>Direction</RegenLabel>}
               hint="Optional — steer the angle, tone, or what to emphasise.">
               <textarea className="textarea" rows={3} placeholder="Focus on the economic decline, the military overreach, and the slow rise of Christianity."
                 value={direction} onChange={(e) => setDirection(e.target.value)} />

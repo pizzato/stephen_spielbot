@@ -406,3 +406,33 @@ body {
   .film-media { flex-direction: column; }
   .film-media > div { flex: 0 0 auto !important; width: 100%; }
 }
+
+/* ── Guided re-generation: "tell it how" popover (companion caret) ─────────── */
+.regen-split { display: inline-flex; align-items: center; gap: 4px; vertical-align: middle; }
+.regen-split__main { padding: 3px 9px; font-size: 11px; }
+.regen-split--block { display: flex; width: 100%; }
+.regen-split__grow { flex: 1; }
+
+.regen-guide { position: relative; display: inline-flex; }
+.regen-guide__caret { padding: 3px 7px; font-size: 11px; line-height: 1; }
+
+.regen-guide__pop {
+  position: absolute; top: calc(100% + 6px); z-index: 60;
+  width: 268px; max-width: 78vw;
+  background: var(--surface); border: 1px solid var(--line-2);
+  border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+  padding: 12px; text-align: left;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.regen-guide__pop--right { right: 0; }
+.regen-guide__pop--left  { left: 0; }
+.regen-guide__title { font-size: 12px; font-weight: 700; color: var(--ink); }
+.regen-guide__input { font-size: 13px; padding: 8px 10px; resize: vertical; min-height: 42px; }
+.regen-guide__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.regen-guide__chip {
+  font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line-2); background: var(--paper-2); color: var(--ink-2);
+  cursor: pointer; transition: all .15s;
+}
+.regen-guide__chip:hover { background: var(--accent-soft); color: var(--accent-ink); border-color: var(--accent-soft); }
+.regen-guide__actions { display: flex; justify-content: flex-end; }

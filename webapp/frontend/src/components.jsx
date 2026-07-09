@@ -31,17 +31,100 @@ export function Card({ span, rowSpan, well, padLg, link, onClick, href, classNam
   return <div className={cls} onClick={onClick} style={style}>{children}</div>
 }
 
-// A field label with an inline "Re-generate" button on the right (issue #88).
-// `busy` disables the button and swaps in `busyLabel`; `onRegen` runs the LLM
-// regeneration. Pass it as the `label` of a <Field>.
-export function RegenLabel({ children, busy, disabled, onRegen, icon, label = 'Re-generate', busyLabel = 'Writing…' }) {
+// A "tell it how" popover: a small caret button beside a Re-generate control that
+// opens a text box for a one-off regeneration instruction — "shorten it", "make it
+// all robots". Calls onSubmit(instruction) then closes. `chips` are optional quick
+// presets; `align` places the popover to the 'left' or 'right' of the caret.
+export function RegenGuide({ busy, disabled, onSubmit, chips = [],
+  placeholder = 'e.g. shorten it, make it all robots…', align = 'right' }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const wrapRef = useRef(null)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    const t = setTimeout(() => inputRef.current?.focus(), 0)
+    return () => {
+      document.removeEventListener('mousedown', onDoc)
+      document.removeEventListener('keydown', onKey)
+      clearTimeout(t)
+    }
+  }, [open])
+
+  const submit = () => { onSubmit((text || '').trim()); setText(''); setOpen(false) }
+
+  return (
+    <span className="regen-guide" ref={wrapRef}>
+      <button type="button" className="btn btn--quiet regen-guide__caret"
+        aria-label="Re-generate with an instruction" title="Re-generate with an instruction"
+        disabled={disabled}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((v) => !v) }}>
+        <Icon name="chevron-down" />
+      </button>
+      {open && (
+        <div className={`regen-guide__pop regen-guide__pop--${align}`} onClick={(e) => e.stopPropagation()}>
+          <div className="regen-guide__title">Tell it how…</div>
+          <textarea ref={inputRef} className="textarea regen-guide__input" rows={2} value={text}
+            placeholder={placeholder} onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() } }} />
+          {chips.length ? (
+            <div className="regen-guide__chips">
+              {chips.map((c) => (
+                <button key={c} type="button" className="regen-guide__chip" onClick={() => setText(c)}>{c}</button>
+              ))}
+            </div>
+          ) : null}
+          <div className="regen-guide__actions">
+            <button type="button" className="btn btn--primary btn--sm" disabled={busy}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); submit() }}>
+              <Icon name="rotate" /> Re-generate
+            </button>
+          </div>
+        </div>
+      )}
+    </span>
+  )
+}
+
+// A field label with an inline "Re-generate" button on the right (issue #88) plus
+// a companion caret that opens the "tell it how" instruction popover. `busy`
+// disables the button and swaps in `busyLabel`; `onRegen(instruction)` runs the
+// LLM regeneration ('' for a plain click). Pass it as the `label` of a <Field>.
+export function RegenLabel({ children, busy, disabled, onRegen, icon,
+  label = 'Re-generate', busyLabel = 'Writing…', chips }) {
   return (
     <span className="row center between">
       <span className="row center gap-10">{icon ? <Icon name={icon} style={{ color: 'var(--ink-3)', width: 16 }} /> : null}{children}</span>
-      <button type="button" className="btn btn--quiet" style={{ padding: '3px 9px', fontSize: 11 }}
-        disabled={busy || disabled} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRegen() }}>
-        <Icon name="rotate" /> {busy ? busyLabel : label}
+      <span className="regen-split">
+        <button type="button" className="btn btn--quiet regen-split__main"
+          disabled={busy || disabled} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRegen('') }}>
+          <Icon name="rotate" /> {busy ? busyLabel : label}
+        </button>
+        <RegenGuide busy={busy} disabled={busy || disabled} onSubmit={(instr) => onRegen(instr)} chips={chips} />
+      </span>
+    </span>
+  )
+}
+
+// A Re-generate button with a companion "tell it how" caret, for the plain-button
+// regen sites (scene image, cover, character look, film image/video re-render).
+// A plain click runs onRegen(''); the caret popover runs onRegen(instruction).
+export function GuidedRegenButton({ label, busyLabel, busy, disabled, icon = 'rotate-right',
+  variant = 'ghost', size, block, onRegen, chips, align = 'right', placeholder }) {
+  const sizeCls = size === 'sm' ? ' btn--sm' : size === 'lg' ? ' btn--lg' : ''
+  return (
+    <span className={`regen-split${block ? ' regen-split--block' : ''}`}>
+      <button type="button" className={`btn btn--${variant}${sizeCls}${block ? ' regen-split__grow' : ''}`}
+        disabled={busy || disabled} onClick={(e) => { e.preventDefault(); e.stopPropagation(); onRegen('') }}>
+        <Icon name={icon} /> {busy ? (busyLabel || label) : label}
       </button>
+      <RegenGuide busy={busy} disabled={busy || disabled} onSubmit={(instr) => onRegen(instr)}
+        chips={chips} align={align} placeholder={placeholder} />
     </span>
   )
 }

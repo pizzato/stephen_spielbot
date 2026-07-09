@@ -2123,6 +2123,19 @@ def clear_script_character_image(work_dir, char_id: str) -> list[dict]:
     return _write_script_characters(work_dir, chars)
 
 
+def _apply_prompt_instruction(prompt: str, instruction: str) -> str:
+    """Append a one-off "tell it how" steering instruction to a render prompt.
+
+    Kept transient — it is NOT persisted to the scene's image_prompt, so it only
+    steers this single render (e.g. "make it all robots"). Empty → unchanged."""
+    instruction = (instruction or "").strip()[:500]
+    if not instruction:
+        return prompt
+    if not (prompt or "").strip():
+        return instruction
+    return f"{prompt}. {instruction}"
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,
@@ -2133,6 +2146,7 @@ def _generate_active_scene_preview(
     *,
     force: bool = False,
     worker_pool: WorkerPool | None = None,
+    instruction: str = "",
 ) -> Path:
     work_dir = _job_work_dir(job_id)
     if work_dir is None:
@@ -2185,6 +2199,8 @@ def _generate_active_scene_preview(
     # global catalogue ones the style opted into.
     base_prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+    # One-off user steering from the Re-generate popover (not persisted).
+    prompt = _apply_prompt_instruction(prompt, instruction)
     # Anchor featured characters to their reference image (FLUX.2 only; the engine
     # ignores these otherwise).
     reference_images = _scene_reference_images(base_prompt, scene, cfg, style_name, work_dir)

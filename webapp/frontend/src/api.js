@@ -96,16 +96,16 @@ export const api = {
     }
   },
   // Improve the Create brief's title or direction in place (issue #88).
-  improveBrief: (field, title, direction, styleName) =>
-    req('POST', '/create/improve', { field, title, direction, style_name: styleName || '' }),
+  improveBrief: (field, title, direction, styleName, instruction) =>
+    req('POST', '/create/improve', { field, title, direction, style_name: styleName || '', instruction: instruction || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
-  regenPreview: (jobId, sceneId, resolution, style) =>
-    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
+  regenPreview: (jobId, sceneId, resolution, style, instruction) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}&instruction=${encodeURIComponent(instruction || '')}`),
   generateAllPreviews: (jobId, resolution, style) =>
     req('POST', `/jobs/${jobId}/previews?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
   regenAllPreviews: (jobId, resolution, style) =>
@@ -167,7 +167,7 @@ export const api = {
   rejectComment: (commentId) => req('POST', '/youtube/comments/reject', { comment_id: commentId }),
   replyComment: (commentId, text) => req('POST', '/youtube/comments/reply', { comment_id: commentId, text }),
   // LLM-draft a reply to any comment (issue #88): manual composer + draft regenerate.
-  draftCommentReply: (commentId) => req('POST', '/youtube/comments/draft-reply', { comment_id: commentId }),
+  draftCommentReply: (commentId, instruction) => req('POST', '/youtube/comments/draft-reply', { comment_id: commentId, instruction: instruction || '' }),
   // community engagement drafts (issue #84)
   sendCommunityReply: (commentId, text) => req('POST', '/youtube/comments/community/send', { comment_id: commentId, text }),
   dismissCommunityReply: (commentId) => req('POST', '/youtube/comments/community/dismiss', { comment_id: commentId }),
@@ -215,7 +215,7 @@ export const api = {
   ytPostOptions: () => req('GET', '/youtube/post/options'),
   ytPostPrefill: (workDir) => req('GET', `/youtube/post/prefill?work_dir=${encodeURIComponent(workDir || '')}`),
   ytDescribe: (body) => req('POST', '/youtube/describe', body),
-  ytPostTitle: (workDir, title) => req('POST', '/youtube/post/title', { work_dir: workDir, title: title || '' }),
+  ytPostTitle: (workDir, title, instruction) => req('POST', '/youtube/post/title', { work_dir: workDir, title: title || '', instruction: instruction || '' }),
   // Persist edited cover title + description back to the script.
   ytPostSave: (body) => req('POST', '/youtube/post/save', body),
   ytCover: (body) => req('POST', '/youtube/cover', body),
@@ -258,7 +258,7 @@ export const api = {
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
-  rerenderFilmScene: (workDir, sceneId, component) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component }),
+  rerenderFilmScene: (workDir, sceneId, component, instruction) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component, instruction: instruction || '' }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
   selectFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-select`, { work_dir: workDir, version_id: versionId }),
   inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip, RegenLabel } from '../components.jsx'
+import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip, RegenLabel, GuidedRegenButton } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -144,19 +144,19 @@ export default function Publish({ initialWorkDir, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const regenTitle = async () => {
+  const regenTitle = async (instruction = '') => {
     setBusy('title'); setError('')
     try {
-      const r = await api.ytPostTitle(workDir, title)
+      const r = await api.ytPostTitle(workDir, title, instruction)
       setTitle(r.title || '')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const regenCover = async () => {
+  const regenCover = async (instruction = '') => {
     setBusy('cover'); setError('')
     let pollTimer = null
     try {
-      const { task_id: tid } = await api.ytCover({ work_dir: workDir, title })
+      const { task_id: tid } = await api.ytCover({ work_dir: workDir, title, instruction })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -317,7 +317,7 @@ export default function Publish({ initialWorkDir, go }) {
               )}
             </div>
           </Field>
-          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters (YouTube title).">
+          <Field label={<RegenLabel busy={busy === 'title'} disabled={!workDir} onRegen={regenTitle} chips={['Shorter', 'Punchier', 'More literal']}>Title</RegenLabel>} hint="Max 100 characters (YouTube title).">
             <input className="input" value={title} maxLength={100} onChange={(e) => setTitle(e.target.value)} />
           </Field>
           {(dest.youtube || dest.x) && (
@@ -384,12 +384,13 @@ export default function Publish({ initialWorkDir, go }) {
             <Check checked={includeThumbnail} onChange={setIncludeThumbnail}
               label="Upload thumbnail to YouTube" />
           </div>
-          <Button variant="ghost" block icon="rotate-right" disabled={busy === 'cover' || !workDir} onClick={regenCover}>
-            {busy === 'cover'
-              ? (uiWorker?.active && !uiWorker.available && uiWorker.eta_text
-                  ? `Queued — worker free in ${uiWorker.eta_text}…`
-                  : 'Generating cover…')
-              : 'Regenerate cover'}</Button>
+          <GuidedRegenButton block variant="ghost" icon="rotate-right"
+            label="Regenerate cover"
+            busyLabel={uiWorker?.active && !uiWorker.available && uiWorker.eta_text
+              ? `Queued — worker free in ${uiWorker.eta_text}…`
+              : 'Generating cover…'}
+            busy={busy === 'cover'} disabled={busy === 'cover' || !workDir}
+            onRegen={regenCover} chips={['Bolder', 'Simpler', 'More dramatic']} />
           {busy !== 'cover' && uiWorker?.active && !uiWorker.available && uiWorker.eta_text && (
             <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
               Render busy — a worker will be free for covers in {uiWorker.eta_text}.
