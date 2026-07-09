@@ -9,13 +9,16 @@ class PublicConfigTests(unittest.TestCase):
     def test_secret_values_are_blanked_with_set_flags(self):
         cfg = {
             "claude_api_key": "sk-ant-SECRET",
+            "grok_api_key": "xai-SECRET",
             "hf_token": "hf_SECRET",
             "x_client_secret": "",
         }
         pub = app.public_config(cfg)
         self.assertEqual(pub["claude_api_key"], "")
+        self.assertEqual(pub["grok_api_key"], "")
         self.assertEqual(pub["hf_token"], "")
         self.assertTrue(pub["claude_api_key_set"])
+        self.assertTrue(pub["grok_api_key_set"])
         self.assertTrue(pub["hf_token_set"])
         self.assertFalse(pub["x_client_secret_set"])
 
@@ -32,10 +35,11 @@ class PublicConfigTests(unittest.TestCase):
 
 class MergeConfigUpdateTests(unittest.TestCase):
     def test_blank_secret_keeps_stored_value(self):
-        current = {"claude_api_key": "sk-ant-SECRET", "hf_token": "hf_SECRET"}
-        update = {"claude_api_key": "", "hf_token": ""}
+        current = {"claude_api_key": "sk-ant-SECRET", "grok_api_key": "xai-SECRET", "hf_token": "hf_SECRET"}
+        update = {"claude_api_key": "", "grok_api_key": "", "hf_token": ""}
         merged = app.merge_config_update(current, update)
         self.assertEqual(merged["claude_api_key"], "sk-ant-SECRET")
+        self.assertEqual(merged["grok_api_key"], "xai-SECRET")
         self.assertEqual(merged["hf_token"], "hf_SECRET")
 
     def test_new_secret_value_overwrites(self):

@@ -1668,49 +1668,10 @@ _FIELD_INSTRUCTIONS = {
 def _llm_complete(system: str, user: str, cfg: dict, max_tokens: int = 700) -> str:
     """Lightweight direct LLM call honouring the configured backend.
 
-    NOTE: kept self-contained (stdlib urllib) rather than importing
-    pipeline.llm's internals. If pipeline.llm later changes models/prompting,
-    this can be unified with it.
-
-    Raises if the model hit ``max_tokens`` before finishing, so callers that
-    parse the output (e.g. JSON) fail loudly instead of silently dropping a
-    truncated response.
+    Delegates to pipeline.llm._chat_complete so Claude / Grok / local stay in sync.
     """
-    import urllib.request
-    if cfg.get("llm_backend", "local") == "claude":
-        key = cfg.get("claude_api_key", "")
-        if not key:
-            raise RuntimeError("No Claude API key configured (Settings → LLM backend).")
-        payload = json.dumps({
-            "model": cfg.get("claude_model", "claude-sonnet-4-6"),
-            "max_tokens": max_tokens, "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages", data=payload,
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
-        if data.get("stop_reason") == "max_tokens":
-            raise RuntimeError(
-                f"LLM response was truncated at the {max_tokens}-token limit.")
-        return "".join(b.get("text", "") for b in data.get("content", [])).strip()
-
-    url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
-    payload = json.dumps({
-        "model": cfg.get("local_llm_model", ""),
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": 0.9, "max_tokens": max_tokens,
-    }).encode()
-    req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
-    choice = data["choices"][0]
-    if choice.get("finish_reason") == "length":
-        raise RuntimeError(
-            f"LLM response was truncated at the {max_tokens}-token limit.")
-    return choice["message"]["content"].strip()
+    from pipeline.llm import _chat_complete
+    return _chat_complete(cfg, system, user, max_tokens=max_tokens, label="field_regen")
 
 
 class FieldRegenBody(BaseModel):
@@ -8002,8 +7963,8 @@ def _ensure_descriptions() -> int:
     """Cache YouTube descriptions for completed jobs that don't have one yet.
     Called from the automation loop so it runs server-side, not on browser polls."""
     cfg = gapp.load_config()
-    backend = cfg.get("llm_backend", "local")
-    if backend == "claude" and not cfg.get("claude_api_key", ""):
+    from pipeline.llm import llm_backend_ready
+    if not llm_backend_ready(cfg):
         return 0
     count = 0
     try:
@@ -8031,8 +7992,8 @@ def _ensure_tags() -> int:
     recent jobs; on-demand generation at publish time is the backstop for
     anything not yet warmed."""
     cfg = gapp.load_config()
-    backend = cfg.get("llm_backend", "local")
-    if backend == "claude" and not cfg.get("claude_api_key", ""):
+    from pipeline.llm import llm_backend_ready
+    if not llm_backend_ready(cfg):
         return 0
     seen: set[str] = set()
     candidates: list[str] = []

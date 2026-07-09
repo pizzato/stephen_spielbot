@@ -1040,7 +1040,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
     }
   }
 
-  const isClaude = cfg.llm_backend === 'claude'
+  const llmBackend = cfg.llm_backend || 'local'
 
   return (
     <div>
@@ -1096,16 +1096,31 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
           <Card span={6} className="reveal reveal-d1">
             <span className="label-sm">LLM backend</span>
             <div className="stack gap-22 mt-16">
-              <Field label="Backend">
-                <Segmented value={cfg.llm_backend || 'local'} onChange={(v) => set('llm_backend', v)}
-                  options={[{ value: 'local', label: 'Local (vLLM)' }, { value: 'claude', label: 'Claude' }]} />
+              <Field label="Backend" hint="Scripts, ideas, descriptions, and comment helpers all use this backend.">
+                <Segmented value={llmBackend} onChange={(v) => set('llm_backend', v)}
+                  options={[
+                    { value: 'local', label: 'Local' },
+                    { value: 'claude', label: 'Claude' },
+                    { value: 'grok', label: 'Grok' },
+                  ]} />
               </Field>
-              {isClaude ? (
+              {llmBackend === 'claude' && (
                 <>
                   <Field label="Claude API key"><input className="input" type="password" placeholder={cfg.claude_api_key_set ? '•••••••• (saved — leave blank to keep)' : 'sk-ant-…'} value={cfg.claude_api_key || ''} onChange={(e) => set('claude_api_key', e.target.value)} /></Field>
                   <Field label="Claude model"><input className="input" value={cfg.claude_model || ''} onChange={(e) => set('claude_model', e.target.value)} /></Field>
                 </>
-              ) : (
+              )}
+              {llmBackend === 'grok' && (
+                <>
+                  <Field label="Grok API key" hint="xAI API key (console.x.ai). You can also set XAI_API_KEY in the environment.">
+                    <input className="input" type="password" placeholder={cfg.grok_api_key_set ? '•••••••• (saved — leave blank to keep)' : 'xai-…'} value={cfg.grok_api_key || ''} onChange={(e) => set('grok_api_key', e.target.value)} />
+                  </Field>
+                  <Field label="Grok model" hint="e.g. grok-4.5, grok-3, grok-3-mini">
+                    <input className="input" value={cfg.grok_model || 'grok-4.5'} onChange={(e) => set('grok_model', e.target.value)} />
+                  </Field>
+                </>
+              )}
+              {llmBackend === 'local' && (
                 <>
                   <Field label="Local LLM URL"><input className="input" value={cfg.local_llm_url || ''} onChange={(e) => set('local_llm_url', e.target.value)} /></Field>
                   <Field label="Local LLM model"><input className="input" value={cfg.local_llm_model || ''} onChange={(e) => set('local_llm_model', e.target.value)} /></Field>
