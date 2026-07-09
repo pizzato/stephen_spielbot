@@ -113,6 +113,8 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     try:
         if backend == "claude" and cfg.get("claude_api_key"):
             _fill_via_claude(scenes, title, video_title, cfg)
+        elif backend == "grok":
+            _fill_via_chat(scenes, title, video_title, cfg)
         else:
             _fill_via_local(scenes, title, video_title, cfg)
     except Exception as exc:
@@ -176,18 +178,54 @@ def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dic
                 )}],
             ) as stream:
                 text = "".join(stream.text_stream).strip()
-            if text.startswith("```"):
-                lines = text.splitlines()
-                text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            data = json.loads(text)
-            if not (s.narration or "").strip() and data.get("narration"):
-                s.narration = data["narration"].strip()
-                logger.info("Self-heal: filled scene %d narration via Claude: %r", s.id, s.narration[:60])
-            if not (s.image_prompt or "").strip() and data.get("image_prompt"):
-                s.image_prompt = data["image_prompt"].strip()
-                logger.info("Self-heal: filled scene %d image_prompt via Claude", s.id)
+            _apply_heal_json(s, text, label="Claude")
         except Exception as exc:
             logger.warning("Self-heal: Claude fill failed for scene %d: %s", s.id, exc)
+
+
+def _fill_via_chat(scenes: list[Scene], title: str, video_title: str, cfg: dict) -> None:
+    """Fill empty fields via the configured chat backend (Grok / shared path)."""
+    from pipeline.llm import _chat_complete
+    for s in scenes:
+        if (s.narration or "").strip() and (s.image_prompt or "").strip():
+            continue
+        prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
+        next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
+        ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
+        if next_narr: ctx.append(f'Next scene: "{next_narr}"')
+        need = []
+        if not (s.narration or "").strip():
+            need.append('"narration": exactly 2 sentences, ~18-22 words, calm documentary tone')
+        if not (s.image_prompt or "").strip():
+            need.append('"image_prompt": 60-100 word static scene description for FLUX, no motion verbs')
+        if not need:
+            continue
+        try:
+            text = _chat_complete(
+                cfg,
+                _prompts.system("heal_claude"),
+                _prompts.user("heal_claude", ctx="\n".join(ctx), needed_keys=", ".join(need)),
+                max_tokens=400,
+                label=f"heal scene {s.id}",
+            )
+            _apply_heal_json(s, text, label="Grok")
+        except Exception as exc:
+            logger.warning("Self-heal: chat fill failed for scene %d: %s", s.id, exc)
+
+
+def _apply_heal_json(s: Scene, text: str, label: str = "LLM") -> None:
+    """Parse a heal_claude JSON blob and apply non-empty fields onto *s*."""
+    if text.startswith("```"):
+        lines = text.splitlines()
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    data = json.loads(text)
+    if not (s.narration or "").strip() and data.get("narration"):
+        s.narration = data["narration"].strip()
+        logger.info("Self-heal: filled scene %d narration via %s: %r", s.id, label, s.narration[:60])
+    if not (s.image_prompt or "").strip() and data.get("image_prompt"):
+        s.image_prompt = data["image_prompt"].strip()
+        logger.info("Self-heal: filled scene %d image_prompt via %s", s.id, label)
 
 
 def _fill_via_local(scenes: list[Scene], title: str, video_title: str, cfg: dict) -> None:
