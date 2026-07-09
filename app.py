@@ -163,6 +163,10 @@ DEFAULT_CFG = {
     "local_llm_model": "openai/gpt-oss-120b",
     "claude_api_key": "",
     "claude_model": "claude-sonnet-4-6",
+    # Grok (xAI) — OpenAI-compatible Chat Completions at api.x.ai
+    "grok_api_key": "",
+    "grok_model": "grok-4.5",
+    "grok_api_url": "https://api.x.ai/v1/chat/completions",
     # FLUX image generation for scene previews
     "flux_model":    "flux1-schnell-fp8.safetensors",
     "flux_clip_t5":  "t5xxl_fp8_e4m3fn.safetensors",
@@ -897,7 +901,7 @@ def save_config(cfg: dict) -> None:
 # preserved (not overwritten with blank) when the client saves them empty.
 # youtube_client_secrets is a file PATH, not a secret, so it is deliberately
 # excluded here.
-_SECRET_VALUE_KEYS = ("claude_api_key", "hf_token", "x_client_secret")
+_SECRET_VALUE_KEYS = ("claude_api_key", "grok_api_key", "hf_token", "x_client_secret")
 
 
 def public_config(cfg: dict) -> dict:
