@@ -38,6 +38,21 @@ class ScriptCharacterStoreTests(TempConfigCase):
     def test_read_missing_is_empty(self):
         self.assertEqual(app._read_script_characters(self._work_dir()), [])
 
+    def test_add_blank_character_persists_editable_placeholder(self):
+        # The editor's "Add character" posts a blank row; it must survive
+        # normalization (which drops nameless entries) as an editable placeholder
+        # with a stable id — otherwise the button appears to do nothing.
+        wd = self._work_dir()
+        saved = app.add_script_character(wd, "", [], "")
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(saved[0]["name"], "New character")
+        cid = saved[0]["id"]
+        # The returned id round-trips through an edit (rename to a real character).
+        edited = app.update_script_character(wd, cid, name="George Washington",
+                                             description="tall, powdered wig, blue coat")
+        self.assertEqual(edited[0]["name"], "George Washington")
+        self.assertEqual(app._read_script_characters(wd)[0]["id"], cid)
+
     def test_script_character_image_path_basename_only(self):
         wd = self._work_dir()
         p = app._script_character_image_path(wd, "../../etc/passwd")

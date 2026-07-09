@@ -2040,10 +2040,16 @@ def _find_script_character(chars: list[dict], char_id: str) -> dict:
 
 
 def add_script_character(work_dir, name: str = "", aliases=None, description: str = "") -> list[dict]:
-    """Append a manually-created character to the script and return the saved list."""
+    """Append a manually-created character to the script and return the saved list.
+
+    A blank name is replaced with a placeholder so the new row survives
+    normalization (_norm_characters drops nameless entries) and shows up as an
+    editable card — the editor persists each row on the server immediately, so a
+    dropped blank would make "Add character" appear to do nothing."""
     work_dir = Path(work_dir)
     chars = _read_script_characters(work_dir)
-    chars.append({"name": name, "aliases": list(aliases or []), "description": description})
+    chars.append({"name": name.strip() or "New character",
+                  "aliases": list(aliases or []), "description": description})
     return _write_script_characters(work_dir, chars)
 
 
