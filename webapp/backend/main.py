@@ -1291,11 +1291,13 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
 # ── scene preview (FLUX first frame) ─────────────────────────────────────────
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview")
-def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style: str = "") -> dict:
+def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style: str = "",
+                        instruction: str = "") -> dict:
     try:
         with _track_op("Generating preview", f"scene {scene_id}"):
             out = gapp._generate_active_scene_preview(
-                job_id, int(scene_id), resolution, style, "", "", force=True
+                job_id, int(scene_id), resolution, style, "", "", force=True,
+                instruction=instruction,
             )
     except Exception as e:
         raise HTTPException(503, f"Preview failed: {str(e).splitlines()[0][:200]}")
@@ -1713,11 +1715,26 @@ def _llm_complete(system: str, user: str, cfg: dict, max_tokens: int = 700) -> s
     return choice["message"]["content"].strip()
 
 
+def _instruction_note(instruction: str, *, label: str = "instruction from the user") -> str:
+    """Format an optional free-text steering instruction for an LLM user-prompt.
+
+    Powers the "tell it how" popover on every Re-generate button: the user types
+    something like "shorten it" or "make it funnier" and it's appended to the
+    prompt. Empty/whitespace returns '' so an un-guided regen is byte-identical to
+    before (and stays cacheable)."""
+    instruction = (instruction or "").strip()[:500]
+    if not instruction:
+        return ""
+    return (f"\n\nAdditional {label} — follow it, overriding the guidance above "
+            f"where they conflict: {instruction}")
+
+
 class FieldRegenBody(BaseModel):
     title: str = ""
     narration: str = ""
     image_prompt: str = ""
     video_prompt: str = ""
+    instruction: str = ""   # optional "tell it how" steering (Re-generate popover)
 
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-field")
@@ -1757,6 +1774,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         f"Title: {body.title}\nNarration: {body.narration}\n"
         f"Image prompt: {body.image_prompt}\nVideo prompt: {body.video_prompt}\n\n"
         f"Task: {_FIELD_INSTRUCTIONS[field]}"
+        + _instruction_note(body.instruction)
     )
     try:
         with _track_op(f"Regenerating {field}", video_title or topic or f"scene {scene_id}"):
@@ -1794,6 +1812,7 @@ class BriefImproveBody(BaseModel):
     title: str = ""
     direction: str = ""
     style_name: str = ""
+    instruction: str = ""          # optional "tell it how" steering
 
 
 @api.post("/api/create/improve")
@@ -1818,6 +1837,7 @@ def create_improve(body: BriefImproveBody) -> dict:
             + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
             + "\nImprove the title (or write a strong one if it's empty). "
             "Keep it concise and true to the direction."
+            + _instruction_note(body.instruction)
         )
     else:
         system = ("You refine the creative-direction brief for a short, AI-generated video. "
@@ -1827,6 +1847,7 @@ def create_improve(body: BriefImproveBody) -> dict:
             f"Current direction: {direction or '(none yet)'}\n"
             "\nImprove and sharpen the direction: clarify the angle, tone, and what to "
             "emphasise. Keep it to 1–3 sentences."
+            + _instruction_note(body.instruction)
         )
     try:
         with _track_op(f"Improving {body.field}", title or direction):
@@ -4172,6 +4193,7 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
 class DescribeBody(BaseModel):
     work_dir: str = ""
     title: str = ""
+    instruction: str = ""          # optional "tell it how" steering (title regen)
 
 
 @api.post("/api/youtube/describe")
@@ -4205,6 +4227,7 @@ def yt_post_title(body: DescribeBody) -> dict:
         f"Scene outline: {outline or '(unavailable)'}\n"
         + (f"Title phrasing style to follow: {title_style}\n" if title_style else "")
         + "\nWrite a strong YouTube title for this film. Keep it under 100 characters."
+        + _instruction_note(body.instruction)
     )
     try:
         with _track_op("Regenerating title", current):
@@ -4511,6 +4534,7 @@ class CoverBody(BaseModel):
     title: str = ""
     style: str = ""
     resolution: str = ""
+    instruction: str = ""          # optional "tell it how" steering (cover regen)
 
 
 def _best_cover_comfy_url() -> str:
@@ -4592,6 +4616,7 @@ def yt_cover(body: CoverBody) -> dict:
                 "work_dir": str(wd),
                 "title": title,
                 "style": body.style or "",
+                "instruction": body.instruction or "",
                 "vid_width": vid_width,
                 "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
@@ -5787,6 +5812,7 @@ class CommentActionBody(BaseModel):
     comment_id: str
     final_title: str = ""
     text: str = ""
+    instruction: str = ""          # optional "tell it how" steering (draft-reply)
 
 
 @api.post("/api/youtube/comments/approve")
@@ -5898,6 +5924,7 @@ def youtube_draft_reply(body: CommentActionBody) -> dict:
         + f"Their comment: {c.get('text', '')}\n"
         + (f"Earlier replies in this thread:\n{thread}\n" if thread else "")
         + "\nWrite a concise reply (1–3 sentences)."
+        + _instruction_note(body.instruction)
     )
     try:
         with _track_op("Drafting reply", c.get("commenter", "")):
@@ -6817,6 +6844,7 @@ def reassemble_film(body: ReassembleBody) -> dict:
 class RerenderSceneBody(BaseModel):
     work_dir: str
     component: str  # "narration", "image", or "video"
+    instruction: str = ""   # optional "tell it how" steering (image/video re-render)
 
 
 def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
@@ -6861,8 +6889,12 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         video_history.record(wd, sid, final_path)
 
 
-def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
-    """Background thread: re-render narration then re-mux the scene."""
+def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                            instruction: str = "") -> None:
+    """Background thread: re-render narration then re-mux the scene.
+
+    (instruction is accepted for a uniform worker signature but unused — narration
+    is audio-only; steering applies to the image/video re-renders.)"""
     try:
         _render_scene_narration(task_id, wd, sid, jc, row)
 
@@ -6891,7 +6923,8 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path) -> tuple[
     return base_prompt, reference_images
 
 
-def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        instruction: str = "") -> None:
     """Background thread: re-render first-frame image only (no video)."""
     import shutil
     import secrets
@@ -6913,6 +6946,8 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
     try:
         _film_checkpoint(task_id)
         image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd)
+        # One-off user steering from the Re-generate popover (not persisted).
+        image_prompt = gapp._apply_prompt_instruction(image_prompt, instruction)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -6958,7 +6993,8 @@ def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
         return False
 
 
-def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -> None:
+def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        instruction: str = "") -> None:
     """Background thread: re-render video from the existing first frame → mux.
 
     Reuses the already-made first frame; only regenerates it when none is usable."""
@@ -6989,6 +7025,11 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         style_clean = jc.get("style", "").strip().rstrip(".")
         if style_clean and video_prompt and not video_prompt.startswith(style_clean):
             video_prompt = f"{style_clean}. {video_prompt}"
+        # One-off user steering from the Re-generate popover (not persisted). Applied
+        # to the motion prompt and to the first-frame prompt used if the frame is
+        # regenerated below (a reused first frame is unaffected).
+        video_prompt = gapp._apply_prompt_instruction(video_prompt, instruction)
+        image_prompt = gapp._apply_prompt_instruction(image_prompt, instruction)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
@@ -7088,7 +7129,8 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict) -
         _finish_film_task_error(task_id, e)
 
 
-def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict) -> None:
+def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict,
+                         instruction: str = "") -> None:
     """Run a re-render worker, then record a completion entry in the Activity log.
 
     The workers only update _film_tasks (so the live "Re-rendering…" indicator can
@@ -7096,7 +7138,7 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
     _track_op gives every other operation."""
     started = time.time()
     try:
-        target(tid, wd, sid, jc, row)
+        target(tid, wd, sid, jc, row, instruction)
     finally:
         _film_cancelled_tids.discard(tid)
         end = time.time()
@@ -7174,7 +7216,7 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         target = _run_video_rerender
     threading.Thread(
         target=_run_rerender_logged,
-        args=(target, tid, wd, sid, body.component, jc, row),
+        args=(target, tid, wd, sid, body.component, jc, row, body.instruction),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}

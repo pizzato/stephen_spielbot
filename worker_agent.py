@@ -259,7 +259,8 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
             except Exception:
                 rows = []
 
-    prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows)
+    prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows,
+                                instruction=p.get("instruction") or "")
 
     cover_path = work_dir / "cover.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
