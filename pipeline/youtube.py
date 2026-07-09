@@ -455,46 +455,13 @@ def evaluate_comment(comment_text: str, commenter: str, cfg: dict) -> dict:
         commenter=(commenter or "Unknown")[:100],
         comment_text=(comment_text or "").strip()[:2000],
     )
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            return _eval_claude(prompt, cfg)
-        return _eval_local(prompt, cfg)
+        from pipeline.llm import _chat_complete
+        text = _chat_complete(cfg, "", prompt, max_tokens=256, label="comment_eval")
+        return _parse_eval(text)
     except Exception as exc:
         logger.warning("Comment evaluation failed: %s", exc)
         return {**_SAFE_DEFAULT, "reason": f"Evaluation error: {str(exc)[:120]}"}
-
-
-def _eval_claude(prompt: str, cfg: dict) -> dict:
-    import anthropic
-    import os
-    api_key = cfg.get("claude_api_key", "") or os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        raise RuntimeError("No Claude API key configured")
-    client = anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model=cfg.get("claude_model", "claude-sonnet-4-6"),
-        max_tokens=256,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return _parse_eval(msg.content[0].text)
-
-
-def _eval_local(prompt: str, cfg: dict) -> dict:
-    url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
-    model = cfg.get("local_llm_model", "openai/gpt-oss-120b")
-    payload = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 256,
-        "temperature": 0.1,
-    }).encode()
-    req = urllib.request.Request(
-        url, data=payload, headers={"Content-Type": "application/json"}
-    )
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read())
-    return _parse_eval(data["choices"][0]["message"]["content"])
 
 
 # ── Video upload ──────────────────────────────────────────────────────────────
