@@ -35,10 +35,10 @@ function ReplyComposer({ comment, adapter, onSent, onCancel }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
-  const draft = async () => {
+  const draft = async (instruction = '') => {
     if (!adapter.draft) return
     setBusy('draft'); setError('')
-    try { const r = await adapter.draft(comment.comment_id); setText(r.reply || '') }
+    try { const r = await adapter.draft(comment.comment_id, instruction); setText(r.reply || '') }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const send = async () => {
@@ -51,7 +51,8 @@ function ReplyComposer({ comment, adapter, onSent, onCancel }) {
   return (
     <div className="stack gap-10 mt-10">
       <Field label={adapter.draft
-        ? <RegenLabel busy={busy === 'draft'} onRegen={draft} label="Draft with AI" busyLabel="Drafting…">Your reply</RegenLabel>
+        ? <RegenLabel busy={busy === 'draft'} onRegen={(instr) => draft(instr)} label="Draft with AI" busyLabel="Drafting…"
+            chips={['Shorter', 'Warmer', 'Funnier', 'More formal']}>Your reply</RegenLabel>
         : 'Your reply'}>
         <textarea className="input" rows={3} value={text} placeholder={`Reply to ${adapter.prefix}${comment.commenter || 'viewer'}…`}
           onChange={(e) => setText(e.target.value)} />
@@ -113,10 +114,10 @@ export default function Community() {
     try { await adapter.reject(c.comment_id); await refreshComments(); setStatus('Rejected.') }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
-  const regenDraft = async (c) => {
+  const regenDraft = async (c, instruction = '') => {
     if (!adapter.draft) return
     setBusy('cr' + c.comment_id); setError('')
-    try { const r = await adapter.draft(c.comment_id); setDrafts((d) => ({ ...d, [c.comment_id]: r.reply || '' })) }
+    try { const r = await adapter.draft(c.comment_id, instruction); setDrafts((d) => ({ ...d, [c.comment_id]: r.reply || '' })) }
     catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const sendDraft = async (c) => {
@@ -226,7 +227,8 @@ export default function Community() {
                   <>
                     {c.engagement_reason && <p className="muted" style={{ fontSize: 12.5, margin: 0, fontStyle: 'italic' }}>{c.engagement_reason}</p>}
                     <Field label={adapter.draft
-                      ? <RegenLabel busy={busy === 'cr' + c.comment_id} onRegen={() => regenDraft(c)}>Suggested reply</RegenLabel>
+                      ? <RegenLabel busy={busy === 'cr' + c.comment_id} onRegen={(instr) => regenDraft(c, instr)}
+                          chips={['Shorter', 'Warmer', 'Funnier', 'More formal']}>Suggested reply</RegenLabel>
                       : 'Suggested reply'}>
                       <textarea className="input" rows={3} value={drafts[c.comment_id] ?? c.engagement_draft ?? ''}
                         onChange={(e) => setDrafts((d) => ({ ...d, [c.comment_id]: e.target.value }))} />

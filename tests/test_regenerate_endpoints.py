@@ -283,5 +283,121 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(result["video_history"]["selected"], h["versions"][0]["id"])
 
 
+class InstructionSteeringTests(unittest.TestCase):
+    """Guided re-generation: the optional free-text 'tell it how' instruction is
+    threaded into the LLM/render prompt, and an empty instruction leaves the
+    prompt byte-identical to the un-guided one."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _store(self):
+        store = mock.Mock()
+        store.get_job.return_value = None
+        store.scene_rows.return_value = []
+        return store
+
+    def test_instruction_note_empty_is_blank(self):
+        self.assertEqual(backend._instruction_note(""), "")
+        self.assertEqual(backend._instruction_note("   "), "")
+
+    def test_instruction_note_includes_text_and_truncates(self):
+        note = backend._instruction_note("make it all robots")
+        self.assertIn("make it all robots", note)
+        long = backend._instruction_note("x" * 900)
+        self.assertLessEqual(long.count("x"), 500)
+
+    def test_apply_prompt_instruction(self):
+        self.assertEqual(backend.gapp._apply_prompt_instruction("a castle", ""), "a castle")
+        self.assertEqual(backend.gapp._apply_prompt_instruction("a castle", "   "), "a castle")
+        self.assertEqual(backend.gapp._apply_prompt_instruction("a castle", "all robots"), "a castle. all robots")
+        self.assertEqual(backend.gapp._apply_prompt_instruction("", "all robots"), "all robots")
+
+    def test_regenerate_field_threads_instruction(self):
+        with mock.patch.object(backend.DurableStore, "default", return_value=self._store()), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend.gapp, "_save_active_scene"), \
+             mock.patch.object(backend, "_llm_complete", return_value="Shorter narration.") as llm:
+            result = backend.regenerate_field(
+                "job1", 1, field="narration",
+                body=backend.FieldRegenBody(narration="Long draft.", instruction="make it shorter"))
+        self.assertEqual(result["value"], "Shorter narration.")
+        self.assertIn("make it shorter", llm.call_args.args[1])
+
+    def test_regenerate_field_empty_instruction_leaves_prompt_unchanged(self):
+        prompts = []
+
+        def cap(system, user, cfg, **kw):
+            prompts.append(user)
+            return "x"
+
+        with mock.patch.object(backend.DurableStore, "default", return_value=self._store()), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend.gapp, "_save_active_scene"), \
+             mock.patch.object(backend, "_llm_complete", side_effect=cap):
+            backend.regenerate_field("job1", 1, field="narration",
+                                     body=backend.FieldRegenBody(narration="Draft."))
+            backend.regenerate_field("job1", 1, field="narration",
+                                     body=backend.FieldRegenBody(narration="Draft.", instruction=""))
+        self.assertEqual(prompts[0], prompts[1])
+        self.assertNotIn("Additional instruction", prompts[0])
+
+    def test_draft_reply_threads_instruction(self):
+        comment = {"comment_id": "c1", "channel": "", "text": "Hi", "commenter": "Sam", "replies": []}
+        with mock.patch.object(backend.yt, "load_comments_cache", return_value=[comment]), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend, "_llm_complete", return_value="reply") as llm:
+            backend.youtube_draft_reply(backend.CommentActionBody(comment_id="c1", instruction="be funnier"))
+        self.assertIn("be funnier", llm.call_args.args[1])
+
+    def test_improve_threads_instruction(self):
+        with mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend, "_llm_complete", return_value="t") as llm:
+            backend.create_improve(backend.BriefImproveBody(field="title", title="old", instruction="make it shorter"))
+        self.assertIn("make it shorter", llm.call_args.args[1])
+
+    def test_post_title_threads_instruction(self):
+        wd = tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT)
+        with mock.patch.object(backend.gapp, "load_config", return_value={}), \
+             mock.patch.object(backend.gapp, "_load_scenes_for_work_dir", return_value=[]), \
+             mock.patch.object(backend.gapp, "style_settings", return_value={"title_style": ""}), \
+             mock.patch.object(backend, "_work_dir_style_name", return_value=""), \
+             mock.patch.object(backend, "_video_title_for", return_value="current"), \
+             mock.patch.object(backend, "_llm_complete", return_value="New title") as llm:
+            backend.yt_post_title(backend.DescribeBody(work_dir=wd, title="current", instruction="add a number"))
+        self.assertIn("add a number", llm.call_args.args[1])
+
+    def test_build_cover_prompt_appends_instruction(self):
+        from pipeline.cover import build_cover_prompt
+        base = build_cover_prompt("My Title", "cinematic")
+        steered = build_cover_prompt("My Title", "cinematic", instruction="make it all robots")
+        self.assertNotIn("make it all robots", base)
+        self.assertTrue(steered.rstrip().endswith("make it all robots"))
+
+    def test_rerender_film_scene_threads_instruction(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        started = []
+
+        def fake_thread(target, args, daemon):
+            started.append(args)
+            return mock.Mock(start=lambda: None)
+
+        store = mock.Mock()
+        store.scene_rows.return_value = [{"id": 1, "image_prompt": "p", "video_prompt": "v"}]
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
+             mock.patch.object(backend, "_film_job_config", return_value={}), \
+             mock.patch.object(backend.image_history, "seed_if_empty"), \
+             mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
+            result = backend.rerender_film_scene(
+                1, backend.RerenderSceneBody(work_dir=str(wd), component="image",
+                                             instruction="make it all robots"))
+        self.assertTrue(result["ok"])
+        # args = (target, tid, wd, sid, component, jc, row, instruction)
+        self.assertEqual(started[0][-1], "make it all robots")
+
+
 if __name__ == "__main__":
     unittest.main()

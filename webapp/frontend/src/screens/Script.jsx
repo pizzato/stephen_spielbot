@@ -1,6 +1,17 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, VersionStrip, InpaintModal } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+
+// Quick-instruction presets for the "tell it how" Re-generate popovers.
+const REGEN_CHIPS = {
+  title: ['Shorter', 'Punchier', 'More literal'],
+  narration: ['Shorten', 'Expand', 'Simpler', 'More dramatic'],
+  image_prompt: ['More detail', 'Simpler', 'Wider shot'],
+  video_prompt: ['More motion', 'Slower pace', 'Static camera'],
+  image: ['More detail', 'Brighter', 'Different angle'],
+  cover: ['Bolder', 'Simpler', 'More dramatic'],
+  look: ['More detail', 'Different angle', 'Friendlier'],
+}
 
 // Shared style for the floating arrow / close controls in the enlarged-image view.
 const LB_BTN = {
@@ -186,10 +197,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   // ── Cover tab ─────────────────────────────────────────────────────────────────
-  const regenTitle = async () => {
+  const regenTitle = async (instruction = '') => {
     setYtBusy('title'); setError('')
     try {
-      const r = await api.ytPostTitle(job.work_dir, coverTitle || job.title || '')
+      const r = await api.ytPostTitle(job.work_dir, coverTitle || job.title || '', instruction)
       setCoverTitle(r.title || '')
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
@@ -215,11 +226,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
-  const regenCover = async () => {
+  const regenCover = async (instruction = '') => {
     setYtBusy('cover'); setError('')
     let pollTimer = null
     try {
-      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: coverTitle || job.title || '', resolution })
+      const { task_id: tid } = await api.ytCover({ work_dir: job.work_dir, title: coverTitle || job.title || '', resolution, instruction })
       await new Promise((resolve, reject) => {
         const check = async () => {
           try {
@@ -340,25 +351,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     ? (lbMulti && lbVersions[lightbox.ver] ? fileUrl(lbVersions[lightbox.ver].path) : imgUrl(scenes[lightbox.scene] || {}))
     : ''
 
-  const regenField = async (field) => {
+  const regenField = async (field, instruction = '') => {
     setFieldBusy(field); setError('')
     try {
       const r = await api.regenField(job.job_id, d.id, field, {
         title: d.title || '', narration: d.narration || '',
         image_prompt: d.image_prompt || '', video_prompt: d.video_prompt || '',
+        instruction,
       })
       setField(field, r.value)
     } catch (e) { setError(e.message) } finally { setFieldBusy('') }
   }
 
   const fieldLabel = (text, field, icon) => (
-    <span className="row center between">
-      <span className="row center gap-10">{icon ? <Icon name={icon} style={{ color: 'var(--ink-3)', width: 16 }} /> : null}{text}</span>
-      <button type="button" className="btn btn--quiet" style={{ padding: '3px 9px', fontSize: 11 }}
-        disabled={fieldBusy === field} onClick={(e) => { e.preventDefault(); e.stopPropagation(); regenField(field) }}>
-        <Icon name="rotate" /> {fieldBusy === field ? 'Writing…' : 'Re-generate'}
-      </button>
-    </span>
+    <RegenLabel icon={icon} busy={fieldBusy === field}
+      onRegen={(instr) => regenField(field, instr)} chips={REGEN_CHIPS[field]}>{text}</RegenLabel>
   )
 
   const persist = async (idx = cur) => {
@@ -378,11 +385,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCur(to)
   }
 
-  const regen = async () => {
+  const regen = async (instruction = '') => {
     setBusy('preview'); setError('')
     try {
       await persist(cur)
-      const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style)
+      const r = await api.regenPreview(job.job_id, scenes[cur].id, resolution, style, instruction)
       setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, preview_path: r.preview_path, has_preview: true, history: r.history, cb: Date.now() } : s))
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -441,7 +448,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const addCharacter = () => charOp('add', () =>
     api.addScriptCharacter(job.job_id, { name: '', aliases: [], description: '' }))
   const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(job.job_id, c.id))
-  const genCharLook = (c) => charOp(c.id, () => api.generateScriptCharacterPortrait(job.job_id, c.id, ''))
+  const genCharLook = (c, instruction = '') => charOp(c.id, () => api.generateScriptCharacterPortrait(job.job_id, c.id, instruction))
   const clearCharLook = (c) => charOp(c.id, () => api.clearScriptCharacterImage(job.job_id, c.id))
   const uploadCharLook = (c, file) => file && charOp(c.id, async () =>
     api.setScriptCharacterImage(job.job_id, c.id, file.name, await fileToDataUrl(file)))
@@ -610,7 +617,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <div className="bento">
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
-              <Field label={<RegenLabel busy={ytBusy === 'title'} disabled={!job.work_dir} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
+              <Field label={<RegenLabel busy={ytBusy === 'title'} disabled={!job.work_dir} onRegen={regenTitle} chips={REGEN_CHIPS.title}>Title</RegenLabel>} hint="Max 100 characters.">
                 <input className="input" value={coverTitle} maxLength={100} onChange={(e) => { setCoverTitle(e.target.value); setCoverMsg('') }} />
               </Field>
               <Field label="Resolution">
@@ -645,9 +652,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                   : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
               </div>
-              <Button variant="ghost" block icon="rotate-right" disabled={!!ytBusy} onClick={regenCover}>
-                {ytBusy === 'cover' ? 'Generating…' : coverUrl ? 'Regenerate cover' : 'Generate cover'}
-              </Button>
+              <GuidedRegenButton block variant="ghost" icon="rotate-right"
+                label={coverUrl ? 'Regenerate cover' : 'Generate cover'} busyLabel="Generating…"
+                busy={ytBusy === 'cover'} disabled={!!ytBusy}
+                onRegen={regenCover} chips={REGEN_CHIPS.cover} />
+
               <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
                 onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
               <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
@@ -725,8 +734,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     </span>
                   )}
                 </div>
-                <Button variant="ghost" block icon="rotate-right" disabled={!!busy} onClick={regen}>
-                  {busy === 'preview' ? 'Painting…' : 'Regenerate image'}</Button>
+                <GuidedRegenButton block variant="ghost" icon="rotate-right"
+                  label="Regenerate image" busyLabel="Painting…"
+                  busy={busy === 'preview'} disabled={!!busy}
+                  onRegen={regen} chips={REGEN_CHIPS.image} />
                 <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!d.has_preview || !!busy}
                   onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
@@ -854,9 +865,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       )}
                     </div>
                     <div className="stack gap-6 mt-10">
-                      <Button variant="ghost" size="sm" block icon="rotate-right" disabled={b} onClick={() => genCharLook(c)}>
-                        {b ? 'Painting…' : c.has_image ? 'Regenerate look' : 'Generate look'}
-                      </Button>
+                      <GuidedRegenButton block size="sm" variant="ghost" icon="rotate-right"
+                        label={c.has_image ? 'Regenerate look' : 'Generate look'} busyLabel="Painting…"
+                        busy={b} disabled={b}
+                        onRegen={(instr) => genCharLook(c, instr)} chips={REGEN_CHIPS.look} />
+
                       <label className="btn btn--ghost btn--sm btn--block" style={{ cursor: b ? 'default' : 'pointer' }}>
                         <Icon name="upload" /> Upload
                         <input type="file" accept="image/*" hidden disabled={b}
