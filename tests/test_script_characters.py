@@ -133,5 +133,92 @@ class LocalIdentifyTests(unittest.TestCase):
         self.assertIn("Julius Caesar", visual_prompts[0])
 
 
+def _scene(i, narration):
+    return llm.Scene(id=i, title=f"T{i}", image_prompt="I", video_prompt="V",
+                     narration=narration)
+
+
+class RecurringCharacterPassTests(unittest.TestCase):
+    """The second pass over the FULL script catches recurring characters the
+    first-batch identify (scenes 1-10, 1-2 central subjects) missed."""
+
+    def test_norm_respects_custom_cap(self):
+        rows = [{"name": f"C{i}", "description": "d"} for i in range(6)]
+        self.assertEqual(len(llm._norm_identified_characters(rows)), 2)          # default cap
+        self.assertEqual(len(llm._norm_identified_characters(rows, cap=5)), 5)   # widened
+
+    def test_merge_dedups_by_name_and_alias_batch1_wins(self):
+        identified = [{"name": "George Washington", "aliases": ["Washington"],
+                       "description": "batch-1 look"}]
+        found = [
+            {"name": "Washington", "aliases": [], "description": "duplicate — dropped"},
+            {"name": "King George", "aliases": [], "description": "a stout king"},
+        ]
+        merged = llm._merge_recurring(identified, found)
+        self.assertEqual([c["name"] for c in merged], ["George Washington", "King George"])
+        self.assertEqual(merged[0]["description"], "batch-1 look")  # batch-1 not overwritten
+
+    def test_detect_drops_single_scene_keeps_recurring(self):
+        scenes = [_scene(1, "Washington takes command."),
+                  _scene(2, "Redcoats march."),
+                  _scene(3, "Washington crosses the river.")]
+
+        def fake_call(system, user_msg, max_tokens, label, retries=2):
+            self.assertIn("Scene 3:", user_msg)
+            return json.dumps([
+                {"name": "Washington", "aliases": ["the General"],
+                 "description": "tall man, powdered wig", "scenes": [1, 3]},
+                {"name": "Cornwallis", "description": "an officer", "scenes": [2]},  # 1 scene
+            ])
+
+        out = llm._detect_recurring_characters(fake_call, scenes, [])
+        self.assertEqual([c["name"] for c in out], ["Washington"])
+
+    def test_detect_early_returns_under_two_scenes(self):
+        called = {"n": 0}
+
+        def fake_call(*a, **k):
+            called["n"] += 1
+            return "[]"
+
+        out = llm._detect_recurring_characters(fake_call, [_scene(1, "Solo.")], [])
+        self.assertEqual(out, [])
+        self.assertEqual(called["n"], 0, "must not call the LLM for a single scene")
+
+    def test_detect_survives_bad_json(self):
+        scenes = [_scene(1, "A."), _scene(2, "B.")]
+        identified = [{"name": "Kept", "aliases": [], "description": "unchanged"}]
+        out = llm._detect_recurring_characters(
+            lambda *a, **k: "not json at all", scenes, identified)
+        self.assertEqual(out, identified)  # best-effort: batch-1 list preserved
+
+    def test_claude_generate_picks_up_recurring_character_batch1_missed(self):
+        # Batch-1 returns NO characters (the miss the user reported); the recurring
+        # pass over all 11 scenes surfaces Washington.
+        batch = {"n": 0}
+
+        def fake_call(client, model, system, user_msg, *a, **k):
+            batch["n"] += 1
+            if batch["n"] == 1:
+                return json.dumps({
+                    "style": "S", "music": "M", "characters": [],
+                    "scenes": [{"id": i, "title": f"T{i}", "image_prompt": "I",
+                                "video_prompt": "V", "narration": f"Washington acts in scene {i}."}
+                               for i in range(1, 11)],
+                })
+            # The recurring pass is the only call whose prompt lists every scene,
+            # so scene 1 appears there (continuation context shows only the last 3).
+            if "Scene 1:" in (user_msg or ""):
+                return json.dumps([{"name": "George Washington", "aliases": ["Washington"],
+                                    "description": "tall man, powdered wig, blue coat",
+                                    "scenes": [1, 5, 11]}])
+            return json.dumps([{"id": 11, "title": "T11", "image_prompt": "I",
+                                "video_prompt": "V", "narration": "Washington wins."}])
+
+        with mock.patch.object(llm, "_claude_call", side_effect=fake_call):
+            _, _, _, chars = llm._claude_generate("Revolution", 11, None, "k", "m")
+        self.assertEqual([c["name"] for c in chars], ["George Washington"])
+
+
 if __name__ == "__main__":
     unittest.main()
