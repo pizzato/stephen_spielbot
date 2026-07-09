@@ -889,9 +889,6 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
   }
   const setCharField = (id, key, val) =>
     setCharacters((arr) => arr.map((c) => (c.id === id ? { ...c, [key]: val } : c)))
-  const saveCharacter = (c) => charOp(c.id, () => api.updateScriptCharacter(jobId, c.id, {
-    name: c.name || '', aliases: c.aliases || [], description: c.description || '',
-  }))
   const addCharacter = () => charOp('add', () =>
     api.addScriptCharacter(jobId, { name: '', aliases: [], description: '' }))
   const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(jobId, c.id))
