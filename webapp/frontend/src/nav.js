@@ -17,6 +17,7 @@ const ROUTES = {
   create:   { seg: ['create'] },
   script:   { seg: ['script'],   name: true },
   progress: { seg: ['render'],   name: true },
+  // remix kept as a deep-link alias → same unified Edit film screen as editfilm.
   remix:    { seg: ['remix'],    name: true },
   editfilm: { seg: ['edit'],     name: true },
   queue:    { seg: ['queue'] },

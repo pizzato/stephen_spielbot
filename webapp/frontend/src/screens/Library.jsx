@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
 
-export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, onNewVersion }) {
+export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -14,10 +14,9 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
 
-  // Entering a finished film to watch it (the card's primary action) clears its
-  // "New" badge — recorded server-side so it's shared across devices — then opens
-  // the remix/player view. Fire-and-forget: the badge clears on the next load().
-  const openCard = (wd) => { api.markJobSeen(wd).catch(() => {}); onOpenRemix(wd) }
+  // Entering a finished film clears its "New" badge, then opens the Edit film
+  // screen (Film tab — final cut + details). Fire-and-forget on the badge.
+  const openCard = (wd) => { api.markJobSeen(wd).catch(() => {}); onOpenEdit(wd) }
 
   // Copy a finished film's script into a fresh work dir and open the editor on it.
   // On success onNewVersion navigates away (this screen unmounts), so busy is only
@@ -120,8 +119,7 @@ export default function Library({ go, onOpenProgress, onOpenRemix, onOpenEdit, o
                 </div>
               )}
               <div className="row gap-10 mt-16 row--wrap">
-                <Button variant="ghost" icon="film" onClick={(e) => { e.stopPropagation(); onOpenEdit(f.work_dir) }}>Edit</Button>
-                <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); openCard(f.work_dir) }}>Remix</Button>
+                <Button variant="ghost" icon="sliders" onClick={(e) => { e.stopPropagation(); openCard(f.work_dir) }}>Edit</Button>
                 <Button variant="ghost" icon="copy" disabled={busyNew === f.work_dir} onClick={(e) => { e.stopPropagation(); newVersion(f.work_dir) }}>
                   {busyNew === f.work_dir ? 'Copying…' : 'New version'}
                 </Button>
