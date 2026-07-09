@@ -157,6 +157,32 @@ script_local_fill_narration:
     Write ONLY a 2-sentence spoken narration for this scene (~18-22 words, ~9 seconds at a calm documentary pace). No labels, no quotes, no markdown — just the 2 sentences as plain prose.
 
 
+recurring_characters:
+  description: |
+    Second pass over the FULL assembled script: find every named character that
+    appears in two or more scenes (the batch-1 identify only sees the first ~10
+    scenes and only names the 1-2 central subjects). Drives per-script character
+    consistency (characters.json → reference images + prompt injection).
+  system: |
+    You are a script analyst. You are given the full narration of a multi-scene video, one scene per line, numbered by scene. Identify the RECURRING CHARACTERS: named people, creatures, or specific individuals who appear in TWO OR MORE distinct scenes.
+
+    Rules:
+    - Include only NAMED individuals (e.g. "George Washington", "Cleopatra", a named animal or figure).
+    - EXCLUDE places, nations, organisations, groups, armies, crowds, events, objects, and abstract concepts (e.g. "Britain", "the Continental Army", "the Revolution", "Congress", "the soldiers").
+    - Count a character only if the SAME individual genuinely appears in at least two different scenes — by name, an alias/epithet, or an unambiguous reference to that same person.
+    - Ignore one-off figures mentioned in only a single scene.
+
+    Output ONLY a JSON array (no markdown, no code fences, no prose). Each element is an object with:
+      - "name": the character's name as used in the narration
+      - "aliases": array of other names/epithets used for them (e.g. ["the General"]); [] if none
+      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. If the narration gives no visual detail, infer a plausible, context-appropriate appearance.
+      - "scenes": array of the scene numbers (integers) they appear in — must contain at least two
+
+    If no character appears in two or more scenes, output exactly [].
+  user: |
+    ${scene_list}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Self-heal (resume_generation.py)
 # Fills empty narration/image_prompt right before TTS so videos are never silent.

@@ -68,15 +68,19 @@ class Scene:
 
 _CLAUDE_BATCH_SIZE = 10  # max scenes per API call
 
-# A video centres on at most one or two recurring figures; cap what we keep.
+# The batch-1 identify names at most one or two CENTRAL figures (it only sees the
+# first ~10 scenes). The post-assembly recurring-cast pass (over the whole script)
+# may surface supporting characters too, so it keeps a larger merged set.
 _MAX_MAIN_CHARACTERS = 2
+_MAX_RECURRING_CHARACTERS = 8
 
 
-def _norm_identified_characters(raw_list) -> list[dict]:
-    """Coerce the LLM's identified main characters into {name, aliases, description}.
+def _norm_identified_characters(raw_list, cap: int = _MAX_MAIN_CHARACTERS) -> list[dict]:
+    """Coerce the LLM's identified characters into {name, aliases, description}.
 
     Drops entries without a name, coerces aliases to a clean string list (accepts
-    a comma-separated string too), and caps the list at _MAX_MAIN_CHARACTERS. An
+    a comma-separated string too), and caps the list at *cap* (the batch-1 main
+    subjects use the default; the recurring-cast pass passes a larger cap). An
     empty/invalid input yields [] — meaning "this video has no recurring
     character", which leaves the rest of the pipeline unchanged."""
     out: list[dict] = []
@@ -95,7 +99,7 @@ def _norm_identified_characters(raw_list) -> list[dict]:
             "aliases": aliases,
             "description": str(raw.get("description") or "").strip(),
         })
-        if len(out) >= _MAX_MAIN_CHARACTERS:
+        if len(out) >= cap:
             break
     return out
 
@@ -124,6 +128,74 @@ def _merge_character_note(character_note: str, identified: list[dict]) -> str:
     if not extra:
         return character_note
     return f"{character_note}\n{extra}" if character_note else f"\n{extra}"
+
+
+def _character_keys(c: dict) -> set[str]:
+    """Lower-cased name + aliases of a character, for dedup across the two passes."""
+    toks = [c.get("name", ""), *(c.get("aliases") or [])]
+    return {t.strip().lower() for t in toks if t and str(t).strip()}
+
+
+def _merge_recurring(identified: list[dict], found: list[dict]) -> list[dict]:
+    """Merge the recurring-cast pass into the batch-1 list. Batch-1 entries win
+    (their descriptions were folded into generation), and any detected duplicate —
+    matched by name OR alias — is dropped. Capped at _MAX_RECURRING_CHARACTERS."""
+    seen: set[str] = set()
+    for c in identified:
+        seen |= _character_keys(c)
+    out = list(identified)
+    for c in found:
+        keys = _character_keys(c)
+        if keys & seen:
+            continue
+        seen |= keys
+        out.append(c)
+        if len(out) >= _MAX_RECURRING_CHARACTERS:
+            break
+    return out[:_MAX_RECURRING_CHARACTERS]
+
+
+def _detect_recurring_characters(call_fn, scenes: list[Scene],
+                                 identified: list[dict]) -> list[dict]:
+    """Second-pass recurring-cast detection over the FULL assembled script.
+
+    The batch-1 identify only sees the first ~10 scenes and only names the 1-2
+    CENTRAL subjects, so recurring supporting characters — and anyone introduced
+    later — are missed (e.g. a general who appears in scenes 3, 7 and 12 of a
+    documentary that isn't strictly "about" him). This pass shows the model every
+    scene's narration and asks for each named figure appearing in 2+ scenes, then
+    merges the result into the batch-1 list (which wins on conflicts).
+
+    *call_fn(system, user_msg, max_tokens, label, retries=...)* → str (the active
+    backend's caller). Best-effort: any failure leaves the batch-1 list untouched
+    so a hiccup here never fails script generation."""
+    lines = [f"Scene {s.id}: {(s.narration or '').strip()}"
+             for s in scenes if (s.narration or "").strip()]
+    if len(lines) < 2:  # nothing can recur across <2 narrated scenes
+        return identified
+    try:
+        raw = call_fn(
+            _prompts.system("recurring_characters"),
+            _prompts.user("recurring_characters", scene_list="\n".join(lines)),
+            _MAX_RECURRING_CHARACTERS * 120 + 400,
+            "recurring characters",
+            retries=2,
+        )
+        data = _parse_claude_response(raw, "recurring characters")
+    except Exception as exc:  # noqa: BLE001 — best-effort, keep batch-1 result
+        logger.warning("Recurring-character pass failed (%s) — keeping %d identified",
+                       exc, len(identified))
+        return identified
+    rows = data if isinstance(data, list) else data.get("characters", [])
+    # Keep only characters the model placed in 2+ distinct scenes.
+    multi = [r for r in (rows if isinstance(rows, list) else [])
+             if isinstance(r, dict)
+             and len({str(x) for x in r.get("scenes", []) if str(x).strip()}) >= 2]
+    found = _norm_identified_characters(multi, cap=_MAX_RECURRING_CHARACTERS)
+    merged = _merge_recurring(identified, found)
+    logger.info("Recurring-character pass: %d identified + %d detected → %d total",
+                len(identified), len(found), len(merged))
+    return merged
 
 
 def _parse_claude_response(content: str, label: str):
@@ -454,6 +526,9 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after cloud fill — used title", s.id)
+    # Second pass over the whole script: catch recurring supporting characters the
+    # first-batch identify (scenes 1–10, 1-2 central subjects) missed.
+    identified = _detect_recurring_characters(call_fn, final_scenes, identified)
     return final_scenes, music_desc, style, identified
 
 
@@ -819,6 +894,17 @@ def _local_generate(title: str, n_scenes: int,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still had empty narration at assembly — used title", s.id)
+
+    # Second pass over the whole script: catch recurring supporting characters the
+    # story stage (0-2 central subjects) missed. Adapts _local_llm to the shared
+    # call_fn(system, user_msg, max_tokens, label, retries) signature.
+    def _rc_call(system, user_msg, max_tokens, label, retries=2):  # noqa: ARG001
+        return _local_llm(
+            [{"role": "system", "content": system},
+             {"role": "user", "content": user_msg}],
+            max_tokens=max_tokens, url=url, model=model, retries=retries,
+        )
+    identified = _detect_recurring_characters(_rc_call, scenes, identified)
 
     return scenes, music_desc, style, identified
 
