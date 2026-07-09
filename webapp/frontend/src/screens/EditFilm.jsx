@@ -1071,7 +1071,13 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
                   <Field label="Name">
                     <input className="input" value={c.name || ''}
                       onChange={(e) => setCharField(c.id, 'name', e.target.value)}
-                      onBlur={() => saveCharacter(c)} />
+                      onBlur={(e) => {
+                        const name = e.target.value
+                        setCharField(c.id, 'name', name)
+                        charOp(c.id, () => api.updateScriptCharacter(jobId, c.id, {
+                          name, aliases: c.aliases || [], description: c.description || '',
+                        }))
+                      }} />
                   </Field>
                   <Field label="Also called" hint="Comma-separated aliases the narration may use.">
                     <input className="input" value={aliasValue(c)}
@@ -1081,7 +1087,13 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
                   <Field label="Appearance" hint="Fixed look — drawn the same way in every scene.">
                     <textarea className="textarea" rows={4} value={c.description || ''}
                       onChange={(e) => setCharField(c.id, 'description', e.target.value)}
-                      onBlur={() => saveCharacter(c)} />
+                      onBlur={(e) => {
+                        const description = e.target.value
+                        setCharField(c.id, 'description', description)
+                        charOp(c.id, () => api.updateScriptCharacter(jobId, c.id, {
+                          name: c.name || '', aliases: c.aliases || [], description,
+                        }))
+                      }} />
                   </Field>
                   <div className="row center gap-8 row--wrap">
                     <Chip tone={used.length ? 'ok' : 'neutral'}>
