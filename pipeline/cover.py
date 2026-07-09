@@ -110,24 +110,30 @@ def _extract_scene_aspects(scenes) -> str:
     return " | ".join(snippets[:3])
 
 
-def build_cover_prompt(title: str, style: str = "", scenes=None) -> str:
+def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: str = "") -> str:
     """Build a FLUX prompt for a YouTube documentary cover image.
 
     scenes: optional iterable of Scene objects or dicts with `image_prompt`. When
             provided, a short subject hint is appended so the cover reflects the
             actual video content (not random topic-biased imagery).
+    instruction: optional one-off user steering from the Re-generate popover
+            (e.g. "make it all robots"), appended to the prompt.
     """
     style_note = style.strip().rstrip(".")
     style_line = f"Video visual style: {style_note}. " if style_note else ""
     aspects = _extract_scene_aspects(scenes)
     subject_hint = f"Key visual elements from the video: {aspects}. " if aspects else ""
-    return _prompts.user(
+    prompt = _prompts.user(
         "cover_image",
         title=title,
         style_line=style_line,
         subject_hint=subject_hint,
         negative=_prompts.value("cover_negative"),
     )
+    instruction = (instruction or "").strip()[:500]
+    if instruction:
+        prompt = f"{prompt}. {instruction}"
+    return prompt
 
 
 def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:

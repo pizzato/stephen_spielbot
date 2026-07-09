@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip, VideoVersionStrip, InpaintModal } from '../components.jsx'
+import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, GuidedRegenButton, VersionStrip, VideoVersionStrip, InpaintModal } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+
+// Quick-instruction presets for the "tell it how" Re-generate popovers.
+const REGEN_CHIPS = {
+  title: ['Shorter', 'Punchier', 'More literal'],
+  narration: ['Shorten', 'Expand', 'Simpler', 'More dramatic'],
+  image_prompt: ['More detail', 'Simpler', 'Wider shot'],
+  video_prompt: ['More motion', 'Slower pace', 'Static camera'],
+  image: ['More detail', 'Brighter', 'Different angle'],
+  video: ['More motion', 'Slower pace', 'Different angle'],
+}
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
@@ -47,10 +57,10 @@ function SceneCard({
 
   // Regenerate one text field with the LLM, keeping the other edits as context (issue #88).
   const setters = { title: setTitle, narration: setNarration, image_prompt: setImagePrompt, video_prompt: setVideoPrompt }
-  const regenField = async (field) => {
+  const regenField = async (field, instruction = '') => {
     setFieldBusy(field); setError('')
     try {
-      const r = await api.regenField(jobId, scene.id, field, { title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      const r = await api.regenField(jobId, scene.id, field, { title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt, instruction })
       setters[field](r.value)
     } catch (e) { setError(e.message) } finally { setFieldBusy('') }
   }
@@ -153,13 +163,13 @@ function SceneCard({
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
   }
 
-  const rerender = async (component) => {
+  const rerender = async (component, instruction = '') => {
     await persist()
     setBusy(component)
     setError('')
     onRerenderStart(component)
     try {
-      const r = await api.rerenderFilmScene(workDir, scene.id, component)
+      const r = await api.rerenderFilmScene(workDir, scene.id, component, instruction)
       if (r.task_id) {
         startPolling(r.task_id)
       } else {
@@ -315,10 +325,10 @@ function SceneCard({
               </>
             ) : (
               <div className="stack gap-14">
-                <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={() => regenField('title')}>Title</RegenLabel>}>
+                <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={(instr) => regenField('title', instr)} chips={REGEN_CHIPS.title}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={() => regenField('narration')} icon="microphone-lines">Narration</RegenLabel>}>
+                <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
                   <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
                 </Field>
                 <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
@@ -327,10 +337,10 @@ function SceneCard({
                     {(voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
                   </select>
                 </Field>
-                <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={() => regenField('image_prompt')} icon="image">Image prompt</RegenLabel>} hint="FLUX — static frame">
+                <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
-                <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={() => regenField('video_prompt')} icon="film">Video prompt</RegenLabel>} hint="LTX — motion & camera">
+                <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>} hint="LTX — motion & camera">
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
               </div>
@@ -355,18 +365,17 @@ function SceneCard({
                 onClick={() => rerender('narration')}>
                 {busy === 'narration' ? 'Rendering…' : 'Narration'}
               </Button>
-              <Button variant="ghost" icon="image" size="sm" disabled={isRendering}
-                onClick={() => rerender('image')}>
-                {busy === 'image' ? 'Rendering…' : 'Image'}
-              </Button>
+              <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
+                label="Image" busyLabel="Rendering…" busy={busy === 'image'}
+                onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
               <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
                 onClick={() => { setInpaintErr(''); setInpaint(true) }}>
                 Edit image
               </Button>
-              <Button variant="ghost" icon="film" size="sm" disabled={isRendering}
-                onClick={() => rerender('video')}>
-                {busy === 'video' ? 'Rendering…' : 'Video'}
-              </Button>
+              <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
+                label="Video" busyLabel="Rendering…" busy={busy === 'video'}
+                onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
+
               {/* Spacer */}
               <div style={{ flex: 1 }} />
 
