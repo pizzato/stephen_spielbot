@@ -1,19 +1,22 @@
-"""Script generation — supports Claude API and local vLLM backends.
+"""Script generation — supports Claude, Grok (xAI), and local vLLM backends.
 
 Backend is selected via config:
-  llm_backend: "claude" | "local"   (default: "local")
-  claude_api_key: "sk-ant-..."       (required when backend is "claude")
-  claude_model: "claude-sonnet-4-6"  (optional override)
+  llm_backend: "claude" | "grok" | "local"   (default: "local")
+  claude_api_key / claude_model               (when backend is "claude")
+  grok_api_key / grok_model                   (when backend is "grok"; key also
+                                              from env XAI_API_KEY)
+  local_llm_url / local_llm_model             (when backend is "local")
 
-Claude backend: single call, JSON output, reliable.
-Local backend:  two-stage plain-text (story + per-scene visuals), works
-                around the reasoning-model token constraints.
+Claude / Grok: JSON batch protocol, reliable structured output.
+Local:         two-stage plain-text (story + per-scene visuals), works
+               around the reasoning-model token constraints.
 """
 from __future__ import annotations
 
 import concurrent.futures
 import json
 import logging
+import os
 import re
 import urllib.request
 import urllib.error
@@ -29,6 +32,10 @@ from pipeline import prompts as _prompts
 
 _LOCAL_LLM_URL_DEFAULT   = "http://localhost:8000/v1/chat/completions"
 _LOCAL_LLM_MODEL_DEFAULT = "openai/gpt-oss-120b"
+
+# xAI Grok — OpenAI-compatible Chat Completions.
+_GROK_CHAT_URL_DEFAULT = "https://api.x.ai/v1/chat/completions"
+_GROK_MODEL_DEFAULT = "grok-4.5"
 
 NEGATIVE_PROMPT = _prompts.value("video_negative")
 
@@ -173,12 +180,124 @@ def _claude_call(client, model: str, system: str, user_msg: str,
     raise last_exc
 
 
-def _fill_empty_narrations(client, model: str, scenes: list[Scene],
-                           title: str, video_title: str | None) -> None:
-    """For any scene with empty narration, make a targeted Claude call to fill it.
+def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
+                            user_msg: str, max_tokens: int, label: str,
+                            retries: int = 6, timeout: int = 300) -> str:
+    """Chat Completions call (OpenAI-compatible: Grok/xAI, local vLLM with auth).
 
-    Mutates the scenes list in place. Prioritises scene 1 which is most likely
-    to be left empty by the main generation pass.
+    Used by the Grok backend. Retries with exponential backoff on network/5xx.
+    """
+    import time as _time
+    messages = []
+    if (system or "").strip():
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": user_msg})
+    payload = json.dumps({
+        "model": model,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": max_tokens,
+    }).encode()
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}",
+    }
+    last_exc: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                data = json.loads(resp.read())
+            choice = data["choices"][0]
+            finish = choice.get("finish_reason")
+            content = (choice.get("message") or {}).get("content") or ""
+            if finish in ("length", "max_tokens"):
+                raise RuntimeError(
+                    f"LLM hit the token limit ({max_tokens}) for {label}. "
+                    "Try fewer scenes or a shorter topic."
+                )
+            if not content.strip():
+                raise RuntimeError(f"Empty LLM content for {label} (finish_reason={finish})")
+            return content.strip()
+        except Exception as exc:
+            last_exc = exc
+            if attempt < retries:
+                delay = min(10 * (2 ** (attempt - 1)), 60)
+                logger.warning("OpenAI-compatible call failed (attempt %d/%d, %s): %s — retrying in %ds",
+                               attempt, retries, label, exc, delay)
+                _time.sleep(delay)
+    raise last_exc
+
+
+def _claude_api_key(cfg: dict) -> str:
+    return (cfg.get("claude_api_key") or "").strip() or os.environ.get("ANTHROPIC_API_KEY", "").strip()
+
+
+def _grok_api_key(cfg: dict) -> str:
+    return (cfg.get("grok_api_key") or "").strip() or os.environ.get("XAI_API_KEY", "").strip()
+
+
+def llm_backend_ready(cfg: dict) -> bool:
+    """True when the configured LLM backend has what it needs to make a call.
+
+    Local is assumed ready (the call fails later if the server is down). Cloud
+    backends need an API key in config or the matching environment variable.
+    """
+    backend = cfg.get("llm_backend", "local")
+    if backend == "claude":
+        return bool(_claude_api_key(cfg))
+    if backend == "grok":
+        return bool(_grok_api_key(cfg))
+    return True
+
+
+def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
+                   label: str, retries: int = 3) -> str:
+    """One-shot chat completion against the configured LLM backend.
+
+    Shared by suggestions, descriptions, tags, director briefs, community
+    replies, and field regen. Script generation uses the same backends but
+    its own batching protocol.
+    """
+    backend = cfg.get("llm_backend", "local")
+    if backend == "claude":
+        api_key = _claude_api_key(cfg)
+        if not api_key:
+            raise RuntimeError("No Claude API key configured (Settings → LLM backend).")
+        import anthropic
+        import httpx
+        timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
+        client = anthropic.Anthropic(
+            api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout)
+        )
+        return _claude_call(
+            client, cfg.get("claude_model", "claude-sonnet-4-6"),
+            system, user_msg, max_tokens, label, retries=retries,
+        )
+    if backend == "grok":
+        api_key = _grok_api_key(cfg)
+        if not api_key:
+            raise RuntimeError("No Grok API key configured (Settings → LLM backend).")
+        return _openai_compatible_call(
+            cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT,
+            api_key,
+            cfg.get("grok_model") or _GROK_MODEL_DEFAULT,
+            system, user_msg, max_tokens, label, retries=retries,
+        )
+    url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
+    model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
+    return _local_llm(
+        [{"role": "system", "content": system}, {"role": "user", "content": user_msg}],
+        max_tokens=max_tokens, url=url, model=model, retries=max(1, retries - 1),
+    )
+
+
+def _fill_empty_narrations(call_fn, scenes: list[Scene],
+                           title: str, video_title: str | None) -> None:
+    """For any scene with empty narration, make a targeted LLM call to fill it.
+
+    *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
+    Mutates the scenes list in place.
     """
     topic = video_title or title
     empty = [s for s in scenes if not (s.narration or "").strip()]
@@ -194,12 +313,11 @@ def _fill_empty_narrations(client, model: str, scenes: list[Scene],
         if next_narr:
             ctx_parts.append(f'Next scene begins with: "{next_narr}"')
         try:
-            narration = _claude_call(
-                client, model,
+            narration = call_fn(
                 _prompts.system("script_claude_fill_narration"),
                 _prompts.user("script_claude_fill_narration", ctx="\n".join(ctx_parts)),
-                max_tokens=120,
-                label=f"fill narration scene {scene.id}",
+                120,
+                f"fill narration scene {scene.id}",
                 retries=2,
             ).strip()
             if narration:
@@ -209,21 +327,16 @@ def _fill_empty_narrations(client, model: str, scenes: list[Scene],
             logger.warning("Could not fill narration for scene %d: %s", scene.id, exc)
 
 
-def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
-                     api_key: str, model: str,
-                     video_title: str | None = None,
-                     video_style_hint: str | None = None,
-                     character_sheet: str | None = None,
-                     avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
-    import anthropic
-    import httpx
-    # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
-    # from Anthropic's servers after ~3 minutes on large prompts, causing
-    # "Server disconnected without sending a response" errors.
-    timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
-    http_client = httpx.Client(http2=False, timeout=timeout)
-    client = anthropic.Anthropic(api_key=api_key, http_client=http_client)
+def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
+                          call_fn,
+                          video_title: str | None = None,
+                          video_style_hint: str | None = None,
+                          character_sheet: str | None = None,
+                          avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+    """JSON batch script generation shared by Claude and Grok.
 
+    *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
+    """
     # ── Batch 1: style + music + first BATCH_SIZE scenes ──────────────────────
     first_batch = min(_CLAUDE_BATCH_SIZE, n_scenes)
     style_note = (
@@ -263,7 +376,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
-    raw = _claude_call(client, model, _prompts.system("script_claude_initial"), user_msg, max_tokens, f"scenes 1–{first_batch}")
+    raw = call_fn(_prompts.system("script_claude_initial"), user_msg, max_tokens, f"scenes 1–{first_batch}")
     outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
     style      = style_hint.strip() if style_hint and style_hint.strip() else outer.get("style", "")
@@ -319,8 +432,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
-        raw = _claude_call(client, model, _prompts.system("script_claude_continuation"), cont_msg,
-                           max_tokens, f"scenes {batch_start}–{batch_end}")
+        raw = call_fn(_prompts.system("script_claude_continuation"), cont_msg,
+                      max_tokens, f"scenes {batch_start}–{batch_end}")
         items = _parse_claude_response(raw, f"scenes {batch_start}–{batch_end}")
         if not isinstance(items, list):
             items = items.get("scenes", [])
@@ -335,13 +448,60 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         batch_start = batch_end + 1
 
     final_scenes = scenes[:n_scenes]
-    _fill_empty_narrations(client, model, final_scenes, title, video_title)
+    _fill_empty_narrations(call_fn, final_scenes, title, video_title)
     # Absolute last-resort safety net: no Scene leaves with empty narration.
     for s in final_scenes:
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
-            logger.warning("Scene %d still empty after Claude fill — used title", s.id)
+            logger.warning("Scene %d still empty after cloud fill — used title", s.id)
     return final_scenes, music_desc, style, identified
+
+
+def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
+                     api_key: str, model: str,
+                     video_title: str | None = None,
+                     video_style_hint: str | None = None,
+                     character_sheet: str | None = None,
+                     avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+    import anthropic
+    import httpx
+    # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
+    # from Anthropic's servers after ~3 minutes on large prompts, causing
+    # "Server disconnected without sending a response" errors.
+    timeout = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=30.0)
+    http_client = httpx.Client(http2=False, timeout=timeout)
+    client = anthropic.Anthropic(api_key=api_key, http_client=http_client)
+
+    def call_fn(system, user_msg, max_tokens, label, retries=6):
+        return _claude_call(client, model, system, user_msg, max_tokens, label, retries=retries)
+
+    return _json_script_generate(
+        title, n_scenes, style_hint, call_fn,
+        video_title=video_title, video_style_hint=video_style_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint,
+    )
+
+
+def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
+                   api_key: str, model: str,
+                   video_title: str | None = None,
+                   video_style_hint: str | None = None,
+                   character_sheet: str | None = None,
+                   avoid_hint: str | None = None,
+                   api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+    """Grok (xAI) uses the same JSON batch protocol as Claude."""
+    url = api_url or _GROK_CHAT_URL_DEFAULT
+
+    def call_fn(system, user_msg, max_tokens, label, retries=6):
+        return _openai_compatible_call(
+            url, api_key, model, system, user_msg, max_tokens, label, retries=retries,
+        )
+
+    return _json_script_generate(
+        title, n_scenes, style_hint, call_fn,
+        video_title=video_title, video_style_hint=video_style_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -678,7 +838,7 @@ def generate_script(
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
-    Backend is chosen from config: llm_backend = "claude" | "local".
+    Backend is chosen from config: llm_backend = "claude" | "grok" | "local".
     video_title is the short YouTube title; title is the full topic/description.
     video_style_hint is per-style motion/cinematography guidance steering each
     scene's video_prompt (camera + subject movement).
@@ -696,16 +856,30 @@ def generate_script(
     backend = cfg.get("llm_backend", "local")
 
     if backend == "claude":
-        api_key = cfg.get("claude_api_key", "")
+        api_key = _claude_api_key(cfg)
         if not api_key:
             raise RuntimeError(
-                'Claude API key not set. Add it in the Config tab under "LLM Backend".'
+                'Claude API key not set. Add it in Settings under "LLM backend".'
             )
         model = cfg.get("claude_model", "claude-sonnet-4-6")
         logger.info("Using Claude backend: model=%s", model)
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
                                 character_sheet=character_sheet, avoid_hint=avoid_hint)
+
+    if backend == "grok":
+        api_key = _grok_api_key(cfg)
+        if not api_key:
+            raise RuntimeError(
+                'Grok API key not set. Add it in Settings under "LLM backend" '
+                "(or set the XAI_API_KEY environment variable)."
+            )
+        model = cfg.get("grok_model") or _GROK_MODEL_DEFAULT
+        logger.info("Using Grok backend: model=%s", model)
+        return _grok_generate(title, n_scenes, style_hint, api_key, model,
+                              video_title=video_title, video_style_hint=video_style_hint,
+                              character_sheet=character_sheet, avoid_hint=avoid_hint,
+                              api_url=cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT)
 
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
@@ -721,32 +895,8 @@ def generate_video_prompt(title: str, comment: str) -> str:  # noqa: ARG001
     # Note: comment is intentionally ignored — the brief must be topic-agnostic.
     sys_msg = _prompts.system("director_brief")
     user_msg = _prompts.user("director_brief", title=title or "Untitled")
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            api_key = cfg.get("claude_api_key", "")
-            if not api_key:
-                raise RuntimeError("No Claude API key configured")
-            import anthropic, httpx
-            timeout = httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=30.0)
-            client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
-            text = _claude_call(
-                client,
-                cfg.get("claude_model", "claude-sonnet-4-6"),
-                sys_msg,
-                user_msg,
-                max_tokens=200,
-                label="video_prompt",
-            )
-            return text.strip()
-        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
-        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
-        return _local_llm(
-            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-            max_tokens=200,
-            url=url,
-            model=model,
-        ).strip()
+        return _chat_complete(cfg, sys_msg, user_msg, max_tokens=200, label="video_prompt").strip()
     except Exception as exc:
         logger.warning("generate_video_prompt failed: %s", exc)
         return ""  # empty string — caller should show Create tab without a pre-filled prompt
@@ -776,8 +926,7 @@ def generate_community_reply(comment_text: str, commenter: str, thread_text: str
                              guidance: str, cfg: dict) -> dict:
     """Decide whether to reply to a non-request community comment and, if so, draft
     a reply in the channel's voice. Returns {should_reply, reply, reason}; safe
-    default on any failure. Backend is chosen from cfg (claude | local) — both are
-    supported."""
+    default on any failure. Backend is chosen from cfg (claude | grok | local)."""
     sys_msg = _prompts.system("community_reply")
     user_msg = _prompts.user(
         "community_reply",
@@ -786,32 +935,8 @@ def generate_community_reply(comment_text: str, commenter: str, thread_text: str
         comment=(comment_text or "").strip()[:2000],
         thread=(thread_text or "").strip() or "(no replies yet)",
     )
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            api_key = cfg.get("claude_api_key", "")
-            if not api_key:
-                raise RuntimeError("No Claude API key configured")
-            import anthropic, httpx
-            timeout = httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=30.0)
-            client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
-            text = _claude_call(
-                client,
-                cfg.get("claude_model", "claude-sonnet-4-6"),
-                sys_msg,
-                user_msg,
-                max_tokens=400,
-                label="community_reply",
-            )
-            return _parse_community_reply(text)
-        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
-        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
-        text = _local_llm(
-            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-            max_tokens=400,
-            url=url,
-            model=model,
-        )
+        text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=400, label="community_reply")
         return _parse_community_reply(text)
     except Exception as exc:
         logger.warning("generate_community_reply failed: %s", exc)
@@ -909,39 +1034,8 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
     user_msg = _prompts.user("video_suggestions", titles_list=titles_list,
                              discarded_list=discarded_list,
                              style_context=style_suggestion_context(style))
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            api_key = cfg.get("claude_api_key", "")
-            if not api_key:
-                raise RuntimeError("No Claude API key configured")
-            import anthropic
-            import httpx
-            timeout = httpx.Timeout(connect=15.0, read=60.0, write=30.0, pool=30.0)
-            client = anthropic.Anthropic(
-                api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout)
-            )
-            text = _claude_call(
-                client,
-                cfg.get("claude_model", "claude-sonnet-4-6"),
-                sys_msg,
-                user_msg,
-                max_tokens=2048,
-                label="video_suggestions",
-            )
-            return _drop_repeats(_parse_suggestions(text), previous_titles)
-        # Local backend
-        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
-        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
-        text = _local_llm(
-            [
-                {"role": "system", "content": sys_msg},
-                {"role": "user", "content": user_msg},
-            ],
-            max_tokens=2048,
-            url=url,
-            model=model,
-        )
+        text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=2048, label="video_suggestions")
         return _drop_repeats(_parse_suggestions(text), previous_titles)
     except Exception as exc:
         logger.warning("generate_video_suggestions failed: %s", exc)
@@ -972,33 +1066,8 @@ def generate_youtube_description(
         title=title or "Untitled",
         narrations=narrations[:3000],
     )
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            api_key = cfg.get("claude_api_key", "")
-            if not api_key:
-                raise RuntimeError("No Claude API key configured")
-            import anthropic, httpx
-            timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
-            client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
-            text = _claude_call(
-                client,
-                cfg.get("claude_model", "claude-sonnet-4-6"),
-                sys_msg,
-                user_msg,
-                max_tokens=160,
-                label="youtube_description",
-            )
-            return text.strip()
-        # Local backend
-        url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
-        model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
-        return _local_llm(
-            [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-            max_tokens=160,
-            url=url,
-            model=model,
-        ).strip()
+        return _chat_complete(cfg, sys_msg, user_msg, max_tokens=160, label="youtube_description").strip()
     except Exception as exc:
         logger.warning("generate_youtube_description failed: %s", exc)
         return f"A documentary about {title}. Generated by Stephen Spielbot."
@@ -1049,33 +1118,8 @@ def generate_youtube_tags(
         title=title or "Untitled",
         narrations=narrations[:3000],
     )
-    backend = cfg.get("llm_backend", "local")
     try:
-        if backend == "claude":
-            api_key = cfg.get("claude_api_key", "")
-            if not api_key:
-                raise RuntimeError("No Claude API key configured")
-            import anthropic, httpx
-            timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
-            client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
-            text = _claude_call(
-                client,
-                cfg.get("claude_model", "claude-sonnet-4-6"),
-                sys_msg,
-                user_msg,
-                max_tokens=120,
-                label="youtube_tags",
-            )
-        else:
-            # Local backend
-            url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
-            model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
-            text = _local_llm(
-                [{"role": "system", "content": sys_msg}, {"role": "user", "content": user_msg}],
-                max_tokens=120,
-                url=url,
-                model=model,
-            )
+        text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=120, label="youtube_tags")
     except Exception as exc:
         logger.warning("generate_youtube_tags failed: %s", exc)
         return []

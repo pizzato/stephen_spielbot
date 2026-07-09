@@ -1670,49 +1670,10 @@ _FIELD_INSTRUCTIONS = {
 def _llm_complete(system: str, user: str, cfg: dict, max_tokens: int = 700) -> str:
     """Lightweight direct LLM call honouring the configured backend.
 
-    NOTE: kept self-contained (stdlib urllib) rather than importing
-    pipeline.llm's internals. If pipeline.llm later changes models/prompting,
-    this can be unified with it.
-
-    Raises if the model hit ``max_tokens`` before finishing, so callers that
-    parse the output (e.g. JSON) fail loudly instead of silently dropping a
-    truncated response.
+    Delegates to pipeline.llm._chat_complete so Claude / Grok / local stay in sync.
     """
-    import urllib.request
-    if cfg.get("llm_backend", "local") == "claude":
-        key = cfg.get("claude_api_key", "")
-        if not key:
-            raise RuntimeError("No Claude API key configured (Settings → LLM backend).")
-        payload = json.dumps({
-            "model": cfg.get("claude_model", "claude-sonnet-4-6"),
-            "max_tokens": max_tokens, "system": system,
-            "messages": [{"role": "user", "content": user}],
-        }).encode()
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages", data=payload,
-            headers={"x-api-key": key, "anthropic-version": "2023-06-01",
-                     "content-type": "application/json"})
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            data = json.loads(resp.read())
-        if data.get("stop_reason") == "max_tokens":
-            raise RuntimeError(
-                f"LLM response was truncated at the {max_tokens}-token limit.")
-        return "".join(b.get("text", "") for b in data.get("content", [])).strip()
-
-    url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
-    payload = json.dumps({
-        "model": cfg.get("local_llm_model", ""),
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        "temperature": 0.9, "max_tokens": max_tokens,
-    }).encode()
-    req = urllib.request.Request(url, data=payload, headers={"content-type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as resp:
-        data = json.loads(resp.read())
-    choice = data["choices"][0]
-    if choice.get("finish_reason") == "length":
-        raise RuntimeError(
-            f"LLM response was truncated at the {max_tokens}-token limit.")
-    return choice["message"]["content"].strip()
+    from pipeline.llm import _chat_complete
+    return _chat_complete(cfg, system, user, max_tokens=max_tokens, label="field_regen")
 
 
 def _instruction_note(instruction: str, *, label: str = "instruction from the user") -> str:
@@ -6511,6 +6472,46 @@ _film_task_meta: dict = {}
 # resume_generation.py) — so deletion flags them here and they abort at the
 # next checkpoint instead of feeding ComfyUI/TTS more work for a dead film.
 _film_cancelled_tids: set = set()
+# How long a failed re-render stays visible on the edit page after the fact, so a
+# failure that happened while the user was on another screen is still surfaced on
+# their return rather than silently vanishing. In-memory only — a backend restart
+# clears it, and starting a fresh re-render for the scene clears it immediately.
+_FILM_ERROR_TTL_S = 6 * 3600
+
+# One process-wide ComfyUI pool shared by every edit-screen scene re-render.
+# Without it, each re-render built its own WorkerPool, whose per-worker
+# semaphore then gated nothing across requests: clicking regenerate on many
+# scenes submitted them all to ComfyUI at once, piling extra jobs onto the busy
+# workers. Anything left *pending* behind a running job for >_PENDING_TIMEOUT
+# (180s, see pipeline/comfyui.py) is deleted by the worker-stuck safety valve,
+# so every re-render past the worker count failed silently. Sharing one pool
+# makes acquire() a real FIFO queue — extra re-renders wait for a free worker
+# instead of being killed.
+_edit_render_pool = None
+_edit_render_pool_key: tuple = ()
+_edit_render_pool_lock = threading.Lock()
+
+
+def _shared_edit_render_pool():
+    """Get-or-create the shared re-render WorkerPool over the reachable workers,
+    or None when none are reachable. Rebuilt only when the reachable set changes."""
+    global _edit_render_pool, _edit_render_pool_key
+    from pipeline.worker_pool import WorkerPool, alive_workers
+    # Re-rendering means the UI is in use — keep the main render reserving a
+    # worker for UI work (issue #98), mirroring _preview_worker_urls().
+    ui_activity.mark_active()
+    cfg = gapp.load_config()
+    try:
+        urls = alive_workers(cfg.get("comfy_workers", []))
+    except Exception as exc:
+        gapp.logger.warning("Re-render worker probe failed: %s", exc)
+        return None
+    key = tuple(sorted(urls))
+    with _edit_render_pool_lock:
+        if _edit_render_pool is None or _edit_render_pool_key != key:
+            _edit_render_pool = WorkerPool(list(urls))
+            _edit_render_pool_key = key
+        return _edit_render_pool
 
 
 class _FilmTaskCancelled(Exception):
@@ -6529,7 +6530,26 @@ def _finish_film_task_error(task_id: str, e: Exception) -> None:
     if task_id in _film_cancelled_tids:
         _film_tasks[task_id] = {"status": "cancelled"}
     else:
-        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200]}
+        # finished_at lets /films/tasks re-surface this failure (bounded by
+        # _FILM_ERROR_TTL_S) when the user returns to the editor, instead of the
+        # scene silently showing its old frame/clip.
+        _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200],
+                                "finished_at": time.time()}
+
+
+def _clear_finished_film_tasks(work_dir: str, scene_id: int) -> None:
+    """Drop terminal (error/cancelled/done) re-render records for a scene. Called
+    when a fresh re-render starts so it supersedes any earlier failed attempt on
+    that scene (clears the stale 'failed' badge) and terminal records don't pile
+    up in the in-memory task stores."""
+    for tid, meta in list(_film_task_meta.items()):
+        if meta.get("work_dir") != work_dir or meta.get("scene_id") != scene_id:
+            continue
+        if (_film_tasks.get(tid) or {}).get("status") == "running":
+            continue
+        _film_tasks.pop(tid, None)
+        _film_task_meta.pop(tid, None)
+        _film_cancelled_tids.discard(tid)
 
 
 def _cancel_film_tasks(work_dir: Path) -> int:
@@ -6932,13 +6952,10 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
     cfg = gapp.load_config()
     engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
-    worker_urls = gapp._preview_worker_urls()
-    if not worker_urls:
+    pool = _shared_edit_render_pool()
+    if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
         return
-
-    from pipeline.worker_pool import WorkerPool
-    pool = WorkerPool(worker_urls)
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     preview = wd / f"scene_{sid:02d}_preview.png"
@@ -7005,13 +7022,10 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
     cfg = gapp.load_config()
     engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, jc.get("style_name", "")).get("image_engine"))
-    worker_urls = gapp._preview_worker_urls()
-    if not worker_urls:
+    pool = _shared_edit_render_pool()
+    if pool is None:
         _film_tasks[task_id] = {"status": "error", "error": "No ComfyUI workers reachable."}
         return
-
-    from pipeline.worker_pool import WorkerPool
-    pool = WorkerPool(worker_urls)
 
     first_frame = wd / f"scene_{sid:02d}_first_frame.png"
     final_path = wd / f"scene_{sid:02d}_final.mp4"
@@ -7204,6 +7218,10 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         # video as a take so the user can flip back to it.
         video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
 
+    # A fresh re-render supersedes any earlier attempt shown on this scene —
+    # clear a stale "failed" badge and stop terminal records accumulating.
+    _clear_finished_film_tasks(str(wd), sid)
+
     tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": body.component}
     _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": body.component}
@@ -7311,23 +7329,37 @@ def film_task_status(task_id: str = Query(...)) -> dict:
 
 @api.get("/api/films/tasks")
 def film_tasks_for_work_dir(work_dir: str = Query(...)) -> dict:
-    """Running re-render tasks for a film, so the edit page can resume its
-    progress indicators after a reload (the task ids live only in client state
-    otherwise)."""
+    """Re-render tasks for a film so the edit page can restore state after a
+    reload (the task ids live only in client state otherwise): running ones
+    resume their spinner, and recently-failed ones re-surface their error so a
+    failure that happened while the user was on another screen isn't lost —
+    otherwise the scene silently shows its old frame/clip."""
     wd = str(Path(work_dir))
+    now = time.time()
     out = []
     for tid, meta in list(_film_task_meta.items()):
         if meta.get("work_dir") != wd:
             continue
         task = _film_tasks.get(tid)
-        if not task or task.get("status") != "running":
+        if not task:
             continue
-        out.append({
-            "task_id": tid,
-            "scene_id": meta.get("scene_id"),
-            "component": meta.get("component"),
-            "step": task.get("step", ""),
-        })
+        status = task.get("status")
+        if status == "running":
+            out.append({
+                "task_id": tid,
+                "scene_id": meta.get("scene_id"),
+                "component": meta.get("component"),
+                "status": "running",
+                "step": task.get("step", ""),
+            })
+        elif status == "error" and now - task.get("finished_at", 0) < _FILM_ERROR_TTL_S:
+            out.append({
+                "task_id": tid,
+                "scene_id": meta.get("scene_id"),
+                "component": meta.get("component"),
+                "status": "error",
+                "error": task.get("error", "Re-render failed"),
+            })
     return {"ok": True, "tasks": out}
 
 
@@ -7973,8 +8005,8 @@ def _ensure_descriptions() -> int:
     """Cache YouTube descriptions for completed jobs that don't have one yet.
     Called from the automation loop so it runs server-side, not on browser polls."""
     cfg = gapp.load_config()
-    backend = cfg.get("llm_backend", "local")
-    if backend == "claude" and not cfg.get("claude_api_key", ""):
+    from pipeline.llm import llm_backend_ready
+    if not llm_backend_ready(cfg):
         return 0
     count = 0
     try:
@@ -8002,8 +8034,8 @@ def _ensure_tags() -> int:
     recent jobs; on-demand generation at publish time is the backstop for
     anything not yet warmed."""
     cfg = gapp.load_config()
-    backend = cfg.get("llm_backend", "local")
-    if backend == "claude" and not cfg.get("claude_api_key", ""):
+    from pipeline.llm import llm_backend_ready
+    if not llm_backend_ready(cfg):
         return 0
     seen: set[str] = set()
     candidates: list[str] = []
