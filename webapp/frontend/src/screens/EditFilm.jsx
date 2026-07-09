@@ -10,6 +10,49 @@ const resPixels = (name) => {
   return m ? Number(m[1]) * Number(m[2]) : 0
 }
 
+// Lightbox chrome (matches Script characters / scene enlargements).
+const LB_BTN = {
+  position: 'absolute', zIndex: 2, border: 'none', color: '#fff',
+  background: 'rgba(20,22,24,.55)', backdropFilter: 'blur(6px)',
+  width: 46, height: 46, borderRadius: '50%', fontSize: 18,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+}
+
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(r.result)
+  r.onerror = () => reject(new Error('Could not read that file.'))
+  r.readAsDataURL(file)
+})
+
+// Mirror app._character_mentions: whole-word name/alias in image prompt + narration.
+const characterMentions = (scene, character) => {
+  const text = `${scene?.image_prompt || ''} ${scene?.narration || ''}`
+  const tokens = [character?.name || '', ...((character?.aliases) || [])]
+  return tokens.some((tok) => {
+    const t = (tok || '').trim()
+    if (!t) return false
+    try {
+      return new RegExp(`\\b${t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(text)
+    } catch {
+      return text.toLowerCase().includes(t.toLowerCase())
+    }
+  })
+}
+
+// Poll film-task status until done/error/cancelled.
+const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
+  const poll = setInterval(async () => {
+    try {
+      const t = await api.filmTaskStatus(taskId)
+      if (t.status === 'done') { clearInterval(poll); resolve(t) }
+      else if (t.status === 'error' || t.status === 'cancelled') {
+        clearInterval(poll); reject(new Error(t.error || `Task ${t.status}`))
+      }
+    } catch (e) { clearInterval(poll); reject(e) }
+  }, 3000)
+})
+
 // ── Per-scene card (Scenes tab) ───────────────────────────────────────────────
 
 function SceneCard({
@@ -781,6 +824,342 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   )
 }
 
+// ── Characters tab ────────────────────────────────────────────────────────────
+
+function CharactersTab({ workDir, onSwitchToScenes }) {
+  const [jobId, setJobId] = useState('')
+  const [scenes, setScenes] = useState([])
+  const [characters, setCharacters] = useState([])
+  const [loaded, setLoaded] = useState(false)
+  const [error, setError] = useState('')
+  const [charBusy, setCharBusy] = useState('')
+  const [charMsg, setCharMsg] = useState('')
+  const [aliasDraft, setAliasDraft] = useState({})
+  const [charLightbox, setCharLightbox] = useState(null)
+  const [redoBusy, setRedoBusy] = useState('')  // character id currently redoing scenes
+  const [confirmRedo, setConfirmRedo] = useState('')  // character id pending confirm
+
+  const load = useCallback(async () => {
+    setError('')
+    try {
+      const r = await api.filmScenes(workDir)
+      setJobId(r.job_id || '')
+      setScenes(r.scenes || [])
+      if (r.job_id) {
+        const c = await api.scriptCharacters(r.job_id)
+        setCharacters(c.characters || [])
+      } else {
+        setCharacters([])
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setLoaded(true)
+    }
+  }, [workDir])
+
+  useEffect(() => { load() }, [load])
+
+  // Background look generation may still be finishing — poll briefly while any
+  // character is missing its image (same pattern as Script Characters).
+  useEffect(() => {
+    if (!jobId || charBusy || redoBusy) return
+    if (!characters.some((c) => !c.has_image)) return
+    let alive = true
+    let tries = 0
+    let timer = null
+    const poll = async () => {
+      try {
+        const r = await api.scriptCharacters(jobId)
+        if (!alive) return
+        setCharacters(r.characters || [])
+        if ((r.characters || []).some((c) => !c.has_image) && tries++ < 12) timer = setTimeout(poll, 4000)
+      } catch { /* best-effort */ }
+    }
+    timer = setTimeout(poll, 4000)
+    return () => { alive = false; clearTimeout(timer) }
+  }, [jobId, characters, charBusy, redoBusy])
+
+  const charOp = async (id, run) => {
+    setCharBusy(id); setError(''); setCharMsg('')
+    try {
+      const r = await run()
+      setCharacters(r.characters || [])
+    } catch (e) { setError(e.message) } finally { setCharBusy('') }
+  }
+  const setCharField = (id, key, val) =>
+    setCharacters((arr) => arr.map((c) => (c.id === id ? { ...c, [key]: val } : c)))
+  const saveCharacter = (c) => charOp(c.id, () => api.updateScriptCharacter(jobId, c.id, {
+    name: c.name || '', aliases: c.aliases || [], description: c.description || '',
+  }))
+  const addCharacter = () => charOp('add', () =>
+    api.addScriptCharacter(jobId, { name: '', aliases: [], description: '' }))
+  const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(jobId, c.id))
+  const genCharLook = (c) => charOp(c.id, () => api.generateScriptCharacterPortrait(jobId, c.id, ''))
+  const clearCharLook = (c) => charOp(c.id, () => api.clearScriptCharacterImage(jobId, c.id))
+  const uploadCharLook = (c, file) => file && charOp(c.id, async () =>
+    api.setScriptCharacterImage(jobId, c.id, file.name, await fileToDataUrl(file)))
+  const promoteCharacter = (c) => charOp(c.id, async () => {
+    const r = await api.promoteScriptCharacter(jobId, c.id)
+    setCharMsg(`Saved “${c.name || 'character'}” to your character catalogue.`)
+    return r
+  })
+  const selectCharVersion = (c, versionId) =>
+    charOp(c.id, () => api.selectScriptCharacterImage(jobId, c.id, versionId))
+
+  const scenesForChar = (c) => scenes.filter((s) => characterMentions(s, c))
+
+  // Re-render image then video for every scene that features this character, so
+  // the new look lands in first frames and the motion clips that use them.
+  const redoScenes = async (c) => {
+    const matching = scenesForChar(c)
+    setConfirmRedo('')
+    if (!matching.length) {
+      setCharMsg(`No scenes mention “${c.name || 'this character'}” by name or alias.`)
+      return
+    }
+    setRedoBusy(c.id); setError(''); setCharMsg('')
+    try {
+      setCharMsg(`Re-rendering images for ${matching.length} scene${matching.length === 1 ? '' : 's'}…`)
+      const imageWaits = []
+      for (const s of matching) {
+        const r = await api.rerenderFilmScene(workDir, s.id, 'image')
+        if (r.task_id) imageWaits.push(waitFilmTask(r.task_id))
+      }
+      await Promise.all(imageWaits)
+
+      setCharMsg(`Re-rendering video for ${matching.length} scene${matching.length === 1 ? '' : 's'}…`)
+      const videoWaits = []
+      for (const s of matching) {
+        const r = await api.rerenderFilmScene(workDir, s.id, 'video')
+        if (r.task_id) videoWaits.push(waitFilmTask(r.task_id))
+      }
+      await Promise.all(videoWaits)
+
+      setCharMsg(
+        `Updated ${matching.length} scene${matching.length === 1 ? '' : 's'} with “${c.name || 'character'}”. `
+        + 'Open Scenes to review, then Reassemble film to refresh the final cut.',
+      )
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setRedoBusy('')
+    }
+  }
+
+  // Character look lightbox
+  const charSelVerIdx = (c) => {
+    const vs = c?.history?.versions || []
+    const i = vs.findIndex((v) => v.id === c?.history?.selected)
+    return i < 0 ? Math.max(0, vs.length - 1) : i
+  }
+  const openCharLightbox = (c) => c.has_image && setCharLightbox({ id: c.id, ver: charSelVerIdx(c) })
+  const clbVerMove = (delta) => setCharLightbox((lb) => {
+    if (!lb) return lb
+    const vs = characters.find((x) => x.id === lb.id)?.history?.versions || []
+    const nv = Math.min(vs.length - 1, Math.max(0, lb.ver + delta))
+    return nv === lb.ver ? lb : { ...lb, ver: nv }
+  })
+  useEffect(() => {
+    if (!charLightbox) return
+    const onKey = (e) => {
+      const k = e.key
+      if (k === 'ArrowUp' || k === 'ArrowLeft') { e.preventDefault(); clbVerMove(-1) }
+      else if (k === 'ArrowDown' || k === 'ArrowRight') { e.preventDefault(); clbVerMove(1) }
+      else if (k === 'Escape') { e.preventDefault(); setCharLightbox(null) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [charLightbox, characters])
+  const clbChar = charLightbox ? characters.find((c) => c.id === charLightbox.id) : null
+  const clbVersions = clbChar?.history?.versions || []
+  const clbSrc = charLightbox
+    ? (clbVersions[charLightbox.ver] ? fileUrl(clbVersions[charLightbox.ver].path) : (clbChar?.image_url || ''))
+    : ''
+  const aliasValue = (c) => (aliasDraft[c.id] ?? (c.aliases || []).join(', '))
+  const commitAliases = (c) => {
+    const raw = aliasDraft[c.id]
+    setAliasDraft((d) => { const n = { ...d }; delete n[c.id]; return n })
+    if (raw === undefined) return
+    const aliases = raw.split(',').map((s) => s.trim()).filter(Boolean)
+    setCharField(c.id, 'aliases', aliases)
+    charOp(c.id, () => api.updateScriptCharacter(jobId, c.id, {
+      name: c.name || '', aliases, description: c.description || '',
+    }))
+  }
+
+  if (!loaded) return <p className="muted">Loading characters…</p>
+  if (!jobId) {
+    return (
+      <Card span={12} well>
+        <p className="muted" style={{ margin: 0 }}>Could not resolve this film’s job id — characters can’t be loaded.</p>
+      </Card>
+    )
+  }
+
+  return (
+    <div>
+      <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
+        <Button variant="primary" icon="user-plus" disabled={!!charBusy || !!redoBusy} onClick={addCharacter}>
+          {charBusy === 'add' ? 'Adding…' : 'Add character'}
+        </Button>
+      </div>
+
+      <Banner tone="danger">{error}</Banner>
+      {charMsg && <Banner tone="ok">{charMsg}</Banner>}
+      {redoBusy && (
+        <Banner tone="info">
+          <Icon name="spinner" spin /> Updating scenes for this character’s look… This can take a while.
+        </Banner>
+      )}
+
+      <div className="bento">
+        <Card span={12} well className="reveal reveal-d1">
+          <div className="row center gap-10">
+            <Icon name="user-group" style={{ color: 'var(--ink-3)' }} />
+            <span className="muted" style={{ fontSize: 12.5 }}>
+              Edit this film’s cast and looks. After changing a look, use <strong>Redo scenes</strong> so
+              image and video picks up the new appearance — then reassemble from the Scenes tab.
+            </span>
+          </div>
+        </Card>
+
+        {characters.length === 0 && (
+          <Card span={12} well className="reveal reveal-d2">
+            <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+              No recurring characters for this film. Click <strong>Add character</strong> to define one.
+            </p>
+          </Card>
+        )}
+
+        {characters.map((c, i) => {
+          const b = charBusy === c.id || redoBusy === c.id
+          const used = scenesForChar(c)
+          return (
+            <Card key={c.id} span={6} padLg className={`reveal reveal-d${(i % 3) + 1}`}>
+              <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
+                <div style={{ width: 176, flex: '0 0 auto' }}>
+                  <div onClick={() => openCharLightbox(c)}
+                    style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: '1 / 1', background: 'var(--paper-2)', cursor: c.has_image ? 'zoom-in' : 'default' }}>
+                    {c.has_image
+                      ? <img src={c.image_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                      : <div className={`gfill ${b ? 'skel' : 'g' + (i % 6)}`} style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          {!b && <Icon name="user" style={{ color: 'var(--ink-3)', fontSize: 26 }} />}
+                        </div>}
+                    {c.has_image && (
+                      <span style={{ position: 'absolute', right: 8, bottom: 8, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 11, fontWeight: 600, padding: '3px 8px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 5, backdropFilter: 'blur(4px)' }}>
+                        <Icon name="up-right-and-down-left-from-center" /> Full size
+                      </span>
+                    )}
+                  </div>
+                  <div className="stack gap-6 mt-10">
+                    <Button variant="ghost" size="sm" block icon="rotate-right" disabled={b} onClick={() => genCharLook(c)}>
+                      {charBusy === c.id ? 'Painting…' : c.has_image ? 'Regenerate look' : 'Generate look'}
+                    </Button>
+                    <label className="btn btn--ghost btn--sm btn--block" style={{ cursor: b ? 'default' : 'pointer' }}>
+                      <Icon name="upload" /> Upload
+                      <input type="file" accept="image/*" hidden disabled={b}
+                        onChange={(e) => { uploadCharLook(c, e.target.files?.[0]); e.target.value = '' }} />
+                    </label>
+                    {c.has_image && (
+                      <Button variant="quiet" size="sm" block icon="trash-can" disabled={b} onClick={() => clearCharLook(c)}>Remove look</Button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="stack gap-14" style={{ flex: 1, minWidth: 200 }}>
+                  <Field label="Name">
+                    <input className="input" value={c.name || ''}
+                      onChange={(e) => setCharField(c.id, 'name', e.target.value)}
+                      onBlur={() => saveCharacter(c)} />
+                  </Field>
+                  <Field label="Also called" hint="Comma-separated aliases the narration may use.">
+                    <input className="input" value={aliasValue(c)}
+                      onChange={(e) => setAliasDraft((d) => ({ ...d, [c.id]: e.target.value }))}
+                      onBlur={() => commitAliases(c)} />
+                  </Field>
+                  <Field label="Appearance" hint="Fixed look — drawn the same way in every scene.">
+                    <textarea className="textarea" rows={4} value={c.description || ''}
+                      onChange={(e) => setCharField(c.id, 'description', e.target.value)}
+                      onBlur={() => saveCharacter(c)} />
+                  </Field>
+                  <div className="row center gap-8 row--wrap">
+                    <Chip tone={used.length ? 'ok' : 'neutral'}>
+                      {used.length ? `In ${used.length} scene${used.length === 1 ? '' : 's'}` : 'Not in any scene'}
+                    </Chip>
+                  </div>
+                  <div className="row gap-10 row--wrap">
+                    {confirmRedo === c.id ? (
+                      <>
+                        <Button variant="primary" icon="rotate-right" disabled={b || !used.length}
+                          onClick={() => redoScenes(c)}>
+                          {redoBusy === c.id ? 'Re-rendering…' : `Confirm redo ${used.length}`}
+                        </Button>
+                        <Button variant="ghost" disabled={b} onClick={() => setConfirmRedo('')}>Cancel</Button>
+                      </>
+                    ) : (
+                      <Button variant="primary" icon="rotate-right" disabled={b || !used.length || !!redoBusy}
+                        onClick={() => setConfirmRedo(c.id)}>
+                        Redo scenes
+                      </Button>
+                    )}
+                    <Button variant="ghost" icon="bookmark" disabled={b || !(c.name || '').trim()} onClick={() => promoteCharacter(c)}>Save to catalogue</Button>
+                    <Button variant="quiet" icon="trash-can" disabled={b} onClick={() => removeCharacter(c)}>Delete</Button>
+                  </div>
+                </div>
+              </div>
+              <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
+                onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={b} />
+            </Card>
+          )
+        })}
+
+        {charLightbox && (
+          <div onClick={() => setCharLightbox(null)}
+            style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>
+            {clbSrc
+              ? <img src={clbSrc} alt="" onClick={(e) => e.stopPropagation()}
+                  style={{ maxWidth: '90%', maxHeight: '90%', objectFit: 'contain', borderRadius: 8, boxShadow: '0 24px 70px rgba(0,0,0,.6)', cursor: 'default' }} />
+              : <span onClick={(e) => e.stopPropagation()} style={{ color: 'rgba(255,255,255,.8)', fontSize: 14, cursor: 'default' }}>No look for this character yet.</span>}
+
+            <div onClick={(e) => e.stopPropagation()}
+              style={{ position: 'absolute', top: 18, left: 22, color: 'rgba(255,255,255,.92)', fontSize: 13, fontWeight: 600, display: 'flex', gap: 10, cursor: 'default' }}>
+              <span>{clbChar?.name || 'Character'}</span>
+              {clbVersions.length > 1 && <span style={{ opacity: 0.65 }}>· Look {charLightbox.ver + 1} / {clbVersions.length}</span>}
+            </div>
+
+            <button type="button" title="Close (Esc)" onClick={(e) => { e.stopPropagation(); setCharLightbox(null) }}
+              style={{ ...LB_BTN, top: 14, right: 16, width: 40, height: 40, fontSize: 16, cursor: 'pointer' }}>
+              <Icon name="xmark" />
+            </button>
+
+            {clbVersions.length > 1 && (
+              <>
+                <button type="button" title="Previous look (←)" disabled={charLightbox.ver <= 0}
+                  onClick={(e) => { e.stopPropagation(); clbVerMove(-1) }}
+                  style={{ ...LB_BTN, left: 18, top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: charLightbox.ver <= 0 ? 0.35 : 1 }}>
+                  <Icon name="chevron-left" />
+                </button>
+                <button type="button" title="Next look (→)" disabled={charLightbox.ver >= clbVersions.length - 1}
+                  onClick={(e) => { e.stopPropagation(); clbVerMove(1) }}
+                  style={{ ...LB_BTN, right: 18, top: '50%', transform: 'translateY(-50%)', cursor: 'pointer', opacity: charLightbox.ver >= clbVersions.length - 1 ? 0.35 : 1 }}>
+                  <Icon name="chevron-right" />
+                </button>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {charMsg && !redoBusy && onSwitchToScenes && characters.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <Button variant="ghost" icon="film" onClick={onSwitchToScenes}>Open Scenes</Button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ── Scenes tab ────────────────────────────────────────────────────────────────
 
 function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
@@ -946,8 +1325,10 @@ function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
 
 // ── Unified Edit Film screen ──────────────────────────────────────────────────
 
+const EDIT_TABS = new Set(['film', 'characters', 'scenes'])
+
 export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
-  const [tab, setTab] = useState(initialTab === 'scenes' ? 'scenes' : 'film')
+  const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
 
   // Prefill page title from film scenes (lightweight enough for the head).
@@ -959,7 +1340,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   }, [workDir])
 
   useEffect(() => {
-    setTab(initialTab === 'scenes' ? 'scenes' : 'film')
+    setTab(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   }, [workDir, initialTab])
 
   const label = workDir ? workDir.replace(/\/+$/, '').split('/').pop() : 'Film'
@@ -980,6 +1361,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
+          { value: 'characters', label: 'Characters' },
           { value: 'scenes', label: 'Scenes' },
         ]} />
       </div>
@@ -991,6 +1373,12 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
           meta={meta}
           filmTitle={filmTitle}
           onTitleChange={setFilmTitle}
+        />
+      )}
+      {tab === 'characters' && (
+        <CharactersTab
+          workDir={workDir}
+          onSwitchToScenes={() => setTab('scenes')}
         />
       )}
       {tab === 'scenes' && (
