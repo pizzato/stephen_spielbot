@@ -1,6 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { Card, Field, Button, Chip, Icon, Banner, RegenLabel, VersionStrip, VideoVersionStrip, InpaintModal } from '../components.jsx'
+import {
+  Card, Field, Button, Chip, Icon, Banner, Segmented, RegenLabel,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal,
+} from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+
+const resPixels = (name) => {
+  const m = /\((\d+)[×x](\d+)\)/.exec(name || '')
+  return m ? Number(m[1]) * Number(m[2]) : 0
+}
+
+// ── Per-scene card (Scenes tab) ───────────────────────────────────────────────
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
@@ -15,7 +25,7 @@ function SceneCard({
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
   const [busy, setBusy] = useState('')
-  const [fieldBusy, setFieldBusy] = useState('')   // which text field is regenerating (issue #88)
+  const [fieldBusy, setFieldBusy] = useState('')
   const [taskId, setTaskId] = useState(null)
   const [taskStatus, setTaskStatus] = useState(null)
   const [error, setError] = useState('')
@@ -45,7 +55,6 @@ function SceneCard({
     }
   }
 
-  // Regenerate one text field with the LLM, keeping the other edits as context (issue #88).
   const setters = { title: setTitle, narration: setNarration, image_prompt: setImagePrompt, video_prompt: setVideoPrompt }
   const regenField = async (field) => {
     setFieldBusy(field); setError('')
@@ -68,8 +77,6 @@ function SceneCard({
     pollRef.current = setInterval(async () => {
       try {
         const r = await api.filmTaskStatus(tid)
-        // 'cancelled' = the film was deleted out from under the task; stop
-        // polling without the error banner an actual failure gets.
         if (r.status === 'done' || r.status === 'cancelled') {
           clearInterval(pollRef.current)
           pollRef.current = null
@@ -100,11 +107,6 @@ function SceneCard({
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current) }, [])
 
-  // Resume polling for a re-render already running on the server (e.g. the user
-  // left the edit page and came back). The parent counts these in activeRenders,
-  // so we don't call onRerenderStart here. resumedRef makes this idempotent: the
-  // effect must not restart polling for a task it already picked up (startPolling
-  // changes identity on every parent re-render).
   useEffect(() => {
     if (initialTask && initialTask.task_id !== resumedRef.current && !pollRef.current) {
       resumedRef.current = initialTask.task_id
@@ -120,8 +122,6 @@ function SceneCard({
     }
   }, [initialTask, startPolling])
 
-  // Keep local history in sync when the parent reloads scenes (e.g. after an
-  // image or video re-render adds a new version).
   useEffect(() => { setHistory(scene.history) }, [scene.history])
   useEffect(() => { setVideoHistory(scene.video_history) }, [scene.video_history])
 
@@ -181,18 +181,11 @@ function SceneCard({
   }
 
   const isRendering = !!busy || !!taskId
-  // Prefer the selected kept version (each has a unique URL, so switching updates
-  // the frame instantly without cache-busting); fall back to the canonical preview.
   const selectedVersion = history?.versions?.find((v) => v.id === history.selected)
   const previewUrl = selectedVersion ? fileUrl(selectedVersion.path)
     : (scene.preview_url || (scene.preview_path ? fileUrl(scene.preview_path) : ''))
-  // Prefer the selected kept take (each has a unique URL, so switching updates the
-  // player instantly without cache-busting); fall back to the canonical final.
   const selectedTake = videoHistory?.versions?.find((v) => v.id === videoHistory.selected)
   const videoUrl = selectedTake ? fileUrl(selectedTake.path) : scene.video_url
-  // Match the panels to the film's real orientation so portrait frames aren't
-  // cropped into a landscape box. Derived from the resolution name (e.g.
-  // "Portrait FHD (1080×1920)"), falling back to 16/9 when it's unparseable.
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
 
   return (
@@ -235,10 +228,7 @@ function SceneCard({
 
       <Card span={12} className="reveal" style={{ padding: 0, overflow: 'hidden' }}>
         <div>
-          {/* Media: initial frame + film, side by side, equal width
-              (stacks on mobile via .film-media). */}
           <div className="film-media" style={{ display: 'flex', gap: 1, background: 'var(--line)' }}>
-            {/* Initial frame */}
             <div
               onClick={() => previewUrl && setLightbox(true)}
               style={{
@@ -269,7 +259,6 @@ function SceneCard({
               )}
             </div>
 
-            {/* Film */}
             <div style={{ flex: 1, position: 'relative', background: '#000', aspectRatio: aspect }}>
               {videoUrl
                 ? <video src={videoUrl} controls style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
@@ -286,7 +275,6 @@ function SceneCard({
             </div>
           </div>
 
-          {/* Content */}
           <div style={{ padding: '14px 16px' }}>
             {!editing ? (
               <>
@@ -345,9 +333,7 @@ function SceneCard({
 
             {error && <div style={{ fontSize: 12, color: 'var(--danger)', marginTop: 6 }}>{error}</div>}
 
-            {/* Action row */}
             <div className="row gap-6 mt-14" style={{ flexWrap: 'wrap' }}>
-              {/* Edit / Save */}
               {!editing ? (
                 <Button variant="ghost" icon="pencil" size="sm" onClick={() => setEditing(true)}>Edit</Button>
               ) : (
@@ -357,7 +343,6 @@ function SceneCard({
                 </>
               )}
 
-              {/* Re-render buttons */}
               <Button variant="ghost" icon="microphone-lines" size="sm" disabled={isRendering}
                 onClick={() => rerender('narration')}>
                 {busy === 'narration' ? 'Rendering…' : 'Narration'}
@@ -374,14 +359,11 @@ function SceneCard({
                 onClick={() => rerender('video')}>
                 {busy === 'video' ? 'Rendering…' : 'Video'}
               </Button>
-              {/* Spacer */}
               <div style={{ flex: 1 }} />
 
-              {/* Move up/down */}
               <Button variant="ghost" icon="chevron-up" size="sm" disabled={index === 0 || isRendering} onClick={() => onMove(index, index - 1)} />
               <Button variant="ghost" icon="chevron-down" size="sm" disabled={index >= total - 1 || isRendering} onClick={() => onMove(index, index + 1)} />
 
-              {/* Delete */}
               {confirmDel ? (
                 <>
                   <Button variant="danger" icon="trash-can" size="sm" onClick={async () => { setConfirmDel(false); onDelete(scene.id) }}>Confirm</Button>
@@ -404,10 +386,406 @@ function SceneCard({
   )
 }
 
-export default function EditFilm({ workDir, go }) {
+// ── Film tab: final cut + whole-video metadata + audio remix ──────────────────
+
+function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
+  const [data, setData] = useState(null)
+  const [vol, setVol] = useState({ voice: 100, music: 18, ambient: 0 })
+  const [musicDesc, setMusicDesc] = useState('')
+  const [voice, setVoice] = useState('')
+  const [musicHistory, setMusicHistory] = useState(null)
+  const [videoHistory, setVideoHistory] = useState(null)
+  const [musicBusy, setMusicBusy] = useState(false)
+  const [narratorBusy, setNarratorBusy] = useState(false)
+  const [upscaleBusy, setUpscaleBusy] = useState(false)
+  const [upscaleResolution, setUpscaleResolution] = useState('')
+  const [upscaleMode, setUpscaleMode] = useState('fast')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [status, setStatus] = useState('')
+  const [confirmDel, setConfirmDel] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [approving, setApproving] = useState(false)
+  const [aspect, setAspect] = useState('16 / 9')
+  const [portrait, setPortrait] = useState(false)
+  const [videoDims, setVideoDims] = useState(null)
+
+  // Whole-video metadata (like Script Cover)
+  const [coverTitle, setCoverTitle] = useState(filmTitle || '')
+  const [description, setDescription] = useState('')
+  const [ytBusy, setYtBusy] = useState('')
+  const [metaMsg, setMetaMsg] = useState('')
+
+  const onVideoMeta = (e) => {
+    const w = e.target.videoWidth, h = e.target.videoHeight
+    if (w && h) { setAspect(`${w} / ${h}`); setPortrait(h > w); setVideoDims({ w, h }) }
+  }
+
+  useEffect(() => {
+    if (filmTitle) setCoverTitle((t) => t || filmTitle)
+  }, [filmTitle])
+
+  useEffect(() => {
+    setError('')
+    api.loadRemix(workDir)
+      .then((d) => {
+        setData(d)
+        setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol })
+        setVoice(d.voice || d.voices?.[0] || '')
+        setMusicDesc(d.music_desc || '')
+        setMusicHistory(d.music_history)
+        setVideoHistory(d.video_history)
+      })
+      .catch((e) => setError(e.message))
+
+    // Title + description for the finished film (same store as Cover / Publish).
+    api.ytPostPrefill(workDir).then((p) => {
+      if (p.title) {
+        setCoverTitle(p.title)
+        onTitleChange?.(p.title)
+      }
+      if (p.description) setDescription(p.description)
+    }).catch(() => {})
+  }, [workDir])
+
+  const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
+  const currentResolution = data?.resolution || meta.default_resolution || ''
+  const orientation = videoDims ? (videoDims.h > videoDims.w ? 'Portrait' : 'Landscape') : String(currentResolution || '').split(' ')[0]
+  const currentPixels = videoDims ? videoDims.w * videoDims.h : resPixels(currentResolution)
+  const upscaleOptions = (meta?.resolutions || [])
+    .filter((r) => String(r || '').startsWith(`${orientation} `) || String(r || '').startsWith(`${orientation} (`))
+    .filter((r) => resPixels(r) > currentPixels)
+
+  useEffect(() => {
+    if (!upscaleOptions.length) {
+      setUpscaleResolution('')
+      return
+    }
+    if (!upscaleOptions.includes(upscaleResolution)) {
+      setUpscaleResolution(upscaleOptions[0])
+    }
+  }, [upscaleOptions.join('|')])
+
+  const regenTitle = async () => {
+    setYtBusy('title'); setError(''); setMetaMsg('')
+    try {
+      const r = await api.ytPostTitle(workDir, coverTitle || filmTitle || '')
+      setCoverTitle(r.title || '')
+      onTitleChange?.(r.title || '')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const genDescription = async () => {
+    setYtBusy('desc'); setError(''); setMetaMsg('')
+    try {
+      const r = await api.ytDescribe({ work_dir: workDir, title: coverTitle || filmTitle || '' })
+      setDescription(r.description || '')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const saveMeta = async () => {
+    setYtBusy('save'); setError(''); setMetaMsg('')
+    try {
+      const title = coverTitle.trim()
+      await api.ytPostSave({ work_dir: workDir, title, description })
+      onTitleChange?.(title)
+      setMetaMsg('Title and description saved.')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const regenMusic = async () => {
+    setMusicBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.regenMusic({ work_dir: data.work_dir, music_desc: musicDesc })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.music_history) setMusicHistory(t.music_history)
+              setStatus('Regenerated the music and re-muxed the film.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Music regen ${t.status}.`))
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const selectMusic = async (versionId) => {
+    setMusicBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.selectMusic(data.work_dir, versionId)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      if (r.music_history) setMusicHistory(r.music_history)
+      const chosen = r.music_history?.versions?.find((v) => v.id === r.music_history.selected)
+      if (chosen && chosen.desc) setMusicDesc(chosen.desc)
+      setStatus('Switched the soundtrack and re-muxed the film.')
+    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
+  const upscaleVideo = async () => {
+    setUpscaleBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.upscaleRemixVideo({
+        work_dir: data.work_dir,
+        target_resolution: upscaleResolution,
+        upscale_mode: upscaleMode,
+      })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url, resolution: upscaleResolution }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setStatus('Created an upscaled final-video version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Video upscale ${t.status}.`))
+            } else if (t.step === 'final_upscale') {
+              setStatus('Upscaling the final video…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
+  }
+
+  const selectVideoVersion = async (versionId) => {
+    setUpscaleBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.selectRemixVideo(data.work_dir, versionId)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      if (r.video_history) setVideoHistory(r.video_history)
+      setStatus('Switched the final-video version.')
+    } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
+  }
+
+  const regenNarrator = async () => {
+    setNarratorBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.regenNarrator({ work_dir: data.work_dir, voice })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              setStatus('Regenerated narration and reassembled the film.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Narrator regen ${t.status}.`))
+            } else if (t.step === 'narration' && t.scene_id) {
+              setStatus(`Regenerating narration for scene ${t.scene_id}${t.total ? ` (${t.current}/${t.total})` : ''}…`)
+            } else if (t.step === 'finalize') {
+              setStatus('Reassembling the film…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+      setData((d) => ({ ...d, voice }))
+    } catch (e) { setError(e.message) } finally { setNarratorBusy(false) }
+  }
+
+  const remix = async () => {
+    setBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.applyRemix({
+        work_dir: data.work_dir, voice_vol: vol.voice, music_vol: vol.music, ambient_vol: vol.ambient,
+      })
+      setStatus(r.message)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url + `&t=${Date.now()}` }))
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  const approve = async () => {
+    setApproving(true); setError(''); setStatus('')
+    try {
+      await api.publishApprove(data.work_dir || workDir)
+      setData((d) => ({ ...d, approved: true, awaiting_approval: false }))
+      setStatus('Approved — it will publish on the normal schedule.')
+    } catch (e) { setError(e.message) } finally { setApproving(false) }
+  }
+
+  const del = async () => {
+    setDeleting(true); setError('')
+    try { await api.deleteFilm(data.work_dir || workDir); go('library') }
+    catch (e) { setError(e.message); setConfirmDel(false) } finally { setDeleting(false) }
+  }
+
+  if (error && !data) {
+    return (
+      <div>
+        <Banner tone="info">{error}</Banner>
+        <p className="muted" style={{ fontSize: 13, marginTop: 8 }}>
+          The final cut isn’t ready yet — switch to <strong>Scenes</strong> to edit individual shots, or reassemble after rendering.
+        </p>
+      </div>
+    )
+  }
+  if (!data) return <p className="muted">Loading final cut…</p>
+
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy
+
+  return (
+    <div>
+      <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
+        {data.final_url && <a className="btn btn--ghost" href={data.final_url} download><Icon name="download" /> Download</a>}
+        {data.awaiting_approval && (
+          <Button variant="primary" icon="check" disabled={approving} onClick={approve}>{approving ? 'Approving…' : 'Approve'}</Button>
+        )}
+        <Button variant={data.awaiting_approval ? 'ghost' : 'primary'} icon="upload" onClick={() => go('publish', { publishWorkDir: data.work_dir || workDir })}>Publish</Button>
+        {confirmDel ? (
+          <>
+            <Button variant="danger" icon="trash-can" disabled={deleting} onClick={del}>{deleting ? 'Deleting…' : 'Confirm delete'}</Button>
+            <Button variant="ghost" disabled={deleting} onClick={() => setConfirmDel(false)}>Cancel</Button>
+          </>
+        ) : (
+          <Button variant="danger" icon="trash-can" onClick={() => setConfirmDel(true)}>Delete</Button>
+        )}
+      </div>
+
+      <Banner tone="danger">{error}</Banner>
+      {status && <Banner tone="ok">{status}</Banner>}
+      {metaMsg && <Banner tone="ok">{metaMsg}</Banner>}
+
+      <div className="bento">
+        <Card span={8} className="reveal reveal-d1" style={{ padding: 0, overflow: 'hidden' }}>
+          <video src={data.final_url} controls onLoadedMetadata={onVideoMeta}
+            style={{ display: 'block', background: '#15171a', aspectRatio: aspect, margin: '0 auto',
+              width: portrait ? 'auto' : '100%', height: portrait ? '78vh' : 'auto', maxHeight: '78vh' }} />
+          <div className="row center between" style={{ padding: '16px 20px' }}>
+            <Chip tone="ok" dot>Final cut</Chip>
+            <span className="muted mono">{data.work_dir}</span>
+          </div>
+          {(videoHistory?.versions?.length || 0) > 1 && (
+            <div style={{ padding: '0 20px 18px' }}>
+              <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
+                onSelect={selectVideoVersion} aspect={aspect} busy={anyBusy}
+                label="Final versions" hint="click to use" />
+            </div>
+          )}
+        </Card>
+
+        {/* Whole-video title + description (Cover-style) */}
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm">Film details</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Title and description for the whole video — reused when publishing.</p>
+          <div className="stack gap-16 mt-24">
+            <Field label={<RegenLabel busy={ytBusy === 'title'} onRegen={regenTitle}>Title</RegenLabel>} hint="Max 100 characters.">
+              <input className="input" value={coverTitle} maxLength={100}
+                onChange={(e) => { setCoverTitle(e.target.value); setMetaMsg('') }} />
+            </Field>
+            <Field label={
+              <span className="row center between">
+                <span>YouTube description</span>
+                <button type="button" className="btn btn--quiet" style={{ padding: '4px 10px', fontSize: 12 }}
+                  disabled={ytBusy === 'desc'} onClick={genDescription}>
+                  <Icon name="wand-magic-sparkles" /> {ytBusy === 'desc' ? 'Writing…' : 'Generate'}
+                </button>
+              </span>
+            }>
+              <textarea className="textarea" rows={8} value={description}
+                onChange={(e) => { setDescription(e.target.value); setMetaMsg('') }}
+                placeholder="Written automatically when the script is generated — click Generate to rewrite it." />
+            </Field>
+            <Button variant="primary" block icon="floppy-disk" disabled={ytBusy === 'save' || !coverTitle.trim()} onClick={saveMeta}>
+              {ytBusy === 'save' ? 'Saving…' : 'Save title & description'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm">Re-mix audio</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Balance the levels and re-mux without re-rendering the video.</p>
+          <div className="stack gap-22 mt-24">
+            {[['voice', 'Voice', 'microphone-lines'], ['music', 'Music', 'music'], ['ambient', 'Ambient', 'wind']].map(([k, label, ic]) => (
+              <Field key={k} label={<span className="row center gap-10"><Icon name={ic} style={{ color: 'var(--ink-3)', width: 16 }} /> {label}</span>} hint={`${vol[k]}%`}>
+                <input className="slider" type="range" min={0} max={150} value={vol[k]} onChange={set(k)} />
+              </Field>
+            ))}
+          </div>
+          <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={anyBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narrator</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
+          <div className="mt-24">
+            <Field label="Narrator voice">
+              <select className="select" value={voice} disabled={anyBusy}
+                onChange={(e) => setVoice(e.target.value)}>
+                {(data.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="microphone-lines" disabled={anyBusy} onClick={regenNarrator}>
+              {narratorBusy ? 'Regenerating…' : 'Regenerate narration'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="up-right-and-down-left-from-center" style={{ color: 'var(--ink-3)', width: 16 }} /> Upscale video</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Upscale the whole finished film and keep it as a selectable final version.</p>
+          <div className="stack gap-14 mt-24">
+            <Field label="Target resolution">
+              <select className="select" value={upscaleResolution} disabled={anyBusy || upscaleOptions.length === 0}
+                onChange={(e) => setUpscaleResolution(e.target.value)}>
+                {upscaleOptions.length === 0
+                  ? <option value="">No larger target</option>
+                  : upscaleOptions.map((r) => <option key={r} value={r}>{r.replace(`${orientation} `, '')}</option>)}
+              </select>
+            </Field>
+            <Field label="Mode">
+              <select className="select" value={upscaleMode} disabled={anyBusy || !upscaleResolution}
+                onChange={(e) => setUpscaleMode(e.target.value)}>
+                <option value="fast">Fast</option>
+                <option value="temporal_ai">AI temporal</option>
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="up-right-and-down-left-from-center"
+              disabled={anyBusy || !upscaleResolution}
+              onClick={upscaleVideo}>
+              {upscaleBusy ? 'Upscaling…' : 'Upscale film'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card span={12} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} /> Background music</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
+          <div className="mt-24">
+            <Field label="Music prompt" hint="What the soundtrack should sound like">
+              <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy || upscaleBusy}
+                onChange={(e) => setMusicDesc(e.target.value)}
+                placeholder="cinematic orchestral background music, atmospheric, instrumental" />
+            </Field>
+          </div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
+            onSelect={selectMusic} busy={anyBusy} />
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+// ── Scenes tab ────────────────────────────────────────────────────────────────
+
+function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
   const [scenes, setScenes] = useState([])
   const [jobId, setJobId] = useState('')
-  const [title, setTitle] = useState('')
   const [resolution, setResolution] = useState('')
   const [style, setStyle] = useState('')
   const [voices, setVoices] = useState([])
@@ -425,7 +803,7 @@ export default function EditFilm({ workDir, go }) {
       const r = await api.filmScenes(workDir)
       setScenes(r.scenes || [])
       setJobId(r.job_id || '')
-      setTitle(r.title || '')
+      onTitle?.(r.title || '')
       setResolution(r.resolution || '')
       setStyle(r.style || '')
       setVoices(r.voices || [])
@@ -435,7 +813,7 @@ export default function EditFilm({ workDir, go }) {
     } finally {
       setLoaded(true)
     }
-  }, [workDir])
+  }, [workDir, onTitle])
 
   useEffect(() => { load() }, [load])
 
@@ -494,32 +872,14 @@ export default function EditFilm({ workDir, go }) {
     }
   }
 
-  if (!loaded) {
-    return (
-      <div>
-        <div className="page-head">
-          <div className="page-head__intro">
-            <span className="label-sm">Edit film</span>
-            <h1 className="display-md">Loading…</h1>
-          </div>
-        </div>
-      </div>
-    )
-  }
+  if (!loaded) return <p className="muted">Loading scenes…</p>
 
   return (
     <div>
-      <div className="page-head">
-        <div className="page-head__intro">
-          <span className="label-sm reveal">Edit film · {scenes.length} scenes</span>
-          <h1 className="display-md reveal reveal-d1">{title || 'Film editor'}</h1>
-        </div>
-        <div className="row gap-10 reveal reveal-d1">
-          <Button variant="ghost" icon="arrow-left" onClick={() => go('library')}>Back</Button>
-          <Button variant="primary" icon="circle-nodes" disabled={assembling || activeRenders > 0 || scenes.length === 0} onClick={reassemble}>
-            {assembling ? 'Assembling…' : 'Reassemble film'}
-          </Button>
-        </div>
+      <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
+        <Button variant="primary" icon="circle-nodes" disabled={assembling || activeRenders > 0 || scenes.length === 0} onClick={reassemble}>
+          {assembling ? 'Assembling…' : 'Reassemble film'}
+        </Button>
       </div>
 
       <Banner tone="danger">{error}</Banner>
@@ -538,7 +898,7 @@ export default function EditFilm({ workDir, go }) {
             <div style={{ fontSize: 12.5, marginTop: 2 }}>
               <a href={assembleResult.final_url} target="_blank" rel="noopener" style={{ color: 'var(--ok)' }}>Download final video</a>
               {' · '}
-              <button type="button" className="btn btn--quiet" style={{ fontSize: 12.5, padding: 0 }} onClick={() => go('remix', { workDir })}>Open in Remix</button>
+              <button type="button" className="btn btn--quiet" style={{ fontSize: 12.5, padding: 0 }} onClick={onSwitchToFilm}>View final cut</button>
             </div>
           </div>
         </div>
@@ -579,6 +939,66 @@ export default function EditFilm({ workDir, go }) {
             {assembling ? 'Assembling…' : 'Reassemble film'}
           </Button>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Unified Edit Film screen ──────────────────────────────────────────────────
+
+export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
+  const [tab, setTab] = useState(initialTab === 'scenes' ? 'scenes' : 'film')
+  const [filmTitle, setFilmTitle] = useState('')
+
+  // Prefill page title from film scenes (lightweight enough for the head).
+  useEffect(() => {
+    if (!workDir) return
+    api.filmScenes(workDir).then((r) => {
+      if (r.title) setFilmTitle(r.title)
+    }).catch(() => {})
+  }, [workDir])
+
+  useEffect(() => {
+    setTab(initialTab === 'scenes' ? 'scenes' : 'film')
+  }, [workDir, initialTab])
+
+  const label = workDir ? workDir.replace(/\/+$/, '').split('/').pop() : 'Film'
+  const displayTitle = filmTitle || label
+
+  return (
+    <div>
+      <div className="page-head">
+        <div className="page-head__intro">
+          <span className="label-sm reveal">Edit film</span>
+          <h1 className="display-md reveal reveal-d1">{displayTitle}</h1>
+        </div>
+        <div className="row gap-10 reveal reveal-d1">
+          <Button variant="ghost" icon="arrow-left" onClick={() => go('library')}>Films</Button>
+        </div>
+      </div>
+
+      <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
+        <Segmented value={tab} onChange={setTab} options={[
+          { value: 'film', label: 'Film' },
+          { value: 'scenes', label: 'Scenes' },
+        ]} />
+      </div>
+
+      {tab === 'film' && (
+        <FilmTab
+          workDir={workDir}
+          go={go}
+          meta={meta}
+          filmTitle={filmTitle}
+          onTitleChange={setFilmTitle}
+        />
+      )}
+      {tab === 'scenes' && (
+        <ScenesTab
+          workDir={workDir}
+          onTitle={setFilmTitle}
+          onSwitchToFilm={() => setTab('film')}
+        />
       )}
     </div>
   )
