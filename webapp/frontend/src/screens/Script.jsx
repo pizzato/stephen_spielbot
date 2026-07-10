@@ -521,7 +521,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <Button variant="primary" icon="floppy-disk" disabled={busy === 'savecover' || !coverTitle.trim()} onClick={saveCover}>
                 {busy === 'savecover' ? 'Saving…' : 'Save'}
               </Button>
-              <Button variant="ghost" icon="rotate" onClick={() => go('create')}>Re-draft</Button>
+              <Button variant="ghost" icon="rotate" onClick={() => {
+                const b = job.create_brief || {}
+                go('create', {
+                  title: b.video_title || job.video_title || job.title || '',
+                  description: b.topic || job.topic || '',
+                  scenes: b.n_scenes || job.scenes?.length || null,
+                  resolution: b.resolution || job.resolution || '',
+                  styleName: b.style_name || job.style_name || '',
+                  voice: b.voice || job.voice || '',
+                  voice_robotic: b.voice_robotic ?? job.voice_robotic,
+                  visualStyle: b.visual_style || '',
+                  autoApprove: b.auto_approve,
+                  queueItemId: job.queue_item_id || null,
+                })
+              }}>Re-draft</Button>
               {confirmDelScript ? (
                 <>
                   <Button variant="danger" icon="trash-can" disabled={busy === 'delete'} onClick={deleteCurrent}>

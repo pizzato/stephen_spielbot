@@ -957,12 +957,38 @@ def script_generate_status(task_id: str = Query(...)) -> dict:
     return dict(task)
 
 
+def _create_brief_path(wd: Path) -> Path:
+    return Path(wd) / "create_brief.json"
+
+
+def _write_create_brief(wd: Path, brief: dict) -> None:
+    """Persist the Create-form inputs used to generate this script so Re-draft
+    can restore the whole brief (title, direction, style, narrator, scenes…)."""
+    try:
+        _create_brief_path(wd).write_text(json.dumps(brief, indent=2))
+    except Exception:
+        gapp.logger.warning("Could not write create_brief.json for %s", wd, exc_info=True)
+
+
+def _read_create_brief(wd: Path) -> dict:
+    p = _create_brief_path(wd)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
 def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
     app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
     it inside _run_script_task; tests call it directly."""
-    topic = (body.topic or "").strip() or (body.video_title or "").strip()
-    if not topic:
+    # Keep the user's original direction separate from style extra_instructions
+    # so Re-draft can restore the Create form without baked-in style text.
+    user_topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not user_topic:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
 
     cfg = gapp.load_config()
@@ -970,25 +996,24 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
     extra = (ss.get("extra_instructions") or "").strip()
-    if extra:
-        topic = f"{topic}\n\n{extra}"
+    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
 
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
-    display_topic = (body.video_title or "").strip() or topic.splitlines()[0][:80]
+    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
-                topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
+                llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
                 avoid_hint=avoid_hint,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
 
-    display_title = (body.video_title or "").strip() or topic
+    display_title = (body.video_title or "").strip() or user_topic
     work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
     # Bake the visual style prefix into each image_prompt so it's visible in the
@@ -1019,12 +1044,26 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
             daemon=True,
         ).start()
 
+    create_brief = {
+        "video_title": (body.video_title or "").strip(),
+        "topic": user_topic,
+        "n_scenes": int(body.n_scenes),
+        "visual_style": (body.visual_style or "").strip(),
+        "voice": (body.voice or "").strip(),
+        "voice_robotic": bool(body.voice_robotic),
+        "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
+        "style_name": body.style_name or ss["name"],
+        "auto_approve": bool(body.auto_approve),
+    }
+    _write_create_brief(work_dir, create_brief)
+
     store = DurableStore.default()
     try:
         store.create_or_update_job(
             job_id, work_dir, display_title,
             config={"title": display_title, "video_title": (body.video_title or "").strip(),
-                    "topic": topic, "phase": "script_review", "style_name": ss["name"]},
+                    "topic": user_topic, "phase": "script_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
             metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
         )
         store.upsert_scenes(job_id, scenes_list)
@@ -1045,9 +1084,14 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "work_dir": str(work_dir),
         "title": display_title,
         "video_title": (body.video_title or "").strip(),
+        "topic": user_topic,
         "style": style,
         "style_name": ss["name"],
         "music_desc": music_desc,
+        "voice": create_brief["voice"] or ss.get("voice", ""),
+        "voice_robotic": create_brief["voice_robotic"],
+        "resolution": create_brief["resolution"],
+        "create_brief": create_brief,
         "scenes": [_scene_to_json(s, work_dir) for s in scenes_list],
         "characters": _script_characters_payload(work_dir),
     }
@@ -1096,10 +1140,11 @@ def _read_script_scenes(wd: Path) -> list:
     return scenes_list
 
 
-def _script_source_meta(src_job_id: str, fallback_title: str) -> tuple[str, str, str, str]:
-    """Resolve (video_title, style, music_desc, style_name) for an existing job
-    from the durable store, falling back to the folder-derived title."""
+def _script_source_meta(src_job_id: str, fallback_title: str) -> tuple[str, str, str, str, dict]:
+    """Resolve (video_title, style, music_desc, style_name, create_brief) for an
+    existing job from the durable store, falling back to the folder-derived title."""
     video_title, style, music_desc, style_name = fallback_title, "", "", ""
+    create_brief: dict = {}
     store = DurableStore.default()
     try:
         job = store.get_job(src_job_id)
@@ -1111,25 +1156,51 @@ def _script_source_meta(src_job_id: str, fallback_title: str) -> tuple[str, str,
             style = meta.get("style", "")
             music_desc = meta.get("music_desc", "")
             style_name = cfg.get("style_name", "")
+            if isinstance(cfg.get("create_brief"), dict):
+                create_brief = dict(cfg["create_brief"])
+            # Older jobs only kept topic (sometimes with style extras baked in).
+            if not create_brief and cfg.get("topic"):
+                create_brief = {
+                    "video_title": video_title,
+                    "topic": str(cfg.get("topic") or ""),
+                    "style_name": style_name,
+                }
     finally:
         store.close()
-    return video_title, style, music_desc, style_name
+    return video_title, style, music_desc, style_name, create_brief
 
 
 def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
-                          style: str, music_desc: str, style_name: str) -> dict:
+                          style: str, music_desc: str, style_name: str,
+                          create_brief: dict | None = None) -> dict:
     """Register `scenes_list` as the script of work dir `wd` (a reload of its own
     folder, or a fresh duplicate) and return the Script-editor payload. Back-fills
     each scene's preview_path from any matching image already in `wd`, so a first
     frame produced by an earlier render (or copied from a source script) is reused
     instead of regenerated. Shared by /scripts/load and /scripts/duplicate."""
     job_id = job_id_from_work_dir(wd)
+    brief = dict(create_brief or {}) or _read_create_brief(wd)
+    # Prefer on-disk brief (source of truth after generate); merge store fallbacks.
+    disk = _read_create_brief(wd)
+    if disk:
+        brief = {**brief, **disk}
     store = DurableStore.default()
     try:
+        cfg_payload = {"video_title": video_title, "phase": "script_review",
+                       "style_name": style_name}
+        if brief:
+            cfg_payload["create_brief"] = brief
+            if brief.get("topic"):
+                cfg_payload["topic"] = brief["topic"]
+            if brief.get("video_title"):
+                cfg_payload["video_title"] = brief["video_title"]
+                video_title = brief["video_title"] or video_title
+            if brief.get("style_name"):
+                cfg_payload["style_name"] = brief["style_name"]
+                style_name = brief["style_name"] or style_name
         store.create_or_update_job(
             job_id, wd, video_title,
-            config={"video_title": video_title, "phase": "script_review",
-                    "style_name": style_name},
+            config=cfg_payload,
             metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
         )
         store.upsert_scenes(job_id, scenes_list)
@@ -1151,17 +1222,25 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
 
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, style_name)
+    voice = (brief.get("voice") or "").strip() or ss.get("voice", "")
+    if "voice_robotic" in brief:
+        voice_robotic = bool(brief.get("voice_robotic"))
+    else:
+        voice_robotic = bool(ss.get("voice_robotic", False))
+    resolution = (brief.get("resolution") or "").strip() or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
     return {
         "job_id": job_id,
         "work_dir": str(wd),
         "title": video_title,
         "video_title": video_title,
+        "topic": brief.get("topic") or "",
         "style": style,
         "style_name": ss["name"],
         "music_desc": music_desc,
-        "voice": ss.get("voice", ""),
-        "voice_robotic": bool(ss.get("voice_robotic", False)),
-        "resolution": ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
+        "voice": voice,
+        "voice_robotic": voice_robotic,
+        "resolution": resolution,
+        "create_brief": brief,
         "scenes": [_scene_to_json(r, wd) for r in rows],
         "characters": _script_characters_payload(wd),
     }
@@ -1176,10 +1255,11 @@ def load_script(work_dir: str = Query("")) -> dict:
         raise HTTPException(400, "Script path is outside the output folder.")
     scenes_list = _read_script_scenes(wd)
     fallback_title = wd.name.replace("-", " ").title()
-    video_title, style, music_desc, style_name = _script_source_meta(
+    video_title, style, music_desc, style_name, create_brief = _script_source_meta(
         job_id_from_work_dir(wd), fallback_title)
     return _register_script_into(wd, scenes_list, video_title=video_title,
-                                 style=style, music_desc=music_desc, style_name=style_name)
+                                 style=style, music_desc=music_desc, style_name=style_name,
+                                 create_brief=create_brief)
 
 
 class DuplicateScriptBody(BaseModel):
@@ -1204,7 +1284,7 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
     scenes_list = _read_script_scenes(src)
 
     fallback_title = src.name.replace("-", " ").title()
-    src_title, style, music_desc, style_name = _script_source_meta(
+    src_title, style, music_desc, style_name, create_brief = _script_source_meta(
         job_id_from_work_dir(src), fallback_title)
     title = (body.title or "").strip() or src_title
 
@@ -1224,10 +1304,16 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
             sp = src / suffix
             if sp.exists():
                 shutil.copy2(sp, new_wd / suffix)
-    for extra in ("description.txt", "cover.png", "characters.json"):
+    for extra in ("description.txt", "cover.png", "characters.json", "create_brief.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
+    # Prefer the brief we already loaded when the source only had it in the store.
+    if create_brief and not _create_brief_path(new_wd).exists():
+        brief_copy = dict(create_brief)
+        if title and title != src_title:
+            brief_copy["video_title"] = title
+        _write_create_brief(new_wd, brief_copy)
     # Carry the per-script character look images so the duplicate keeps the same
     # cast (characters.json copied above references these by basename).
     src_chars = gapp._script_characters_dir(src)
@@ -1235,7 +1321,8 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
         shutil.copytree(src_chars, gapp._script_characters_dir(new_wd), dirs_exist_ok=True)
 
     return _register_script_into(new_wd, scenes_list, video_title=title,
-                                 style=style, music_desc=music_desc, style_name=style_name)
+                                 style=style, music_desc=music_desc, style_name=style_name,
+                                 create_brief=create_brief)
 
 
 @api.get("/api/jobs/{job_id}/scenes")
