@@ -77,7 +77,21 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed.scenes) setScenes(seed.scenes)
     if (seed.resolution) setResolution(seed.resolution)
     if (seed.styleName) setStyleName(seed.styleName)
+    // No-style free fields (locked styles re-sync voice/visuals from the profile).
+    if (seed.voice) setVoice(seed.voice)
+    if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
+    if (seed.visualStyle) setStyle(seed.visualStyle)
+    if (seed.autoApprove != null) setAutoApprove(!!seed.autoApprove)
   }, [seed])
+
+  // After seed applies a style name, locked profiles still own voice/visuals —
+  // re-apply any explicit seed voice/visual only when re-drafting as No style.
+  useEffect(() => {
+    if (!seed || profile) return
+    if (seed.voice) setVoice(seed.voice)
+    if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
+    if (seed.visualStyle) setStyle(seed.visualStyle)
+  }, [seed, profile])
 
   useEffect(() => {
     if (!seed?.scenes && profile?.n_scenes) setScenes(profile.n_scenes)
@@ -137,13 +151,16 @@ export default function Create({ seed, meta, onGenerated }) {
     <div>
       <div className="page-head">
         <div className="page-head__intro">
-          <span className="label-sm reveal">New film</span>
+          <span className="label-sm reveal">{seed?.title || seed?.description ? 'Re-draft' : 'New film'}</span>
           <h1 className="display-md reveal reveal-d1">Set the brief</h1>
         </div>
       </div>
 
       <Banner tone="danger">{error}</Banner>
       {seed?.queueItemId && <Banner tone="info">Editing a queued request — generating a script here will fill its existing queue slot (it keeps its position) and make it render faster.</Banner>}
+      {!seed?.queueItemId && (seed?.title || seed?.description) && (
+        <Banner tone="info">Previous Create settings restored. Adjust anything, then generate a fresh script (new work folder).</Banner>
+      )}
 
       <div className="bento">
         <Card span={8} padLg className="reveal reveal-d1">
