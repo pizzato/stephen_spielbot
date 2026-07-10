@@ -116,6 +116,10 @@ export default function App() {
       scenes: payload?.scenes ?? null,
       resolution: payload?.resolution ?? '',
       styleName: payload?.styleName ?? '',
+      voice: payload?.voice ?? '',
+      voice_robotic: payload?.voice_robotic,
+      visualStyle: payload?.visualStyle ?? '',
+      autoApprove: payload?.autoApprove,
       queueItemId: payload?.queueItemId ?? null,
     })
     // Visiting Films marks the new ones as seen (mailbox-style clear).
