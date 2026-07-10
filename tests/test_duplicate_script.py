@@ -34,7 +34,10 @@ class DuplicateScriptTests(unittest.TestCase):
         # asserts only the copy logic under test.
         self.meta = mock.patch.object(
             backend, "_script_source_meta",
-            return_value=("My Film", "noir", "jazz", "Cinematic")).start()
+            return_value=("My Film", "noir", "jazz", "Cinematic", {
+                "video_title": "My Film", "topic": "about the film",
+                "n_scenes": 2, "style_name": "Cinematic",
+            })).start()
         self.register = mock.patch.object(
             backend, "_register_script_into",
             side_effect=lambda wd, scenes, **kw: {"work_dir": str(wd), "scenes": scenes, **kw}).start()
