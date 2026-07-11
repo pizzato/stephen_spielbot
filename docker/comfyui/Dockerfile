@@ -45,12 +45,18 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
     fi \
     && pip install -r requirements.txt
 
-# Video Helper Suite gives the backend a packaged way to load an existing MP4,
-# run it through the LTX latent upscaler, and save the upscaled MP4. This makes
-# Remix's temporal AI upscaler self-contained instead of requiring a local CLI.
+# Video Helper Suite: load/save MP4s for Remix upscale without a local CLI.
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
         custom_nodes/ComfyUI-VideoHelperSuite \
     && pip install -r custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+
+# Lightricks IC-LoRA nodes (LTXICLoRALoaderModelOnly, LTXAddVideoICLoRAGuide, …)
+# for the LTX-2.3 Pixel Spatial Upscaler used by Remix "AI temporal" upscale.
+RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git \
+        custom_nodes/ComfyUI-LTXVideo \
+    && if [ -f custom_nodes/ComfyUI-LTXVideo/requirements.txt ]; then \
+         pip install -r custom_nodes/ComfyUI-LTXVideo/requirements.txt; \
+       fi
 
 EXPOSE 8188
 
