@@ -470,6 +470,9 @@ def _norm_characters(value) -> list[dict]:
             "ref_image": str(raw.get("ref_image") or "").strip(),
             "ref_strength": strength,
             "enabled": bool(raw.get("enabled", True)),
+            # Named voice (from the voices store) this character speaks with in
+            # dialogue scenes; "" ⟹ fall back to the style's narrator voice.
+            "voice": str(raw.get("voice") or "").strip(),
         })
     return out
 
