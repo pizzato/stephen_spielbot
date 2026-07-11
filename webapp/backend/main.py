@@ -1031,12 +1031,14 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     ]
     gapp._persist_script_snapshot(work_dir, scenes_list)
 
-    # Persist the 0-2 main characters the LLM identified for THIS script (living
-    # in the work dir, not the global catalogue) and render their look images in
-    # the background so the editor's Characters tab shows them ready to accept or
-    # edit. Best-effort: skipped/partial when no worker is up (editor offers a
-    # manual "Generate look").
-    saved_characters = gapp._write_script_characters(work_dir, characters)
+    # Persist only NEW cast members as per-script characters. Any LLM-identified
+    # figure that already exists in the style's global catalogue is skipped so
+    # the catalogue look/description is not shadowed by a fresh script entry
+    # (see app._filter_identified_against_style / _job_characters).
+    # Render look images in the background for the new ones; best-effort when
+    # no worker is up (editor offers a manual "Generate look").
+    new_characters = gapp._filter_identified_against_style(characters, cfg, ss["name"])
+    saved_characters = gapp._write_script_characters(work_dir, new_characters)
     if saved_characters:
         threading.Thread(
             target=gapp.generate_all_script_portraits,

@@ -63,6 +63,28 @@ class ScriptCharacterApiTests(unittest.TestCase):
         self.assertEqual(chars[0]["aliases"], ["Caesar"])
         self.assertFalse(chars[0]["has_image"])  # no worker → no look yet
 
+    def test_generate_skips_characters_already_in_style_catalogue(self):
+        # Opt Caesar into Hero; LLM also "identifies" Caesar + a new Brutus.
+        # Only Brutus becomes a per-script character; Caesar stays global.
+        self.config_file.write_text(yaml.safe_dump({
+            "styles": [_style("Hero", character_ids=["char_caesar"])],
+            "default_style": "Hero",
+            "characters": [{"id": "char_caesar", "name": "Julius Caesar",
+                            "aliases": ["Caesar"], "description": "catalogue look"}],
+            "characters_migrated_v2": True,
+        }))
+        res = self._make_job([
+            {"name": "Julius Caesar", "aliases": ["Caesar"], "description": "LLM override"},
+            {"name": "Brutus", "aliases": [], "description": "a senator"},
+        ])
+        self.assertEqual([c["name"] for c in res["characters"]], ["Brutus"])
+        # Global catalogue still wins at render time (no script shadow for Caesar).
+        cfg = gapp.load_config()
+        job = [c for c in gapp._job_characters(cfg, "Hero", Path(res["work_dir"]))
+               if c["name"] == "Julius Caesar"]
+        self.assertEqual(len(job), 1)
+        self.assertEqual(job[0]["description"], "catalogue look")
+
     def test_crud_roundtrip(self):
         job_id = self._make_job([{"name": "Caesar", "description": "a general"}])["job_id"]
         cid = self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"][0]["id"]
