@@ -17,7 +17,7 @@ import shutil
 from pathlib import Path
 
 from pipeline import echomimic
-from pipeline.assembler import _get_duration, concatenate_scenes_hard_cut
+from pipeline.assembler import _get_duration, concatenate_scenes_hard_cut, ensure_video_resolution
 from pipeline.tts_worker import generate_narration
 
 logger = logging.getLogger("video_gen")
@@ -42,6 +42,7 @@ def render_dialogue_scene(
     _animate=echomimic.animate,
     _duration=_get_duration,
     _concat=concatenate_scenes_hard_cut,
+    _normalize=ensure_video_resolution,
 ) -> Path:
     """Render ``scene`` (mode 'dialogue') to ``scene_NN_final.mp4`` and return it."""
     lines = [ln for ln in (scene.lines or []) if str((ln or {}).get("text") or "").strip()]
@@ -73,5 +74,9 @@ def render_dialogue_scene(
     if len(line_clips) == 1:
         shutil.copy2(line_clips[0], final)
     else:
+        # EchoMimic sizes output to each portrait, so shots can differ in dimensions;
+        # reframe all to size×size before the hard-cut concat needs uniform dims.
+        for c in line_clips:
+            _normalize(c, size, size)
         _concat(line_clips, final)
     return final
