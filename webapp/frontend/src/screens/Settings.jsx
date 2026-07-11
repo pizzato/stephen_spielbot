@@ -942,6 +942,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
+      out.echomimic_workers = fromLines(toLines(cfg.echomimic_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
       dirtyRef.current = false; setDirty(false)   // saved — let the sync effect adopt r.config
@@ -1076,6 +1077,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
                 <WorkerStatus items={workers?.tts} />
+              </Field>
+              <Field label="EchoMimic workers" hint="One URL per line (port 8190). Talking-head engine for dialogue/performance scenes.">
+                <textarea className="textarea" rows={2} value={toLines(cfg.echomimic_workers)} onChange={(e) => set('echomimic_workers', e.target.value)} />
+                <WorkerStatus items={workers?.echomimic} />
               </Field>
               <WorkerControls workers={workers} busyHost={workerBusy} onAction={controlWorker} />
               <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">

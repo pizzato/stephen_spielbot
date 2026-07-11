@@ -810,6 +810,7 @@ def workers_status() -> dict:
     """
     from pipeline.worker_pool import queue_depth
     from pipeline.tts_worker import worker_alive as tts_alive
+    from pipeline.echomimic import worker_alive as echomimic_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -823,6 +824,7 @@ def workers_status() -> dict:
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
         "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
+        "echomimic": [{"endpoint": h, "up": echomimic_alive(h, timeout=3)} for h in cfg.get("echomimic_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
@@ -848,7 +850,7 @@ def _worker_hosts(cfg: dict) -> list[str]:
     Each host runs one docker compose stack (ComfyUI + F5-TTS) that
     scripts/worker.sh controls over SSH — same hosts `make stop W=<host>` uses."""
     hosts: list[str] = []
-    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []):
+    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []) + (cfg.get("echomimic_workers") or []):
         h = _host_of(entry)
         if h and h not in hosts:
             hosts.append(h)

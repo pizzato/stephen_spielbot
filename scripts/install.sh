@@ -200,11 +200,13 @@ import sys, yaml
 path, hosts = sys.argv[1], sys.argv[2:]
 data = yaml.safe_load(open(path)) or {}
 data["tts_workers"] = [f"http://{h}:8189" for h in hosts]
+data["echomimic_workers"] = [f"http://{h}:8190" for h in hosts]
 data.pop("ui_workers", None)  # removed concept (issue #98)
 # Same dump options as app.save_config, so this matches an in-app settings save.
 with open(path, "w") as f:
     yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 print("[config] tts_workers ->", data["tts_workers"])
+print("[config] echomimic_workers ->", data["echomimic_workers"])
 PY
 
 echo ""
