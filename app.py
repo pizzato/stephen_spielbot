@@ -1679,6 +1679,34 @@ def _character_mentions(text: str, character: dict) -> bool:
     return False
 
 
+def _character_name_blob(character: dict) -> str:
+    """Name + aliases joined for cross-matching (e.g. 'Julius Caesar' ↔ 'Caesar')."""
+    parts = [character.get("name", "")] + list(character.get("aliases") or [])
+    return " ".join(str(p).strip() for p in parts if str(p or "").strip())
+
+
+def _characters_refer_to_same(a: dict, b: dict) -> bool:
+    """True when two character records share a name/alias (exact token or whole-word
+    mention either way). Used to detect that an LLM-identified cast member is
+    already the same person as a catalogue entry."""
+    a_tokens = {
+        t.strip().lower()
+        for t in [a.get("name", "")] + list(a.get("aliases") or [])
+        if (t or "").strip()
+    }
+    b_tokens = {
+        t.strip().lower()
+        for t in [b.get("name", "")] + list(b.get("aliases") or [])
+        if (t or "").strip()
+    }
+    if a_tokens & b_tokens:
+        return True
+    a_blob, b_blob = _character_name_blob(a), _character_name_blob(b)
+    if not a_blob or not b_blob:
+        return False
+    return _character_mentions(a_blob, b) or _character_mentions(b_blob, a)
+
+
 def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     """The global characters a style has opted into, in library order.
 
@@ -1693,11 +1721,45 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     return [c for c in chars if c.get("id") in ids]
 
 
+def _filter_identified_against_style(identified, cfg: dict, style_name: str = "") -> list[dict]:
+    """Drop LLM-identified characters that already exist in the style's catalogue.
+
+    Per-script characters shadow catalogue entries of the same name in
+    :func:`_job_characters`, so re-creating "Julius Caesar" as a script character
+    would override the global look/description. Only true *new* cast members
+    become per-script characters; style-accessible globals keep winning.
+
+    Matching is by name/alias (case-insensitive exact or whole-word either way).
+    Only enabled, style-opted-in catalogue characters count as accessible.
+    """
+    style_chars = [
+        c for c in _style_characters(cfg, style_name)
+        if c.get("enabled", True) and (c.get("name") or "").strip()
+    ]
+    if not style_chars:
+        return list(identified or [])
+    out: list[dict] = []
+    for idc in identified or []:
+        if not isinstance(idc, dict) or not (idc.get("name") or "").strip():
+            continue
+        match = next((gc for gc in style_chars if _characters_refer_to_same(idc, gc)), None)
+        if match is not None:
+            logger.info(
+                "Skipping per-script character %r — already in style %r catalogue as %r",
+                idc.get("name"), style_name or "(default)", match.get("name"),
+            )
+            continue
+        out.append(idc)
+    return out
+
+
 # ── Per-script characters ────────────────────────────────────────────────────
 # A script can carry its OWN characters — identified by the LLM at generation
 # time (see llm.generate_script) and living entirely inside the work dir, NOT
 # the shared cfg["characters"] catalogue. They ride into that job's renders via
-# _job_characters and can be promoted into the catalogue on demand.
+# _job_characters and can be promoted into the catalogue on demand. Catalogue
+# characters already opted into the style are NOT re-created here (see
+# _filter_identified_against_style) so they keep their global look.
 
 def _script_characters_dir(work_dir: Path) -> Path:
     """Directory holding a script's own character reference images."""

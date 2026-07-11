@@ -61,6 +61,63 @@ class ScriptCharacterStoreTests(TempConfigCase):
         self.assertIsNone(app._script_character_image_path(wd, ""))
 
 
+class FilterIdentifiedAgainstStyleTests(TempConfigCase):
+    """LLM-identified cast members that already live in the style catalogue
+    must not become per-script characters (which would shadow the global look)."""
+
+    def test_exact_name_match_dropped(self):
+        self.write_config({
+            "characters": [{"id": "char_c", "name": "Julius Caesar", "aliases": ["Caesar"],
+                            "description": "canonical red toga"}],
+            "styles": [_style("Hero", character_ids=["char_c"])],
+            "default_style": "Hero", "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        identified = [
+            {"name": "Julius Caesar", "aliases": [], "description": "LLM paraphrased look"},
+            {"name": "Brutus", "aliases": [], "description": "a senator"},
+        ]
+        kept = app._filter_identified_against_style(identified, cfg, "Hero")
+        self.assertEqual([c["name"] for c in kept], ["Brutus"])
+
+    def test_alias_and_whole_word_match_dropped(self):
+        self.write_config({
+            "characters": [{"id": "char_c", "name": "Julius Caesar", "aliases": ["Caesar"],
+                            "description": "canonical"}],
+            "styles": [_style("Hero", character_ids=["char_c"])],
+            "default_style": "Hero", "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        # LLM only returned the short name — still the same person.
+        kept = app._filter_identified_against_style(
+            [{"name": "Caesar", "description": "other"}], cfg, "Hero")
+        self.assertEqual(kept, [])
+
+    def test_catalogue_not_in_style_is_not_filtered(self):
+        # Global exists but style did not opt in → still create a per-script copy.
+        self.write_config({
+            "characters": [{"id": "char_c", "name": "Julius Caesar", "description": "canonical"}],
+            "styles": [_style("Hero", character_ids=[])],
+            "default_style": "Hero", "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        identified = [{"name": "Julius Caesar", "description": "llm"}]
+        kept = app._filter_identified_against_style(identified, cfg, "Hero")
+        self.assertEqual(len(kept), 1)
+        self.assertEqual(kept[0]["name"], "Julius Caesar")
+
+    def test_disabled_catalogue_character_is_not_filtered(self):
+        self.write_config({
+            "characters": [{"id": "char_c", "name": "Caesar", "description": "x", "enabled": False}],
+            "styles": [_style("Hero", character_ids=["char_c"])],
+            "default_style": "Hero", "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        kept = app._filter_identified_against_style(
+            [{"name": "Caesar", "description": "llm"}], cfg, "Hero")
+        self.assertEqual(len(kept), 1)
+
+
 class JobCharactersMergeTests(TempConfigCase):
     def _work_dir(self):
         wd = self.output_dir / "vid-20260101-000000"
