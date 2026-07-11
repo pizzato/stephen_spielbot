@@ -2776,9 +2776,9 @@ def _normalize_upscale_mode(mode: str | None) -> str:
     ``temporal_ai`` is accepted as an alias of ``ic_lora`` for older clients.
     """
     m = (mode or "fast").strip().lower()
-    if m in {"temporal_ai", "ic-lora", "iclora", "ai_temporal"}:
+    if m in {"ic_lora", "temporal_ai", "ic-lora", "iclora", "ai_temporal"}:
         return "ic_lora"
-    if m in {"latent", "latent_ai", "ltx_latent", "simple_model"}:
+    if m in {"ltx_latent", "latent", "latent_ai", "simple_model"}:
         return "ltx_latent"
     if m in {"fast", "ffmpeg"}:
         return "fast"
