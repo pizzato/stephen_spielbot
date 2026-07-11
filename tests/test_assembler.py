@@ -144,6 +144,33 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             latent.assert_called_once()
             ic.assert_not_called()
 
+    def test_temporal_ai_upscale_whole_scene_by_default(self):
+        """Typical scene lengths stay in one Comfy job (no 4s slicing)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=18.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale") as chunked, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as comfy_upscale, \
+                 mock.patch.dict("os.environ", {
+                     "TEMPORAL_VIDEO_UPSCALER_CMD": "",
+                     # Default is ~40s (LTX frame cap); a normal scene must not slice.
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "39.96",
+                 }, clear=False):
+                result = assembler.temporal_ai_upscale_video(
+                    src, out, 1920, 1080,
+                    timeout_seconds=123,
+                    comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(result, out)
+            chunked.assert_not_called()
+            comfy_upscale.assert_called_once()
+
     def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"
