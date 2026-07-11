@@ -48,6 +48,7 @@ class DialogueRenderTests(unittest.TestCase):
                 make_still=fake_still,
                 echomimic_host="http://s1:8190", tts_host="http://s1:8189",
                 _tts=fake_tts, _animate=fake_animate, _duration=lambda p: 4.0, _concat=fake_concat,
+                _normalize=lambda c, w, h: None,
             )
             self.assertEqual(final.name, "scene_03_final.mp4")
             self.assertTrue(final.exists())
