@@ -39,9 +39,14 @@ def _resolve_media_tool(name: str) -> str:
 
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
-# Body length per ComfyUI upscale job. Chunks are joined with a short overlap
-# crossfade so generative / latent upscalers don't hard-cut every N seconds.
-_TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "4"))
+# Prefer whole-scene upscale. The LTX graph rejects >1000 frames (~40s at 25fps);
+# only clips longer than that are split. Override with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS
+# if a worker runs out of VRAM on long scenes. Overlapped xfade joins rare long clips.
+_LTX_UPSCALE_MAX_SECONDS = (1000 - 1) / 25.0  # matches pipeline.comfyui LTX_MAX_FRAMES / LTX_FPS
+_TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
+    "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
+    str(_LTX_UPSCALE_MAX_SECONDS),
+))
 _TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP", "0.5"))
 
 # Open-source attribution stamped into the published final video's container
