@@ -169,10 +169,12 @@ cluster status panel). Worker lists are part of this file:
 | `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
-The temporal upscaler runs from the Remix screen after reviewing the finished
-film. It uses the packaged ComfyUI worker workflow with the LTX 2.3 spatial
-upscaler model downloaded by `make install`; each upscale is kept as a selectable
-final-video version so you can switch back to the original.
+The temporal upscaler runs from the Edit film screen after reviewing the finished
+film (**AI temporal** mode). It uses Lightricks'
+[LTX-2.3 IC-LoRA Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler)
+(2× or 4×, generative detail) via ComfyUI-LTXVideo — not the older latent
+`LTXVLatentUpsampler` path. Models are downloaded by `make install`; each upscale
+is kept as a selectable final-video version so you can switch back to the original.
 
 ## Models
 
@@ -184,6 +186,9 @@ cd ~/github/ComfyUI
 huggingface-cli download Lightricks/LTX-2.3-fp8 ltx-2.3-22b-dev-fp8.safetensors --local-dir models/checkpoints --local-dir-use-symlinks False
 huggingface-cli download Lightricks/LTX-2.3 ltx-2.3-22b-distilled-lora-384.safetensors --local-dir models/loras --local-dir-use-symlinks False
 huggingface-cli download Lightricks/LTX-2.3 ltx-2.3-spatial-upscaler-x2-1.1.safetensors --local-dir models/latent_upscale_models --local-dir-use-symlinks False
+# IC-LoRA Pixel Spatial Upscaler (Remix AI temporal) — 2× and 4×
+huggingface-cli download Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x2-0.9.safetensors --local-dir models/loras --local-dir-use-symlinks False
+huggingface-cli download Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors --local-dir models/loras --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/ltx-2 split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 ```
 

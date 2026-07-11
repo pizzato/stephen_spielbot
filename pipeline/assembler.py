@@ -203,9 +203,9 @@ def temporal_ai_upscale_video(
 ) -> Path:
     """Run a temporal AI video upscaler.
 
-    By default this uses the packaged ComfyUI LTX latent-upscale workflow. An
-    explicit command template remains supported as an advanced override for
-    existing installs that already configured one.
+    By default this uses Lightricks' LTX-2.3 IC-LoRA Pixel Spatial Upscaler
+    (generative 2×/4×). An explicit command template remains supported as an
+    advanced override for existing installs that already configured one.
     """
     actual_w, actual_h = _get_video_dimensions(input_path)
     if actual_w >= width and actual_h >= height:
@@ -219,21 +219,33 @@ def temporal_ai_upscale_video(
         from pipeline.comfyui import upscale_video_ltx
 
         duration = _get_duration(input_path)
+        fps = _get_video_fps(input_path)
         chunk_seconds = max(1.0, float(os.environ.get(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
             str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
         )))
+
+        def _ic_lora_upscale(inp, out, w, h, fps=fps, timeout_seconds=timeout, comfy_url=None, **_kw):
+            return upscale_video_ltx(
+                inp, out, w, h,
+                fps=fps,
+                timeout_seconds=timeout_seconds,
+                comfy_url=comfy_url or "http://localhost:8188",
+                source_width=actual_w,
+                source_height=actual_h,
+            )
+
         if duration > chunk_seconds + 0.25:
             return _chunked_comfy_temporal_upscale(
                 input_path,
                 output_path,
                 width,
                 height,
-                fps=_get_video_fps(input_path),
+                fps=fps,
                 timeout_seconds=timeout,
                 comfy_url=comfy_url or "http://localhost:8188",
                 chunk_seconds=chunk_seconds,
-                upscale_fn=upscale_video_ltx,
+                upscale_fn=_ic_lora_upscale,
             )
 
         return upscale_video_ltx(
@@ -241,9 +253,12 @@ def temporal_ai_upscale_video(
             output_path,
             width,
             height,
-            fps=_get_video_fps(input_path),
+            fps=fps,
             timeout_seconds=timeout,
             comfy_url=comfy_url or "http://localhost:8188",
+            source_width=actual_w,
+            source_height=actual_h,
+            duration_seconds=duration,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
