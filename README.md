@@ -148,9 +148,10 @@ cluster status panel). Worker lists are part of this file:
 | ComfyUI Workers | One URL per line — scenes are distributed across workers in parallel |
 | TTS Workers | F5-TTS endpoints for parallel narration (one container per worker on port 8189, derived from your render workers by `make install`) |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
-| LLM Backend | `local` (vLLM), `claude` (Anthropic API), or `grok` (xAI API) |
+| LLM Backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` (ChatGPT) |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
 | Grok API key / model | xAI key (or `XAI_API_KEY`) and model name, e.g. `grok-4.5` |
+| OpenAI API key / model | OpenAI key (or `OPENAI_API_KEY`) and model name, e.g. `gpt-4o` |
 | Resolution | 832×480 default; portrait and square presets available |
 
 ## Environment variables
@@ -161,6 +162,7 @@ cluster status panel). Worker lists are part of this file:
 | `CHATTERBOX_PYTHON` | `~/miniconda3/envs/chatterbox/bin/python` | Python interpreter for Chatterbox TTS |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
+| `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
 | `FFMPEG_PATH` | `$(which ffmpeg)` | Path to the ffmpeg binary (set when it isn't on `PATH`) |
 | `FFMPEG_TIMEOUT` | `600` | Per-call ffmpeg timeout, seconds |
 | `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Optional timeout for the packaged Remix temporal AI upscaler, in seconds |
