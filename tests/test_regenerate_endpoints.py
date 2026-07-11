@@ -298,6 +298,27 @@ class FilmUpscaleTests(unittest.TestCase):
             )
         self.assertEqual(started[0][3], "ltx_latent")
 
+    def test_remix_upscale_endpoint_accepts_canonical_ic_lora_mode(self):
+        """UI sends upscale_mode=ic_lora; normalizer must accept the canonical key."""
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        wd.with_suffix(".mp4").write_bytes(b"low-res-final")
+        started = []
+
+        def fake_thread(target, args, daemon):
+            started.append(args)
+            return mock.Mock(start=lambda: None)
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
+            backend.remix_upscale_video(
+                backend.RemixUpscaleBody(
+                    work_dir=str(wd),
+                    target_resolution="Landscape FHD (1920×1080)",
+                    upscale_mode="ic_lora",
+                ),
+            )
+        self.assertEqual(started[0][3], "ic_lora")
+
     def test_activity_surfaces_running_final_upscale(self):
         backend._film_tasks["final_upscale_123"] = {"status": "running", "step": "final_upscale"}
         backend._film_task_meta["final_upscale_123"] = {
