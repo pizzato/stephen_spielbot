@@ -100,8 +100,9 @@ for host in $(remote_hosts); do
     ssh -o ConnectTimeout=5 "$host" \
         'cd ~/spielbot-worker/docker 2>/dev/null && docker compose ps --format "    {{.Service}}  {{.Status}}"' \
         2>/dev/null || echo "    (no container stack — run: make install)"
-    check_health "ComfyUI ${host}" "http://${host}:8188/system_stats"
-    check_health "F5-TTS  ${host}" "http://${host}:8189/health"
+    check_health "ComfyUI  ${host}" "http://${host}:8188/system_stats"
+    check_health "F5-TTS   ${host}" "http://${host}:8189/health"
+    check_health "EchoMimic ${host}" "http://${host}:8190/health"
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────

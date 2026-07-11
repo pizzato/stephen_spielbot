@@ -192,8 +192,10 @@ DEFAULT_CFG = {
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
     # tts_workers:   hostnames for F5-TTS narration.
+    # echomimic_workers: EchoMimic-V3 talking-head URLs (dialogue/performance scenes).
     "comfy_workers": [],
     "tts_workers":   [],
+    "echomimic_workers": [],
     # UI worker reservation (issue #98): while the web UI is actively used, the
     # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
     # render pool once the UI has been idle this many seconds.
