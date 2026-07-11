@@ -100,7 +100,10 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     This recovers from any upstream save bug by calling the LLM to fill what's missing,
     and falls back to scene title text so generation NEVER produces a silent scene.
     """
-    bad = [s for s in scenes if not (s.narration or "").strip()
+    # Dialogue scenes carry spoken lines, not narration, and are rendered by the
+    # EchoMimic path — never heal them into narration scenes.
+    healable = [s for s in scenes if getattr(s, "mode", "narration") != "dialogue"]
+    bad = [s for s in healable if not (s.narration or "").strip()
            or not (s.image_prompt or "").strip()]
     if not bad:
         return
@@ -300,6 +303,49 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
     logger.info("PROGRESS %.0f%% — %s", pct, msg)
 
 
+def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None):
+    """Build (voice_ref_for, make_still) for dialogue scenes.
+
+    Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
+    own voice, else the style narrator — and (b) a talking-head still: the
+    character's reference portrait (validated EchoMimic input). Reads the per-script
+    characters.json cast + the config voices store."""
+    try:
+        chars = json.loads((work_dir / "characters.json").read_text()) or []
+    except Exception:
+        chars = []
+    voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
+    global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
+
+    def _find(speaker: str):
+        s = (speaker or "").strip().lower()
+        for c in chars:
+            names = [c.get("name", "")] + list(c.get("aliases") or [])
+            if any(s == str(n).strip().lower() for n in names if str(n).strip()):
+                return c
+        return None
+
+    def voice_ref_for(speaker: str):
+        c = _find(speaker)
+        if c and c.get("voice") and c["voice"] in voices:
+            p = Path(voices[c["voice"]])
+            if p.exists():
+                return p
+        return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
+
+    def make_still(scene, speaker: str, idx: int) -> Path:
+        c = _find(speaker)
+        ref = (c or {}).get("ref_image") or ""
+        if not ref:
+            raise RuntimeError(f"dialogue speaker {speaker!r} (scene {scene.id}) has no character portrait")
+        for cand in (work_dir / "characters" / ref, global_char_dir / ref):
+            if cand.exists():
+                return cand
+        raise RuntimeError(f"portrait {ref!r} for speaker {speaker!r} not found (scene {scene.id})")
+
+    return voice_ref_for, make_still
+
+
 def main(work_dir: Path) -> None:
     global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
@@ -412,6 +458,39 @@ def main(work_dir: Path) -> None:
 
     write_progress(status_file, 0, "Resume: starting…")
 
+    # ── Dialogue/performance scenes (talking-head via EchoMimic) ─────────────
+    # Rendered up front to scene_NN_final.mp4; the narration/video/mux phases then
+    # skip them (they operate on classic_scenes / find the final already present).
+    # A narration-only script has dialogue_scenes == [] and classic_scenes ==
+    # scenes, so everything below runs exactly as before.
+    dialogue_scenes = [s for s in scenes if getattr(s, "mode", "narration") == "dialogue" and (s.lines or [])]
+    classic_scenes = [s for s in scenes if s not in dialogue_scenes]
+    dialogue_durs: dict[int, float] = {}
+    if dialogue_scenes:
+        from pipeline.dialogue_render import render_dialogue_scene
+        echo_hosts = [h for h in (cfg.get("echomimic_workers") or []) if str(h).startswith(("http://", "https://"))]
+        if not echo_hosts:
+            raise RuntimeError("Dialogue scenes present but no echomimic_workers are configured")
+        if not tts_hosts:
+            raise RuntimeError("Dialogue scenes need a TTS worker but none are configured")
+        voice_ref_for, make_still = _dialogue_resolvers(cfg, work_dir, voice_ref_str)
+        tts_host = tts_hosts[0]
+        write_progress(status_file, 1, f"Rendering {len(dialogue_scenes)} dialogue scene(s)…")
+        for i, s in enumerate(dialogue_scenes):
+            final = work_dir / f"scene_{s.id:02d}_final.mp4"
+            if final.exists() and final.stat().st_size > 10_000:
+                dialogue_durs[s.id] = _get_duration(final)
+                continue
+            render_dialogue_scene(
+                s, work_dir,
+                voice_ref_for=voice_ref_for, make_still=make_still,
+                echomimic_host=echo_hosts[i % len(echo_hosts)],
+                tts_host=tts_host, tts_engine=tts_engine,
+            )
+            dialogue_durs[s.id] = _get_duration(final)
+            write_progress(status_file, 1 + 14 * (i + 1) / len(dialogue_scenes),
+                           f"Dialogue scene {s.id} rendered ({i + 1}/{len(dialogue_scenes)})")
+
     # ── Narrations (0–20%) ───────────────────────────────────────────────────
     narration_paths: dict[int, Path] = {}
     narration_durs:  dict[int, float] = {}
@@ -462,7 +541,7 @@ def main(work_dir: Path) -> None:
     tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(tts_hosts)))
     tts_pending = {
         tts_pool.submit(_tts_scene, scene, tts_hosts[i % len(tts_hosts)]): scene
-        for i, scene in enumerate(scenes)
+        for i, scene in enumerate(classic_scenes)
     }
     tts_done = 0
     try:
@@ -483,7 +562,7 @@ def main(work_dir: Path) -> None:
     finally:
         tts_pool.shutdown(wait=False)
 
-    total_dur = sum(narration_durs.values())
+    total_dur = sum(narration_durs.values()) + sum(dialogue_durs.values())
     logger.info("All narrations done — %.1fs total", total_dur)
     write_progress(status_file, 20, f"Narrations done — {total_dur:.0f}s, generating video…")
 
@@ -789,7 +868,7 @@ def main(work_dir: Path) -> None:
 
     scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
     pending: dict[concurrent.futures.Future, Scene] = {
-        scene_pool.submit(_run_scene, scene): scene for scene in scenes
+        scene_pool.submit(_run_scene, scene): scene for scene in classic_scenes
     }
     completed = 0
     first_error: Exception | None = None
@@ -833,7 +912,7 @@ def main(work_dir: Path) -> None:
     # ── Mux narrations into scene videos ────────────────────────────────────
     scene_finals: list[Path] = []
     for s in scenes:
-        raw = scene_raws_map[s.id]
+        raw = scene_raws_map.get(s.id)  # None for dialogue scenes (final pre-rendered)
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
         mux_task = task_id(durable_job_id, "scene", s.id, "mux")
         is_last = s.id == scenes[-1].id
