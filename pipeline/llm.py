@@ -1,15 +1,17 @@
-"""Script generation — supports Claude, Grok (xAI), and local vLLM backends.
+"""Script generation — supports Claude, Grok (xAI), OpenAI, and local vLLM.
 
 Backend is selected via config:
-  llm_backend: "claude" | "grok" | "local"   (default: "local")
+  llm_backend: "claude" | "grok" | "openai" | "local"   (default: "local")
   claude_api_key / claude_model               (when backend is "claude")
   grok_api_key / grok_model                   (when backend is "grok"; key also
                                               from env XAI_API_KEY)
+  openai_api_key / openai_model               (when backend is "openai"; key also
+                                              from env OPENAI_API_KEY)
   local_llm_url / local_llm_model             (when backend is "local")
 
-Claude / Grok: JSON batch protocol, reliable structured output.
-Local:         two-stage plain-text (story + per-scene visuals), works
-               around the reasoning-model token constraints.
+Claude / Grok / OpenAI: JSON batch protocol, reliable structured output.
+Local:                  two-stage plain-text (story + per-scene visuals), works
+                        around the reasoning-model token constraints.
 """
 from __future__ import annotations
 
@@ -36,6 +38,10 @@ _LOCAL_LLM_MODEL_DEFAULT = "openai/gpt-oss-120b"
 # xAI Grok — OpenAI-compatible Chat Completions.
 _GROK_CHAT_URL_DEFAULT = "https://api.x.ai/v1/chat/completions"
 _GROK_MODEL_DEFAULT = "grok-4.5"
+
+# OpenAI ChatGPT — Chat Completions API.
+_OPENAI_CHAT_URL_DEFAULT = "https://api.openai.com/v1/chat/completions"
+_OPENAI_MODEL_DEFAULT = "gpt-4o"
 
 NEGATIVE_PROMPT = _prompts.value("video_negative")
 
@@ -255,9 +261,9 @@ def _claude_call(client, model: str, system: str, user_msg: str,
 def _openai_compatible_call(url: str, api_key: str, model: str, system: str,
                             user_msg: str, max_tokens: int, label: str,
                             retries: int = 6, timeout: int = 300) -> str:
-    """Chat Completions call (OpenAI-compatible: Grok/xAI, local vLLM with auth).
+    """Chat Completions call (OpenAI, Grok/xAI, or other OpenAI-compatible hosts).
 
-    Used by the Grok backend. Retries with exponential backoff on network/5xx.
+    Used by the OpenAI and Grok backends. Retries with exponential backoff.
     """
     import time as _time
     messages = []
@@ -309,6 +315,10 @@ def _grok_api_key(cfg: dict) -> str:
     return (cfg.get("grok_api_key") or "").strip() or os.environ.get("XAI_API_KEY", "").strip()
 
 
+def _openai_api_key(cfg: dict) -> str:
+    return (cfg.get("openai_api_key") or "").strip() or os.environ.get("OPENAI_API_KEY", "").strip()
+
+
 def llm_backend_ready(cfg: dict) -> bool:
     """True when the configured LLM backend has what it needs to make a call.
 
@@ -320,6 +330,8 @@ def llm_backend_ready(cfg: dict) -> bool:
         return bool(_claude_api_key(cfg))
     if backend == "grok":
         return bool(_grok_api_key(cfg))
+    if backend == "openai":
+        return bool(_openai_api_key(cfg))
     return True
 
 
@@ -354,6 +366,16 @@ def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
             cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT,
             api_key,
             cfg.get("grok_model") or _GROK_MODEL_DEFAULT,
+            system, user_msg, max_tokens, label, retries=retries,
+        )
+    if backend == "openai":
+        api_key = _openai_api_key(cfg)
+        if not api_key:
+            raise RuntimeError("No OpenAI API key configured (Settings → LLM backend).")
+        return _openai_compatible_call(
+            cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT,
+            api_key,
+            cfg.get("openai_model") or _OPENAI_MODEL_DEFAULT,
             system, user_msg, max_tokens, label, retries=retries,
         )
     url = cfg.get("local_llm_url", _LOCAL_LLM_URL_DEFAULT)
@@ -566,6 +588,28 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
                    api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Grok (xAI) uses the same JSON batch protocol as Claude."""
     url = api_url or _GROK_CHAT_URL_DEFAULT
+
+    def call_fn(system, user_msg, max_tokens, label, retries=6):
+        return _openai_compatible_call(
+            url, api_key, model, system, user_msg, max_tokens, label, retries=retries,
+        )
+
+    return _json_script_generate(
+        title, n_scenes, style_hint, call_fn,
+        video_title=video_title, video_style_hint=video_style_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint,
+    )
+
+
+def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
+                     api_key: str, model: str,
+                     video_title: str | None = None,
+                     video_style_hint: str | None = None,
+                     character_sheet: str | None = None,
+                     avoid_hint: str | None = None,
+                     api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+    """OpenAI ChatGPT uses the same JSON batch protocol as Claude/Grok."""
+    url = api_url or _OPENAI_CHAT_URL_DEFAULT
 
     def call_fn(system, user_msg, max_tokens, label, retries=6):
         return _openai_compatible_call(
@@ -924,7 +968,7 @@ def generate_script(
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
-    Backend is chosen from config: llm_backend = "claude" | "grok" | "local".
+    Backend is chosen from config: llm_backend = "claude" | "grok" | "openai" | "local".
     video_title is the short YouTube title; title is the full topic/description.
     video_style_hint is per-style motion/cinematography guidance steering each
     scene's video_prompt (camera + subject movement).
@@ -966,6 +1010,20 @@ def generate_script(
                               video_title=video_title, video_style_hint=video_style_hint,
                               character_sheet=character_sheet, avoid_hint=avoid_hint,
                               api_url=cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT)
+
+    if backend == "openai":
+        api_key = _openai_api_key(cfg)
+        if not api_key:
+            raise RuntimeError(
+                'OpenAI API key not set. Add it in Settings under "LLM backend" '
+                "(or set the OPENAI_API_KEY environment variable)."
+            )
+        model = cfg.get("openai_model") or _OPENAI_MODEL_DEFAULT
+        logger.info("Using OpenAI backend: model=%s", model)
+        return _openai_generate(title, n_scenes, style_hint, api_key, model,
+                                video_title=video_title, video_style_hint=video_style_hint,
+                                character_sheet=character_sheet, avoid_hint=avoid_hint,
+                                api_url=cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT)
 
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
