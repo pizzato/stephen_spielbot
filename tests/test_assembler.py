@@ -114,15 +114,35 @@ class AssemblerToolResolutionTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, out)
-            comfy_upscale.assert_called_once_with(
-                src,
-                out,
-                1920,
-                1080,
-                fps=25.0,
-                timeout_seconds=123,
-                comfy_url="http://worker:8188",
-            )
+            comfy_upscale.assert_called_once()
+            args, kwargs = comfy_upscale.call_args
+            self.assertEqual(args[:4], (src, out, 1920, 1080))
+            self.assertEqual(kwargs.get("fps"), 25.0)
+            self.assertEqual(kwargs.get("timeout_seconds"), 123)
+            self.assertEqual(kwargs.get("comfy_url"), "http://worker:8188")
+
+    def test_ltx_latent_engine_uses_latent_upscaler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=2.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx_latent", return_value=out) as latent, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx") as ic, \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                result = assembler.temporal_ai_upscale_video(
+                    src, out, 1920, 1080,
+                    timeout_seconds=60,
+                    comfy_url="http://worker:8188",
+                    engine="ltx_latent",
+                )
+
+            self.assertEqual(result, out)
+            latent.assert_called_once()
+            ic.assert_not_called()
 
     def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
