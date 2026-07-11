@@ -200,12 +200,18 @@ def temporal_ai_upscale_video(
     command_template: str | None = None,
     timeout_seconds: int | None = None,
     comfy_url: str | None = None,
+    *,
+    engine: str = "ic_lora",
 ) -> Path:
-    """Run a temporal AI video upscaler.
+    """Run a ComfyUI (or custom CLI) AI video upscaler on one clip.
 
-    By default this uses Lightricks' LTX-2.3 IC-LoRA Pixel Spatial Upscaler
-    (generative 2×/4×). An explicit command template remains supported as an
-    advanced override for existing installs that already configured one.
+    *engine*:
+      - ``ic_lora`` — Lightricks LTX-2.3 IC-LoRA Pixel Spatial Upscaler
+        (generative 2×/4×; https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler)
+      - ``ltx_latent`` — simpler LTXVLatentUpsampler + latent spatial-upscaler-x2 model
+
+    An explicit *command_template* (or TEMPORAL_VIDEO_UPSCALER_CMD) overrides both
+    and runs as a shell command instead.
     """
     actual_w, actual_h = _get_video_dimensions(input_path)
     if actual_w >= width and actual_h >= height:
@@ -213,10 +219,18 @@ def temporal_ai_upscale_video(
             f"Target {width}x{height} is not larger than source {actual_w}x{actual_h}."
         )
 
+    eng = (engine or "ic_lora").strip().lower()
+    if eng in {"temporal_ai", "ic-lora", "iclora"}:
+        eng = "ic_lora"
+    if eng in {"latent", "latent_ai", "ltx_latent_upsampler"}:
+        eng = "ltx_latent"
+    if eng not in {"ic_lora", "ltx_latent"}:
+        raise ValueError(f"Unknown AI upscale engine: {engine!r}")
+
     template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
     timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
     if not template.strip():
-        from pipeline.comfyui import upscale_video_ltx
+        from pipeline.comfyui import upscale_video_ltx, upscale_video_ltx_latent
 
         duration = _get_duration(input_path)
         fps = _get_video_fps(input_path)
@@ -224,13 +238,22 @@ def temporal_ai_upscale_video(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
             str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
         )))
+        url = comfy_url or "http://localhost:8188"
 
-        def _ic_lora_upscale(inp, out, w, h, fps=fps, timeout_seconds=timeout, comfy_url=None, **_kw):
+        def _comfy_upscale(inp, out, w, h, fps=fps, timeout_seconds=timeout, comfy_url=None, **_kw):
+            cu = comfy_url or url
+            if eng == "ltx_latent":
+                return upscale_video_ltx_latent(
+                    inp, out, w, h,
+                    fps=fps,
+                    timeout_seconds=timeout_seconds,
+                    comfy_url=cu,
+                )
             return upscale_video_ltx(
                 inp, out, w, h,
                 fps=fps,
                 timeout_seconds=timeout_seconds,
-                comfy_url=comfy_url or "http://localhost:8188",
+                comfy_url=cu,
                 source_width=actual_w,
                 source_height=actual_h,
             )
@@ -243,21 +266,20 @@ def temporal_ai_upscale_video(
                 height,
                 fps=fps,
                 timeout_seconds=timeout,
-                comfy_url=comfy_url or "http://localhost:8188",
+                comfy_url=url,
                 chunk_seconds=chunk_seconds,
-                upscale_fn=_ic_lora_upscale,
+                upscale_fn=_comfy_upscale,
             )
 
+        if eng == "ltx_latent":
+            return upscale_video_ltx_latent(
+                input_path, output_path, width, height,
+                fps=fps, timeout_seconds=timeout, comfy_url=url,
+            )
         return upscale_video_ltx(
-            input_path,
-            output_path,
-            width,
-            height,
-            fps=fps,
-            timeout_seconds=timeout,
-            comfy_url=comfy_url or "http://localhost:8188",
-            source_width=actual_w,
-            source_height=actual_h,
+            input_path, output_path, width, height,
+            fps=fps, timeout_seconds=timeout, comfy_url=url,
+            source_width=actual_w, source_height=actual_h,
             duration_seconds=duration,
         )
 
@@ -276,8 +298,8 @@ def temporal_ai_upscale_video(
         raise RuntimeError("Temporal AI upscaler command is empty.")
 
     logger.info(
-        "[upscale] temporal_ai: %dx%d -> %dx%d (%s)",
-        actual_w, actual_h, width, height, input_path.name,
+        "[upscale] %s (cli): %dx%d -> %dx%d (%s)",
+        eng, actual_w, actual_h, width, height, input_path.name,
     )
     _run(cmd, timeout=timeout, max_retries=1)
     if not output_path.exists() or output_path.stat().st_size == 0:

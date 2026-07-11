@@ -169,12 +169,16 @@ cluster status panel). Worker lists are part of this file:
 | `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
-The temporal upscaler runs from the Edit film screen after reviewing the finished
-film (**AI temporal** mode). It uses Lightricks'
-[LTX-2.3 IC-LoRA Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler)
-(2× or 4×, generative detail) via ComfyUI-LTXVideo — not the older latent
-`LTXVLatentUpsampler` path. Models are downloaded by `make install`; each upscale
-is kept as a selectable final-video version so you can switch back to the original.
+Final-film upscale on the Edit film screen has three modes:
+
+| Mode | What it does |
+|------|----------------|
+| **Fast** | Plain ffmpeg scale |
+| **LTX latent** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1` |
+| **LTX IC-LoRA** | Generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) (2×/4× IC-LoRA via ComfyUI-LTXVideo) |
+
+Models are downloaded by `make install`; each upscale is kept as a selectable
+final-video version so you can switch back to the original.
 
 ## Models
 
