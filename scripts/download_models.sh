@@ -2,10 +2,11 @@
 # Download all models required by Stephen Spielbot into a ComfyUI installation.
 # Usage: bash scripts/download_models.sh [/path/to/ComfyUI]
 #
-# Models downloaded by default (~49 GB):
-#   LTX 2.3  — checkpoint, LoRA, spatial upscaler, text encoder    (~28 GB)
-#   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders     (~5 GB)
-#   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE         (~16 GB)
+# Models downloaded by default (~50+ GB):
+#   LTX 2.3  — checkpoint, distilled LoRA, latent spatial upscaler, text encoder
+#   LTX IC-LoRA Pixel Spatial Upscaler (2× + 4×) for Remix AI temporal upscale
+#   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders
+#   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE
 # Opt-in (env flags): INSTALL_FLUX1=1 adds the legacy FLUX.1-schnell engine.
 set -euo pipefail
 
@@ -136,6 +137,18 @@ download \
     "Lightricks/LTX-2.3" \
     "ltx-2.3-spatial-upscaler-x2-1.1.safetensors" \
     "models/latent_upscale_models"
+
+# Generative pixel spatial upscalers (IC-LoRA) — Remix "AI temporal" mode.
+# https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler
+download \
+    "Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" \
+    "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x2-0.9.safetensors" \
+    "models/loras"
+
+download \
+    "Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" \
+    "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors" \
+    "models/loras"
 
 download \
     "Comfy-Org/ltx-2" \

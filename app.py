@@ -203,7 +203,7 @@ DEFAULT_CFG = {
     # render pool once the UI has been idle this many seconds.
     "ui_idle_timeout_seconds": 300,
     # Optional advanced override for the packaged Remix temporal AI upscaler.
-    # Blank uses the built-in ComfyUI LTX latent-upscale workflow.
+    # Blank uses LTX-2.3 IC-LoRA Pixel Spatial Upscaler (ComfyUI workflow).
     "temporal_video_upscaler_cmd": "",
     "temporal_video_upscaler_timeout": 7200,
     # Generation defaults
