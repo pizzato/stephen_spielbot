@@ -20,7 +20,7 @@ import os
 import re
 import urllib.request
 import urllib.error
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -60,6 +60,15 @@ class Scene:
     video_prompt: str   # LTX I2V: motion, camera movement, action, pacing
     narration: str
     negative_prompt: str = NEGATIVE_PROMPT
+    # ── Dialogue/performance (additive; absent/"narration" ⟹ today's behavior) ──
+    # mode: "narration" (default) | "silent" | "dialogue". A scene with narration
+    # text and no explicit mode is narration — existing scripts are unchanged.
+    mode: str = "narration"
+    # dialogue lines: ordered [{"speaker": <character name|"Narrator">, "text": str}].
+    # Each line renders as a talking-head shot (EchoMimic) in the speaker's voice.
+    lines: list = field(default_factory=list)
+    # explicit length (seconds) for silent scenes that have no audio to time from.
+    duration: float = 0.0
 
 
 # ══════════════════════════════════════════════════════════════════════════════

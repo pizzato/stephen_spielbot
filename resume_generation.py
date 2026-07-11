@@ -316,6 +316,11 @@ def main(work_dir: Path) -> None:
             # Per-style video negative (blank → built-in default). job_config.json
             # carries the resolved value stamped at render time.
             negative_prompt=(cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT,
+            # Dialogue/performance fields ride in the scene's metadata sidecar
+            # (absent ⟹ narration — existing scripts hydrate unchanged).
+            mode=str((s.get("metadata") or {}).get("mode") or "narration"),
+            lines=list((s.get("metadata") or {}).get("lines") or []),
+            duration=float((s.get("metadata") or {}).get("duration") or 0.0),
         )
         for s in script_data
     ]
