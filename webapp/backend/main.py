@@ -2699,9 +2699,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         target_dims = gapp._RESOLUTIONS.get((target_name or "").strip())
         if not target_dims:
             raise RuntimeError("Choose a valid upscale resolution.")
-        mode = (upscale_mode or "fast").strip().lower()
-        if mode not in {"fast", "temporal_ai"}:
-            raise RuntimeError("Choose a valid upscale mode.")
+        mode = _normalize_upscale_mode(upscale_mode)
 
         target_w, target_h = target_dims
         actual_w, actual_h = _get_video_dimensions(final_path)
@@ -2713,17 +2711,24 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         final_video_history.seed_if_empty(wd, final_path, "Original")
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
-        if mode == "temporal_ai":
+        if mode in {"ic_lora", "ltx_latent"}:
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
             _temporal_upscale_scenes_to_final(
-                task_id, wd, staged, target_w, target_h, cfg, command_template=command_template
+                task_id, wd, staged, target_w, target_h, cfg,
+                command_template=command_template,
+                engine=mode,
             )
         else:
             upscale_video(final_path, staged, target_w, target_h)
 
         _film_checkpoint(task_id)
         staged.replace(final_path)
-        label = f"{'AI temporal' if mode == 'temporal_ai' else 'Fast'} {target_w}x{target_h}"
+        mode_label = {
+            "fast": "Fast",
+            "ltx_latent": "LTX latent",
+            "ic_lora": "LTX IC-LoRA",
+        }.get(mode, mode)
+        label = f"{mode_label} {target_w}x{target_h}"
         final_video_history.record(wd, final_path, label=label)
         _film_tasks[task_id] = {
             "status": "done",
@@ -2762,6 +2767,24 @@ def _rendered_scene_finals(wd: Path) -> list[Path]:
     )
 
 
+def _normalize_upscale_mode(mode: str | None) -> str:
+    """Map UI/API upscale mode strings to canonical keys.
+
+    - fast: ffmpeg scale (simple)
+    - ltx_latent: LTXVLatentUpsampler + latent spatial-upscaler-x2
+    - ic_lora: LTX-2.3 IC-LoRA Pixel Spatial Upscaler (generative)
+    ``temporal_ai`` is accepted as an alias of ``ic_lora`` for older clients.
+    """
+    m = (mode or "fast").strip().lower()
+    if m in {"temporal_ai", "ic-lora", "iclora", "ai_temporal"}:
+        return "ic_lora"
+    if m in {"latent", "latent_ai", "ltx_latent", "simple_model"}:
+        return "ltx_latent"
+    if m in {"fast", "ffmpeg"}:
+        return "fast"
+    raise RuntimeError("Choose a valid upscale mode (fast, ltx_latent, or ic_lora).")
+
+
 def _temporal_upscale_scenes_to_final(
     task_id: str,
     wd: Path,
@@ -2770,6 +2793,7 @@ def _temporal_upscale_scenes_to_final(
     target_h: int,
     cfg: dict,
     command_template: str | None = None,
+    engine: str = "ic_lora",
 ) -> Path:
     """Upscale rendered scene clips as separate worker jobs, then rebuild final."""
     import concurrent.futures
@@ -2784,7 +2808,7 @@ def _temporal_upscale_scenes_to_final(
 
     worker_urls = [] if command_template else gapp._preview_worker_urls()
     if not command_template and not worker_urls:
-        raise RuntimeError("No ComfyUI workers reachable for temporal AI upscale.")
+        raise RuntimeError("No ComfyUI workers reachable for AI upscale.")
 
     timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
     pool = WorkerPool(worker_urls) if worker_urls else None
@@ -2814,6 +2838,7 @@ def _temporal_upscale_scenes_to_final(
                     command_template=command_template,
                     timeout_seconds=timeout,
                     comfy_url=url,
+                    engine=engine,
                 )
                 return index, out
             finally:
@@ -2868,9 +2893,10 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     target_name = (body.target_resolution or "").strip()
     if target_name not in gapp._RESOLUTIONS:
         raise HTTPException(400, "Choose a valid upscale resolution.")
-    mode = (body.upscale_mode or "fast").strip().lower()
-    if mode not in {"fast", "temporal_ai"}:
-        raise HTTPException(400, "Choose a valid upscale mode.")
+    try:
+        mode = _normalize_upscale_mode(body.upscale_mode)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
 

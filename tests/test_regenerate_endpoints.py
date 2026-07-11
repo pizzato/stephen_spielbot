@@ -125,12 +125,13 @@ class FilmUpscaleTests(unittest.TestCase):
         scene = wd / "scene_01_final.mp4"
         scene.write_bytes(b"scene-one" * 1500)
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None):
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
             self.assertEqual(src, scene)
             self.assertEqual((width, height), (1920, 1080))
             self.assertEqual(command_template, "temporal-cli -i {input} -o {output}")
             self.assertEqual(timeout_seconds, 1234)
             self.assertIsNone(comfy_url)
+            self.assertEqual(engine, "ic_lora")
             out.write_bytes(b"temporal-upscaled-scene")
             return out
 
@@ -154,6 +155,42 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(final.read_bytes(), b"temporal-upscaled-final")
         self.assertEqual(backend._film_tasks["tid"]["status"], "done")
         temporal.assert_called_once()
+        self.assertEqual(temporal.call_args.kwargs.get("engine"), "ic_lora")
+        fast.assert_not_called()
+
+    def test_final_video_upscale_ltx_latent_mode(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        final = wd.with_suffix(".mp4")
+        final.write_bytes(b"low-res-final")
+        scene = wd / "scene_01_final.mp4"
+        scene.write_bytes(b"scene-one" * 1500)
+
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
+            self.assertEqual(engine, "ltx_latent")
+            self.assertEqual(src, scene)
+            out.write_bytes(b"latent-upscaled-scene")
+            return out
+
+        def fake_concat(paths, out):
+            out.write_bytes(b"latent-upscaled-final")
+            return out
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch.object(backend.gapp, "load_config", return_value={
+                 "comfy_workers": ["http://w1:8188"],
+                 "temporal_video_upscaler_timeout": 60,
+             }), \
+             mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w1:8188"]), \
+             mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
+             mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
+             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.upscale_video") as fast:
+            backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+            backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "ltx_latent")
+
+        self.assertEqual(final.read_bytes(), b"latent-upscaled-final")
+        self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+        temporal.assert_called_once()
         fast.assert_not_called()
 
     def test_packaged_temporal_final_upscale_runs_by_scene(self):
@@ -169,11 +206,12 @@ class FilmUpscaleTests(unittest.TestCase):
         calls = []
         mixed = []
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None):
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
             self.assertNotEqual(src, final)
             self.assertEqual((width, height), (1920, 1080))
             self.assertIsNone(command_template)
             self.assertEqual(timeout_seconds, 1234)
+            self.assertEqual(engine, "ic_lora")
             calls.append((src, comfy_url))
             time.sleep(0.05)
             out.write_bytes(f"upscaled:{src.name}".encode())
@@ -237,7 +275,28 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertTrue(result["task_id"].startswith("final_upscale_"))
         self.assertEqual(started[0][1], wd)
         self.assertEqual(started[0][2], "Landscape FHD (1920×1080)")
-        self.assertEqual(started[0][3], "temporal_ai")
+        # temporal_ai is normalized to ic_lora before the worker thread starts.
+        self.assertEqual(started[0][3], "ic_lora")
+
+    def test_remix_upscale_endpoint_accepts_ltx_latent_mode(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        wd.with_suffix(".mp4").write_bytes(b"low-res-final")
+        started = []
+
+        def fake_thread(target, args, daemon):
+            started.append(args)
+            return mock.Mock(start=lambda: None)
+
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+             mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
+            backend.remix_upscale_video(
+                backend.RemixUpscaleBody(
+                    work_dir=str(wd),
+                    target_resolution="Landscape FHD (1920×1080)",
+                    upscale_mode="ltx_latent",
+                ),
+            )
+        self.assertEqual(started[0][3], "ltx_latent")
 
     def test_activity_surfaces_running_final_upscale(self):
         backend._film_tasks["final_upscale_123"] = {"status": "running", "step": "final_upscale"}
