@@ -114,15 +114,62 @@ class AssemblerToolResolutionTests(unittest.TestCase):
                 )
 
             self.assertEqual(result, out)
-            comfy_upscale.assert_called_once_with(
-                src,
-                out,
-                1920,
-                1080,
-                fps=25.0,
-                timeout_seconds=123,
-                comfy_url="http://worker:8188",
-            )
+            comfy_upscale.assert_called_once()
+            args, kwargs = comfy_upscale.call_args
+            self.assertEqual(args[:4], (src, out, 1920, 1080))
+            self.assertEqual(kwargs.get("fps"), 25.0)
+            self.assertEqual(kwargs.get("timeout_seconds"), 123)
+            self.assertEqual(kwargs.get("comfy_url"), "http://worker:8188")
+
+    def test_ltx_latent_engine_uses_latent_upscaler(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=2.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx_latent", return_value=out) as latent, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx") as ic, \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                result = assembler.temporal_ai_upscale_video(
+                    src, out, 1920, 1080,
+                    timeout_seconds=60,
+                    comfy_url="http://worker:8188",
+                    engine="ltx_latent",
+                )
+
+            self.assertEqual(result, out)
+            latent.assert_called_once()
+            ic.assert_not_called()
+
+    def test_temporal_ai_upscale_whole_scene_by_default(self):
+        """Typical scene lengths stay in one Comfy job (no 4s slicing)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=18.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale") as chunked, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as comfy_upscale, \
+                 mock.patch.dict("os.environ", {
+                     "TEMPORAL_VIDEO_UPSCALER_CMD": "",
+                     # Default is ~40s (LTX frame cap); a normal scene must not slice.
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "39.96",
+                 }, clear=False):
+                result = assembler.temporal_ai_upscale_video(
+                    src, out, 1920, 1080,
+                    timeout_seconds=123,
+                    comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(result, out)
+            chunked.assert_not_called()
+            comfy_upscale.assert_called_once()
 
     def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -130,20 +177,37 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             out = Path(tmp) / "out.mp4"
             src.write_bytes(b"video")
 
-            def fake_concat(chunks, output_path):
+            extract_calls = []
+
+            def fake_extract(input_path, output_path, start, duration):
+                extract_calls.append((start, duration))
+                output_path.write_bytes(b"chunk")
+                return output_path
+
+            def fake_xfade(chunks, output_path, body_seconds, overlap_seconds):
                 self.assertEqual(len(chunks), 3)
+                self.assertEqual(body_seconds, 4.0)
+                self.assertEqual(overlap_seconds, 0.5)
                 output_path.write_bytes(b"joined")
+                return output_path
+
+            def fake_mux(video_path, source_path, output_path, target_duration=None):
+                self.assertEqual(target_duration, 9.0)
+                output_path.write_bytes(b"muxed")
                 return output_path
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
                  mock.patch.object(assembler, "_get_duration", return_value=9.0), \
                  mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
-                 mock.patch.object(assembler, "_extract_temporal_chunk") as extract, \
-                 mock.patch.object(assembler, "_concat_video_chunks", side_effect=fake_concat) as concat, \
+                 mock.patch.object(assembler, "_extract_temporal_chunk", side_effect=fake_extract) as extract, \
+                 mock.patch.object(assembler, "_xfade_video_chunks", side_effect=fake_xfade) as xfade, \
+                 mock.patch.object(assembler, "_concat_video_chunks") as concat, \
+                 mock.patch.object(assembler, "_mux_source_audio", side_effect=fake_mux) as mux, \
                  mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=lambda _src, dst, *_args, **_kw: dst) as comfy_upscale, \
                  mock.patch.dict("os.environ", {
                      "TEMPORAL_VIDEO_UPSCALER_CMD": "",
                      "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "4",
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP": "0.5",
                  }, clear=False):
                 result = assembler.temporal_ai_upscale_video(
                     src,
@@ -157,7 +221,50 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(result, out)
             self.assertEqual(extract.call_count, 3)
             self.assertEqual(comfy_upscale.call_count, 3)
+            # Non-final chunks extend by the overlap so xfade can blend the same
+            # source-time region; final chunk is the remainder only.
+            self.assertEqual(extract_calls[0], (0.0, 4.5))
+            self.assertEqual(extract_calls[1], (4.0, 4.5))
+            self.assertEqual(extract_calls[2], (8.0, 1.0))
+            xfade.assert_called_once()
+            concat.assert_not_called()
+            mux.assert_called_once()
+
+    def test_chunked_upscale_hard_concats_when_overlap_disabled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+
+            def fake_concat(chunks, output_path):
+                self.assertEqual(len(chunks), 2)
+                output_path.write_bytes(b"joined")
+                return output_path
+
+            def fake_mux(video_path, source_path, output_path, target_duration=None):
+                output_path.write_bytes(b"muxed")
+                return output_path
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=7.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
+                 mock.patch.object(assembler, "_extract_temporal_chunk") as extract, \
+                 mock.patch.object(assembler, "_concat_video_chunks", side_effect=fake_concat) as concat, \
+                 mock.patch.object(assembler, "_xfade_video_chunks") as xfade, \
+                 mock.patch.object(assembler, "_mux_source_audio", side_effect=fake_mux), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=lambda _src, dst, *_args, **_kw: dst), \
+                 mock.patch.dict("os.environ", {
+                     "TEMPORAL_VIDEO_UPSCALER_CMD": "",
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "4",
+                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP": "0",
+                 }, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 1920, 1080, comfy_url="http://worker:8188",
+                )
+
+            self.assertEqual(extract.call_count, 2)
             concat.assert_called_once()
+            xfade.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -40,13 +40,12 @@ models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
 Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 
-The Remix screen's `Upscale video → AI temporal` mode runs as a packaged ComfyUI
-workflow on the render workers. The ComfyUI image installs Video Helper Suite,
-and `make install` downloads/syncs the LTX 2.3 spatial upscaler model with the
-rest of the default model set. Large finished MP4s are staged into the worker's
-ComfyUI input folder over SSH/Docker instead of uploaded through ComfyUI's HTTP
-upload route, so request-size limits do not apply. No manual command template is
-required.
+The Edit film screen's `Upscale video → AI temporal` mode runs Lightricks'
+LTX-2.3 IC-LoRA Pixel Spatial Upscaler on the render workers. The ComfyUI image
+installs Video Helper Suite and ComfyUI-LTXVideo; `make install` downloads the
+IC-LoRA 2×/4× weights (plus the latent spatial upscaler used in scene gen).
+Large finished MP4s are staged into the worker's ComfyUI input folder over
+SSH/Docker instead of HTTP upload. No manual command template is required.
 
 Re-deploy or add one host later (from the controller):
 

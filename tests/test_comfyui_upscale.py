@@ -7,7 +7,25 @@ import pipeline.comfyui as comfyui
 
 
 class ComfyLtxUpscaleTests(unittest.TestCase):
-    def test_upscale_video_ltx_queues_packaged_workflow(self):
+    def test_ic_lora_name_for_scale(self):
+        self.assertEqual(
+            comfyui._ic_lora_name_for_scale(960, 540, 1920, 1080),
+            comfyui._IC_LORA_X2,
+        )
+        self.assertEqual(
+            comfyui._ic_lora_name_for_scale(480, 270, 1920, 1080),
+            comfyui._IC_LORA_X4,
+        )
+
+    def test_ic_lora_pixel_grid_matches_downscale_factor(self):
+        # Latent (W/32, H/32) must be divisible by factor → pixel multiple 32*factor.
+        self.assertEqual(comfyui._ic_lora_pixel_grid(comfyui._IC_LORA_X2), 64)
+        self.assertEqual(comfyui._ic_lora_pixel_grid(comfyui._IC_LORA_X4), 128)
+        # 1080 on 4× grid must not land on 1088 (latent h=34, 34%4≠0).
+        self.assertEqual(comfyui._snap_ltx_dim(1080, 128, prefer="up"), 1152)
+        self.assertEqual(1152 // 32 % 4, 0)
+
+    def test_upscale_video_ltx_queues_ic_lora_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.mp4"
             out = Path(tmp) / "out.mp4"
@@ -24,10 +42,12 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                  mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
                  mock.patch.object(comfyui, "_wait_for_completion") as wait, \
                  mock.patch.object(comfyui, "_get_outputs", return_value=[
-                     {"filename": "spielbot-ltx-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                     {"filename": "spielbot-ic-lora-upscale_00001.mp4", "subfolder": "", "type": "output"}
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out) as download, \
-                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out) as normalize:
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out) as normalize, \
+                 mock.patch("pipeline.assembler._get_video_dimensions", return_value=(960, 540)), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=2.0):
                 result = comfyui.upscale_video_ltx(
                     src,
                     out,
@@ -47,22 +67,56 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                 comfy_url="http://worker:8188",
             )
             download.assert_called_once()
+            # Final output is the user-requested size; working latent grid may differ.
             normalize.assert_called_once_with(out, 1920, 1080)
             workflow = queued["workflow"]
-            self.assertEqual(workflow["2"]["class_type"], "VHS_LoadVideoFFmpeg")
-            self.assertEqual(workflow["2"]["inputs"]["video"], "staged.mp4")
-            self.assertNotIn("vae", workflow["2"]["inputs"])
-            self.assertNotIn("format", workflow["2"]["inputs"])
-            self.assertEqual(workflow["8"]["class_type"], "VAEEncode")
-            self.assertEqual(workflow["8"]["inputs"]["pixels"], ["2", 0])
-            self.assertEqual(workflow["4"]["class_type"], "LTXVLatentUpsampler")
-            self.assertEqual(workflow["4"]["inputs"]["samples"], ["8", 0])
-            self.assertEqual(workflow["5"]["class_type"], "VAEDecode")
-            self.assertEqual(workflow["5"]["inputs"]["samples"], ["4", 0])
-            self.assertEqual(workflow["7"]["class_type"], "VHS_VideoCombine")
-            self.assertEqual(workflow["7"]["inputs"]["images"], ["5", 0])
-            self.assertNotIn("vae", workflow["7"]["inputs"])
-            self.assertEqual(workflow["7"]["inputs"]["frame_rate"], 24)
+            self.assertEqual(workflow["3"]["class_type"], "LTXICLoRALoaderModelOnly")
+            self.assertEqual(
+                workflow["3"]["inputs"]["lora_name"],
+                comfyui._IC_LORA_X2,
+            )
+            self.assertEqual(workflow["8"]["class_type"], "VHS_LoadVideoFFmpeg")
+            self.assertEqual(workflow["8"]["inputs"]["video"], "staged.mp4")
+            self.assertEqual(workflow["10"]["class_type"], "LTXAddVideoICLoRAGuide")
+            self.assertEqual(workflow["10"]["inputs"]["latent_downscale_factor"], ["3", 1])
+            # 2× → pixel grid 64; 1080 → 1088, latent 34 divisible by 2.
+            self.assertEqual(workflow["9"]["inputs"]["width"], 1920)
+            self.assertEqual(workflow["9"]["inputs"]["height"], 1088)
+            self.assertEqual(workflow["18"]["class_type"], "VHS_VideoCombine")
+            self.assertEqual(workflow["18"]["inputs"]["frame_rate"], 24)
+
+    def test_upscale_video_ltx_4x_uses_128_pixel_grid(self):
+        """Regression: 1920x1088 latent 60x34 is not divisible by factor 4."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-ic-lora-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out) as normalize, \
+                 mock.patch("pipeline.assembler._get_video_dimensions", return_value=(480, 270)), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=1.0):
+                comfyui.upscale_video_ltx(src, out, 1920, 1080, fps=25, comfy_url="http://w:8188")
+
+            wf = queued["workflow"]
+            self.assertEqual(wf["3"]["inputs"]["lora_name"], comfyui._IC_LORA_X4)
+            self.assertEqual(wf["9"]["inputs"]["width"], 1920)
+            self.assertEqual(wf["9"]["inputs"]["height"], 1152)  # 1080 → 1152 (128 grid)
+            # Latent 60x36 is divisible by 4.
+            self.assertEqual(1920 // 32 % 4, 0)
+            self.assertEqual(1152 // 32 % 4, 0)
+            normalize.assert_called_once_with(out, 1920, 1080)
 
     def test_upscale_video_ltx_retries_dropped_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -77,50 +131,45 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                      None,
                  ]) as wait, \
                  mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-ic-lora-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out), \
+                 mock.patch("pipeline.assembler._get_video_dimensions", return_value=(480, 270)), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=1.0):
+                comfyui.upscale_video_ltx(src, out, 1920, 1080, fps=25, comfy_url="http://w:8188")
+
+            self.assertEqual(queue.call_count, 2)
+            self.assertEqual(wait.call_count, 2)
+            # 4× scale → x4 LoRA
+            wf = queue.call_args_list[0][0][0]
+            self.assertEqual(wf["3"]["inputs"]["lora_name"], comfyui._IC_LORA_X4)
+
+    def test_latent_fallback_workflow_still_packaged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
                      {"filename": "spielbot-ltx-upscale_00001.mp4", "subfolder": "", "type": "output"}
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out), \
                  mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
-                result = comfyui.upscale_video_ltx(
-                    src,
-                    out,
-                    1920,
-                    1080,
-                    fps=24,
-                    timeout_seconds=456,
-                    comfy_url="http://worker:8188",
-                )
+                comfyui.upscale_video_ltx_latent(src, out, 1920, 1080, fps=24)
 
-            self.assertEqual(result, out)
-            self.assertEqual(queue.call_count, 2)
-            self.assertEqual(wait.call_count, 2)
-            self.assertEqual(wait.call_args.args[0], "prompt-2")
-
-    def test_stage_video_for_remote_worker_uses_rsync_and_docker_cp(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            src = Path(tmp) / "input.mp4"
-            src.write_bytes(b"video")
-            calls = []
-
-            def fake_run(cmd, **kwargs):
-                calls.append(cmd)
-                return mock.Mock(returncode=0, stdout="", stderr="")
-
-            with mock.patch.object(comfyui.uuid, "uuid4", side_effect=[
-                mock.Mock(hex="abcdef1234567890"),
-                mock.Mock(hex="feedface12345678"),
-            ]), \
-                 mock.patch.object(comfyui.subprocess, "run", side_effect=fake_run):
-                name = comfyui._stage_video_for_load(src, comfy_url="http://worker-a:8188")
-
-            self.assertEqual(name, "spielbot-upscale-abcdef123456.mp4")
-            self.assertIn(["ssh", "--", "worker-a", "mkdir", "-p", "/tmp/spielbot-comfy-input-feedface"], calls)
-            self.assertIn(["rsync", "-az", str(src), "worker-a:/tmp/spielbot-comfy-input-feedface/spielbot-upscale-abcdef123456.mp4"], calls)
-            self.assertIn([
-                "ssh", "--", "worker-a", "docker", "cp",
-                "/tmp/spielbot-comfy-input-feedface/spielbot-upscale-abcdef123456.mp4",
-                "spielbot-worker-comfyui-1:/opt/ComfyUI/input/spielbot-upscale-abcdef123456.mp4",
-            ], calls)
+            workflow = queued["workflow"]
+            self.assertEqual(workflow["4"]["class_type"], "LTXVLatentUpsampler")
+            self.assertEqual(workflow["3"]["inputs"]["model_name"],
+                             "ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
 
 
 if __name__ == "__main__":

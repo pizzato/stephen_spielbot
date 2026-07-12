@@ -139,7 +139,10 @@ export const api = {
   selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),
   selectRemixVideo: (workDir, versionId) => req('POST', '/remix/video-select', { work_dir: workDir, version_id: versionId }),
 
-  getActivity: () => req('GET', '/activity'),
+  getActivity: ({ limit } = {}) => {
+    const q = limit ? `?limit=${encodeURIComponent(limit)}` : ''
+    return req('GET', `/activity${q}`)
+  },
   getBadges: () => req('GET', '/badges'),
   markSeen: (section) => req('POST', '/badges/seen', { section }),
 

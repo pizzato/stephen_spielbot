@@ -39,7 +39,15 @@ def _resolve_media_tool(name: str) -> str:
 
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
-_TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "4"))
+# Prefer whole-scene upscale. The LTX graph rejects >1000 frames (~40s at 25fps);
+# only clips longer than that are split. Override with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS
+# if a worker runs out of VRAM on long scenes. Overlapped xfade joins rare long clips.
+_LTX_UPSCALE_MAX_SECONDS = (1000 - 1) / 25.0  # matches pipeline.comfyui LTX_MAX_FRAMES / LTX_FPS
+_TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
+    "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
+    str(_LTX_UPSCALE_MAX_SECONDS),
+))
+_TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP", "0.5"))
 
 # Open-source attribution stamped into the published final video's container
 # metadata. A plain `comment` tag survives the downstream re-encode/upscale
@@ -200,12 +208,18 @@ def temporal_ai_upscale_video(
     command_template: str | None = None,
     timeout_seconds: int | None = None,
     comfy_url: str | None = None,
+    *,
+    engine: str = "ic_lora",
 ) -> Path:
-    """Run a temporal AI video upscaler.
+    """Run a ComfyUI (or custom CLI) AI video upscaler on one clip.
 
-    By default this uses the packaged ComfyUI LTX latent-upscale workflow. An
-    explicit command template remains supported as an advanced override for
-    existing installs that already configured one.
+    *engine*:
+      - ``ic_lora`` — Lightricks LTX-2.3 IC-LoRA Pixel Spatial Upscaler
+        (generative 2×/4×; https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler)
+      - ``ltx_latent`` — simpler LTXVLatentUpsampler + latent spatial-upscaler-x2 model
+
+    An explicit *command_template* (or TEMPORAL_VIDEO_UPSCALER_CMD) overrides both
+    and runs as a shell command instead.
     """
     actual_w, actual_h = _get_video_dimensions(input_path)
     if actual_w >= width and actual_h >= height:
@@ -213,37 +227,75 @@ def temporal_ai_upscale_video(
             f"Target {width}x{height} is not larger than source {actual_w}x{actual_h}."
         )
 
+    eng = (engine or "ic_lora").strip().lower()
+    if eng in {"temporal_ai", "ic-lora", "iclora"}:
+        eng = "ic_lora"
+    if eng in {"latent", "latent_ai", "ltx_latent_upsampler"}:
+        eng = "ltx_latent"
+    if eng not in {"ic_lora", "ltx_latent"}:
+        raise ValueError(f"Unknown AI upscale engine: {engine!r}")
+
     template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
     timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
     if not template.strip():
-        from pipeline.comfyui import upscale_video_ltx
+        from pipeline.comfyui import upscale_video_ltx, upscale_video_ltx_latent
 
         duration = _get_duration(input_path)
+        fps = _get_video_fps(input_path)
         chunk_seconds = max(1.0, float(os.environ.get(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
             str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
         )))
+        chunk_overlap = max(0.0, float(os.environ.get(
+            "TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP",
+            str(_TEMPORAL_UPSCALE_CHUNK_OVERLAP),
+        )))
+        # Overlap cannot exceed half the body or the xfade math collapses.
+        chunk_overlap = min(chunk_overlap, max(0.0, chunk_seconds * 0.45))
+        url = comfy_url or "http://localhost:8188"
+
+        def _comfy_upscale(inp, out, w, h, fps=fps, timeout_seconds=timeout, comfy_url=None, **_kw):
+            cu = comfy_url or url
+            if eng == "ltx_latent":
+                return upscale_video_ltx_latent(
+                    inp, out, w, h,
+                    fps=fps,
+                    timeout_seconds=timeout_seconds,
+                    comfy_url=cu,
+                )
+            return upscale_video_ltx(
+                inp, out, w, h,
+                fps=fps,
+                timeout_seconds=timeout_seconds,
+                comfy_url=cu,
+                source_width=actual_w,
+                source_height=actual_h,
+            )
+
         if duration > chunk_seconds + 0.25:
             return _chunked_comfy_temporal_upscale(
                 input_path,
                 output_path,
                 width,
                 height,
-                fps=_get_video_fps(input_path),
+                fps=fps,
                 timeout_seconds=timeout,
-                comfy_url=comfy_url or "http://localhost:8188",
+                comfy_url=url,
                 chunk_seconds=chunk_seconds,
-                upscale_fn=upscale_video_ltx,
+                overlap_seconds=chunk_overlap,
+                upscale_fn=_comfy_upscale,
             )
 
+        if eng == "ltx_latent":
+            return upscale_video_ltx_latent(
+                input_path, output_path, width, height,
+                fps=fps, timeout_seconds=timeout, comfy_url=url,
+            )
         return upscale_video_ltx(
-            input_path,
-            output_path,
-            width,
-            height,
-            fps=_get_video_fps(input_path),
-            timeout_seconds=timeout,
-            comfy_url=comfy_url or "http://localhost:8188",
+            input_path, output_path, width, height,
+            fps=fps, timeout_seconds=timeout, comfy_url=url,
+            source_width=actual_w, source_height=actual_h,
+            duration_seconds=duration,
         )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -261,8 +313,8 @@ def temporal_ai_upscale_video(
         raise RuntimeError("Temporal AI upscaler command is empty.")
 
     logger.info(
-        "[upscale] temporal_ai: %dx%d -> %dx%d (%s)",
-        actual_w, actual_h, width, height, input_path.name,
+        "[upscale] %s (cli): %dx%d -> %dx%d (%s)",
+        eng, actual_w, actual_h, width, height, input_path.name,
     )
     _run(cmd, timeout=timeout, max_retries=1)
     if not output_path.exists() or output_path.stat().st_size == 0:
@@ -281,24 +333,39 @@ def _chunked_comfy_temporal_upscale(
     comfy_url: str,
     chunk_seconds: float,
     upscale_fn,
+    overlap_seconds: float = 0.5,
 ) -> Path:
-    """Upscale long videos in bounded chunks so ComfyUI does not hold all frames."""
+    """Upscale long videos in bounded chunks so ComfyUI does not hold all frames.
+
+    Chunks share a short trailing/leading overlap that is crossfaded so
+    generative (IC-LoRA) and latent upscalers don't leave a hard cut every
+    *chunk_seconds*. Video is upscaled without audio; the source audio is
+    remuxed onto the joined result so voice/music stay continuous.
+    """
     output_path.parent.mkdir(parents=True, exist_ok=True)
     duration = _get_duration(input_path)
-    n_chunks = max(1, int((duration + chunk_seconds - 0.001) // chunk_seconds))
+    body = max(1.0, float(chunk_seconds))
+    overlap = max(0.0, min(float(overlap_seconds), body * 0.45))
+    n_chunks = max(1, int((duration + body - 0.001) // body))
     logger.info(
-        "[comfy] chunked temporal upscale: %.1fs in %d chunks of %.1fs",
-        duration, n_chunks, chunk_seconds,
+        "[comfy] chunked temporal upscale: %.1fs in %d chunks of %.1fs (overlap %.2fs)",
+        duration, n_chunks, body, overlap,
     )
     with tempfile.TemporaryDirectory(prefix="spielbot-upscale-", dir=str(output_path.parent)) as tmp:
         tmp_dir = Path(tmp)
         upscaled: list[Path] = []
         for idx in range(n_chunks):
-            start = idx * chunk_seconds
+            start = idx * body
             remaining = max(0.0, duration - start)
-            if remaining <= 0:
+            if remaining <= 0.01:
                 break
-            segment_duration = min(chunk_seconds, remaining)
+            is_last = idx == n_chunks - 1 or remaining <= body + 0.05
+            # Non-final chunks extend past the body by *overlap* so the next
+            # chunk can xfade over the same source-time region (aligned).
+            if is_last:
+                segment_duration = remaining
+            else:
+                segment_duration = min(body + overlap, remaining)
             src_chunk = tmp_dir / f"chunk_{idx:04d}.mp4"
             out_chunk = tmp_dir / f"chunk_{idx:04d}.upscaled.mp4"
             _extract_temporal_chunk(input_path, src_chunk, start, segment_duration)
@@ -312,22 +379,32 @@ def _chunked_comfy_temporal_upscale(
                 comfy_url=comfy_url,
             )
             upscaled.append(out_chunk)
+            if is_last:
+                break
         if not upscaled:
             raise RuntimeError("Temporal AI upscaler did not produce any chunks.")
-        _concat_video_chunks(upscaled, output_path)
+        video_only = tmp_dir / "joined.video.mp4"
+        if len(upscaled) == 1 or overlap <= 0.001:
+            _concat_video_chunks(upscaled, video_only)
+        else:
+            _xfade_video_chunks(upscaled, video_only, body_seconds=body, overlap_seconds=overlap)
+        _mux_source_audio(video_only, input_path, output_path, target_duration=duration)
     return output_path
 
 
 def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, duration: float) -> Path:
+    """Extract a video-only segment (frame-accurate) for ComfyUI upscaling."""
+    # -ss after -i is slower but frame-accurate — hard cuts at chunk boundaries
+    # were worsened by keyframe-inaccurate input seeking.
     _run([
         _FFMPEG, "-y",
-        "-ss", f"{start:.3f}",
         "-i", str(input_path),
+        "-ss", f"{start:.3f}",
         "-t", f"{duration:.3f}",
         "-map", "0:v:0",
-        "-map", "0:a?",
+        "-an",
         "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
-        "-c:a", "aac", "-b:a", "192k",
+        "-pix_fmt", "yuv420p",
         "-movflags", "+faststart",
         str(output_path),
     ], timeout=1800)
@@ -351,6 +428,124 @@ def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
         ], timeout=1800)
     finally:
         list_path.unlink(missing_ok=True)
+    return output_path
+
+
+def _xfade_video_chunks(
+    chunks: list[Path],
+    output_path: Path,
+    *,
+    body_seconds: float,
+    overlap_seconds: float,
+) -> Path:
+    """Join upscaled chunks with an xfade over the shared source-time overlap.
+
+    Each non-final chunk is body+overlap long and starts at i*body; the next
+    chunk starts at (i+1)*body. Crossfading for *overlap_seconds* at offset
+    *body_seconds* therefore blends two independent upscales of the same
+    source interval, preserving total duration.
+    """
+    if len(chunks) == 1:
+        shutil.copy2(chunks[0], output_path)
+        return output_path
+
+    fade = max(0.05, float(overlap_seconds))
+    durs = [_get_duration(p) for p in chunks]
+
+    inputs: list[str] = []
+    for p in chunks:
+        inputs.extend(["-i", str(p)])
+
+    filters: list[str] = []
+    # Running length of the joined stream before the next xfade.
+    # First xfade: offset ≈ body (start of shared region on chunk 0).
+    # Next offset = previous_length - fade (measured from durations).
+    prev_label = "0:v"
+    acc_len = durs[0]
+    for i in range(1, len(chunks)):
+        join_fade = min(fade, durs[i] - 0.05, acc_len - 0.05)
+        if join_fade < 0.05:
+            # Degenerate short chunk — hard-append via concat filter.
+            out_label = f"v{i}"
+            filters.append(
+                f"[{prev_label}][{i}:v]concat=n=2:v=1:a=0[{out_label}]"
+            )
+            acc_len = acc_len + durs[i]
+            prev_label = out_label
+            continue
+        offset = max(0.0, acc_len - join_fade)
+        out_label = f"v{i}"
+        filters.append(
+            f"[{prev_label}][{i}:v]xfade=transition=fade:duration={join_fade:.3f}:offset={offset:.3f}[{out_label}]"
+        )
+        acc_len = acc_len + durs[i] - join_fade
+        prev_label = out_label
+
+    _run([
+        _FFMPEG, "-y",
+        *inputs,
+        "-filter_complex", ";".join(filters),
+        "-map", f"[{prev_label}]",
+        "-an",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(output_path),
+    ], timeout=3600)
+    return output_path
+
+
+def _has_audio_stream(path: Path) -> bool:
+    result = subprocess.run(
+        [
+            _FFPROBE, "-v", "error",
+            "-select_streams", "a:0",
+            "-show_entries", "stream=index",
+            "-of", "csv=p=0",
+            str(path),
+        ],
+        capture_output=True, text=True, timeout=30,
+    )
+    return bool((result.stdout or "").strip())
+
+
+def _mux_source_audio(
+    video_path: Path,
+    source_path: Path,
+    output_path: Path,
+    *,
+    target_duration: float | None = None,
+) -> Path:
+    """Attach the original clip's audio to an upscaled video-only stream.
+
+    Re-using the pre-upscale audio avoids clicks/gaps from per-chunk AAC
+    re-encodes. Duration is clamped to the source so lip-sync stays intact.
+    """
+    dur = target_duration if target_duration is not None else _get_duration(source_path)
+    if not _has_audio_stream(source_path):
+        _run([
+            _FFMPEG, "-y",
+            "-i", str(video_path),
+            "-t", f"{dur:.3f}",
+            "-c:v", "copy",
+            "-an",
+            "-movflags", "+faststart",
+            str(output_path),
+        ], timeout=1800)
+        return output_path
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(video_path),
+        "-i", str(source_path),
+        "-map", "0:v:0",
+        "-map", "1:a:0?",
+        "-t", f"{dur:.3f}",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-shortest",
+        "-movflags", "+faststart",
+        str(output_path),
+    ], timeout=1800)
     return output_path
 
 

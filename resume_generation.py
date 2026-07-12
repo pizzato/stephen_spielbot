@@ -116,7 +116,7 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     try:
         if backend == "claude" and cfg.get("claude_api_key"):
             _fill_via_claude(scenes, title, video_title, cfg)
-        elif backend == "grok":
+        elif backend in ("grok", "openai"):
             _fill_via_chat(scenes, title, video_title, cfg)
         else:
             _fill_via_local(scenes, title, video_title, cfg)
@@ -212,7 +212,8 @@ def _fill_via_chat(scenes: list[Scene], title: str, video_title: str, cfg: dict)
                 max_tokens=400,
                 label=f"heal scene {s.id}",
             )
-            _apply_heal_json(s, text, label="Grok")
+            label = (cfg.get("llm_backend") or "chat").capitalize()
+            _apply_heal_json(s, text, label=label)
         except Exception as exc:
             logger.warning("Self-heal: chat fill failed for scene %d: %s", s.id, exc)
 

@@ -49,6 +49,7 @@ from pipeline.llm import generate_script, generate_video_suggestions, Scene  # n
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
+from pipeline import film_timing  # noqa: E402
 from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
@@ -193,27 +194,29 @@ def _script_characters_payload(wd: Path) -> list[dict]:
 
 
 # ── activity tracker ─────────────────────────────────────────────────────────
+# Live ops + durable history for the Activity screen. History survives restarts
+# (JSON under ~/.local/share/video-generator/). Events are grouped by film when
+# a work_dir is known; low-value background work is marked noise for UI fold-up.
 
 _op_lock = threading.Lock()
-_current_ops: dict = {}   # op_id -> {name, detail, started_at}
-_activity_log: list = []  # [{name, detail, ts, duration_s}], newest first, max 20
+_current_ops: dict = {}   # op_id -> live event dict
+# Concurrent worker sub-jobs *within* a single film task — e.g. every scene of a
+# parallel final upscale, which otherwise share one _film_tasks entry and show as
+# a single flickering status. Surfaced on /api/activity so each busy worker is
+# visible with its own ETA; deliberately ignored by /api/films/task(s), which
+# track the parent task. Keyed by a stable sub-job id; guarded by _op_lock.
+_film_subjobs: dict = {}  # subjob_id -> live sub-job dict
+_activity_log: list = []  # completed events, newest first
+_ACTIVITY_LOG_MAX = 200
+_ACTIVITY_LOG_PATH = Path.home() / ".local" / "share" / "video-generator" / "activity_log.json"
+_activity_log_loaded = False
 
-
-@contextmanager
-def _track_op(name: str, detail: str = ""):
-    started = time.time()
-    op_id = uuid.uuid4().hex
-    with _op_lock:
-        _current_ops[op_id] = {"name": name, "detail": detail, "started_at": started}
-    try:
-        yield
-    finally:
-        end = time.time()
-        with _op_lock:
-            _current_ops.pop(op_id, None)
-            _append_activity_locked(name, detail, end, started)
-            del _activity_log[20:]
-
+# Names that are useful for debugging but noisy on the Activity screen.
+_NOISE_OP_NAMES = frozenset({
+    "Automation tick",
+    "Fetching comments",
+    "Fetching X mentions",
+})
 
 # Live sub-phase labels for film edit tasks (keyed by _film_tasks["step"]).
 _RERENDER_STEP_LABELS = {
@@ -227,11 +230,178 @@ _RERENDER_STEP_LABELS = {
 }
 
 
-def _append_activity_locked(name: str, detail: str, end: float, started: float) -> None:
-    _activity_log.insert(0, {
-        "name": name, "detail": detail,
-        "ts": end, "duration_s": round(max(0.0, end - started), 1),
-    })
+def _activity_category(name: str) -> str:
+    n = (name or "").lower()
+    if "automation" in n:
+        return "automation"
+    if any(k in n for k in ("upscal", "re-render", "rerender", "narrator", "music", "remix", "film", "assemble")):
+        return "film"
+    if any(k in n for k in ("render", "generat", "script", "preview", "scene")):
+        return "script" if "script" in n else "render"
+    if any(k in n for k in ("youtube", "upload", "x ", "posting", "comment", "mention", "thumbnail", "description", "title")):
+        return "publish"
+    if any(k in n for k in ("engagement", "voice", "suggestion")):
+        return "system"
+    return "other"
+
+
+def _activity_is_noise(name: str, category: str = "") -> bool:
+    if (name or "") in _NOISE_OP_NAMES:
+        return True
+    return category == "automation"
+
+
+def _activity_group_for(work_dir: str = "", title: str = "", *, noise: bool = False, category: str = "") -> tuple[str, str]:
+    """Return (group_key, group_label) for collapse/expand in the UI."""
+    if noise or category == "automation":
+        return "noise", "Background & automation"
+    wd = (work_dir or "").strip()
+    if wd:
+        key = Path(wd).name
+        label = (title or "").strip() or key
+        return f"film:{key}", label
+    if category in {"publish", "system", "other"}:
+        return f"cat:{category}", category.replace("_", " ").title()
+    return "system", "System"
+
+
+def _make_activity_event(
+    *,
+    name: str,
+    detail: str = "",
+    started_at: float | None = None,
+    finished_at: float | None = None,
+    status: str = "done",
+    work_dir: str = "",
+    title: str = "",
+    pct: float | int | None = None,
+    eta_text: str | None = None,
+    eta_seconds: float | None = None,
+    event_id: str | None = None,
+    category: str | None = None,
+) -> dict:
+    now = time.time()
+    started = float(started_at or finished_at or now)
+    finished = finished_at
+    cat = category or _activity_category(name)
+    noise = _activity_is_noise(name, cat)
+    # Prefer a real film title when we only have a work_dir.
+    film_title = (title or "").strip()
+    if work_dir and not film_title:
+        try:
+            film_title = _video_title_for(Path(work_dir))
+        except Exception:
+            film_title = Path(work_dir).name
+    group_key, group_label = _activity_group_for(
+        work_dir, film_title, noise=noise, category=cat,
+    )
+    duration_s = None
+    elapsed_s = None
+    if finished is not None:
+        duration_s = round(max(0.0, float(finished) - started), 1)
+    else:
+        elapsed_s = round(max(0.0, now - started), 1)
+    ev = {
+        "id": event_id or uuid.uuid4().hex,
+        "name": name,
+        "detail": detail or "",
+        "category": cat,
+        "noise": noise,
+        "group_key": group_key,
+        "group_label": group_label,
+        "work_dir": work_dir or "",
+        "title": film_title or "",
+        "status": status,
+        "started_at": started,
+        "ts": float(finished if finished is not None else now),
+        "duration_s": duration_s,
+        "elapsed_s": elapsed_s,
+        "pct": int(round(pct)) if pct is not None else None,
+        "eta_text": eta_text,
+        "eta_seconds": eta_seconds,
+    }
+    return ev
+
+
+def _load_activity_log() -> None:
+    global _activity_log_loaded, _activity_log
+    if _activity_log_loaded:
+        return
+    _activity_log_loaded = True
+    try:
+        if _ACTIVITY_LOG_PATH.exists():
+            data = json.loads(_ACTIVITY_LOG_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                _activity_log = [e for e in data if isinstance(e, dict)][:_ACTIVITY_LOG_MAX]
+    except Exception:
+        _activity_log = list(_activity_log)
+
+
+def _persist_activity_log_locked() -> None:
+    try:
+        _ACTIVITY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _ACTIVITY_LOG_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(_activity_log[:_ACTIVITY_LOG_MAX], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(_ACTIVITY_LOG_PATH)
+    except Exception:
+        pass
+
+
+def _append_activity_locked(
+    name: str,
+    detail: str,
+    end: float,
+    started: float,
+    *,
+    work_dir: str = "",
+    title: str = "",
+    status: str = "done",
+    category: str | None = None,
+) -> None:
+    _load_activity_log()
+    ev = _make_activity_event(
+        name=name,
+        detail=detail,
+        started_at=started,
+        finished_at=end,
+        status=status,
+        work_dir=work_dir,
+        title=title,
+        category=category,
+    )
+    _activity_log.insert(0, ev)
+    del _activity_log[_ACTIVITY_LOG_MAX:]
+    _persist_activity_log_locked()
+
+
+@contextmanager
+def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = ""):
+    started = time.time()
+    op_id = uuid.uuid4().hex
+    with _op_lock:
+        _load_activity_log()
+        _current_ops[op_id] = _make_activity_event(
+            name=name,
+            detail=detail,
+            started_at=started,
+            status="running",
+            work_dir=work_dir,
+            title=title,
+            event_id=op_id,
+        )
+    try:
+        yield
+    finally:
+        end = time.time()
+        with _op_lock:
+            _current_ops.pop(op_id, None)
+            _append_activity_locked(
+                name, detail, end, started,
+                work_dir=work_dir, title=title, status="done",
+            )
 
 
 def _film_task_started_at(task_id: str) -> float:
@@ -246,8 +416,67 @@ def _film_task_started_at(task_id: str) -> float:
         return 0.0
 
 
+def _film_job_dims(work_dir: str) -> tuple[int | None, int | None]:
+    """Output (width, height) for a film's scenes, for resolution-keyed ETAs."""
+    if not work_dir:
+        return None, None
+    try:
+        jc = _film_job_config(Path(work_dir))
+    except Exception:
+        return None, None
+    dims = gapp._RESOLUTIONS.get((jc.get("resolution") or "").strip())
+    if dims:
+        return int(dims[0]), int(dims[1])
+    w, h = jc.get("vid_width"), jc.get("vid_height")
+    if w and h:
+        try:
+            return int(w), int(h)
+        except (TypeError, ValueError):
+            return None, None
+    return None, None
+
+
+def _film_op_for(component: str) -> str:
+    """Learned-timing op key for a film task's component (empty = don't estimate)."""
+    if component == "narrator":
+        return "narrator_scene"
+    if component == "music":
+        return "music_regen"
+    if component in ("narration", "image", "video"):
+        return f"rerender_{component}"
+    return ""
+
+
+def _film_task_eta(component: str, task: dict, started: float, dims: tuple) -> tuple:
+    """(eta_text, eta_seconds) for a running film task from learned durations.
+
+    Single-shot ops (scene re-render, music) count down from their learned
+    average as they run; the narrator change is sequential across scenes, so its
+    ETA is the per-scene average times the scenes still to go."""
+    op = _film_op_for(component)
+    if not op:
+        return None, None
+    w, h = dims
+    est, _learned = film_timing.estimate(op, width=w, height=h)
+    if op == "narrator_scene":
+        try:
+            total, current = int(task.get("total") or 0), int(task.get("current") or 0)
+        except (TypeError, ValueError):
+            total = current = 0
+        remaining_scenes = max(1, total - current + 1) if total else 1
+        remaining = est * remaining_scenes
+    else:
+        remaining = max(3.0, est - max(0.0, time.time() - started))
+    return humanize_eta(remaining), round(remaining)
+
+
 def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     if task.get("status") != "running":
+        return None
+    # The parallel scene upscale surfaces one sub-job per busy worker (see
+    # _film_subjobs); skip the coarse parent while its workers fan out so the
+    # screen shows every scene, not one flickering "Upscaling scene N".
+    if task.get("fanout"):
         return None
 
     meta = _film_task_meta.get(task_id) or {}
@@ -255,6 +484,7 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     started = _film_task_started_at(task_id) or time.time()
     step = str(task.get("step") or component or "").strip()
     detail = _RERENDER_STEP_LABELS.get(step, step)
+    work_dir = str(meta.get("work_dir") or "")
 
     scene_id = int(meta.get("scene_id") or task.get("scene_id") or 0)
     if task_id.startswith("rerender_") and not scene_id:
@@ -265,9 +495,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
             except ValueError:
                 scene_id = 0
     if scene_id > 0 and component != "narrator":
-        return {"name": f"Re-rendering scene {scene_id}", "detail": detail, "started_at": started}
-
-    if component == "final_upscale" or task_id.startswith("final_upscale_"):
+        name = f"Re-rendering scene {scene_id}"
+    elif component == "final_upscale" or task_id.startswith("final_upscale_"):
         name = "Upscaling final video"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
@@ -279,11 +508,86 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     else:
         name = "Updating film"
 
-    work_dir = str(meta.get("work_dir") or "")
+    title = ""
     if work_dir:
-        film = Path(work_dir).name
-        detail = f"{detail} · {film}" if detail else film
-    return {"name": name, "detail": detail, "started_at": started}
+        try:
+            title = _video_title_for(Path(work_dir))
+        except Exception:
+            title = Path(work_dir).name
+        if not detail:
+            detail = title
+        elif title and title not in detail:
+            detail = f"{detail} · {title}"
+
+    pct = task.get("pct")
+    if pct is None and task.get("current") and task.get("total"):
+        try:
+            pct = 100.0 * float(task["current"]) / max(1.0, float(task["total"]))
+        except (TypeError, ValueError):
+            pct = None
+
+    eta_text, eta_seconds = _film_task_eta(component, task, started, _film_job_dims(work_dir))
+
+    return _make_activity_event(
+        name=name,
+        detail=detail,
+        started_at=started,
+        status="running",
+        work_dir=work_dir,
+        title=title,
+        pct=pct,
+        eta_text=eta_text,
+        eta_seconds=eta_seconds,
+        event_id=f"film:{task_id}",
+        category="film",
+    )
+
+
+def _register_film_subjob(subjob_id: str, **fields) -> None:
+    with _op_lock:
+        _film_subjobs[subjob_id] = {"id": subjob_id, "started_at": time.time(), **fields}
+
+
+def _clear_film_subjob(subjob_id: str) -> None:
+    with _op_lock:
+        _film_subjobs.pop(subjob_id, None)
+
+
+def _clear_film_subjobs_for(task_id: str) -> None:
+    """Drop any leftover sub-jobs for a task (e.g. after it errors mid fan-out)."""
+    prefix = f"{task_id}#"
+    with _op_lock:
+        for k in [k for k in _film_subjobs if k.startswith(prefix)]:
+            _film_subjobs.pop(k, None)
+
+
+def _film_subjob_activity_ops() -> list[dict]:
+    """Live activity events for concurrent worker sub-jobs (parallel upscale)."""
+    with _op_lock:
+        subs = [dict(s) for s in _film_subjobs.values()]
+    ops: list[dict] = []
+    now = time.time()
+    for s in subs:
+        started = float(s.get("started_at") or now)
+        est = s.get("est_seconds")
+        eta_text = eta_seconds = None
+        if est:
+            remaining = max(3.0, float(est) - max(0.0, now - started))
+            eta_text, eta_seconds = humanize_eta(remaining), round(remaining)
+        ops.append(_make_activity_event(
+            name=s.get("name") or "Working",
+            detail=s.get("detail") or "",
+            started_at=started,
+            status="running",
+            work_dir=s.get("work_dir") or "",
+            title=s.get("title") or "",
+            pct=s.get("pct"),
+            eta_text=eta_text,
+            eta_seconds=eta_seconds,
+            event_id=s.get("id"),
+            category="film",
+        ))
+    return ops
 
 
 def _record_film_task_activity(
@@ -299,13 +603,127 @@ def _record_film_task_activity(
     status = (_film_tasks.get(task_id) or {}).get("status")
     if status == "error":
         name = failed_name
+        st = "error"
     elif status == "cancelled":
         name = cancelled_name
+        st = "cancelled"
     else:
         name = done_name
+        st = "done"
+    meta = _film_task_meta.get(task_id) or {}
+    work_dir = str(meta.get("work_dir") or "")
+    title = ""
+    if work_dir:
+        try:
+            title = _video_title_for(Path(work_dir))
+        except Exception:
+            title = Path(work_dir).name
+    # Feed the learned-duration model so this op predicts its own ETA next time.
+    if st == "done":
+        component = str(meta.get("component") or "").strip()
+        if component == "music":
+            film_timing.record("music_regen", end - started)
+        elif component == "narrator":
+            n = int((_film_tasks.get(task_id) or {}).get("scene_count") or 0)
+            if n > 0:
+                film_timing.record("narrator_scene", (end - started) / n)
     with _op_lock:
-        _append_activity_locked(name, detail, end, started)
-        del _activity_log[20:]
+        _append_activity_locked(
+            name, detail, end, started,
+            work_dir=work_dir, title=title, status=st, category="film",
+        )
+
+
+def _live_render_activity_items() -> list[dict]:
+    """Running durable generation jobs with progress % and learned ETAs."""
+    items: list[dict] = []
+    try:
+        if not gapp._is_job_running():
+            return items
+        wd = gapp._preferred_work_dir("")
+        if wd is None:
+            return items
+        pct, msg = gapp._status_for_work_dir(wd)
+        title = wd.name
+        eta_text, eta_seconds = None, None
+        started_at = None
+        store = DurableStore.default()
+        try:
+            job_row = store.get_job_by_work_dir(str(wd))
+            if job_row is not None:
+                job = _row_to_dict(job_row)
+                title = job.get("title") or title
+                try:
+                    started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
+                except (TypeError, ValueError):
+                    started_at = None
+                tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+                cfg = gapp.load_config()
+                timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+                reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+                try:
+                    eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=reserved)
+                    if eta:
+                        eta_text = eta.get("eta_text")
+                        eta_seconds = eta.get("eta_seconds")
+                except Exception:
+                    pass
+        finally:
+            store.close()
+        items.append(_make_activity_event(
+            name="Rendering film",
+            detail=msg or title,
+            started_at=started_at or time.time(),
+            status="running",
+            work_dir=str(wd),
+            title=title,
+            pct=pct,
+            eta_text=eta_text,
+            eta_seconds=eta_seconds,
+            event_id=f"render:{wd.name}",
+            category="render",
+        ))
+    except Exception:
+        pass
+    return items
+
+
+def _group_activity_events(events: list[dict]) -> list[dict]:
+    """Nest flat events under collapsible groups (film / noise / system)."""
+    order: list[str] = []
+    buckets: dict[str, dict] = {}
+    for ev in events:
+        key = str(ev.get("group_key") or "system")
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = {
+                "key": key,
+                "label": ev.get("group_label") or key,
+                "work_dir": ev.get("work_dir") or "",
+                "title": ev.get("title") or "",
+                "noise": bool(ev.get("noise")),
+                "live_count": 0,
+                "items": [],
+            }
+        g = buckets[key]
+        g["items"].append(ev)
+        if ev.get("status") == "running":
+            g["live_count"] += 1
+        # Prefer a non-empty film title/work_dir on the group header.
+        if not g["work_dir"] and ev.get("work_dir"):
+            g["work_dir"] = ev["work_dir"]
+        if not g["title"] and ev.get("title"):
+            g["title"] = ev["title"]
+            if not str(g["label"]).startswith("Background"):
+                g["label"] = ev["title"]
+    groups = [buckets[k] for k in order]
+    # Live film groups first, then other live, then noise last among idle.
+    def _sort_key(g: dict) -> tuple:
+        live = 1 if g["live_count"] else 0
+        noise = 1 if g["noise"] else 0
+        return (-live, noise, g["label"].lower())
+    groups.sort(key=_sort_key)
+    return groups
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -1083,12 +1501,14 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         scenes_list.append(row)
     gapp._persist_script_snapshot(work_dir, scenes_list)
 
-    # Persist the 0-2 main characters the LLM identified for THIS script (living
-    # in the work dir, not the global catalogue) and render their look images in
-    # the background so the editor's Characters tab shows them ready to accept or
-    # edit. Best-effort: skipped/partial when no worker is up (editor offers a
-    # manual "Generate look").
-    saved_characters = gapp._write_script_characters(work_dir, characters)
+    # Persist only NEW cast members as per-script characters. Any LLM-identified
+    # figure that already exists in the style's global catalogue is skipped so
+    # the catalogue look/description is not shadowed by a fresh script entry
+    # (see app._filter_identified_against_style / _job_characters).
+    # Render look images in the background for the new ones; best-effort when
+    # no worker is up (editor offers a manual "Generate look").
+    new_characters = gapp._filter_identified_against_style(characters, cfg, ss["name"])
+    saved_characters = gapp._write_script_characters(work_dir, new_characters)
     if saved_characters:
         threading.Thread(
             target=gapp.generate_all_script_portraits,
@@ -2775,9 +3195,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         target_dims = gapp._RESOLUTIONS.get((target_name or "").strip())
         if not target_dims:
             raise RuntimeError("Choose a valid upscale resolution.")
-        mode = (upscale_mode or "fast").strip().lower()
-        if mode not in {"fast", "temporal_ai"}:
-            raise RuntimeError("Choose a valid upscale mode.")
+        mode = _normalize_upscale_mode(upscale_mode)
 
         target_w, target_h = target_dims
         actual_w, actual_h = _get_video_dimensions(final_path)
@@ -2789,17 +3207,24 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         final_video_history.seed_if_empty(wd, final_path, "Original")
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
-        if mode == "temporal_ai":
+        if mode in {"ic_lora", "ltx_latent"}:
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
             _temporal_upscale_scenes_to_final(
-                task_id, wd, staged, target_w, target_h, cfg, command_template=command_template
+                task_id, wd, staged, target_w, target_h, cfg,
+                command_template=command_template,
+                engine=mode,
             )
         else:
             upscale_video(final_path, staged, target_w, target_h)
 
         _film_checkpoint(task_id)
         staged.replace(final_path)
-        label = f"{'AI temporal' if mode == 'temporal_ai' else 'Fast'} {target_w}x{target_h}"
+        mode_label = {
+            "fast": "Fast",
+            "ltx_latent": "LTX latent",
+            "ic_lora": "LTX IC-LoRA",
+        }.get(mode, mode)
+        label = f"{mode_label} {target_w}x{target_h}"
         final_video_history.record(wd, final_path, label=label)
         _film_tasks[task_id] = {
             "status": "done",
@@ -2838,6 +3263,24 @@ def _rendered_scene_finals(wd: Path) -> list[Path]:
     )
 
 
+def _normalize_upscale_mode(mode: str | None) -> str:
+    """Map UI/API upscale mode strings to canonical keys.
+
+    - fast: ffmpeg scale (simple)
+    - ltx_latent: LTXVLatentUpsampler + latent spatial-upscaler-x2
+    - ic_lora: LTX-2.3 IC-LoRA Pixel Spatial Upscaler (generative)
+    ``temporal_ai`` is accepted as an alias of ``ic_lora`` for older clients.
+    """
+    m = (mode or "fast").strip().lower()
+    if m in {"ic_lora", "temporal_ai", "ic-lora", "iclora", "ai_temporal"}:
+        return "ic_lora"
+    if m in {"ltx_latent", "latent", "latent_ai", "simple_model"}:
+        return "ltx_latent"
+    if m in {"fast", "ffmpeg"}:
+        return "fast"
+    raise RuntimeError("Choose a valid upscale mode (fast, ltx_latent, or ic_lora).")
+
+
 def _temporal_upscale_scenes_to_final(
     task_id: str,
     wd: Path,
@@ -2846,6 +3289,7 @@ def _temporal_upscale_scenes_to_final(
     target_h: int,
     cfg: dict,
     command_template: str | None = None,
+    engine: str = "ic_lora",
 ) -> Path:
     """Upscale rendered scene clips as separate worker jobs, then rebuild final."""
     import concurrent.futures
@@ -2860,28 +3304,45 @@ def _temporal_upscale_scenes_to_final(
 
     worker_urls = [] if command_template else gapp._preview_worker_urls()
     if not command_template and not worker_urls:
-        raise RuntimeError("No ComfyUI workers reachable for temporal AI upscale.")
+        raise RuntimeError("No ComfyUI workers reachable for AI upscale.")
 
     timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
     pool = WorkerPool(worker_urls) if worker_urls else None
+    n_scenes = len(scene_finals)
+    try:
+        film_title = _video_title_for(wd)
+    except Exception:
+        film_title = wd.name
+    per_scene_est, _learned = film_timing.estimate("upscale_scene", width=target_w, height=target_h)
     tmp_root = wd / "final_upscale_scenes"
     tmp_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="run-", dir=str(tmp_root)) as tmp:
         tmp_dir = Path(tmp)
-        upscaled_by_index: list[Path | None] = [None] * len(scene_finals)
+        upscaled_by_index: list[Path | None] = [None] * n_scenes
+        # Parent stays an aggregate (fanout) while each scene shows as its own
+        # sub-job below, so the Activity screen lists every busy worker instead of
+        # one flickering "Upscaling scene N". _film_tasks still drives the Remix
+        # poll (step stays "final_upscale"); current/total give it scene progress.
+        _film_tasks[task_id] = {
+            "status": "running", "step": "final_upscale", "fanout": True,
+            "current": 0, "total": n_scenes,
+        }
 
         def upscale_one(index: int, scene_path: Path) -> tuple[int, Path]:
             _film_checkpoint(task_id)
+            sub_id = f"film:{task_id}#s{index + 1}"
+            _register_film_subjob(
+                sub_id,
+                name=f"Upscaling scene {index + 1}/{n_scenes}",
+                detail=f"{engine} → {target_w}×{target_h}",
+                work_dir=str(wd),
+                title=film_title,
+                est_seconds=per_scene_est,
+            )
+            sub_started = time.time()
             url = pool.acquire() if pool else None
             try:
                 out = tmp_dir / f"{scene_path.stem}.upscaled.mp4"
-                _film_tasks[task_id] = {
-                    "status": "running",
-                    "step": "final_upscale",
-                    "scene_id": index + 1,
-                    "current": index + 1,
-                    "total": len(scene_finals),
-                }
                 temporal_ai_upscale_video(
                     scene_path,
                     out,
@@ -2890,27 +3351,42 @@ def _temporal_upscale_scenes_to_final(
                     command_template=command_template,
                     timeout_seconds=timeout,
                     comfy_url=url,
+                    engine=engine,
+                )
+                film_timing.record(
+                    "upscale_scene", time.time() - sub_started,
+                    width=target_w, height=target_h,
                 )
                 return index, out
             finally:
+                _clear_film_subjob(sub_id)
                 if pool and url:
                     pool.release(url)
 
         if command_template:
-            max_workers = min(max(1, int(cfg.get("temporal_video_upscaler_jobs") or 1)), len(scene_finals))
+            max_workers = min(max(1, int(cfg.get("temporal_video_upscaler_jobs") or 1)), n_scenes)
         else:
-            max_workers = min(len(worker_urls), len(scene_finals))
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [
-                executor.submit(upscale_one, idx, scene_path)
-                for idx, scene_path in enumerate(scene_finals)
-            ]
-            for fut in concurrent.futures.as_completed(futures):
-                idx, out = fut.result()
-                upscaled_by_index[idx] = out
+            max_workers = min(len(worker_urls), n_scenes)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [
+                    executor.submit(upscale_one, idx, scene_path)
+                    for idx, scene_path in enumerate(scene_finals)
+                ]
+                done = 0
+                for fut in concurrent.futures.as_completed(futures):
+                    idx, out = fut.result()
+                    upscaled_by_index[idx] = out
+                    done += 1
+                    _film_tasks[task_id] = {
+                        "status": "running", "step": "final_upscale", "fanout": True,
+                        "current": done, "total": n_scenes,
+                    }
+        finally:
+            _clear_film_subjobs_for(task_id)
 
         upscaled = [p for p in upscaled_by_index if p is not None]
-        if len(upscaled) != len(scene_finals):
+        if len(upscaled) != n_scenes:
             raise RuntimeError("Temporal scene upscale did not produce every scene.")
 
         _film_checkpoint(task_id)
@@ -2944,9 +3420,10 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     target_name = (body.target_resolution or "").strip()
     if target_name not in gapp._RESOLUTIONS:
         raise HTTPException(400, "Choose a valid upscale resolution.")
-    mode = (body.upscale_mode or "fast").strip().lower()
-    if mode not in {"fast", "temporal_ai"}:
-        raise HTTPException(400, "Choose a valid upscale mode.")
+    try:
+        mode = _normalize_upscale_mode(body.upscale_mode)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
 
@@ -3936,9 +4413,26 @@ def badges() -> dict:
     except Exception:
         pass
 
+    # Cheap live-work count for the Activity nav badge (ops + film tasks + render).
+    # A fan-out parent (parallel upscale) is hidden in favour of its sub-jobs, so
+    # count the sub-jobs instead — matching what the Activity screen actually lists.
+    activity_live = 0
+    try:
+        with _op_lock:
+            activity_live += len(_current_ops) + len(_film_subjobs)
+        activity_live += sum(
+            1 for t in list(_film_tasks.values())
+            if t.get("status") == "running" and not t.get("fanout")
+        )
+        if render_active:
+            activity_live += 1
+    except Exception:
+        activity_live = 1 if render_active else 0
+
     return {
         "render_active": render_active,
         "render_pct": render_pct,
+        "activity_live": activity_live,
         "queue": queue_pending,
         "youtube": attention + publishable,
         "youtube_attention": attention,
@@ -3950,11 +4444,21 @@ def badges() -> dict:
 
 
 @api.get("/api/activity")
-def get_activity() -> dict:
-    """What the system is doing right now, plus recent event log."""
+def get_activity(limit: int = 80) -> dict:
+    """Everything the system is doing and recently did.
+
+    Returns live items (API ops, film edits, durable renders with ETAs),
+    durable history, and pre-built collapsible groups for the Activity screen.
+    Backward-compatible fields (active_ops, recent, render_*) keep Home working.
+    """
+    try:
+        limit_n = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit_n = 80
     with _op_lock:
+        _load_activity_log()
         active_ops = [dict(op) for op in _current_ops.values()]
-        log = list(_activity_log[:10])
+        log = list(_activity_log[: max(10, limit_n)])
 
     # Film edit tasks run in daemon threads that record progress in _film_tasks
     # rather than _track_op. Surface all running ones so final upscales, music
@@ -3963,40 +4467,63 @@ def get_activity() -> dict:
         op = _film_task_activity_op(key, task)
         if op:
             active_ops.append(op)
+
+    # Concurrent worker sub-jobs (each scene of a parallel upscale) — one row per
+    # busy worker, each with its own ETA, instead of a single parent status.
+    active_ops.extend(_film_subjob_activity_ops())
+
+    # Durable full-film renders (with learned ETAs when available).
+    render_items = _live_render_activity_items()
+    # Avoid double-listing if something already tracked the same render.
+    render_ids = {r.get("id") for r in render_items}
+    active_ops = [op for op in active_ops if op.get("id") not in render_ids]
+    active_ops.extend(render_items)
+
     active_ops.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
     op = dict(active_ops[0]) if active_ops else {}
 
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
-    try:
-        render_active = bool(gapp._is_job_running())
-        if render_active:
-            wd = gapp._preferred_work_dir("")
-            if wd is not None:
-                pct, msg = gapp._status_for_work_dir(wd)
-                render_pct = int(round(pct))
-                render_msg = msg
-                store = DurableStore.default()
-                try:
-                    job_row = store.get_job_by_work_dir(str(wd))
-                    render_title = (_row_to_dict(job_row).get("title") or wd.name) if job_row else wd.name
-                finally:
-                    store.close()
-    except Exception:
-        pass
+    render_eta = None
+    for r in render_items:
+        render_active = True
+        render_pct = int(r.get("pct") or 0)
+        render_msg = r.get("detail") or ""
+        render_title = r.get("title") or ""
+        render_eta = r.get("eta_text")
+        break
 
     try:
         queue_pending = sum(1 for q in yt.load_queue() if q.get("status") == "pending")
     except Exception:
         queue_pending = 0
 
+    # History: completed log entries only (live list is separate).
+    history = [e for e in log if e.get("status") != "running"]
+    # Combined stream for grouping: live first, then history (dedupe by id).
+    seen_ids: set[str] = set()
+    combined: list[dict] = []
+    for ev in active_ops + history:
+        eid = str(ev.get("id") or "")
+        if eid and eid in seen_ids:
+            continue
+        if eid:
+            seen_ids.add(eid)
+        combined.append(ev)
+    groups = _group_activity_events(combined)
+
     return {
         "current_op": op,
         "active_ops": active_ops,
-        "recent": log,
+        "live": active_ops,
+        "recent": history[:10],
+        "history": history[: limit_n],
+        "groups": groups,
+        "live_count": len(active_ops),
         "render_active": render_active,
         "render_pct": render_pct,
         "render_msg": render_msg,
         "render_title": render_title,
+        "render_eta": render_eta,
         "queue_pending": queue_pending,
     }
 
@@ -7323,17 +7850,21 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
         if status == "error":
-            name = f"Re-render failed — scene {sid}"
+            name, st = f"Re-render failed — scene {sid}", "error"
         elif status == "cancelled":
-            name = f"Re-render cancelled — scene {sid}"
+            name, st = f"Re-render cancelled — scene {sid}", "cancelled"
         else:
-            name = f"Re-rendered scene {sid}"
+            name, st = f"Re-rendered scene {sid}", "done"
+            # Learn this op's duration so the next re-render predicts its ETA.
+            w, h = _film_job_dims(str(wd))
+            film_timing.record(f"rerender_{component}", end - started, width=w, height=h)
+        # Full grouped/persisted history entry (under the film), like every other
+        # op — not a bare dict that also truncated the shared log to 20 rows.
         with _op_lock:
-            _activity_log.insert(0, {
-                "name": name, "detail": component,
-                "ts": end, "duration_s": round(end - started, 1),
-            })
-            del _activity_log[20:]
+            _append_activity_locked(
+                name, component, end, started,
+                work_dir=str(wd), status=st, category="film",
+            )
 
 
 @api.post("/api/films/scenes/{scene_id}/rerender")
