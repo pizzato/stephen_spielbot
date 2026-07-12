@@ -491,6 +491,16 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         f"\n{dialogue_note.strip()}"
         if dialogue_note and dialogue_note.strip() else ""
     )
+    # The system prompt pins the scene schema, so dialogue fields must be added
+    # THERE — a user-message note alone gets ignored ("each with exactly these
+    # keys" wins). Empty when dialogue is off → the narration prompt is unchanged.
+    dialogue_schema = (
+        '\n      - "mode": "narration" | "dialogue" | "silent" — how the scene plays. '
+        'Use "dialogue" when characters speak on screen, "silent" for a pure visual beat with no voice-over.'
+        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of {"speaker": <character name>, '
+        '"text": <1-2 short spoken sentences>}. Dialogue and silent scenes MUST have "narration": "".'
+        if dialogue_note_str else ""
+    )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
@@ -512,7 +522,8 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
-    raw = call_fn(_prompts.system("script_claude_initial"), user_msg, max_tokens, f"scenes 1–{first_batch}")
+    raw = call_fn(_prompts.system("script_claude_initial", dialogue_schema=dialogue_schema),
+                  user_msg, max_tokens, f"scenes 1–{first_batch}")
     outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
     style      = style_hint.strip() if style_hint and style_hint.strip() else outer.get("style", "")
@@ -570,7 +581,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
-        raw = call_fn(_prompts.system("script_claude_continuation"), cont_msg,
+        raw = call_fn(_prompts.system("script_claude_continuation", dialogue_schema=dialogue_schema), cont_msg,
                       max_tokens, f"scenes {batch_start}–{batch_end}")
         items = _parse_claude_response(raw, f"scenes {batch_start}–{batch_end}")
         if not isinstance(items, list):

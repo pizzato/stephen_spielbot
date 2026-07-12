@@ -100,11 +100,18 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     This recovers from any upstream save bug by calling the LLM to fill what's missing,
     and falls back to scene title text so generation NEVER produces a silent scene.
     """
-    # Dialogue scenes carry spoken lines, not narration, and are rendered by the
-    # EchoMimic path — never heal them into narration scenes.
-    healable = [s for s in scenes if getattr(s, "mode", "narration") != "dialogue"]
-    bad = [s for s in healable if not (s.narration or "").strip()
-           or not (s.image_prompt or "").strip()]
+    # Dialogue scenes carry spoken lines and silent scenes have no voice-over by
+    # design — never heal either into narrated scenes. Silent scenes still need
+    # an image_prompt (they render visuals).
+    def _needs_heal(s: Scene) -> bool:
+        mode = getattr(s, "mode", "narration")
+        if mode == "dialogue":
+            return False
+        if mode == "silent":
+            return not (s.image_prompt or "").strip()
+        return not (s.narration or "").strip() or not (s.image_prompt or "").strip()
+
+    bad = [s for s in scenes if _needs_heal(s)]
     if not bad:
         return
     logger.warning("Self-heal: %d scene(s) with empty fields — filling: %s",
@@ -124,23 +131,38 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
         logger.warning("Self-heal LLM fill failed: %s — falling back to title text", exc)
 
     # Absolute last resort: never leave a scene with empty narration or image_prompt.
+    # Only narration-mode scenes get narration filled — dialogue/silent scenes are
+    # voiceless by design.
     for s in scenes:
-        if not (s.narration or "").strip():
+        mode = getattr(s, "mode", "narration")
+        if mode == "narration" and not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Self-heal: scene %d narration still empty after LLM — used title", s.id)
-        if not (s.image_prompt or "").strip():
+        if mode != "dialogue" and not (s.image_prompt or "").strip():
             s.image_prompt = s.title or f"Scene {s.id}: {title}"
             logger.warning("Self-heal: scene %d image_prompt still empty after LLM — used title", s.id)
         if not (s.video_prompt or "").strip():
             s.video_prompt = s.image_prompt
 
     # Persist the healed script so the next resume doesn't have to redo this work.
+    # Keep the dialogue/silent metadata — dropping it here would silently turn
+    # those scenes back into narration on the next load.
     try:
-        (work_dir / "script.json").write_text(json.dumps([
-            {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-             "video_prompt": s.video_prompt, "narration": s.narration}
-            for s in scenes
-        ], indent=2))
+        rows = []
+        for s in scenes:
+            row = {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+                   "video_prompt": s.video_prompt, "narration": s.narration}
+            md = {}
+            if getattr(s, "mode", "narration") not in ("narration", "", None):
+                md["mode"] = s.mode
+            if getattr(s, "lines", None):
+                md["lines"] = s.lines
+            if getattr(s, "duration", 0):
+                md["duration"] = s.duration
+            if md:
+                row["metadata"] = md
+            rows.append(row)
+        (work_dir / "script.json").write_text(json.dumps(rows, indent=2))
         logger.info("Self-heal: rewrote script.json with %d filled scenes", len(scenes))
     except Exception as exc:
         logger.warning("Self-heal: could not rewrite script.json: %s", exc)
@@ -302,6 +324,22 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
     except Exception:
         logger.debug("Could not mirror progress to durable store", exc_info=True)
     logger.info("PROGRESS %.0f%% — %s", pct, msg)
+
+
+_SILENT_DEFAULT_SECS = 5.0
+
+
+def _write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
+    """A silent WAV of *seconds* — the 'narration' of a silent scene, so the
+    normal duration/mux/concat pipeline runs unchanged with no spoken audio."""
+    import wave
+    n = max(1, int(seconds * rate))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * n)
+    return path
 
 
 def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None):
@@ -505,6 +543,15 @@ def main(work_dir: Path) -> None:
             dur = _get_duration(out)
             store.complete_task(narration_task, result={"path": str(out), "duration": dur, "skipped": True})
             store.record_artifact(durable_job_id, narration_task, "narration", out, duration_seconds=dur)
+            return scene.id, out
+        if getattr(scene, "mode", "narration") == "silent":
+            # No voice-over by design: a silent track of the scene's duration keeps
+            # the duration/mux/concat pipeline unchanged without speaking anything.
+            secs = float(getattr(scene, "duration", 0) or 0) or _SILENT_DEFAULT_SECS
+            _write_silence_wav(out, secs)
+            logger.info("Scene %d is silent — %.1fs silence instead of TTS", scene.id, secs)
+            store.complete_task(narration_task, result={"path": str(out), "duration": secs, "silent": True})
+            store.record_artifact(durable_job_id, narration_task, "narration", out, duration_seconds=secs)
             return scene.id, out
         hosts_to_try = [primary_host] + [h for h in tts_hosts if h != primary_host]
         last_err: Exception | None = None
