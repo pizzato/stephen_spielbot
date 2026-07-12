@@ -920,6 +920,8 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
+    # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_performance_plan.md.
+    format: str = "narration"
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -988,6 +990,36 @@ def _read_create_brief(wd: Path) -> dict:
         return {}
 
 
+def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
+    """Instruction appended to the JSON script prompt so the LLM emits dialogue/
+    silent/narration scenes. None for the default narration format (no change)."""
+    fmt = (fmt or "narration").strip().lower()
+    if fmt not in ("dialogue", "mixed"):
+        return None
+    cast = ", ".join(n for n in cast_names if n)
+    speakers = (
+        f"Speakers MUST be one of these existing characters: {cast}. Do not invent other speakers."
+        if cast else
+        "Use the recurring character(s) you identify in the \"characters\" field as the speakers."
+    )
+    balance = (
+        "Almost every scene should be mode \"dialogue\": the characters carry the story by "
+        "speaking to the camera or to each other."
+        if fmt == "dialogue" else
+        "Mix freely: use \"dialogue\" when characters speak or interact, \"narration\" for "
+        "scene-setting voice-over, and \"silent\" for pure visual beats."
+    )
+    return (
+        "DIALOGUE VIDEO — characters SPEAK rather than only a narrator. For EACH scene object, "
+        "add a \"mode\" field: \"dialogue\" | \"silent\" | \"narration\". "
+        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of "
+        "{\"speaker\": <character name>, \"text\": <one or two spoken sentences>}, and leave "
+        "\"narration\" empty. When \"silent\", leave narration empty (visuals only). "
+        f"{speakers} {balance} "
+        "Still fill image_prompt and video_prompt as usual; for dialogue scenes frame the speaker(s)."
+    )
+
+
 def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
     app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
@@ -1008,14 +1040,16 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    style_cast = gapp._style_characters(cfg, body.style_name)
+    character_sheet = gapp._character_sheet(style_cast) or None
+    dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
                 llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint,
+                avoid_hint=avoid_hint, dialogue_note=dialogue_note,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
@@ -1027,15 +1061,26 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # scene editor and consistent even if the style profile is later renamed/edited.
     # The render step guards against re-adding a prefix that's already present.
     combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
-    scenes_list = [
-        {"id": s.id, "title": s.title,
-         "image_prompt": (f"{combined_style}. {s.image_prompt}"
-                          if combined_style and s.image_prompt
-                          and not s.image_prompt.startswith(combined_style)
-                          else s.image_prompt),
-         "video_prompt": s.video_prompt, "narration": s.narration}
-        for s in scenes
-    ]
+    scenes_list = []
+    for s in scenes:
+        row = {"id": s.id, "title": s.title,
+               "image_prompt": (f"{combined_style}. {s.image_prompt}"
+                                if combined_style and s.image_prompt
+                                and not s.image_prompt.startswith(combined_style)
+                                else s.image_prompt),
+               "video_prompt": s.video_prompt, "narration": s.narration}
+        # Dialogue/silent fields ride in metadata; narration scenes get no metadata
+        # key, so a narration script.json is byte-identical to before.
+        md = {}
+        if getattr(s, "mode", "narration") not in ("narration", "", None):
+            md["mode"] = s.mode
+        if getattr(s, "lines", None):
+            md["lines"] = s.lines
+        if getattr(s, "duration", 0):
+            md["duration"] = s.duration
+        if md:
+            row["metadata"] = md
+        scenes_list.append(row)
     gapp._persist_script_snapshot(work_dir, scenes_list)
 
     # Persist the 0-2 main characters the LLM identified for THIS script (living
