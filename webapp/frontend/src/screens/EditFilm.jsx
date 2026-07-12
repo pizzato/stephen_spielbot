@@ -601,7 +601,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             } else if (t.status === 'error' || t.status === 'cancelled') {
               clearInterval(poll); reject(new Error(t.error || `Video upscale ${t.status}.`))
             } else if (t.step === 'final_upscale') {
-              setStatus('Upscaling the final video…')
+              setStatus(t.total
+                ? `Upscaling scenes (${t.current || 0}/${t.total} done)…`
+                : 'Upscaling the final video…')
+            } else if (t.step === 'finalize') {
+              setStatus('Assembling the upscaled film…')
             }
           } catch (e) { clearInterval(poll); reject(e) }
         }, 3000)
