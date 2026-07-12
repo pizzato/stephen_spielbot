@@ -17,6 +17,14 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             comfyui._IC_LORA_X4,
         )
 
+    def test_ic_lora_pixel_grid_matches_downscale_factor(self):
+        # Latent (W/32, H/32) must be divisible by factor → pixel multiple 32*factor.
+        self.assertEqual(comfyui._ic_lora_pixel_grid(comfyui._IC_LORA_X2), 64)
+        self.assertEqual(comfyui._ic_lora_pixel_grid(comfyui._IC_LORA_X4), 128)
+        # 1080 on 4× grid must not land on 1088 (latent h=34, 34%4≠0).
+        self.assertEqual(comfyui._snap_ltx_dim(1080, 128, prefer="up"), 1152)
+        self.assertEqual(1152 // 32 % 4, 0)
+
     def test_upscale_video_ltx_queues_ic_lora_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.mp4"
@@ -59,8 +67,8 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                 comfy_url="http://worker:8188",
             )
             download.assert_called_once()
-            # 1080 snaps to 1088 (LTX 32-pixel grid).
-            normalize.assert_called_once_with(out, 1920, 1088)
+            # Final output is the user-requested size; working latent grid may differ.
+            normalize.assert_called_once_with(out, 1920, 1080)
             workflow = queued["workflow"]
             self.assertEqual(workflow["3"]["class_type"], "LTXICLoRALoaderModelOnly")
             self.assertEqual(
@@ -71,10 +79,44 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             self.assertEqual(workflow["8"]["inputs"]["video"], "staged.mp4")
             self.assertEqual(workflow["10"]["class_type"], "LTXAddVideoICLoRAGuide")
             self.assertEqual(workflow["10"]["inputs"]["latent_downscale_factor"], ["3", 1])
+            # 2× → pixel grid 64; 1080 → 1088, latent 34 divisible by 2.
             self.assertEqual(workflow["9"]["inputs"]["width"], 1920)
             self.assertEqual(workflow["9"]["inputs"]["height"], 1088)
             self.assertEqual(workflow["18"]["class_type"], "VHS_VideoCombine")
             self.assertEqual(workflow["18"]["inputs"]["frame_rate"], 24)
+
+    def test_upscale_video_ltx_4x_uses_128_pixel_grid(self):
+        """Regression: 1920x1088 latent 60x34 is not divisible by factor 4."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-ic-lora-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out) as normalize, \
+                 mock.patch("pipeline.assembler._get_video_dimensions", return_value=(480, 270)), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=1.0):
+                comfyui.upscale_video_ltx(src, out, 1920, 1080, fps=25, comfy_url="http://w:8188")
+
+            wf = queued["workflow"]
+            self.assertEqual(wf["3"]["inputs"]["lora_name"], comfyui._IC_LORA_X4)
+            self.assertEqual(wf["9"]["inputs"]["width"], 1920)
+            self.assertEqual(wf["9"]["inputs"]["height"], 1152)  # 1080 → 1152 (128 grid)
+            # Latent 60x36 is divisible by 4.
+            self.assertEqual(1920 // 32 % 4, 0)
+            self.assertEqual(1152 // 32 % 4, 0)
+            normalize.assert_called_once_with(out, 1920, 1080)
 
     def test_upscale_video_ltx_retries_dropped_prompt(self):
         with tempfile.TemporaryDirectory() as tmp:
