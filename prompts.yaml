@@ -36,7 +36,7 @@ script_claude_initial:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
       - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration.
-      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.
+      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.${dialogue_schema}
 
     STRUCTURE RULES — critical for YouTube retention:
     - Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
@@ -61,7 +61,7 @@ script_claude_continuation:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors.
-      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.
+      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.${dialogue_schema}
 
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |

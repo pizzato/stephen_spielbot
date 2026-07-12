@@ -1408,6 +1408,25 @@ def _read_create_brief(wd: Path) -> dict:
         return {}
 
 
+def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
+    """A Scene as a script.json row. Dialogue/silent fields go under "metadata"
+    (only when non-default), so narration scripts stay byte-identical — and so
+    the render, which reads script.json, actually sees authored dialogue."""
+    row = {"id": s.id, "title": s.title,
+           "image_prompt": image_prompt if image_prompt is not None else s.image_prompt,
+           "video_prompt": s.video_prompt, "narration": s.narration}
+    md = {}
+    if getattr(s, "mode", "narration") not in ("narration", "", None):
+        md["mode"] = s.mode
+    if getattr(s, "lines", None):
+        md["lines"] = s.lines
+    if getattr(s, "duration", 0):
+        md["duration"] = s.duration
+    if md:
+        row["metadata"] = md
+    return row
+
+
 def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
     """Instruction appended to the JSON script prompt so the LLM emits dialogue/
     silent/narration scenes. None for the default narration format (no change)."""
@@ -1479,26 +1498,14 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # scene editor and consistent even if the style profile is later renamed/edited.
     # The render step guards against re-adding a prefix that's already present.
     combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
-    scenes_list = []
-    for s in scenes:
-        row = {"id": s.id, "title": s.title,
-               "image_prompt": (f"{combined_style}. {s.image_prompt}"
-                                if combined_style and s.image_prompt
-                                and not s.image_prompt.startswith(combined_style)
-                                else s.image_prompt),
-               "video_prompt": s.video_prompt, "narration": s.narration}
-        # Dialogue/silent fields ride in metadata; narration scenes get no metadata
-        # key, so a narration script.json is byte-identical to before.
-        md = {}
-        if getattr(s, "mode", "narration") not in ("narration", "", None):
-            md["mode"] = s.mode
-        if getattr(s, "lines", None):
-            md["lines"] = s.lines
-        if getattr(s, "duration", 0):
-            md["duration"] = s.duration
-        if md:
-            row["metadata"] = md
-        scenes_list.append(row)
+    scenes_list = [
+        _scene_snapshot_row(s, image_prompt=(
+            f"{combined_style}. {s.image_prompt}"
+            if combined_style and s.image_prompt
+            and not s.image_prompt.startswith(combined_style)
+            else s.image_prompt))
+        for s in scenes
+    ]
     gapp._persist_script_snapshot(work_dir, scenes_list)
 
     # Persist only NEW cast members as per-script characters. Any LLM-identified
@@ -1526,6 +1533,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
+        "format": (body.format or "narration").strip().lower(),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -2477,13 +2485,15 @@ def start_generation(body: GenerateBody) -> dict:
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
             negative_prompt=video_neg,
+            # Dialogue/performance fields ride in the scene metadata; dropping
+            # them here silently turned authored dialogue back into narration.
+            mode=str((row.get("metadata") or {}).get("mode") or "narration"),
+            lines=list((row.get("metadata") or {}).get("lines") or []),
+            duration=float((row.get("metadata") or {}).get("duration") or 0.0),
         )
         for row in scene_rows[:n]
     ]
-    gapp._persist_script_snapshot(work_dir, [
-        {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-         "video_prompt": s.video_prompt, "narration": s.narration} for s in scenes
-    ])
+    gapp._persist_script_snapshot(work_dir, [_scene_snapshot_row(s) for s in scenes])
 
     # Character-first pre-build (main-character consistency). BEFORE the render
     # plan is registered — so it holds even for a fully headless/automated render

@@ -58,9 +58,9 @@ def _render(text: str, **vars: Any) -> str:
     return Template(text).safe_substitute(**{k: ("" if v is None else str(v)) for k, v in vars.items()})
 
 
-def system(name: str) -> str:
-    """Return the rendered `system` text for the named prompt (or empty string)."""
-    return _render(_entry(name).get("system", "")).rstrip("\n")
+def system(name: str, **vars: Any) -> str:
+    """Return the rendered `system` text for the named prompt with ${...} substitutions."""
+    return _render(_entry(name).get("system", ""), **vars).rstrip("\n")
 
 
 def user(name: str, **vars: Any) -> str:
