@@ -353,6 +353,12 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None):
         chars = json.loads((work_dir / "characters.json").read_text()) or []
     except Exception:
         chars = []
+    # Global catalogue characters are speakable too (the per-script cast wins on
+    # a name clash) — e.g. a recurring presenter defined once in Settings.
+    seen = {str(c.get("name", "")).strip().lower() for c in chars if isinstance(c, dict)}
+    for c in (cfg.get("characters") or []):
+        if isinstance(c, dict) and str(c.get("name", "")).strip().lower() not in seen:
+            chars.append(c)
     voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
     global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
 

@@ -62,9 +62,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Character look lightbox — { id, ver }: which character and which of its kept
   // look versions is shown full-resolution.
   const [charLightbox, setCharLightbox] = useState(null)
-  // Named voices (for the per-character voice picker), loaded from config once.
+  // Named voices (per-character voice picker) + the global character catalogue
+  // (their names are valid dialogue speakers too), loaded from config once.
   const [voiceOpts, setVoiceOpts] = useState([])
-  useEffect(() => { api.getConfig().then((c) => setVoiceOpts((c?.voices || []).map((v) => v.name))).catch(() => {}) }, [])
+  const [globalCast, setGlobalCast] = useState([])
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      setVoiceOpts((c?.voices || []).map((v) => v.name))
+      setGlobalCast((c?.characters || []).map((x) => x?.name).filter(Boolean))
+    }).catch(() => {})
+  }, [])
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -385,9 +392,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
   // Dialogue/performance authoring: scene mode + per-line {speaker,text}. setAndSave
   // updates state and persists the computed value in one step (no stale closure).
+  // Speakers: the script's own cast plus the global character catalogue (both can
+  // render — the resolver falls back to catalogue portraits/voices).
+  const castOpts = [...new Set([...characters.map((c) => c.name), ...globalCast])].filter(Boolean)
   const setAndSave = (k, v) => { const u = { ...scenes[cur], [k]: v }; setField(k, v); persist(cur, u) }
   const setLine = (i, k, v) => setField('lines', (d.lines || []).map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln))
-  const addLine = () => setAndSave('lines', [...(d.lines || []), { speaker: characters[0]?.name || '', text: '' }])
+  const setLineAndSave = (i, k, v) =>
+    setAndSave('lines', (d.lines || []).map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln))
+  const addLine = () => setAndSave('lines', [...(d.lines || []), { speaker: castOpts[0] || '', text: '' }])
   const removeLine = (i) => setAndSave('lines', (d.lines || []).filter((_, idx) => idx !== i))
 
   const move = async (to) => {
@@ -756,14 +768,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       {(d.lines || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No lines yet — add one below.</span>}
                       {(d.lines || []).map((ln, i) => (
                         <div key={i} className="row gap-8 center">
-                          <input className="input" list="cast-names" style={{ maxWidth: 170 }} placeholder="Speaker"
-                            value={ln.speaker || ''} onChange={(e) => setLine(i, 'speaker', e.target.value)} onBlur={() => persist(cur)} />
+                          <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
+                            onChange={(e) => setLineAndSave(i, 'speaker', e.target.value)}>
+                            {!castOpts.length && <option value="">(no characters yet)</option>}
+                            {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
+                            {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                          </select>
                           <input className="input" style={{ flex: 1 }} placeholder="What they say…"
                             value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
                           <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeLine(i)} />
                         </div>
                       ))}
-                      <datalist id="cast-names">{characters.map((c) => <option key={c.id} value={c.name} />)}</datalist>
                       <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
                     </div>
                   </Field>

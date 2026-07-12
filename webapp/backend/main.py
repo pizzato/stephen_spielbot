@@ -1435,7 +1435,8 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
         return None
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
-        f"Speakers MUST be one of these existing characters: {cast}. Do not invent other speakers."
+        f"Speakers are these existing characters ({cast}) and/or the main character(s) you "
+        "identify in the \"characters\" field. Do not invent speakers outside those."
         if cast else
         "Use the recurring character(s) you identify in the \"characters\" field as the speakers."
     )
@@ -1834,6 +1835,7 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     try:
         current = store.get_scene(job_id, sid) or {}
         meta = dict(current.get("metadata") or {})
+        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration")}
         if body.voice is not None:
             voice = (body.voice or "").strip()
             if voice:
@@ -1878,6 +1880,18 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     work_dir = gapp._job_work_dir(job_id)
     if work_dir:
         gapp._persist_script_snapshot(work_dir, rows)
+        # A scene whose mode/lines/duration changed must not reuse its previously
+        # rendered files — the resume path skips scenes whose final already exists,
+        # which would silently serve the OLD (e.g. narrated) take.
+        if {k: meta.get(k) for k in ("mode", "lines", "duration")} != old_dialogue:
+            wd = Path(work_dir)
+            stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav"]
+            stale += list(wd.glob(f"scene_{sid:02d}_line_*"))
+            for p in stale:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
     return {"ok": True}
 
 
