@@ -41,6 +41,7 @@ from pipeline.assembler import (
     _get_duration, mux_video_audio,
     concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
+    fit_video_canvas,
 )
 from pipeline.tts_worker import generate_narration
 from pipeline.orchestrator import (
@@ -520,18 +521,21 @@ def main(work_dir: Path) -> None:
             raise RuntimeError("Dialogue scenes need a TTS worker but none are configured")
         voice_ref_for, make_still = _dialogue_resolvers(cfg, work_dir, voice_ref_str)
         tts_host = tts_hosts[0]
+        # No point rendering the talking head larger than the output canvas.
+        echo_size = min(768, max(384, min(vid_width, vid_height)))
         write_progress(status_file, 1, f"Rendering {len(dialogue_scenes)} dialogue scene(s)…")
         for i, s in enumerate(dialogue_scenes):
             final = work_dir / f"scene_{s.id:02d}_final.mp4"
-            if final.exists() and final.stat().st_size > 10_000:
-                dialogue_durs[s.id] = _get_duration(final)
-                continue
-            render_dialogue_scene(
-                s, work_dir,
-                voice_ref_for=voice_ref_for, make_still=make_still,
-                echomimic_host=echo_hosts[i % len(echo_hosts)],
-                tts_host=tts_host, tts_engine=tts_engine,
-            )
+            if not (final.exists() and final.stat().st_size > 10_000):
+                render_dialogue_scene(
+                    s, work_dir,
+                    voice_ref_for=voice_ref_for, make_still=make_still,
+                    echomimic_host=echo_hosts[i % len(echo_hosts)],
+                    tts_host=tts_host, tts_engine=tts_engine, size=echo_size,
+                )
+            # EchoMimic output is portrait-shaped; fit it onto the film's canvas
+            # (blurred pillarbox) so the cross-scene concat gets uniform dims.
+            fit_video_canvas(final, vid_width, vid_height)
             dialogue_durs[s.id] = _get_duration(final)
             write_progress(status_file, 1 + 14 * (i + 1) / len(dialogue_scenes),
                            f"Dialogue scene {s.id} rendered ({i + 1}/{len(dialogue_scenes)})")
