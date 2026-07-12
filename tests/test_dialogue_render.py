@@ -21,7 +21,8 @@ class DialogueRenderTests(unittest.TestCase):
                 Path(out).write_bytes(b"wav")
                 calls["tts"].append((text, str(reference_wav)))
 
-            def fake_animate(still, wav, clip, host, prompt="", steps=8, size=768, video_length=81):
+            def fake_animate(still, wav, clip, host, prompt="", steps=8,
+                             width=0, height=0, video_length=81):
                 Path(clip).write_bytes(b"mp4")
                 calls["animate"].append((str(still), video_length))
 
@@ -48,7 +49,7 @@ class DialogueRenderTests(unittest.TestCase):
                 make_still=fake_still,
                 echomimic_host="http://s1:8190", tts_host="http://s1:8189",
                 _tts=fake_tts, _animate=fake_animate, _duration=lambda p: 4.0, _concat=fake_concat,
-                _normalize=lambda c, w, h: None,
+                canvas=(832, 480), _fit=lambda c, w, h: None,
             )
             self.assertEqual(final.name, "scene_03_final.mp4")
             self.assertTrue(final.exists())
@@ -76,6 +77,22 @@ class DialogueRenderTests(unittest.TestCase):
                 _concat=lambda c, o: self.fail("single line must not concat"),
             )
             self.assertTrue(final.exists())
+
+    def test_echo_dims_keep_aspect_and_grid(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("PIL not available")
+        with tempfile.TemporaryDirectory() as td:
+            land = Path(td) / "land.png"
+            Image.new("RGB", (512, 256)).save(land)
+            self.assertEqual(dialogue_render.echo_dims_for_still(land), (512, 256))
+            sq = Path(td) / "sq.png"
+            Image.new("RGB", (1024, 1024)).save(sq)
+            self.assertEqual(dialogue_render.echo_dims_for_still(sq), (768, 768))
+            bad = Path(td) / "bad.png"
+            bad.write_bytes(b"not an image")
+            self.assertEqual(dialogue_render.echo_dims_for_still(bad), (768, 768))
 
     def test_no_usable_lines_raises(self):
         with tempfile.TemporaryDirectory() as td:

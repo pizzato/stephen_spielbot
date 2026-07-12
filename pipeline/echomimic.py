@@ -38,11 +38,15 @@ def animate(
     steps: int = 8,
     size: int = 768,
     video_length: int = 81,
+    width: int = 0,
+    height: int = 0,
 ) -> Path:
-    """Generate a lip-synced talking-head clip and write it to ``output_path``.
+    """Generate a lip-synced talking clip and write it to ``output_path``.
 
     ``host`` must be an http(s):// EchoMimic worker URL (issue #12). ``video_length``
     is a frame count at 25 fps — size it to the line's audio via ``frames_for_audio``.
+    ``width``/``height`` set the output dimensions (e.g. the scene frame's aspect);
+    when omitted the clip is ``size``×``size`` square.
     """
     if not host.startswith(("http://", "https://")):
         raise RuntimeError(
@@ -55,6 +59,8 @@ def animate(
         "prompt": prompt,
         "steps": int(steps),
         "size": int(size),
+        "width": int(width),
+        "height": int(height),
         "video_length": int(video_length),
     }).encode()
 
