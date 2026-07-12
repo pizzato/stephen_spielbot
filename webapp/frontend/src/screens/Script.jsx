@@ -62,6 +62,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Character look lightbox — { id, ver }: which character and which of its kept
   // look versions is shown full-resolution.
   const [charLightbox, setCharLightbox] = useState(null)
+  // Named voices (for the per-character voice picker), loaded from config once.
+  const [voiceOpts, setVoiceOpts] = useState([])
+  useEffect(() => { api.getConfig().then((c) => setVoiceOpts((c?.voices || []).map((v) => v.name))).catch(() => {}) }, [])
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -368,16 +371,24 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       onRegen={(instr) => regenField(field, instr)} chips={REGEN_CHIPS[field]}>{text}</RegenLabel>
   )
 
-  const persist = async (idx = cur) => {
-    const s = scenes[idx]
+  const persist = async (idx = cur, override = null) => {
+    const s = override || scenes[idx]
     if (!s) return
     try {
       await api.saveScene(job.job_id, s.id, {
         title: s.title || '', image_prompt: s.image_prompt || '',
         video_prompt: s.video_prompt || '', narration: s.narration || '',
+        mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       })
     } catch (e) { setError(e.message) }
   }
+
+  // Dialogue/performance authoring: scene mode + per-line {speaker,text}. setAndSave
+  // updates state and persists the computed value in one step (no stale closure).
+  const setAndSave = (k, v) => { const u = { ...scenes[cur], [k]: v }; setField(k, v); persist(cur, u) }
+  const setLine = (i, k, v) => setField('lines', (d.lines || []).map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln))
+  const addLine = () => setAndSave('lines', [...(d.lines || []), { speaker: characters[0]?.name || '', text: '' }])
+  const removeLine = (i) => setAndSave('lines', (d.lines || []).filter((_, idx) => idx !== i))
 
   const move = async (to) => {
     if (to < 0 || to >= total) return
@@ -445,6 +456,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const saveCharacter = (c) => charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, {
     name: c.name || '', aliases: c.aliases || [], description: c.description || '',
   }))
+  const setCharVoice = (c, v) => { setCharField(c.id, 'voice', v); charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, { voice: v })) }
   const addCharacter = () => charOp('add', () =>
     api.addScriptCharacter(job.job_id, { name: '', aliases: [], description: '' }))
   const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(job.job_id, c.id))
@@ -722,9 +734,48 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Field label={fieldLabel('Scene title', 'title')}>
                   <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
-                <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
-                  <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+
+                <Field label="Scene type" hint="Narration = voice-over (default). Dialogue = characters speak, lip-synced. Silent = visuals only, no voice.">
+                  <div className="row gap-8">
+                    {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
+                      <Button key={m} variant={(d.mode || 'narration') === m ? 'primary' : 'ghost'}
+                        onClick={() => setAndSave('mode', m)}>{lbl}</Button>
+                    ))}
+                  </div>
                 </Field>
+
+                {(d.mode || 'narration') === 'narration' && (
+                  <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
+                    <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+                  </Field>
+                )}
+
+                {d.mode === 'dialogue' && (
+                  <Field label="Dialogue" hint="Each line becomes a talking-head shot in that character's voice. Speakers must be characters that have a portrait (Characters tab).">
+                    <div className="stack gap-10">
+                      {(d.lines || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No lines yet — add one below.</span>}
+                      {(d.lines || []).map((ln, i) => (
+                        <div key={i} className="row gap-8 center">
+                          <input className="input" list="cast-names" style={{ maxWidth: 170 }} placeholder="Speaker"
+                            value={ln.speaker || ''} onChange={(e) => setLine(i, 'speaker', e.target.value)} onBlur={() => persist(cur)} />
+                          <input className="input" style={{ flex: 1 }} placeholder="What they say…"
+                            value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
+                          <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeLine(i)} />
+                        </div>
+                      ))}
+                      <datalist id="cast-names">{characters.map((c) => <option key={c.id} value={c.name} />)}</datalist>
+                      <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
+                    </div>
+                  </Field>
+                )}
+
+                {d.mode === 'silent' && (
+                  <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over.">
+                    <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
+                      value={d.duration || 5} onChange={(e) => setField('duration', Number(e.target.value) || 0)} onBlur={() => persist(cur)} />
+                  </Field>
+                )}
+
                 <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
                   <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
@@ -910,6 +961,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       <textarea className="textarea" rows={4} value={c.description || ''}
                         onChange={(e) => setCharField(c.id, 'description', e.target.value)}
                         onBlur={() => saveCharacter(c)} />
+                    </Field>
+                    <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes.">
+                      <select className="input" value={c.voice || ''} disabled={b}
+                        onChange={(e) => setCharVoice(c, e.target.value)}>
+                        <option value="">Style narrator (default)</option>
+                        {voiceOpts.map((v) => <option key={v} value={v}>{v}</option>)}
+                      </select>
                     </Field>
                     <div className="row gap-10 row--wrap">
                       <Button variant="ghost" icon="bookmark" disabled={b || !(c.name || '').trim()} onClick={() => promoteCharacter(c)}>Save to catalogue</Button>
