@@ -2059,7 +2059,7 @@ def add_script_character(work_dir, name: str = "", aliases=None, description: st
 
 
 def update_script_character(work_dir, char_id: str, *, name=None, aliases=None,
-                            description=None) -> list[dict]:
+                            description=None, voice=None) -> list[dict]:
     """Patch a per-script character's editable fields; returns the saved list."""
     work_dir = Path(work_dir)
     chars = _read_script_characters(work_dir)
@@ -2070,6 +2070,8 @@ def update_script_character(work_dir, char_id: str, *, name=None, aliases=None,
         char["aliases"] = aliases
     if description is not None:
         char["description"] = description
+    if voice is not None:
+        char["voice"] = str(voice).strip()
     return _write_script_characters(work_dir, chars)
 
 

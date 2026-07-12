@@ -158,6 +158,9 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "video_prompt": row.get("video_prompt", ""),
         "narration": row.get("narration", ""),
         "voice": meta.get("voice", ""),
+        "mode": meta.get("mode", "narration"),
+        "lines": meta.get("lines", []),
+        "duration": meta.get("duration", 0),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
@@ -177,6 +180,7 @@ def _character_to_json(wd: Path, c: dict) -> dict:
         "name": c.get("name", ""),
         "aliases": c.get("aliases") or [],
         "description": c.get("description", ""),
+        "voice": c.get("voice", ""),
         "has_image": has_image,
         "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has_image else "",
         "history": image_history.char_history(wd, c.get("id", "")),
@@ -565,6 +569,7 @@ class ScriptCharacterUpdate(BaseModel):
     name: str | None = None
     aliases: list[str] | None = None
     description: str | None = None
+    voice: str | None = None
 
 
 class ScriptCharacterImage(BaseModel):
@@ -612,7 +617,7 @@ def edit_script_character(job_id: str, char_id: str, body: ScriptCharacterUpdate
     wd = _job_wd_or_404(job_id)
     try:
         gapp.update_script_character(wd, char_id, name=body.name, aliases=body.aliases,
-                                     description=body.description)
+                                     description=body.description, voice=body.voice)
     except ValueError as e:
         raise HTTPException(404, str(e))
     return _script_chars_ok(wd)
@@ -1343,6 +1348,10 @@ class SceneUpdate(BaseModel):
     video_prompt: str = ""
     narration: str = ""
     voice: str | None = None
+    # Dialogue/performance (optional; absent ⟹ narration — stored in scene metadata).
+    mode: str | None = None
+    lines: list | None = None
+    duration: float | None = None
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
@@ -1358,6 +1367,28 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["voice"] = voice
             else:
                 meta.pop("voice", None)
+        # Dialogue fields: store only when non-default so narration scenes' metadata
+        # (and thus script.json) stay byte-identical.
+        if body.mode is not None:
+            m = (body.mode or "").strip() or "narration"
+            if m != "narration":
+                meta["mode"] = m
+            else:
+                meta.pop("mode", None)
+        if body.lines is not None:
+            ls = [ln for ln in body.lines
+                  if isinstance(ln, dict) and str(ln.get("text", "")).strip()]
+            if ls:
+                meta["lines"] = [{"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator",
+                                  "text": str(ln.get("text") or "").strip()} for ln in ls]
+            else:
+                meta.pop("lines", None)
+        if body.duration is not None:
+            d = float(body.duration or 0)
+            if d > 0:
+                meta["duration"] = d
+            else:
+                meta.pop("duration", None)
         store.upsert_scene(
             job_id,
             sid,

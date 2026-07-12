@@ -5,6 +5,7 @@ per-character voice field defaults empty — so existing scripts/characters are
 unchanged.
 """
 import unittest
+from pathlib import Path
 
 import app
 from pipeline.llm import Scene
@@ -38,6 +39,16 @@ class DialogueSceneModelTests(unittest.TestCase):
     def test_character_voice_preserved(self):
         chars = app._norm_characters([{"name": "Kinho", "voice": "Luiz"}])
         self.assertEqual(chars[0]["voice"], "Luiz")
+
+    def test_script_character_voice_save_roundtrip(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            chars = app.add_script_character(wd, "Kinho")
+            cid = chars[0]["id"]
+            self.assertEqual(chars[0].get("voice"), "")  # default empty
+            app.update_script_character(wd, cid, voice="Luiz")
+            self.assertEqual(app._read_script_characters(wd)[0]["voice"], "Luiz")
 
 
 if __name__ == "__main__":
