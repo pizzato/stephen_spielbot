@@ -408,12 +408,40 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
             logger.warning("Could not fill narration for scene %d: %s", scene.id, exc)
 
 
+def _norm_scene_lines(item: dict) -> list[dict]:
+    """Extract validated dialogue lines [{speaker,text}] from an LLM scene item."""
+    raw = item.get("lines")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for ln in raw:
+        if not isinstance(ln, dict):
+            continue
+        text = str(ln.get("text") or "").strip()
+        if not text:
+            continue
+        out.append({"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text})
+    return out
+
+
+def _scene_mode_lines(item: dict) -> tuple[str, list[dict]]:
+    """(mode, lines) for a generated scene — 'narration' unless the LLM marked it."""
+    mode = str(item.get("mode") or "narration").strip().lower() or "narration"
+    lines = _norm_scene_lines(item) if mode == "dialogue" else []
+    if mode == "dialogue" and not lines:
+        mode = "narration"  # dialogue with no usable lines degrades to narration
+    if mode not in ("narration", "silent", "dialogue"):
+        mode = "narration"
+    return mode, lines
+
+
 def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
                           call_fn,
                           video_title: str | None = None,
                           video_style_hint: str | None = None,
                           character_sheet: str | None = None,
-                          avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                          avoid_hint: str | None = None,
+                          dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """JSON batch script generation shared by Claude and Grok.
 
     *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
@@ -437,6 +465,10 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         f"\n{character_sheet.strip()}"
         if character_sheet and character_sheet.strip() else ""
     )
+    dialogue_note_str = (
+        f"\n{dialogue_note.strip()}"
+        if dialogue_note and dialogue_note.strip() else ""
+    )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
@@ -454,6 +486,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         video_style_note=video_style_note,
         avoid_note=avoid_note,
         character_note=character_note,
+        dialogue_note=dialogue_note_str,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
@@ -471,16 +504,17 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     identified = _norm_identified_characters(outer.get("characters"))
     character_note = _merge_character_note(character_note, identified)
 
-    scenes = [
-        Scene(
+    scenes = []
+    for i, item in enumerate(scenes_data[:first_batch]):
+        mode, lines = _scene_mode_lines(item)
+        scenes.append(Scene(
             id=item.get("id", i + 1),
             title=item.get("title", f"Scene {i + 1}"),
             image_prompt=item.get("image_prompt", title),
             video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
-        )
-        for i, item in enumerate(scenes_data[:first_batch])
-    ]
+            mode=mode, lines=lines,
+        ))
 
     # ── Continuation batches ──────────────────────────────────────────────────
     batch_start = first_batch + 1
@@ -510,6 +544,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             video_style_note=video_style_note,
             avoid_note=avoid_note,
             character_note=character_note,
+            dialogue_note=dialogue_note_str,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
@@ -519,12 +554,14 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         if not isinstance(items, list):
             items = items.get("scenes", [])
         for i, item in enumerate(items):
+            mode, lines = _scene_mode_lines(item)
             scenes.append(Scene(
                 id=batch_start + i,
                 title=item.get("title", f"Scene {batch_start + i}"),
                 image_prompt=item.get("image_prompt", title),
                 video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
                 narration=item.get("narration", ""),
+                mode=mode, lines=lines,
             ))
         batch_start = batch_end + 1
 
@@ -546,7 +583,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      video_title: str | None = None,
                      video_style_hint: str | None = None,
                      character_sheet: str | None = None,
-                     avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                     avoid_hint: str | None = None,
+                     dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -562,7 +600,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
     return _json_script_generate(
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
-        character_sheet=character_sheet, avoid_hint=avoid_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
     )
 
 
@@ -572,6 +610,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
                    video_style_hint: str | None = None,
                    character_sheet: str | None = None,
                    avoid_hint: str | None = None,
+                   dialogue_note: str | None = None,
                    api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Grok (xAI) uses the same JSON batch protocol as Claude."""
     url = api_url or _GROK_CHAT_URL_DEFAULT
@@ -584,7 +623,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
     return _json_script_generate(
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
-        character_sheet=character_sheet, avoid_hint=avoid_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
     )
 
 
@@ -930,6 +969,7 @@ def generate_script(
     video_style_hint: str | None = None,
     character_sheet: str | None = None,
     avoid_hint: str | None = None,
+    dialogue_note: str | None = None,
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
@@ -960,7 +1000,8 @@ def generate_script(
         logger.info("Using Claude backend: model=%s", model)
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
-                                character_sheet=character_sheet, avoid_hint=avoid_hint)
+                                character_sheet=character_sheet, avoid_hint=avoid_hint,
+                                dialogue_note=dialogue_note)
 
     if backend == "grok":
         api_key = _grok_api_key(cfg)
@@ -974,8 +1015,15 @@ def generate_script(
         return _grok_generate(title, n_scenes, style_hint, api_key, model,
                               video_title=video_title, video_style_hint=video_style_hint,
                               character_sheet=character_sheet, avoid_hint=avoid_hint,
+                              dialogue_note=dialogue_note,
                               api_url=cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT)
 
+    if dialogue_note:
+        raise RuntimeError(
+            "Dialogue/mixed script generation needs the Claude or Grok backend "
+            "(the local vLLM backend produces narration only). Switch the LLM "
+            "backend in Settings, or use the Narration format."
+        )
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
                            video_style_hint=video_style_hint, character_sheet=character_sheet,

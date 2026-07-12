@@ -50,6 +50,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
+  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
@@ -136,6 +137,7 @@ export default function Create({ seed, meta, onGenerated }) {
         voice,
         voice_robotic: robotic,
         resolution,
+        format,
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
       })
@@ -217,6 +219,15 @@ export default function Create({ seed, meta, onGenerated }) {
               <div className="mt-8">
                 <Check checked={robotic} disabled={locked} onChange={setRobotic}
                   label="Make it robotic — a synthetic monotone so it isn't mistaken for a human" />
+              </div>
+            </Field>
+
+            <Field label="Format"
+              hint="Narration = classic voice-over. Dialogue = characters speak, lip-synced (needs characters with a portrait + voice). Mixed = the AI blends narration, dialogue and silent scenes.">
+              <div className="row gap-8">
+                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed']].map(([f, lbl]) => (
+                  <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
+                ))}
               </div>
             </Field>
 
