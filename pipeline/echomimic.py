@@ -16,7 +16,10 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-_TIMEOUT = int(os.environ.get("ECHOMIMIC_TIMEOUT", "1800"))  # seconds per clip
+# Per-clip ceiling. A talking clip's cost scales with resolution × frames — a
+# ~13s line on a 720p-portrait frame legitimately takes ~70 min on a GB10, so
+# the old 30-min default killed real renders mid-flight.
+_TIMEOUT = int(os.environ.get("ECHOMIMIC_TIMEOUT", "7200"))  # seconds per clip
 _FPS = 25
 
 

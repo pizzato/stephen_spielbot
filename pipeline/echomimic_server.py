@@ -37,7 +37,9 @@ REPO_DIR = Path(os.environ.get("ECHOMIMIC_REPO", "/app/echomimic_v3"))
 WEIGHTS_DIR = Path(os.environ.get("ECHOMIMIC_WEIGHTS", "/weights"))
 STUBS_DIR = os.environ.get("ECHOMIMIC_STUBS", "/app/stubs")
 CONFIG_PATH = os.environ.get("ECHOMIMIC_CONFIG", "config/config.yaml")
-TIMEOUT = int(os.environ.get("ECHOMIMIC_TIMEOUT", "1800"))  # seconds per animate
+# Matches the client ceiling (pipeline/echomimic.py) — long lines on large
+# frames are legitimately slow; killing them mid-render wastes the whole clip.
+TIMEOUT = int(os.environ.get("ECHOMIMIC_TIMEOUT", "7200"))  # seconds per animate
 
 # HuggingFace repos and their target subdirs under WEIGHTS_DIR.
 _WEIGHT_REPOS = [
@@ -51,6 +53,9 @@ _TRANSFORMER = str(WEIGHTS_DIR / "EchoMimicV3" / "echomimicv3-flash-pro" / "diff
 _WAV2VEC = str(WEIGHTS_DIR / "chinese-wav2vec2-base")
 
 _weights_lock = threading.Lock()
+# One render at a time per worker: two concurrent infers on one GPU each run
+# slower than serially, pushing both toward the client timeout.
+_render_lock = threading.Lock()
 
 app = FastAPI(title="Stephen Spielbot EchoMimic-V3 worker")
 
@@ -131,9 +136,10 @@ def animate(req: AnimateRequest) -> Response:
             "--fps", "25",
             "--weight_dtype", "bfloat16",
         ]
-        result = subprocess.run(
-            cmd, cwd=str(REPO_DIR), capture_output=True, text=True, timeout=TIMEOUT, env=env
-        )
+        with _render_lock:
+            result = subprocess.run(
+                cmd, cwd=str(REPO_DIR), capture_output=True, text=True, timeout=TIMEOUT, env=env
+            )
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=result.stderr[-2000:])
 
