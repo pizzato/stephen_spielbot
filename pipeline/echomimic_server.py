@@ -60,7 +60,9 @@ class AnimateRequest(BaseModel):
     audio_b64: str
     prompt: str = "A person is speaking to the camera, natural facial expression."
     steps: int = 8
-    size: int = 768
+    size: int = 768         # square fallback when width/height are not given
+    width: int = 0          # explicit output dims (e.g. a landscape scene frame);
+    height: int = 0         # 0 ⟹ size×size square
     video_length: int = 81  # frames at 25 fps; caller sizes this to its audio
 
 
@@ -110,6 +112,9 @@ def animate(req: AnimateRequest) -> Response:
         env = dict(os.environ)
         env["PYTHONPATH"] = STUBS_DIR + os.pathsep + env.get("PYTHONPATH", "")
 
+        # sample_size is (height, width) — VideoX-Fun convention EchoMimic builds on.
+        out_w = int(req.width) or int(req.size)
+        out_h = int(req.height) or int(req.size)
         cmd = [
             "python3", "infer_flash.py",
             "--image_path", str(tmpp / "in.png"),
@@ -122,7 +127,7 @@ def animate(req: AnimateRequest) -> Response:
             "--wav2vec_model_dir", _WAV2VEC,
             "--save_path", str(out_dir),
             "--video_length", str(max(1, int(req.video_length))),
-            "--sample_size", str(int(req.size)), str(int(req.size)),
+            "--sample_size", str(out_h), str(out_w),
             "--fps", "25",
             "--weight_dtype", "bfloat16",
         ]

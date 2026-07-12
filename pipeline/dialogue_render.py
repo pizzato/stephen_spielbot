@@ -1,10 +1,10 @@
 """Render a dialogue/performance scene into one clip via EchoMimic.
 
 For each line ``{speaker, text}``: synthesize the speaker's voice (OpenF5 TTS),
-take a talking-framed still of the speaker (FLUX, reusing the character's reference
-image), animate that still to the audio (EchoMimic talking-head), then concatenate
-the per-line clips into the scene's final mp4. Cutting between single-speaker shots
-is the shot/reverse-shot form dialogue naturally takes.
+take the talking still (the scene's own first frame when there is a single
+speaker — so the character speaks *in the scene* — else the speaker's portrait,
+shot/reverse-shot style), animate it to the audio (EchoMimic talking-head), then
+concatenate the per-line clips into the scene's final mp4.
 
 Narration scenes never call this — it is only reached for ``scene.mode == "dialogue"``.
 The side-effectful steps (TTS, still, animate, probe, concat) are injected so the
@@ -17,12 +17,35 @@ import shutil
 from pathlib import Path
 
 from pipeline import echomimic
-from pipeline.assembler import _get_duration, concatenate_scenes_hard_cut, ensure_video_resolution
+from pipeline.assembler import _get_duration, concatenate_scenes_hard_cut, fit_video_canvas
 from pipeline.tts_worker import generate_narration
 
 logger = logging.getLogger("video_gen")
 
 NARRATOR = "Narrator"
+
+# EchoMimic (Wan-based) wants /16 dimensions; cap the long side for speed.
+_ECHO_MAX_SIDE = 768
+_ECHO_MIN_SIDE = 128
+
+
+def echo_dims_for_still(still: Path, cap: int = _ECHO_MAX_SIDE) -> tuple[int, int]:
+    """(width, height) to request from EchoMimic for *still*.
+
+    Keeps the still's aspect (so a landscape scene frame stays landscape and a
+    square portrait stays square), scales the long side down to *cap*, and rounds
+    to the /16 grid the model needs. Falls back to cap×cap when unreadable."""
+    try:
+        from PIL import Image
+        with Image.open(still) as img:
+            w, h = img.size
+    except Exception:
+        return cap, cap
+    scale = min(1.0, cap / max(w, h))
+    w, h = int(w * scale), int(h * scale)
+    w = max(_ECHO_MIN_SIDE, (w // 16) * 16)
+    h = max(_ECHO_MIN_SIDE, (h // 16) * 16)
+    return w, h
 
 
 def render_dialogue_scene(
@@ -30,19 +53,19 @@ def render_dialogue_scene(
     work_dir: Path,
     *,
     voice_ref_for,          # (speaker:str) -> Path | None   reference wav for the voice
-    make_still,             # (scene, speaker:str, idx:int) -> Path   FLUX still of the speaker
+    make_still,             # (scene, speaker:str, idx:int) -> Path   still to animate
     echomimic_host: str,
     tts_host: str = "localhost",
     prompt_for=lambda scene, speaker: "A person speaks to the camera, natural facial expression.",
     tts_engine: str = "openf5",
-    size: int = 768,
+    canvas: tuple[int, int] | None = None,   # film (width, height); line clips are fitted onto it
     steps: int = 8,
     # injected for testing / to plug the real workers
     _tts=generate_narration,
     _animate=echomimic.animate,
     _duration=_get_duration,
     _concat=concatenate_scenes_hard_cut,
-    _normalize=ensure_video_resolution,
+    _fit=fit_video_canvas,
 ) -> Path:
     """Render ``scene`` (mode 'dialogue') to ``scene_NN_final.mp4`` and return it."""
     lines = [ln for ln in (scene.lines or []) if str((ln or {}).get("text") or "").strip()]
@@ -59,24 +82,27 @@ def render_dialogue_scene(
         dur = _duration(wav)
 
         still = make_still(scene, speaker, idx)
+        ew, eh = echo_dims_for_still(still)
 
         clip = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.mp4"
         _animate(
             still, wav, clip, echomimic_host,
             prompt=prompt_for(scene, speaker),
-            steps=steps, size=size,
+            steps=steps, width=ew, height=eh,
             video_length=echomimic.frames_for_audio(dur),
         )
-        logger.info("  scene %d line %d (%s): %.1fs -> %s", scene.id, idx, speaker, dur, clip.name)
+        logger.info("  scene %d line %d (%s): %.1fs @%dx%d -> %s",
+                    scene.id, idx, speaker, dur, ew, eh, clip.name)
+        # Fit each shot onto the film canvas (blurred pillarbox when aspects
+        # differ) so the in-scene concat and the cross-scene concat both see
+        # uniform dimensions.
+        if canvas:
+            _fit(clip, canvas[0], canvas[1])
         line_clips.append(clip)
 
     final = work_dir / f"scene_{scene.id:02d}_final.mp4"
     if len(line_clips) == 1:
         shutil.copy2(line_clips[0], final)
     else:
-        # EchoMimic sizes output to each portrait, so shots can differ in dimensions;
-        # reframe all to size×size before the hard-cut concat needs uniform dims.
-        for c in line_clips:
-            _normalize(c, size, size)
         _concat(line_clips, final)
     return final
