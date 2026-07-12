@@ -549,6 +549,41 @@ def _mux_source_audio(
     return output_path
 
 
+def fit_video_canvas(video_path: Path, width: int, height: int) -> Path:
+    """Fit a clip onto an exact width×height canvas without cropping content.
+
+    Scales to fit inside the canvas and fills the leftover area with a blurred,
+    zoomed copy of the frame (the standard pillarbox/letterbox treatment) — used
+    for square talking-head clips inside a landscape/portrait film, where
+    ensure_video_resolution's center-crop would cut the speaker's face. In-place
+    (atomic swap); no-op when the clip already matches."""
+    actual_w, actual_h = _get_video_dimensions(video_path)
+    if (actual_w, actual_h) == (width, height):
+        return video_path
+    tmp_path = video_path.with_name(f"{video_path.stem}.fit{width}x{height}.tmp{video_path.suffix}")
+    logger.info("[ffmpeg] fit_video_canvas: %dx%d → %dx%d (%s)",
+                actual_w, actual_h, width, height, video_path.name)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(video_path),
+        "-filter_complex",
+        (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=20:5[bg];"
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vout]"
+        ),
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(tmp_path),
+    ], timeout=1800)
+    tmp_path.replace(video_path)
+    return video_path
+
+
 def concatenate_scenes_hard_cut(scene_paths: list[Path], output_path: Path) -> Path:
     """Join scene clips back-to-back without fades or overlap."""
     if len(scene_paths) == 1:

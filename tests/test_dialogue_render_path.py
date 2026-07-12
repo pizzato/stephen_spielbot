@@ -108,6 +108,22 @@ class CaptionSkipTests(unittest.TestCase):
             self.assertIn("00:00:04", text)  # narrated cue starts after the silent scene
 
 
+class FitCanvasTests(unittest.TestCase):
+    def test_square_clip_fits_landscape_canvas(self):
+        import subprocess
+        from pipeline.assembler import _FFMPEG, _get_video_dimensions, fit_video_canvas
+        with tempfile.TemporaryDirectory() as td:
+            clip = Path(td) / "sq.mp4"
+            subprocess.run([_FFMPEG, "-y", "-f", "lavfi", "-i", "color=c=red:s=640x640:d=1",
+                            "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono", "-t", "1",
+                            "-c:v", "libx264", "-c:a", "aac", str(clip)],
+                           capture_output=True, check=True)
+            fit_video_canvas(clip, 832, 480)
+            self.assertEqual(_get_video_dimensions(clip), (832, 480))
+            fit_video_canvas(clip, 832, 480)  # no-op when already matching
+            self.assertEqual(_get_video_dimensions(clip), (832, 480))
+
+
 class SceneLoadTests(unittest.TestCase):
     def test_resume_partition_reads_metadata(self):
         # mirrors resume_generation.main's hydration + partition
