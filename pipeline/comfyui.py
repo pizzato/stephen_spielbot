@@ -741,16 +741,50 @@ _IC_UPSCALE_NEGATIVE = (
 )
 
 
-def _snap_ltx_dim(value: int, multiple: int = 32) -> int:
-    """Snap a pixel dimension to LTX's multiple (default 32)."""
+# LTX VAE spatial compression. EmptyLTXVLatentVideo of WxH → latent (W/32)×(H/32).
+_LTX_VAE_SPATIAL = 32
+
+
+def _snap_ltx_dim(value: int, multiple: int = 32, *, prefer: str = "round") -> int:
+    """Snap a pixel dimension to *multiple*.
+
+    prefer:
+      - ``round`` — nearest (default)
+      - ``up`` — ceil, never shrink below the requested size
+      - ``down`` — floor
+    """
     m = max(1, int(multiple))
-    return max(m, int(round(int(value) / m) * m))
+    v = max(1, int(value))
+    if prefer == "up":
+        return max(m, ((v + m - 1) // m) * m)
+    if prefer == "down":
+        return max(m, (v // m) * m)
+    return max(m, int(round(v / m) * m))
 
 
 def _ic_lora_name_for_scale(src_w: int, src_h: int, dst_w: int, dst_h: int) -> str:
     """Pick 2× or 4× IC-LoRA from the largest side scale factor."""
     scale = max(float(dst_w) / max(1, src_w), float(dst_h) / max(1, src_h))
     return _IC_LORA_X4 if scale >= 3.0 else _IC_LORA_X2
+
+
+def _ic_lora_downscale_factor(lora_name: str) -> int:
+    """reference_downscale_factor baked into the IC-LoRA weights (2 or 4)."""
+    name = (lora_name or "").lower()
+    if "x4" in name or "-4x" in name:
+        return 4
+    return 2
+
+
+def _ic_lora_pixel_grid(lora_name: str) -> int:
+    """Pixel multiple so latent dims are divisible by the IC-LoRA downscale factor.
+
+    LTXAddVideoICLoRAGuide requires ``(latent_w % factor == 0) and (latent_h % factor == 0)``
+    before dilating the guide. With VAE spatial /32 that means pixels must be a
+    multiple of ``32 * factor`` (64 for 2×, 128 for 4×). Without this, targets
+    like 1920×1080 → 1920×1088 yield latent 60×34 and 34 % 4 fails on 4×.
+    """
+    return _LTX_VAE_SPATIAL * _ic_lora_downscale_factor(lora_name)
 
 
 def upscale_video_ltx(
@@ -780,11 +814,19 @@ def upscale_video_ltx(
     if duration_seconds is None:
         duration_seconds = _get_duration(src)
 
-    width = _snap_ltx_dim(width)
-    height = _snap_ltx_dim(height)
+    # Pick LoRA from the *requested* target (before grid snap) so a 4× jump
+    # still selects the x4 weights even if we later pad height to 1152.
+    requested_w, requested_h = int(width), int(height)
+    ic_lora = _ic_lora_name_for_scale(
+        int(source_width), int(source_height), requested_w, requested_h,
+    )
+    grid = _ic_lora_pixel_grid(ic_lora)
+    # Snap up so we never undershoot the user's target; final normalize crops
+    # / scales back to requested_w×requested_h.
+    width = _snap_ltx_dim(requested_w, grid, prefer="up")
+    height = _snap_ltx_dim(requested_h, grid, prefer="up")
     fps_val = max(1.0, float(fps or LTX_FPS))
     length = _frame_count(1, duration_seconds)
-    ic_lora = _ic_lora_name_for_scale(int(source_width), int(source_height), width, height)
 
     video_name = _stage_video_for_load(src, comfy_url=comfy_url)
     workflow = _load_workflow("ltx23_ic_lora_pixel_upscale.json")
@@ -801,10 +843,10 @@ def upscale_video_ltx(
     })
 
     logger.info(
-        "[comfy] upscale_video_ltx IC-LoRA %s %s -> %dx%d (src %dx%d) fps=%.3f "
-        "frames=%d timeout=%ds on %s",
-        ic_lora, src.name, width, height, source_width, source_height,
-        fps_val, length, timeout_seconds, comfy_url,
+        "[comfy] upscale_video_ltx IC-LoRA %s %s -> %dx%d (work %dx%d, grid %d, "
+        "src %dx%d) fps=%.3f frames=%d timeout=%ds on %s",
+        ic_lora, src.name, requested_w, requested_h, width, height, grid,
+        source_width, source_height, fps_val, length, timeout_seconds, comfy_url,
     )
     last_retryable: Exception | None = None
     prompt_id = ""
@@ -837,7 +879,9 @@ def upscale_video_ltx(
     video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
-    return _ensure_exact_video_resolution(downloaded, int(width), int(height))
+    # Normalize to the user-requested resolution (working size may be larger to
+    # satisfy the IC-LoRA latent grid, e.g. 1080 → 1152 for 4×).
+    return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
 
 
 def upscale_video_ltx_latent(
