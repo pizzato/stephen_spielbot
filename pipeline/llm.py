@@ -75,6 +75,27 @@ class Scene:
     lines: list = field(default_factory=list)
     # explicit length (seconds) for silent scenes that have no audio to time from.
     duration: float = 0.0
+    # Any other metadata the scene sidecar carried (e.g. per-scene voice) —
+    # preserved through the `metadata` property below.
+    metadata_extra: dict = field(default_factory=dict)
+
+    @property
+    def metadata(self) -> dict:
+        """The scene's metadata sidecar, dialogue fields included.
+
+        The orchestrator mirrors scenes into its store via getattr(scene,
+        "metadata") — without this property every render start overwrote the
+        stored metadata with {} and authored dialogue silently reverted to
+        narration."""
+        md = {k: v for k, v in self.metadata_extra.items()
+              if k not in ("mode", "lines", "duration")}
+        if self.mode not in ("narration", "", None):
+            md["mode"] = self.mode
+        if self.lines:
+            md["lines"] = self.lines
+        if self.duration:
+            md["duration"] = self.duration
+        return md
 
 
 # ══════════════════════════════════════════════════════════════════════════════

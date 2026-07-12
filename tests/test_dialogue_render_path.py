@@ -42,6 +42,30 @@ class SnapshotRowTests(unittest.TestCase):
         self.assertEqual(row["metadata"], {"mode": "silent", "duration": 7.0})
 
 
+class SceneMetadataPropertyTests(unittest.TestCase):
+    """ensure_generation_plan mirrors scenes into the store via
+    getattr(scene, "metadata") — without the property it wiped stored dialogue
+    metadata to {} on every render start."""
+
+    def test_narration_scene_metadata_empty(self):
+        s = Scene(id=1, title="t", image_prompt="i", video_prompt="v", narration="n")
+        self.assertEqual(s.metadata, {})
+
+    def test_dialogue_scene_metadata_roundtrip(self):
+        md = {"mode": "dialogue", "lines": [{"speaker": "K", "text": "hi"}], "voice": "Luiz"}
+        s = Scene(id=2, title="t", image_prompt="i", video_prompt="v", narration="",
+                  mode=md["mode"], lines=md["lines"], metadata_extra=dict(md))
+        self.assertEqual(s.metadata["mode"], "dialogue")
+        self.assertEqual(s.metadata["lines"][0]["text"], "hi")
+        self.assertEqual(s.metadata["voice"], "Luiz")  # extras preserved
+
+    def test_orchestrator_upsert_keeps_scene_metadata(self):
+        from pipeline.orchestrator import _scene_value
+        s = Scene(id=3, title="t", image_prompt="i", video_prompt="v", narration="",
+                  mode="silent", duration=5.0)
+        self.assertEqual(_scene_value(s, "metadata", {}), {"mode": "silent", "duration": 5.0})
+
+
 class DialogueSchemaPromptTests(unittest.TestCase):
     def test_system_prompt_without_schema_is_clean(self):
         text = _prompts.system("script_claude_initial", dialogue_schema="")

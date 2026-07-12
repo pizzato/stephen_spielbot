@@ -1415,13 +1415,7 @@ def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
     row = {"id": s.id, "title": s.title,
            "image_prompt": image_prompt if image_prompt is not None else s.image_prompt,
            "video_prompt": s.video_prompt, "narration": s.narration}
-    md = {}
-    if getattr(s, "mode", "narration") not in ("narration", "", None):
-        md["mode"] = s.mode
-    if getattr(s, "lines", None):
-        md["lines"] = s.lines
-    if getattr(s, "duration", 0):
-        md["duration"] = s.duration
+    md = getattr(s, "metadata", None) or {}
     if md:
         row["metadata"] = md
     return row
@@ -2504,6 +2498,7 @@ def start_generation(body: GenerateBody) -> dict:
             mode=str((row.get("metadata") or {}).get("mode") or "narration"),
             lines=list((row.get("metadata") or {}).get("lines") or []),
             duration=float((row.get("metadata") or {}).get("duration") or 0.0),
+            metadata_extra=dict(row.get("metadata") or {}),
         )
         for row in scene_rows[:n]
     ]

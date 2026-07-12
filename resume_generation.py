@@ -413,6 +413,7 @@ def main(work_dir: Path) -> None:
             mode=str((s.get("metadata") or {}).get("mode") or "narration"),
             lines=list((s.get("metadata") or {}).get("lines") or []),
             duration=float((s.get("metadata") or {}).get("duration") or 0.0),
+            metadata_extra=dict(s.get("metadata") or {}),
         )
         for s in script_data
     ]
