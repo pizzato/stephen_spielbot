@@ -189,27 +189,23 @@ def _script_characters_payload(wd: Path) -> list[dict]:
 
 
 # ── activity tracker ─────────────────────────────────────────────────────────
+# Live ops + durable history for the Activity screen. History survives restarts
+# (JSON under ~/.local/share/video-generator/). Events are grouped by film when
+# a work_dir is known; low-value background work is marked noise for UI fold-up.
 
 _op_lock = threading.Lock()
-_current_ops: dict = {}   # op_id -> {name, detail, started_at}
-_activity_log: list = []  # [{name, detail, ts, duration_s}], newest first, max 20
+_current_ops: dict = {}   # op_id -> live event dict
+_activity_log: list = []  # completed events, newest first
+_ACTIVITY_LOG_MAX = 200
+_ACTIVITY_LOG_PATH = Path.home() / ".local" / "share" / "video-generator" / "activity_log.json"
+_activity_log_loaded = False
 
-
-@contextmanager
-def _track_op(name: str, detail: str = ""):
-    started = time.time()
-    op_id = uuid.uuid4().hex
-    with _op_lock:
-        _current_ops[op_id] = {"name": name, "detail": detail, "started_at": started}
-    try:
-        yield
-    finally:
-        end = time.time()
-        with _op_lock:
-            _current_ops.pop(op_id, None)
-            _append_activity_locked(name, detail, end, started)
-            del _activity_log[20:]
-
+# Names that are useful for debugging but noisy on the Activity screen.
+_NOISE_OP_NAMES = frozenset({
+    "Automation tick",
+    "Fetching comments",
+    "Fetching X mentions",
+})
 
 # Live sub-phase labels for film edit tasks (keyed by _film_tasks["step"]).
 _RERENDER_STEP_LABELS = {
@@ -223,11 +219,178 @@ _RERENDER_STEP_LABELS = {
 }
 
 
-def _append_activity_locked(name: str, detail: str, end: float, started: float) -> None:
-    _activity_log.insert(0, {
-        "name": name, "detail": detail,
-        "ts": end, "duration_s": round(max(0.0, end - started), 1),
-    })
+def _activity_category(name: str) -> str:
+    n = (name or "").lower()
+    if "automation" in n:
+        return "automation"
+    if any(k in n for k in ("upscal", "re-render", "rerender", "narrator", "music", "remix", "film", "assemble")):
+        return "film"
+    if any(k in n for k in ("render", "generat", "script", "preview", "scene")):
+        return "script" if "script" in n else "render"
+    if any(k in n for k in ("youtube", "upload", "x ", "posting", "comment", "mention", "thumbnail", "description", "title")):
+        return "publish"
+    if any(k in n for k in ("engagement", "voice", "suggestion")):
+        return "system"
+    return "other"
+
+
+def _activity_is_noise(name: str, category: str = "") -> bool:
+    if (name or "") in _NOISE_OP_NAMES:
+        return True
+    return category == "automation"
+
+
+def _activity_group_for(work_dir: str = "", title: str = "", *, noise: bool = False, category: str = "") -> tuple[str, str]:
+    """Return (group_key, group_label) for collapse/expand in the UI."""
+    if noise or category == "automation":
+        return "noise", "Background & automation"
+    wd = (work_dir or "").strip()
+    if wd:
+        key = Path(wd).name
+        label = (title or "").strip() or key
+        return f"film:{key}", label
+    if category in {"publish", "system", "other"}:
+        return f"cat:{category}", category.replace("_", " ").title()
+    return "system", "System"
+
+
+def _make_activity_event(
+    *,
+    name: str,
+    detail: str = "",
+    started_at: float | None = None,
+    finished_at: float | None = None,
+    status: str = "done",
+    work_dir: str = "",
+    title: str = "",
+    pct: float | int | None = None,
+    eta_text: str | None = None,
+    eta_seconds: float | None = None,
+    event_id: str | None = None,
+    category: str | None = None,
+) -> dict:
+    now = time.time()
+    started = float(started_at or finished_at or now)
+    finished = finished_at
+    cat = category or _activity_category(name)
+    noise = _activity_is_noise(name, cat)
+    # Prefer a real film title when we only have a work_dir.
+    film_title = (title or "").strip()
+    if work_dir and not film_title:
+        try:
+            film_title = _video_title_for(Path(work_dir))
+        except Exception:
+            film_title = Path(work_dir).name
+    group_key, group_label = _activity_group_for(
+        work_dir, film_title, noise=noise, category=cat,
+    )
+    duration_s = None
+    elapsed_s = None
+    if finished is not None:
+        duration_s = round(max(0.0, float(finished) - started), 1)
+    else:
+        elapsed_s = round(max(0.0, now - started), 1)
+    ev = {
+        "id": event_id or uuid.uuid4().hex,
+        "name": name,
+        "detail": detail or "",
+        "category": cat,
+        "noise": noise,
+        "group_key": group_key,
+        "group_label": group_label,
+        "work_dir": work_dir or "",
+        "title": film_title or "",
+        "status": status,
+        "started_at": started,
+        "ts": float(finished if finished is not None else now),
+        "duration_s": duration_s,
+        "elapsed_s": elapsed_s,
+        "pct": int(round(pct)) if pct is not None else None,
+        "eta_text": eta_text,
+        "eta_seconds": eta_seconds,
+    }
+    return ev
+
+
+def _load_activity_log() -> None:
+    global _activity_log_loaded, _activity_log
+    if _activity_log_loaded:
+        return
+    _activity_log_loaded = True
+    try:
+        if _ACTIVITY_LOG_PATH.exists():
+            data = json.loads(_ACTIVITY_LOG_PATH.read_text(encoding="utf-8"))
+            if isinstance(data, list):
+                _activity_log = [e for e in data if isinstance(e, dict)][:_ACTIVITY_LOG_MAX]
+    except Exception:
+        _activity_log = list(_activity_log)
+
+
+def _persist_activity_log_locked() -> None:
+    try:
+        _ACTIVITY_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _ACTIVITY_LOG_PATH.with_suffix(".tmp")
+        tmp.write_text(
+            json.dumps(_activity_log[:_ACTIVITY_LOG_MAX], ensure_ascii=False),
+            encoding="utf-8",
+        )
+        tmp.replace(_ACTIVITY_LOG_PATH)
+    except Exception:
+        pass
+
+
+def _append_activity_locked(
+    name: str,
+    detail: str,
+    end: float,
+    started: float,
+    *,
+    work_dir: str = "",
+    title: str = "",
+    status: str = "done",
+    category: str | None = None,
+) -> None:
+    _load_activity_log()
+    ev = _make_activity_event(
+        name=name,
+        detail=detail,
+        started_at=started,
+        finished_at=end,
+        status=status,
+        work_dir=work_dir,
+        title=title,
+        category=category,
+    )
+    _activity_log.insert(0, ev)
+    del _activity_log[_ACTIVITY_LOG_MAX:]
+    _persist_activity_log_locked()
+
+
+@contextmanager
+def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = ""):
+    started = time.time()
+    op_id = uuid.uuid4().hex
+    with _op_lock:
+        _load_activity_log()
+        _current_ops[op_id] = _make_activity_event(
+            name=name,
+            detail=detail,
+            started_at=started,
+            status="running",
+            work_dir=work_dir,
+            title=title,
+            event_id=op_id,
+        )
+    try:
+        yield
+    finally:
+        end = time.time()
+        with _op_lock:
+            _current_ops.pop(op_id, None)
+            _append_activity_locked(
+                name, detail, end, started,
+                work_dir=work_dir, title=title, status="done",
+            )
 
 
 def _film_task_started_at(task_id: str) -> float:
@@ -251,6 +414,7 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     started = _film_task_started_at(task_id) or time.time()
     step = str(task.get("step") or component or "").strip()
     detail = _RERENDER_STEP_LABELS.get(step, step)
+    work_dir = str(meta.get("work_dir") or "")
 
     scene_id = int(meta.get("scene_id") or task.get("scene_id") or 0)
     if task_id.startswith("rerender_") and not scene_id:
@@ -261,9 +425,8 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
             except ValueError:
                 scene_id = 0
     if scene_id > 0 and component != "narrator":
-        return {"name": f"Re-rendering scene {scene_id}", "detail": detail, "started_at": started}
-
-    if component == "final_upscale" or task_id.startswith("final_upscale_"):
+        name = f"Re-rendering scene {scene_id}"
+    elif component == "final_upscale" or task_id.startswith("final_upscale_"):
         name = "Upscaling final video"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
@@ -275,11 +438,35 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     else:
         name = "Updating film"
 
-    work_dir = str(meta.get("work_dir") or "")
+    title = ""
     if work_dir:
-        film = Path(work_dir).name
-        detail = f"{detail} · {film}" if detail else film
-    return {"name": name, "detail": detail, "started_at": started}
+        try:
+            title = _video_title_for(Path(work_dir))
+        except Exception:
+            title = Path(work_dir).name
+        if not detail:
+            detail = title
+        elif title and title not in detail:
+            detail = f"{detail} · {title}"
+
+    pct = task.get("pct")
+    if pct is None and task.get("current") and task.get("total"):
+        try:
+            pct = 100.0 * float(task["current"]) / max(1.0, float(task["total"]))
+        except (TypeError, ValueError):
+            pct = None
+
+    return _make_activity_event(
+        name=name,
+        detail=detail,
+        started_at=started,
+        status="running",
+        work_dir=work_dir,
+        title=title,
+        pct=pct,
+        event_id=f"film:{task_id}",
+        category="film",
+    )
 
 
 def _record_film_task_activity(
@@ -295,13 +482,118 @@ def _record_film_task_activity(
     status = (_film_tasks.get(task_id) or {}).get("status")
     if status == "error":
         name = failed_name
+        st = "error"
     elif status == "cancelled":
         name = cancelled_name
+        st = "cancelled"
     else:
         name = done_name
+        st = "done"
+    meta = _film_task_meta.get(task_id) or {}
+    work_dir = str(meta.get("work_dir") or "")
+    title = ""
+    if work_dir:
+        try:
+            title = _video_title_for(Path(work_dir))
+        except Exception:
+            title = Path(work_dir).name
     with _op_lock:
-        _append_activity_locked(name, detail, end, started)
-        del _activity_log[20:]
+        _append_activity_locked(
+            name, detail, end, started,
+            work_dir=work_dir, title=title, status=st, category="film",
+        )
+
+
+def _live_render_activity_items() -> list[dict]:
+    """Running durable generation jobs with progress % and learned ETAs."""
+    items: list[dict] = []
+    try:
+        if not gapp._is_job_running():
+            return items
+        wd = gapp._preferred_work_dir("")
+        if wd is None:
+            return items
+        pct, msg = gapp._status_for_work_dir(wd)
+        title = wd.name
+        eta_text, eta_seconds = None, None
+        started_at = None
+        store = DurableStore.default()
+        try:
+            job_row = store.get_job_by_work_dir(str(wd))
+            if job_row is not None:
+                job = _row_to_dict(job_row)
+                title = job.get("title") or title
+                try:
+                    started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
+                except (TypeError, ValueError):
+                    started_at = None
+                tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+                cfg = gapp.load_config()
+                timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+                reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+                try:
+                    eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=reserved)
+                    if eta:
+                        eta_text = eta.get("eta_text")
+                        eta_seconds = eta.get("eta_seconds")
+                except Exception:
+                    pass
+        finally:
+            store.close()
+        items.append(_make_activity_event(
+            name="Rendering film",
+            detail=msg or title,
+            started_at=started_at or time.time(),
+            status="running",
+            work_dir=str(wd),
+            title=title,
+            pct=pct,
+            eta_text=eta_text,
+            eta_seconds=eta_seconds,
+            event_id=f"render:{wd.name}",
+            category="render",
+        ))
+    except Exception:
+        pass
+    return items
+
+
+def _group_activity_events(events: list[dict]) -> list[dict]:
+    """Nest flat events under collapsible groups (film / noise / system)."""
+    order: list[str] = []
+    buckets: dict[str, dict] = {}
+    for ev in events:
+        key = str(ev.get("group_key") or "system")
+        if key not in buckets:
+            order.append(key)
+            buckets[key] = {
+                "key": key,
+                "label": ev.get("group_label") or key,
+                "work_dir": ev.get("work_dir") or "",
+                "title": ev.get("title") or "",
+                "noise": bool(ev.get("noise")),
+                "live_count": 0,
+                "items": [],
+            }
+        g = buckets[key]
+        g["items"].append(ev)
+        if ev.get("status") == "running":
+            g["live_count"] += 1
+        # Prefer a non-empty film title/work_dir on the group header.
+        if not g["work_dir"] and ev.get("work_dir"):
+            g["work_dir"] = ev["work_dir"]
+        if not g["title"] and ev.get("title"):
+            g["title"] = ev["title"]
+            if not str(g["label"]).startswith("Background"):
+                g["label"] = ev["title"]
+    groups = [buckets[k] for k in order]
+    # Live film groups first, then other live, then noise last among idle.
+    def _sort_key(g: dict) -> tuple:
+        live = 1 if g["live_count"] else 0
+        noise = 1 if g["noise"] else 0
+        return (-live, noise, g["label"].lower())
+    groups.sort(key=_sort_key)
+    return groups
 
 
 # ── config ───────────────────────────────────────────────────────────────────
@@ -3886,9 +4178,23 @@ def badges() -> dict:
     except Exception:
         pass
 
+    # Cheap live-work count for the Activity nav badge (ops + film tasks + render).
+    activity_live = 0
+    try:
+        with _op_lock:
+            activity_live += len(_current_ops)
+        activity_live += sum(
+            1 for t in list(_film_tasks.values()) if t.get("status") == "running"
+        )
+        if render_active:
+            activity_live += 1
+    except Exception:
+        activity_live = 1 if render_active else 0
+
     return {
         "render_active": render_active,
         "render_pct": render_pct,
+        "activity_live": activity_live,
         "queue": queue_pending,
         "youtube": attention + publishable,
         "youtube_attention": attention,
@@ -3900,11 +4206,21 @@ def badges() -> dict:
 
 
 @api.get("/api/activity")
-def get_activity() -> dict:
-    """What the system is doing right now, plus recent event log."""
+def get_activity(limit: int = 80) -> dict:
+    """Everything the system is doing and recently did.
+
+    Returns live items (API ops, film edits, durable renders with ETAs),
+    durable history, and pre-built collapsible groups for the Activity screen.
+    Backward-compatible fields (active_ops, recent, render_*) keep Home working.
+    """
+    try:
+        limit_n = max(1, min(200, int(limit)))
+    except (TypeError, ValueError):
+        limit_n = 80
     with _op_lock:
+        _load_activity_log()
         active_ops = [dict(op) for op in _current_ops.values()]
-        log = list(_activity_log[:10])
+        log = list(_activity_log[: max(10, limit_n)])
 
     # Film edit tasks run in daemon threads that record progress in _film_tasks
     # rather than _track_op. Surface all running ones so final upscales, music
@@ -3913,40 +4229,59 @@ def get_activity() -> dict:
         op = _film_task_activity_op(key, task)
         if op:
             active_ops.append(op)
+
+    # Durable full-film renders (with learned ETAs when available).
+    render_items = _live_render_activity_items()
+    # Avoid double-listing if something already tracked the same render.
+    render_ids = {r.get("id") for r in render_items}
+    active_ops = [op for op in active_ops if op.get("id") not in render_ids]
+    active_ops.extend(render_items)
+
     active_ops.sort(key=lambda item: float(item.get("started_at") or 0.0), reverse=True)
     op = dict(active_ops[0]) if active_ops else {}
 
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
-    try:
-        render_active = bool(gapp._is_job_running())
-        if render_active:
-            wd = gapp._preferred_work_dir("")
-            if wd is not None:
-                pct, msg = gapp._status_for_work_dir(wd)
-                render_pct = int(round(pct))
-                render_msg = msg
-                store = DurableStore.default()
-                try:
-                    job_row = store.get_job_by_work_dir(str(wd))
-                    render_title = (_row_to_dict(job_row).get("title") or wd.name) if job_row else wd.name
-                finally:
-                    store.close()
-    except Exception:
-        pass
+    render_eta = None
+    for r in render_items:
+        render_active = True
+        render_pct = int(r.get("pct") or 0)
+        render_msg = r.get("detail") or ""
+        render_title = r.get("title") or ""
+        render_eta = r.get("eta_text")
+        break
 
     try:
         queue_pending = sum(1 for q in yt.load_queue() if q.get("status") == "pending")
     except Exception:
         queue_pending = 0
 
+    # History: completed log entries only (live list is separate).
+    history = [e for e in log if e.get("status") != "running"]
+    # Combined stream for grouping: live first, then history (dedupe by id).
+    seen_ids: set[str] = set()
+    combined: list[dict] = []
+    for ev in active_ops + history:
+        eid = str(ev.get("id") or "")
+        if eid and eid in seen_ids:
+            continue
+        if eid:
+            seen_ids.add(eid)
+        combined.append(ev)
+    groups = _group_activity_events(combined)
+
     return {
         "current_op": op,
         "active_ops": active_ops,
-        "recent": log,
+        "live": active_ops,
+        "recent": history[:10],
+        "history": history[: limit_n],
+        "groups": groups,
+        "live_count": len(active_ops),
         "render_active": render_active,
         "render_pct": render_pct,
         "render_msg": render_msg,
         "render_title": render_title,
+        "render_eta": render_eta,
         "queue_pending": queue_pending,
     }
 

@@ -611,6 +611,7 @@ const NAV = [
   { id: 'queue', label: 'Queue', icon: 'layer-group' },
   { id: 'script', label: 'Script', icon: 'feather-pointed' },
   { id: 'progress', label: 'Render', icon: 'gauge-high' },
+  { id: 'activity', label: 'Activity', icon: 'clock-rotate-left' },
   { id: 'library', label: 'Films', icon: 'film' },
   { sep: true },
   { id: 'publish', label: 'Publishing', icon: 'upload' },
@@ -635,6 +636,15 @@ function navIndicator(id, badges) {
       <span className="nav__rec" title="Rendering now">
         <span className="nav__rec-dot"></span>
         {badges.render_pct ? `${badges.render_pct}%` : 'REC'}
+      </span>
+    )
+  }
+  if (id === 'activity' && (badges.activity_live || badges.render_active)) {
+    const n = badges.activity_live || (badges.render_active ? 1 : 0)
+    return (
+      <span className="nav__rec" title="Work in progress">
+        <span className="nav__rec-dot"></span>
+        {n > 1 ? n : 'LIVE'}
       </span>
     )
   }

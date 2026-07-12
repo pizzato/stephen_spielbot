@@ -35,9 +35,20 @@ export default function Home({ go }) {
   }, [])
 
   const op = activity.current_op || {}
-  const activeOps = (activity.active_ops || []).length ? activity.active_ops : (op.name ? [op] : [])
-  const renderOp = activity.render_active
-    ? { name: `Rendering ${activity.render_pct}%`, detail: activity.render_title || activity.render_msg || '', render: true }
+  const activeOps = (activity.live || activity.active_ops || []).length
+    ? (activity.live || activity.active_ops)
+    : (op.name ? [op] : [])
+  // Backend now includes durable renders in live[]; only synthesize if missing.
+  const hasRenderLive = activeOps.some((a) => a.category === 'render' || a.render)
+  const renderOp = activity.render_active && !hasRenderLive
+    ? {
+        name: `Rendering ${activity.render_pct}%`,
+        detail: activity.render_title || activity.render_msg || '',
+        render: true,
+        pct: activity.render_pct,
+        eta_text: activity.render_eta,
+        title: activity.render_title,
+      }
     : null
   const visibleOps = activeOps.length ? [...activeOps, ...(renderOp ? [renderOp] : [])] : (renderOp ? [renderOp] : [])
   const isActive = visibleOps.length > 0
@@ -84,13 +95,26 @@ export default function Home({ go }) {
           </p>
         </Card>
 
-        {/* Activity card — always shows what the system is doing */}
+        {/* Activity card — compact feed; full timeline is on Activity */}
         <Card span={12} className="reveal reveal-d2">
           <div className="card__head">
             <span className="label-sm">Activity</span>
-            {isActive
-              ? <Chip tone="accent" dot>Running</Chip>
-              : <span style={{ fontSize: 12, color: 'var(--ink-4)' }}>Idle</span>}
+            <div className="row center gap-10">
+              {isActive
+                ? <Chip tone="accent" dot>Running</Chip>
+                : <span style={{ fontSize: 12, color: 'var(--ink-4)' }}>Idle</span>}
+              {activity.render_eta ? (
+                <Chip tone="info" dot>{activity.render_eta} left</Chip>
+              ) : null}
+              <button
+                type="button"
+                className="btn btn--quiet"
+                style={{ padding: '6px 12px', fontSize: 12.5 }}
+                onClick={() => go('activity')}
+              >
+                Full activity →
+              </button>
+            </div>
           </div>
           <div className="stream" style={{ marginTop: 4 }}>
             {visibleOps.map((active, i) => (
@@ -100,34 +124,42 @@ export default function Home({ go }) {
                 </span>
                 <div className="grow">
                   <span className="stream-title">{active.name}</span>
-                  {active.detail && (
-                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{active.detail}</span>
+                  {(active.detail || active.title) && (
+                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+                      {active.title && active.detail && !String(active.detail).includes(active.title)
+                        ? `${active.detail} · ${active.title}`
+                        : (active.detail || active.title)}
+                    </span>
                   )}
                 </div>
-                {active.render && (
-                  <span style={{ fontSize: 12, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums', minWidth: 36, textAlign: 'right' }}>
-                    {activity.render_pct}%
-                  </span>
-                )}
+                <span style={{ fontSize: 12, color: 'var(--ink-3)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
+                  {active.eta_text ? `${active.eta_text} left` : null}
+                  {active.eta_text && active.pct != null ? ' · ' : null}
+                  {(active.render || active.pct != null) ? `${active.pct ?? activity.render_pct}%` : null}
+                </span>
               </div>
             ))}
-            {activity.recent.slice(0, 5).map((ev, i) => (
-              <div key={i} className="stream-entry">
+            {(activity.recent || []).slice(0, 5).map((ev, i) => (
+              <div key={ev.id || i} className="stream-entry">
                 <span className="stream-ico" style={{ background: 'var(--paper-2)', color: 'var(--ink-3)' }}>
                   <Icon name="clock-rotate-left" />
                 </span>
                 <div className="grow">
                   <span className="stream-title">{ev.name}</span>
-                  {ev.detail && (
-                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>{ev.detail}</span>
+                  {(ev.detail || ev.title) && (
+                    <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>
+                      {ev.title && ev.detail && !String(ev.detail).includes(ev.title)
+                        ? `${ev.detail} · ${ev.title}`
+                        : (ev.detail || ev.title)}
+                    </span>
                   )}
                 </div>
                 <span style={{ fontSize: 11.5, color: 'var(--ink-4)', whiteSpace: 'nowrap' }}>
-                  {ev.duration_s}s · {timeAgo(ev.ts)}
+                  {ev.duration_s != null ? `${ev.duration_s}s · ` : ''}{timeAgo(ev.ts)}
                 </span>
               </div>
             ))}
-            {!isActive && activity.recent.length === 0 && (
+            {!isActive && (activity.recent || []).length === 0 && (
               <div className="muted" style={{ fontSize: 13, padding: '8px 0' }}>No recent activity.</div>
             )}
           </div>
