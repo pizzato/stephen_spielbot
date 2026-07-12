@@ -45,12 +45,75 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
     fi \
     && pip install -r requirements.txt
 
-# Video Helper Suite gives the backend a packaged way to load an existing MP4,
-# run it through the LTX latent upscaler, and save the upscaled MP4. This makes
-# Remix's temporal AI upscaler self-contained instead of requiring a local CLI.
+# Video Helper Suite: load/save MP4s for Remix upscale without a local CLI.
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
         custom_nodes/ComfyUI-VideoHelperSuite \
     && pip install -r custom_nodes/ComfyUI-VideoHelperSuite/requirements.txt
+
+# Lightricks IC-LoRA nodes (LTXICLoRALoaderModelOnly, LTXAddVideoICLoRAGuide, …)
+# for the LTX-2.3 Pixel Spatial Upscaler used by Remix "AI temporal" upscale.
+# Newer kornia dropped `pad` from geometry.transform.pyramid; patch it so the
+# whole ComfyUI-LTXVideo package (including IC-LoRA) can import.
+RUN git clone --depth=1 https://github.com/Lightricks/ComfyUI-LTXVideo.git \
+        custom_nodes/ComfyUI-LTXVideo \
+    && if [ -f custom_nodes/ComfyUI-LTXVideo/requirements.txt ]; then \
+         pip install -r custom_nodes/ComfyUI-LTXVideo/requirements.txt; \
+       fi \
+    && python3 <<'PY'
+from pathlib import Path
+
+p = Path("custom_nodes/ComfyUI-LTXVideo/pyramid_blending.py")
+t = p.read_text()
+old = """from kornia.geometry.transform.pyramid import (
+    PyrUp,
+    build_laplacian_pyramid,
+    build_pyramid,
+    find_next_powerof_two,
+    is_powerof_two,
+    pad,
+)"""
+new = """from kornia.geometry.transform.pyramid import (
+    PyrUp,
+    build_laplacian_pyramid,
+    build_pyramid,
+    find_next_powerof_two,
+    is_powerof_two,
+)
+try:
+    from kornia.geometry.transform.pyramid import pad
+except ImportError:
+    # kornia API drift — pad left the pyramid module; mirror its call shape.
+    def pad(tensor, padding, border_type="reflect"):
+        mode = {"reflect": "reflect", "constant": "constant",
+                "replicate": "replicate"}.get(border_type, "reflect")
+        return torch.nn.functional.pad(tensor, padding, mode=mode)
+"""
+if old in t:
+    p.write_text(t.replace(old, new))
+    print("patched pyramid_blending.py for kornia pad")
+else:
+    print("pyramid_blending.py already compatible or layout changed")
+
+# Soft-fail Laplacian blend so IC-LoRA still loads if pyramid_blending breaks.
+init = Path("custom_nodes/ComfyUI-LTXVideo/__init__.py")
+it = init.read_text()
+hard = "from .pyramid_blending import LTXVLaplacianPyramidBlend"
+if hard in it and "except ImportError" not in it:
+    it = it.replace(
+        hard,
+        "try:\n"
+        "    from .pyramid_blending import LTXVLaplacianPyramidBlend\n"
+        "except ImportError:  # optional; IC-LoRA nodes must still load\n"
+        "    LTXVLaplacianPyramidBlend = None",
+    )
+    it = it.replace(
+        '    "LTXVLaplacianPyramidBlend": LTXVLaplacianPyramidBlend,\n',
+        '    **({"LTXVLaplacianPyramidBlend": LTXVLaplacianPyramidBlend}\n'
+        "       if LTXVLaplacianPyramidBlend is not None else {}),\n",
+    )
+    init.write_text(it)
+    print("softened pyramid_blending import in __init__.py")
+PY
 
 EXPOSE 8188
 

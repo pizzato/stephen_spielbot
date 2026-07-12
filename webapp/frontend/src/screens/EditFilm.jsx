@@ -601,7 +601,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             } else if (t.status === 'error' || t.status === 'cancelled') {
               clearInterval(poll); reject(new Error(t.error || `Video upscale ${t.status}.`))
             } else if (t.step === 'final_upscale') {
-              setStatus('Upscaling the final video…')
+              setStatus(t.total
+                ? `Upscaling scenes (${t.current || 0}/${t.total} done)…`
+                : 'Upscaling the final video…')
+            } else if (t.step === 'finalize') {
+              setStatus('Assembling the upscaled film…')
             }
           } catch (e) { clearInterval(poll); reject(e) }
         }, 3000)
@@ -787,7 +791,13 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="up-right-and-down-left-from-center" style={{ color: 'var(--ink-3)', width: 16 }} /> Upscale video</span>
-          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Upscale the whole finished film and keep it as a selectable final version.</p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Upscale the finished film and keep it as a selectable final version.
+            <strong> Fast</strong> is plain ffmpeg.
+            <strong> LTX latent</strong> is the simple model upscaler (latent 2×).
+            <strong> LTX IC-LoRA</strong> is the generative{' '}
+            <a href="https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" target="_blank" rel="noreferrer">Pixel Spatial Upscaler</a>.
+          </p>
           <div className="stack gap-14 mt-24">
             <Field label="Target resolution">
               <select className="select" value={upscaleResolution} disabled={anyBusy || upscaleOptions.length === 0}
@@ -800,8 +810,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             <Field label="Mode">
               <select className="select" value={upscaleMode} disabled={anyBusy || !upscaleResolution}
                 onChange={(e) => setUpscaleMode(e.target.value)}>
-                <option value="fast">Fast</option>
-                <option value="temporal_ai">AI temporal</option>
+                <option value="fast">Fast (ffmpeg)</option>
+                <option value="ltx_latent">LTX latent (simple model)</option>
+                <option value="ic_lora">LTX IC-LoRA (generative)</option>
               </select>
             </Field>
           </div>

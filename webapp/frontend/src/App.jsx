@@ -6,6 +6,7 @@ import Home from './screens/Home.jsx'
 import Create from './screens/Create.jsx'
 import Script from './screens/Script.jsx'
 import Progress from './screens/Progress.jsx'
+import Activity from './screens/Activity.jsx'
 import Queue from './screens/Queue.jsx'
 import ChannelAnalytics from './screens/ChannelAnalytics.jsx'
 import Community from './screens/Community.jsx'
@@ -258,6 +259,7 @@ export default function App() {
       case 'create': return <Create seed={createSeed} meta={meta} onGenerated={onScriptGenerated} />
       case 'script': return <Script job={job} setJob={setJob} meta={meta} onGenerate={onGenerationStarted} go={go} />
       case 'progress': return <Progress workDir={workDir} job={job} go={go} onOpenScript={onOpenScript} />
+      case 'activity': return <Activity go={go} />
       // remix is kept as a deep-link alias for the unified Edit film screen.
       case 'remix': return <EditFilm workDir={workDir} go={go} meta={meta} initialTab="film" />
       case 'queue': return <Queue go={go} onEditScript={onEditQueueScript} meta={meta} />

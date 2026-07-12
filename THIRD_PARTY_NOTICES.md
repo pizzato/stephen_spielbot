@@ -26,6 +26,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | Model | Hugging Face repo | License | Commercial? |
 |---|---|---|---|
 | LTX-Video 2.3 (checkpoint, distilled LoRA, spatial upscaler) | `Lightricks/LTX-2.3-fp8`, `Lightricks/LTX-2.3` | Lightricks LTX-Video license — **review the model card** | Permitted under Lightricks' terms (revenue thresholds may apply) |
+| LTX-2.3 IC-LoRA Pixel Spatial Upscaler (2×/4×) | `Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler` | Lightricks LTX-2 community license — **review the model card** | Permitted under Lightricks' terms |
 | Gemma 3 text encoder (required by the LTX graph) | `Comfy-Org/ltx-2` (`gemma_3_12B_it_fp4_mixed`) | Google **Gemma Terms of Use** + Prohibited Use Policy (not an OSI license) | Allowed under Gemma terms; you must comply with the Prohibited Use Policy |
 
 ## Audio models

@@ -727,6 +727,66 @@ def generate_video_continuation(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
+# Lightricks IC-LoRA Pixel Spatial Upscaler LoRAs (models/loras/).
+# https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler
+_IC_LORA_X2 = "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x2-0.9.safetensors"
+_IC_LORA_X4 = "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors"
+_IC_UPSCALE_POSITIVE = (
+    "high quality, sharp fine detail, crisp textures, clean edges, "
+    "cinematic lighting, photorealistic, detailed"
+)
+_IC_UPSCALE_NEGATIVE = (
+    "blurry, soft, low resolution, pixelated, blocky, compression artifacts, "
+    "noisy, washed out, cartoon, ugly"
+)
+
+
+# LTX VAE spatial compression. EmptyLTXVLatentVideo of WxH → latent (W/32)×(H/32).
+_LTX_VAE_SPATIAL = 32
+
+
+def _snap_ltx_dim(value: int, multiple: int = 32, *, prefer: str = "round") -> int:
+    """Snap a pixel dimension to *multiple*.
+
+    prefer:
+      - ``round`` — nearest (default)
+      - ``up`` — ceil, never shrink below the requested size
+      - ``down`` — floor
+    """
+    m = max(1, int(multiple))
+    v = max(1, int(value))
+    if prefer == "up":
+        return max(m, ((v + m - 1) // m) * m)
+    if prefer == "down":
+        return max(m, (v // m) * m)
+    return max(m, int(round(v / m) * m))
+
+
+def _ic_lora_name_for_scale(src_w: int, src_h: int, dst_w: int, dst_h: int) -> str:
+    """Pick 2× or 4× IC-LoRA from the largest side scale factor."""
+    scale = max(float(dst_w) / max(1, src_w), float(dst_h) / max(1, src_h))
+    return _IC_LORA_X4 if scale >= 3.0 else _IC_LORA_X2
+
+
+def _ic_lora_downscale_factor(lora_name: str) -> int:
+    """reference_downscale_factor baked into the IC-LoRA weights (2 or 4)."""
+    name = (lora_name or "").lower()
+    if "x4" in name or "-4x" in name:
+        return 4
+    return 2
+
+
+def _ic_lora_pixel_grid(lora_name: str) -> int:
+    """Pixel multiple so latent dims are divisible by the IC-LoRA downscale factor.
+
+    LTXAddVideoICLoRAGuide requires ``(latent_w % factor == 0) and (latent_h % factor == 0)``
+    before dilating the guide. With VAE spatial /32 that means pixels must be a
+    multiple of ``32 * factor`` (64 for 2×, 128 for 4×). Without this, targets
+    like 1920×1080 → 1920×1088 yield latent 60×34 and 34 % 4 fails on 4×.
+    """
+    return _LTX_VAE_SPATIAL * _ic_lora_downscale_factor(lora_name)
+
+
 def upscale_video_ltx(
     input_path: Path,
     output_path: Path,
@@ -735,8 +795,108 @@ def upscale_video_ltx(
     fps: float,
     timeout_seconds: int = 7200,
     comfy_url: str = COMFYUI_URL,
+    *,
+    source_width: int | None = None,
+    source_height: int | None = None,
+    duration_seconds: float | None = None,
 ) -> Path:
-    """Upscale an existing MP4 through the packaged LTX temporal workflow."""
+    """Upscale an existing MP4 via LTX-2.3 IC-LoRA Pixel Spatial Upscaler.
+
+    Uses Lightricks' generative IC-LoRA (2× or 4×) rather than the older
+    LTXVLatentUpsampler latent upscaler. Requires ComfyUI-LTXVideo custom nodes
+    and the IC-LoRA weights under models/loras/.
+    """
+    from pipeline.assembler import _get_duration, _get_video_dimensions
+
+    src = Path(input_path)
+    if source_width is None or source_height is None:
+        source_width, source_height = _get_video_dimensions(src)
+    if duration_seconds is None:
+        duration_seconds = _get_duration(src)
+
+    # Pick LoRA from the *requested* target (before grid snap) so a 4× jump
+    # still selects the x4 weights even if we later pad height to 1152.
+    requested_w, requested_h = int(width), int(height)
+    ic_lora = _ic_lora_name_for_scale(
+        int(source_width), int(source_height), requested_w, requested_h,
+    )
+    grid = _ic_lora_pixel_grid(ic_lora)
+    # Snap up so we never undershoot the user's target; final normalize crops
+    # / scales back to requested_w×requested_h.
+    width = _snap_ltx_dim(requested_w, grid, prefer="up")
+    height = _snap_ltx_dim(requested_h, grid, prefer="up")
+    fps_val = max(1.0, float(fps or LTX_FPS))
+    length = _frame_count(1, duration_seconds)
+
+    video_name = _stage_video_for_load(src, comfy_url=comfy_url)
+    workflow = _load_workflow("ltx23_ic_lora_pixel_upscale.json")
+    workflow = _fill_template(workflow, {
+        "VIDEO_NAME": video_name,
+        "WIDTH": int(width),
+        "HEIGHT": int(height),
+        "LENGTH": int(length),
+        "FPS": fps_val,
+        "SEED": random.randint(0, 2**32 - 1),
+        "IC_LORA_NAME": ic_lora,
+        "POSITIVE_PROMPT": _IC_UPSCALE_POSITIVE,
+        "NEGATIVE_PROMPT": _IC_UPSCALE_NEGATIVE,
+    })
+
+    logger.info(
+        "[comfy] upscale_video_ltx IC-LoRA %s %s -> %dx%d (work %dx%d, grid %d, "
+        "src %dx%d) fps=%.3f frames=%d timeout=%ds on %s",
+        ic_lora, src.name, requested_w, requested_h, width, height, grid,
+        source_width, source_height, fps_val, length, timeout_seconds, comfy_url,
+    )
+    last_retryable: Exception | None = None
+    prompt_id = ""
+    for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
+        client_id = str(uuid.uuid4())
+        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+        try:
+            _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+            break
+        except (DroppedJobError, StuckJobError) as exc:
+            last_retryable = exc
+            if attempt >= _COMFY_PROMPT_ATTEMPTS:
+                raise RuntimeError(
+                    f"ComfyUI LTX IC-LoRA upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                    f"{_final_retryable_message(exc)}"
+                ) from exc
+            logger.warning(
+                "[comfy] LTX IC-LoRA upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
+            )
+    else:
+        raise RuntimeError(f"ComfyUI LTX IC-LoRA upscale did not complete: {last_retryable}")
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(
+            f"No output files from ComfyUI for LTX IC-LoRA upscale prompt {prompt_id} ({comfy_url})"
+        )
+
+    video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+    # Normalize to the user-requested resolution (working size may be larger to
+    # satisfy the IC-LoRA latent grid, e.g. 1080 → 1152 for 4×).
+    return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
+
+
+def upscale_video_ltx_latent(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    timeout_seconds: int = 7200,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Legacy 2× latent upscale via LTXVLatentUpsampler + spatial-upscaler-x2 model.
+
+    Kept as a fallback for workers without ComfyUI-LTXVideo / IC-LoRA weights.
+    """
     video_name = _stage_video_for_load(Path(input_path), comfy_url=comfy_url)
     workflow = _load_workflow("ltx23_video_upscale.json")
     workflow = _fill_template(workflow, {
@@ -747,7 +907,7 @@ def upscale_video_ltx(
     })
 
     logger.info(
-        "[comfy] upscale_video_ltx %s -> %dx%d fps=%.3f timeout=%ds on %s",
+        "[comfy] upscale_video_ltx_latent %s -> %dx%d fps=%.3f timeout=%ds on %s",
         Path(input_path).name, width, height, fps, timeout_seconds, comfy_url,
     )
     last_retryable: Exception | None = None
@@ -762,19 +922,19 @@ def upscale_video_ltx(
             last_retryable = exc
             if attempt >= _COMFY_PROMPT_ATTEMPTS:
                 raise RuntimeError(
-                    f"ComfyUI LTX upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                    f"ComfyUI LTX latent upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
                     f"{_final_retryable_message(exc)}"
                 ) from exc
             logger.warning(
-                "[comfy] LTX upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                "[comfy] LTX latent upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
                 prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
             )
     else:
-        raise RuntimeError(f"ComfyUI LTX upscale did not complete: {last_retryable}")
+        raise RuntimeError(f"ComfyUI LTX latent upscale did not complete: {last_retryable}")
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
-        raise RuntimeError(f"No output files from ComfyUI for LTX upscale prompt {prompt_id} ({comfy_url})")
+        raise RuntimeError(f"No output files from ComfyUI for LTX latent upscale prompt {prompt_id} ({comfy_url})")
 
     video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)

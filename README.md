@@ -148,9 +148,10 @@ cluster status panel). Worker lists are part of this file:
 | ComfyUI Workers | One URL per line — scenes are distributed across workers in parallel |
 | TTS Workers | F5-TTS endpoints for parallel narration (one container per worker on port 8189, derived from your render workers by `make install`) |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
-| LLM Backend | `local` (vLLM), `claude` (Anthropic API), or `grok` (xAI API) |
+| LLM Backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` (ChatGPT) |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
 | Grok API key / model | xAI key (or `XAI_API_KEY`) and model name, e.g. `grok-4.5` |
+| OpenAI API key / model | OpenAI key (or `OPENAI_API_KEY`) and model name, e.g. `gpt-4o` |
 | Resolution | 832×480 default; portrait and square presets available |
 
 ## Environment variables
@@ -161,15 +162,22 @@ cluster status panel). Worker lists are part of this file:
 | `CHATTERBOX_PYTHON` | `~/miniconda3/envs/chatterbox/bin/python` | Python interpreter for Chatterbox TTS |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
+| `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
 | `FFMPEG_PATH` | `$(which ffmpeg)` | Path to the ffmpeg binary (set when it isn't on `PATH`) |
 | `FFMPEG_TIMEOUT` | `600` | Per-call ffmpeg timeout, seconds |
 | `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Optional timeout for the packaged Remix temporal AI upscaler, in seconds |
 | `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
-The temporal upscaler runs from the Remix screen after reviewing the finished
-film. It uses the packaged ComfyUI worker workflow with the LTX 2.3 spatial
-upscaler model downloaded by `make install`; each upscale is kept as a selectable
+Final-film upscale on the Edit film screen has three modes:
+
+| Mode | What it does |
+|------|----------------|
+| **Fast** | Plain ffmpeg scale |
+| **LTX latent** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1` |
+| **LTX IC-LoRA** | Generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) (2×/4× IC-LoRA via ComfyUI-LTXVideo) |
+
+Models are downloaded by `make install`; each upscale is kept as a selectable
 final-video version so you can switch back to the original.
 
 ## Models
@@ -182,6 +190,9 @@ cd ~/github/ComfyUI
 huggingface-cli download Lightricks/LTX-2.3-fp8 ltx-2.3-22b-dev-fp8.safetensors --local-dir models/checkpoints --local-dir-use-symlinks False
 huggingface-cli download Lightricks/LTX-2.3 ltx-2.3-22b-distilled-lora-384.safetensors --local-dir models/loras --local-dir-use-symlinks False
 huggingface-cli download Lightricks/LTX-2.3 ltx-2.3-spatial-upscaler-x2-1.1.safetensors --local-dir models/latent_upscale_models --local-dir-use-symlinks False
+# IC-LoRA Pixel Spatial Upscaler (Remix AI temporal) — 2× and 4×
+huggingface-cli download Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x2-0.9.safetensors --local-dir models/loras --local-dir-use-symlinks False
+huggingface-cli download Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors --local-dir models/loras --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/ltx-2 split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 ```
 

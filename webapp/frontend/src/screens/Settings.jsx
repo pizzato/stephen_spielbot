@@ -1107,6 +1107,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                     { value: 'local', label: 'Local' },
                     { value: 'claude', label: 'Claude' },
                     { value: 'grok', label: 'Grok' },
+                    { value: 'openai', label: 'OpenAI' },
                   ]} />
               </Field>
               {llmBackend === 'claude' && (
@@ -1122,6 +1123,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   </Field>
                   <Field label="Grok model" hint="e.g. grok-4.5, grok-3, grok-3-mini">
                     <input className="input" value={cfg.grok_model || 'grok-4.5'} onChange={(e) => set('grok_model', e.target.value)} />
+                  </Field>
+                </>
+              )}
+              {llmBackend === 'openai' && (
+                <>
+                  <Field label="OpenAI API key" hint="platform.openai.com API key. You can also set OPENAI_API_KEY in the environment.">
+                    <input className="input" type="password" placeholder={cfg.openai_api_key_set ? '•••••••• (saved — leave blank to keep)' : 'sk-…'} value={cfg.openai_api_key || ''} onChange={(e) => set('openai_api_key', e.target.value)} />
+                  </Field>
+                  <Field label="OpenAI model" hint="e.g. gpt-4o, gpt-4.1, gpt-4o-mini">
+                    <input className="input" value={cfg.openai_model || 'gpt-4o'} onChange={(e) => set('openai_model', e.target.value)} />
                   </Field>
                 </>
               )}
