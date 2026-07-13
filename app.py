@@ -477,8 +477,78 @@ def _norm_characters(value) -> list[dict]:
             # Named voice (from the voices store) this character speaks with in
             # dialogue scenes; "" ⟹ fall back to the style's narrator voice.
             "voice": str(raw.get("voice") or "").strip(),
+            # Voice-casting hints (from the LLM identify or the user) driving
+            # the library-voice auto-pick; "" ⟹ unconstrained.
+            "gender": str(raw.get("gender") or "").strip().lower(),
+            "age": str(raw.get("age") or "").strip().lower(),
         })
     return out
+
+
+_FEMALE_CUES = ("woman", "female", "she ", "her ", "girl", "lady", "queen", "mrs", "miss", "mother", "sister")
+_MALE_CUES = ("man", "male", "he ", "his ", "boy", "gentleman", "king", "mr ", "mr.", "father", "brother", "sir ")
+_AGE_NEIGHBORS = {"young": "adult", "adult": "mature", "mature": "adult", "elderly": "mature"}
+
+
+def _guess_gender(char: dict) -> str:
+    """The character's stated gender, else a cue-word guess from the description."""
+    g = str(char.get("gender") or "").strip().lower()
+    if g in ("male", "female"):
+        return g
+    text = f" {char.get('description', '')} ".lower()
+    f = sum(text.count(c) for c in _FEMALE_CUES)
+    m = sum(text.count(c) for c in _MALE_CUES)
+    return "female" if f > m else ("male" if m > f else "")
+
+
+def _auto_assign_character_voices(chars: list[dict], cfg: dict,
+                                  exclude: str | None = None) -> list[dict]:
+    """Give each voiceless character a fitting voice from the library.
+
+    Library voices carry gender/age/accent metadata (scripts/download_voices.py).
+    Match gender first (hard requirement when known), then prefer the exact age
+    bracket, then a neighbouring one; spread picks across the cast so two
+    characters don't share a voice until the pool runs dry. The style narrator's
+    voice is excluded — a character sounding exactly like the narrator was the
+    original bug. Characters with a voice already set are untouched."""
+    pool = [v for v in (cfg.get("voices") or [])
+            if isinstance(v, dict) and v.get("gender") and v.get("name")
+            and v.get("name") != (exclude or "")]
+    if not pool:
+        return chars
+    used = {c.get("voice") for c in chars if c.get("voice")}
+
+    def pick(char: dict) -> str:
+        gender = _guess_gender(char)
+        age = str(char.get("age") or "").strip().lower()
+
+        def score(v: dict, allow_used: bool) -> float:
+            if not allow_used and v["name"] in used:
+                return -1
+            s = 0.0
+            if gender and v.get("gender") == gender:
+                s += 4
+            elif gender and v.get("gender") != gender:
+                s -= 4  # wrong-gender voice is worse than no match data
+            if age:
+                if v.get("age") == age:
+                    s += 2
+                elif v.get("age") == _AGE_NEIGHBORS.get(age):
+                    s += 1
+            return s
+        for allow_used in (False, True):
+            ranked = sorted(pool, key=lambda v: (-score(v, allow_used), v["name"]))
+            if ranked and score(ranked[0], allow_used) >= 0:
+                return ranked[0]["name"]
+        return ""
+
+    for c in chars:
+        if not c.get("voice"):
+            name = pick(c)
+            if name:
+                c["voice"] = name
+                used.add(name)
+    return chars
 
 
 def _norm_character_ids(value, valid_ids: set) -> list[str]:

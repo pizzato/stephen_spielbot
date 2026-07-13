@@ -50,6 +50,12 @@ else
     "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
 fi
 
+# Bundled character voice library (public-domain LibriVox clips + gender/age/
+# accent metadata) — used to auto-cast voices for story characters. Idempotent;
+# best-effort (a network blip must not fail the install).
+"$VENV/bin/python" "$REPO_ROOT/scripts/download_voices.py" || \
+    echo "[voices] library download incomplete — rerun later with: make download-voices"
+
 if [[ -n "${TEMPORAL_VIDEO_UPSCALER_CMD:-}" || -n "${TEMPORAL_VIDEO_UPSCALER_TIMEOUT:-}" ]]; then
     "$VENV/bin/python" - "$CONFIG_YAML" <<'PY'
 import os
