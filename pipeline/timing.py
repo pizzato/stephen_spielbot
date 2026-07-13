@@ -207,6 +207,7 @@ def estimate_eta(
     by_label: dict[str, dict[str, Any]] = {}
     any_default = False
     tracked = 0
+    echo_scenes: set = set()  # distinct dialogue scenes → how many run in parallel
 
     for t in tasks:
         kind = t.get("kind", "")
@@ -218,6 +219,8 @@ def estimate_eta(
         est, learned = _estimate_one(table, kind, payload)
         if not learned:
             any_default = True
+        if _POOL.get(label) == "echomimic" and payload.get("scene_id") is not None:
+            echo_scenes.add(payload.get("scene_id"))
 
         status = t.get("status", "")
         if status in _DONE_STATUSES:
@@ -250,10 +253,13 @@ def estimate_eta(
     if tracked == 0:
         return None
 
+    # Dialogue scenes render concurrently — one per echomimic worker — so the
+    # echomimic wall is divided by however many scenes actually run in parallel
+    # (min of workers and distinct scenes; a lines-within-a-scene stay serial).
+    echo_par = max(1, min(n_echo, len(echo_scenes) or 1))
+
     def _wall(d: dict[str, float]) -> float:
-        # Dialogue lines render sequentially today (one scene at a time), so the
-        # echomimic pool contributes serially rather than divided by workers.
-        return max(d["comfy"] / n_comfy, d["tts"] / n_tts, d["echomimic"])
+        return max(d["comfy"] / n_comfy, d["tts"] / n_tts, d["echomimic"] / echo_par)
 
     total_seconds = _wall(full) + full_mux + full_finalize
     eta_seconds = _wall(rem) + rem_last_mux + rem_finalize

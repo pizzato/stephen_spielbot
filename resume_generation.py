@@ -6,6 +6,7 @@ Usage:
 """
 import concurrent.futures
 import json
+import threading
 import logging
 import logging.handlers
 import shutil
@@ -592,44 +593,47 @@ def main(work_dir: Path) -> None:
         tts_host = tts_hosts[0]
         timing_table = store.timing_table()
         lines_done = [0]
-        cur_host = [echo_hosts[0]]
+        _dlg_lock = threading.Lock()
 
         def _line_pct() -> float:
             return 2 + (dlg_end - 2) * (lines_done[0] / max(1, total_lines))
 
-        @contextmanager
-        def line_cm(scene, idx, n_lines, speaker):
-            """Durable task + live progress around one shot (talking or silent).
-
-            Completing the task feeds the learned timing table, which is what
-            gives the ETA banner a real number for dialogue renders."""
-            silent = (speaker == "silent")
-            who = "a silent motion shot" if silent else f"{speaker} speaks"
-            t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
-            payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
-                       "speaker": "" if silent else speaker, "silent": silent,
-                       "vid_width": vid_width, "vid_height": vid_height,
-                       "resource_class": "comfy:video" if silent else "echomimic"}
-            # Upsert — jobs planned before per-line tasks existed lack the row.
-            store.create_task(t_id, durable_job_id, "scene.dialogue.line",
-                              f"Scene {scene.id} · {who} ({idx + 1}/{n_lines})",
-                              worker_kind="comfy" if silent else "echomimic", payload=payload, max_attempts=2)
-            sig = timing_signature("scene.dialogue.line", payload)
-            entry = timing_table.get(sig) if sig else None
-            est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this shot"
-                   if entry and entry.get("sample_count") else "")
-            write_progress(status_file, _line_pct(),
-                           f"Dialogue · scene {scene.id}: {who} "
-                           f"(shot {lines_done[0] + 1}/{total_lines}){est}")
-            wid = worker_id("comfy", worker_pool.urls[0]) if silent else worker_id("echomimic", cur_host[0])
-            with TaskRun(store, t_id, worker_id_value=wid, lease_seconds=7200,
-                         start_message=f"{who} — shot {idx + 1}/{n_lines}") as run:
-                yield
-                run.complete({"scene_id": scene.id, "line_index": idx}, "shot rendered")
-            lines_done[0] += 1
-            write_progress(status_file, _line_pct(),
-                           f"Dialogue · scene {scene.id}: {who} done "
-                           f"({lines_done[0]}/{total_lines} shots)")
+        def _make_line_cm(host):
+            """A per-scene shot wrapper bound to that scene's echomimic host, so
+            concurrently-rendering scenes each record the right worker. Shared
+            counter + progress writes are locked (scenes run on separate threads)."""
+            @contextmanager
+            def line_cm(scene, idx, n_lines, speaker):
+                silent = (speaker == "silent")
+                who = "a silent motion shot" if silent else f"{speaker} speaks"
+                t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
+                payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
+                           "speaker": "" if silent else speaker, "silent": silent,
+                           "vid_width": vid_width, "vid_height": vid_height,
+                           "resource_class": "comfy:video" if silent else "echomimic"}
+                # Upsert — jobs planned before per-line tasks existed lack the row.
+                store.create_task(t_id, durable_job_id, "scene.dialogue.line",
+                                  f"Scene {scene.id} · {who} ({idx + 1}/{n_lines})",
+                                  worker_kind="comfy" if silent else "echomimic", payload=payload, max_attempts=2)
+                sig = timing_signature("scene.dialogue.line", payload)
+                entry = timing_table.get(sig) if sig else None
+                est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this shot"
+                       if entry and entry.get("sample_count") else "")
+                with _dlg_lock:
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue · scene {scene.id}: {who} "
+                                   f"(shot {lines_done[0] + 1}/{total_lines}){est}")
+                wid = worker_id("comfy", worker_pool.urls[0]) if silent else worker_id("echomimic", host)
+                with TaskRun(store, t_id, worker_id_value=wid, lease_seconds=7200,
+                             start_message=f"{who} — shot {idx + 1}/{n_lines}") as run:
+                    yield
+                    run.complete({"scene_id": scene.id, "line_index": idx}, "shot rendered")
+                with _dlg_lock:
+                    lines_done[0] += 1
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue · scene {scene.id}: {who} done "
+                                   f"({lines_done[0]}/{total_lines} shots)")
+            return line_cm
 
         def silent_video(scene, shot, still, out_clip):
             """Render a silent shot (people move, no speech) as an LTX i2v clip
@@ -653,28 +657,45 @@ def main(work_dir: Path) -> None:
                 shutil.move(str(raw), str(out_clip))
             return Path(out_clip)
 
-        write_progress(status_file, 1,
-                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) — {total_lines} shot(s)…")
-        for i, s in enumerate(dialogue_scenes):
+        def _render_one(i: int, s: Scene) -> tuple[int, float]:
+            host = echo_hosts[i % len(echo_hosts)]
             final = work_dir / f"scene_{s.id:02d}_final.mp4"
             if not (final.exists() and final.stat().st_size > 10_000):
-                cur_host[0] = echo_hosts[i % len(echo_hosts)]
                 render_dialogue_scene(
                     s, work_dir,
                     voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
-                    echomimic_host=cur_host[0],
+                    echomimic_host=host,
                     tts_host=tts_host, tts_engine=tts_engine,
                     canvas=(vid_width, vid_height),
-                    line_cm=line_cm, silent_video=silent_video,
+                    line_cm=_make_line_cm(host), silent_video=silent_video,
                 )
             else:
-                lines_done[0] += len(s.lines or [])  # resumed scene — its lines are already done
+                with _dlg_lock:
+                    lines_done[0] += len(s.lines or [])  # resumed scene — lines already done
             # EchoMimic output is portrait-shaped; fit it onto the film's canvas
             # (blurred pillarbox) so the cross-scene concat gets uniform dims.
             fit_video_canvas(final, vid_width, vid_height)
-            dialogue_durs[s.id] = _get_duration(final)
-            write_progress(status_file, _line_pct(),
-                           f"Dialogue scene {s.id} assembled ({i + 1}/{len(dialogue_scenes)})")
+            return s.id, _get_duration(final)
+
+        # Render scenes CONCURRENTLY, one per echomimic worker, so the whole
+        # fleet is used instead of a single busy worker while the rest idle.
+        n_parallel = max(1, min(len(echo_hosts), len(dialogue_scenes)))
+        write_progress(status_file, 1,
+                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) across "
+                       f"{n_parallel} worker(s) — {total_lines} shot(s)…")
+        dlg_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_parallel)
+        try:
+            futs = {dlg_pool.submit(_render_one, i, s): s for i, s in enumerate(dialogue_scenes)}
+            done_scenes = 0
+            for fut in concurrent.futures.as_completed(futs):
+                sid, dur = fut.result()
+                dialogue_durs[sid] = dur
+                done_scenes += 1
+                with _dlg_lock:
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue scene {sid} assembled ({done_scenes}/{len(dialogue_scenes)})")
+        finally:
+            dlg_pool.shutdown(wait=True)
 
     # ── Narrations (0–20%) ───────────────────────────────────────────────────
     narration_paths: dict[int, Path] = {}
