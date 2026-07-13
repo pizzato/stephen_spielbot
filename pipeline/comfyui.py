@@ -605,6 +605,26 @@ def _apply_second_pass(workflow: dict, cfg: float, steps: int) -> None:
     workflow["28"]["inputs"]["sigmas"] = sigmas
 
 
+# LTX 2.3 generates each clip's audio from the same text prompt. Steer that audio
+# toward natural diegetic sound (the real sounds of what's happening in the scene)
+# and away from the music / dramatic score LTX otherwise invents — films are
+# scored separately (the user adds music where wanted). Applied to every LTX video.
+_AUDIO_POSITIVE = ("natural realistic diegetic sound of the scene — the actual ambient and "
+                   "environmental audio of what is happening, real room tone")
+_AUDIO_NEGATIVE = ("music, musical score, soundtrack, background music, dramatic orchestral score, "
+                   "ominous drone, suspenseful underscore, singing, song")
+
+
+def _steer_audio_natural(positive: str, negative: str) -> tuple[str, str]:
+    """Append the natural-sound directive to an LTX prompt pair so the generated
+    clip carries the scene's real sounds instead of invented music."""
+    p = (positive or "").rstrip().rstrip(".")
+    pos = f"{p}. {_AUDIO_POSITIVE}." if p else f"{_AUDIO_POSITIVE}."
+    n = (negative or "").rstrip().rstrip(",")
+    neg = f"{n}, {_AUDIO_NEGATIVE}" if n else _AUDIO_NEGATIVE
+    return pos, neg
+
+
 def generate_video_clip(
     positive_prompt: str,
     negative_prompt: str,
@@ -623,6 +643,7 @@ def generate_video_clip(
 ) -> Path:
     """Generate a video clip using LTX 2.3 T2V and save to output_path."""
     length = _frame_count(length, duration_seconds)
+    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -683,6 +704,7 @@ def generate_video_continuation(
 ) -> Path:
     """Continue a video clip from its last frame using LTX 2.3 I2V."""
     length = _frame_count(length, duration_seconds)
+    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
