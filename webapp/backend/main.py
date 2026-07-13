@@ -1422,15 +1422,31 @@ def _read_create_brief(wd: Path) -> dict:
 
 
 def _clean_lines(raw_lines) -> list[dict]:
-    """Validated dialogue lines/shots from a client payload: drop empty-text rows,
-    default the speaker, keep the optional per-line shot framing."""
+    """Validated shot sequence from a client payload. Keeps SPEAKING shots
+    (non-empty text) and SILENT shots (marked; people move, no speech); drops
+    empty rows. Optional per-shot framing/video-prompt/duration preserved."""
     out = []
     for ln in raw_lines or []:
-        if not isinstance(ln, dict) or not str(ln.get("text", "")).strip():
+        if not isinstance(ln, dict):
             continue
-        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator",
-               "text": str(ln.get("text") or "").strip()}
+        text = str(ln.get("text") or "").strip()
         shot = str(ln.get("shot") or "").strip()
+        if ln.get("silent"):
+            try:
+                dur = float(ln.get("duration") or 0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            row = {"silent": True, "duration": dur if dur > 0 else 3.0}
+            if shot:
+                row["shot"] = shot
+            vp = str(ln.get("video_prompt") or "").strip()
+            if vp:
+                row["video_prompt"] = vp
+            out.append(row)
+            continue
+        if not text:
+            continue
+        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
         if shot:
             row["shot"] = shot
         out.append(row)
