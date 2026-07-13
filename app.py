@@ -2319,6 +2319,90 @@ def _apply_prompt_instruction(prompt: str, instruction: str) -> str:
     return f"{prompt}. {instruction}"
 
 
+def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
+    """True only if *path* is a readable image of exactly width×height pixels."""
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            return img.size == (width, height)
+    except Exception:
+        return False
+
+
+def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
+                                  resolution: str = "",
+                                  worker_pool: WorkerPool | None = None) -> int:
+    """Render each dialogue line's per-shot still (speaker close-up, in-scene).
+
+    Dialogue lines may carry a "shot" framing (see the dialogue schema): a close
+    view of the speaker so the talking-head model has a large, clear face to
+    animate — lip-sync quality collapses when the speaker is small in the frame.
+    Writes scene_NN_line_MM_shot.png at the job resolution (the dialogue render
+    prefers it over the scene frame); skips shots already on disk at the right
+    size. Best-effort per shot: a failed still just falls back to the scene
+    frame at render time. Returns how many stills were generated."""
+    work_dir = _job_work_dir(job_id)
+    if work_dir is None:
+        return 0
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    todo: list[tuple[dict, int, str]] = []  # (scene_row, line_idx, shot_prompt)
+    for row in rows:
+        md = row.get("metadata") or {}
+        if md.get("mode") != "dialogue":
+            continue
+        for idx, ln in enumerate(md.get("lines") or []):
+            shot = str((ln or {}).get("shot") or "").strip()
+            if shot:
+                todo.append((row, idx, shot))
+    if not todo:
+        return 0
+
+    cfg = load_config()
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    img_width, img_height = _RESOLUTIONS.get(
+        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
+        (1024, 576),
+    )
+    img_width, img_height = ltx_dimensions(img_width, img_height)
+    combined_style = _compose_visual_style("", cfg, style_name)
+
+    if worker_pool is None:
+        worker_urls = _preview_worker_urls()
+        if not worker_urls:
+            logger.warning("[shots] no image worker available — dialogue shots skipped")
+            return 0
+        worker_pool = WorkerPool(worker_urls)
+
+    made = 0
+    for row, idx, shot in todo:
+        sid = int(row["id"])
+        out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
+        if out.exists() and _image_matches_resolution(out, img_width, img_height):
+            continue
+        base_prompt = _inject_characters(shot, row, cfg, style_name, work_dir)
+        prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+        reference_images = _scene_reference_images(base_prompt, row, cfg, style_name, work_dir)
+        url = worker_pool.acquire()
+        try:
+            generate_with_engine(
+                engine, prompt, out,
+                width=img_width, height=img_height,
+                reference_images=reference_images, comfy_url=url,
+            )
+            made += 1
+            logger.info("[shots] scene %d line %d shot still ready (%s)", sid, idx, out.name)
+        except Exception:
+            logger.warning("[shots] scene %d line %d shot failed — render will fall back",
+                           sid, idx, exc_info=True)
+        finally:
+            worker_pool.release(url)
+    return made
+
+
 def _generate_active_scene_preview(
     job_id: str,
     scene_id: int,

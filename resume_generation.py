@@ -404,6 +404,13 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
         return None
 
     def make_still(scene, speaker: str, idx: int) -> Path:
+        # Per-line SHOT still (speaker close-up in the scene setting, generated at
+        # render start from the line's "shot" framing) — the best lip-sync source:
+        # face large, correct speaker, in-scene. Then the scene frame, then portrait.
+        shot = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}_shot.png"
+        if shot.exists() and vid_width and vid_height and _image_matches_resolution(shot, vid_width, vid_height):
+            logger.info("  scene %d line %d: talking still = shot close-up (%s)", scene.id, idx, shot.name)
+            return shot
         frame = _scene_frame(scene)
         if frame is not None:
             logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
@@ -414,8 +421,8 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
                         scene.id, speaker)
             return portrait
         raise RuntimeError(
-            f"dialogue speaker {speaker!r} (scene {scene.id}) has no scene first frame at the "
-            "job resolution and no character portrait — generate the scene image or add a portrait"
+            f"dialogue speaker {speaker!r} (scene {scene.id}) has no shot still, no scene first "
+            "frame at the job resolution, and no character portrait"
         )
 
     def prompt_for(scene, speaker: str) -> str:

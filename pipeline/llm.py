@@ -458,7 +458,7 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
 
 
 def _norm_scene_lines(item: dict) -> list[dict]:
-    """Extract validated dialogue lines [{speaker,text}] from an LLM scene item."""
+    """Extract validated dialogue lines/shots [{speaker,text[,shot]}] from an LLM scene item."""
     raw = item.get("lines")
     if not isinstance(raw, list):
         return []
@@ -469,7 +469,11 @@ def _norm_scene_lines(item: dict) -> list[dict]:
         text = str(ln.get("text") or "").strip()
         if not text:
             continue
-        out.append({"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text})
+        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
+        shot = str(ln.get("shot") or "").strip()
+        if shot:
+            row["shot"] = shot  # close framing of the speaker — rendered as this line's still
+        out.append(row)
     return out
 
 
@@ -524,8 +528,14 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     dialogue_schema = (
         '\n      - "mode": "narration" | "dialogue" | "silent" — how the scene plays. '
         'Use "dialogue" when characters speak on screen, "silent" for a pure visual beat with no voice-over.'
-        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of {"speaker": <character name>, '
-        '"text": <1-2 short spoken sentences>}. Dialogue and silent scenes MUST have "narration": "".'
+        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of shots, each '
+        '{"speaker": <character name>, "text": <1-2 short spoken sentences>, '
+        '"shot": <20-40 word STATIC close framing of the SPEAKER in this scene\'s setting — '
+        'medium close-up or close-up, the speaker\'s face LARGE and clearly visible, '
+        'looking at the camera or their scene partner; include setting details behind them>}. '
+        'A dialogue scene is a sequence of such shots — the camera cuts to whoever is speaking. '
+        'Dialogue and silent scenes MUST have "narration": "". '
+        'For dialogue scenes the "image_prompt" is the establishing wide shot of the setting.'
         if dialogue_note_str else ""
     )
     is_last_batch = (first_batch == n_scenes)
