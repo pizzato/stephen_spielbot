@@ -2377,6 +2377,14 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
         return None
 
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    # Shot stills MUST match the render resolution — the dialogue render only uses
+    # a still that matches, else it falls back to the (multi-person) scene frame.
+    # Prefer the job's own resolution over the style default.
+    if not resolution:
+        try:
+            resolution = json.loads((work_dir / "job_config.json").read_text()).get("resolution") or ""
+        except Exception:
+            resolution = ""
     img_width, img_height = _RESOLUTIONS.get(
         resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
         (1024, 576),
