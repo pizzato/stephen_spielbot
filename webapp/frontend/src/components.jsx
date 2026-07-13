@@ -23,6 +23,97 @@ export function voiceLabel(name, metaMap) {
   return c ? `${name} — ${c}` : name
 }
 
+// Scene-type controls shared by the Script editor and the video edit screen so
+// they stay identical. Renders the Narration | Dialogue | Silent selector and,
+// for dialogue, the shot sequence editor (speaking + silent shots); for silent,
+// the duration. `scene` = {mode, lines, duration}; onChange(patch) merges into
+// it; onCommit() persists (called on blur and after discrete edits). The
+// narration textarea stays in each parent (it owns its own regen wiring).
+export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommit }) {
+  // onChange(patch, commit): merge patch into the scene; when commit is true the
+  // parent persists the merged value immediately (discrete edits). Text inputs
+  // pass commit=false and persist on blur via onCommit(). Passing the computed
+  // patch (rather than a deferred callback) avoids a stale-closure save.
+  const mode = scene.mode || 'narration'
+  const lines = scene.lines || []
+  const commit = () => onCommit && onCommit()
+  const setLine = (i, k, v, doCommit = false) =>
+    onChange({ lines: lines.map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln) }, doCommit)
+  const addLine = () => onChange({ lines: [...lines, { speaker: castOpts[0] || '', text: '' }] }, true)
+  const addSilent = () => onChange({ lines: [...lines, { silent: true, shot: '', video_prompt: '', duration: 3 }] }, true)
+  const removeShot = (i) => onChange({ lines: lines.filter((_, idx) => idx !== i) }, true)
+  const setMode = (m) => onChange({ mode: m }, true)
+
+  return (
+    <>
+      <Field label="Scene type" hint="Narration = voice-over. Dialogue = characters speak, lip-synced. Silent = visuals only, no voice.">
+        <div className="row gap-8">
+          {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
+            <Button key={m} variant={mode === m ? 'primary' : 'ghost'} onClick={() => setMode(m)}>{lbl}</Button>
+          ))}
+        </div>
+      </Field>
+
+      {mode === 'dialogue' && (
+        <Field label="Shots" hint="A dialogue scene is a sequence of shots. A speaking shot is a talking-head close-up in that character's voice; a silent shot is a beat where people move but don't speak (rendered as motion). Speakers need a portrait.">
+          <div className="stack gap-12">
+            {lines.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No shots yet — add one below.</span>}
+            {lines.map((ln, i) => (
+              <div key={i} className="stack gap-8"
+                style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 10, background: 'var(--paper-2)' }}>
+                <div className="row center between">
+                  <Chip tone={ln.silent ? 'neutral' : 'accent'} dot>{ln.silent ? `Silent shot ${i + 1}` : `Line ${i + 1}`}</Chip>
+                  <Button variant="quiet" icon="trash" title="Remove shot" onClick={() => removeShot(i)} />
+                </div>
+                {ln.silent ? (
+                  <>
+                    <input className="input" placeholder="Shot framing — e.g. Billy's hand drops toward his holster, saloon behind"
+                      value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={commit} />
+                    <input className="input" placeholder="Motion / video prompt — what moves and how (camera included)"
+                      value={ln.video_prompt || ''} onChange={(e) => setLine(i, 'video_prompt', e.target.value)} onBlur={commit} />
+                    <div className="row center gap-8">
+                      <span className="muted" style={{ fontSize: 12.5 }}>Duration (s)</span>
+                      <input className="input" type="number" min={1} step={1} style={{ maxWidth: 90 }}
+                        value={ln.duration || 3} onChange={(e) => setLine(i, 'duration', Number(e.target.value) || 0)} onBlur={commit} />
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="row gap-8 center">
+                      <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
+                        onChange={(e) => setLine(i, 'speaker', e.target.value, true)}>
+                        {!castOpts.length && <option value="">(no characters yet)</option>}
+                        {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
+                        {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                      </select>
+                      <input className="input" style={{ flex: 1 }} placeholder="What they say…"
+                        value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={commit} />
+                    </div>
+                    <input className="input" style={{ fontSize: 12.5 }}
+                      placeholder="Shot framing (optional) — e.g. close-up of Billy at the saloon bar, face large and clear"
+                      value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={commit} />
+                  </>
+                )}
+              </div>
+            ))}
+            <div className="row gap-8">
+              <Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button>
+              <Button variant="ghost" icon="film" onClick={addSilent}>Add silent shot</Button>
+            </div>
+          </div>
+        </Field>
+      )}
+
+      {mode === 'silent' && (
+        <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
+          <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
+            value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
+        </Field>
+      )}
+    </>
+  )
+}
+
 export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button' }) {
   const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : size === 'sm' ? 'btn--sm' : '', block ? 'btn--block' : '']
     .filter(Boolean).join(' ')
