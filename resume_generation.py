@@ -599,37 +599,62 @@ def main(work_dir: Path) -> None:
 
         @contextmanager
         def line_cm(scene, idx, n_lines, speaker):
-            """Durable task + live progress around one talking-head line.
+            """Durable task + live progress around one shot (talking or silent).
 
             Completing the task feeds the learned timing table, which is what
             gives the ETA banner a real number for dialogue renders."""
+            silent = (speaker == "silent")
+            who = "a silent motion shot" if silent else f"{speaker} speaks"
             t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
             payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
-                       "speaker": speaker, "vid_width": vid_width, "vid_height": vid_height,
-                       "resource_class": "echomimic"}
+                       "speaker": "" if silent else speaker, "silent": silent,
+                       "vid_width": vid_width, "vid_height": vid_height,
+                       "resource_class": "comfy:video" if silent else "echomimic"}
             # Upsert — jobs planned before per-line tasks existed lack the row.
             store.create_task(t_id, durable_job_id, "scene.dialogue.line",
-                              f"Scene {scene.id} · {speaker} speaks ({idx + 1}/{n_lines})",
-                              worker_kind="echomimic", payload=payload, max_attempts=2)
+                              f"Scene {scene.id} · {who} ({idx + 1}/{n_lines})",
+                              worker_kind="comfy" if silent else "echomimic", payload=payload, max_attempts=2)
             sig = timing_signature("scene.dialogue.line", payload)
             entry = timing_table.get(sig) if sig else None
-            est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this line"
+            est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this shot"
                    if entry and entry.get("sample_count") else "")
             write_progress(status_file, _line_pct(),
-                           f"Dialogue · scene {scene.id}: {speaker} speaks "
-                           f"(line {lines_done[0] + 1}/{total_lines}){est}")
-            with TaskRun(store, t_id, worker_id_value=worker_id("echomimic", cur_host[0]),
-                         lease_seconds=7200,
-                         start_message=f"{speaker} line {idx + 1}/{n_lines}") as run:
+                           f"Dialogue · scene {scene.id}: {who} "
+                           f"(shot {lines_done[0] + 1}/{total_lines}){est}")
+            wid = worker_id("comfy", worker_pool.urls[0]) if silent else worker_id("echomimic", cur_host[0])
+            with TaskRun(store, t_id, worker_id_value=wid, lease_seconds=7200,
+                         start_message=f"{who} — shot {idx + 1}/{n_lines}") as run:
                 yield
-                run.complete({"scene_id": scene.id, "line_index": idx}, "line rendered")
+                run.complete({"scene_id": scene.id, "line_index": idx}, "shot rendered")
             lines_done[0] += 1
             write_progress(status_file, _line_pct(),
-                           f"Dialogue · scene {scene.id}: {speaker}'s line done "
-                           f"({lines_done[0]}/{total_lines} lines)")
+                           f"Dialogue · scene {scene.id}: {who} done "
+                           f"({lines_done[0]}/{total_lines} shots)")
+
+        def silent_video(scene, shot, still, out_clip):
+            """Render a silent shot (people move, no speech) as an LTX i2v clip
+            from its still, reusing the classic scene-video path."""
+            vp = (str((shot or {}).get("video_prompt") or "").strip()
+                  or scene.video_prompt or scene.image_prompt or scene.title)
+            dur = float((shot or {}).get("duration") or 0) or _SILENT_DEFAULT_SECS
+            shot_scene = Scene(id=scene.id, title=scene.title, image_prompt="",
+                               video_prompt=vp, narration="", negative_prompt=NEGATIVE_PROMPT)
+            url = worker_pool.acquire()
+            try:
+                raw, _amb = _generate_scene_video(
+                    shot_scene, work_dir, dur, vid_width, vid_height,
+                    max_clip_secs, lora_strength, first_pass_cfg, first_pass_steps,
+                    second_pass_cfg, second_pass_steps, url,
+                    scene_first_frame=Path(still), flux_cfg=flux_cfg,
+                )
+            finally:
+                worker_pool.release(url)
+            if Path(raw) != Path(out_clip):
+                shutil.move(str(raw), str(out_clip))
+            return Path(out_clip)
 
         write_progress(status_file, 1,
-                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) — {total_lines} talking shot(s)…")
+                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) — {total_lines} shot(s)…")
         for i, s in enumerate(dialogue_scenes):
             final = work_dir / f"scene_{s.id:02d}_final.mp4"
             if not (final.exists() and final.stat().st_size > 10_000):
@@ -640,7 +665,7 @@ def main(work_dir: Path) -> None:
                     echomimic_host=cur_host[0],
                     tts_host=tts_host, tts_engine=tts_engine,
                     canvas=(vid_width, vid_height),
-                    line_cm=line_cm,
+                    line_cm=line_cm, silent_video=silent_video,
                 )
             else:
                 lines_done[0] += len(s.lines or [])  # resumed scene — its lines are already done

@@ -61,9 +61,12 @@ def render_dialogue_scene(
     tts_engine: str = "openf5",
     canvas: tuple[int, int] | None = None,   # film (width, height); line clips are fitted onto it
     steps: int = 8,
-    # (scene, idx, n_lines, speaker) -> context manager wrapping one line's work —
+    # (scene, idx, n_lines, speaker) -> context manager wrapping one shot's work —
     # the orchestrator uses it for progress messages + durable task tracking.
     line_cm=None,
+    # (scene, shot, still, out_clip) -> Path — render a SILENT shot (motion, no
+    # speech) as an LTX i2v clip. None ⟹ silent shots hold on their still.
+    silent_video=None,
     # injected for testing / to plug the real workers
     _tts=generate_narration,
     _animate=echomimic.animate,
@@ -71,34 +74,50 @@ def render_dialogue_scene(
     _concat=concatenate_scenes_hard_cut,
     _fit=fit_video_canvas,
 ) -> Path:
-    """Render ``scene`` (mode 'dialogue') to ``scene_NN_final.mp4`` and return it."""
-    lines = [ln for ln in (scene.lines or []) if str((ln or {}).get("text") or "").strip()]
+    """Render ``scene`` (mode 'dialogue') to ``scene_NN_final.mp4`` and return it.
+
+    Each entry in ``scene.lines`` is a shot: SPEAKING (has ``text`` → talking
+    head) or SILENT (``silent`` flag → motion clip, no speech)."""
+    def _is_silent(ln):
+        return bool((ln or {}).get("silent")) and not str((ln or {}).get("text") or "").strip()
+
+    lines = [ln for ln in (scene.lines or [])
+             if _is_silent(ln) or str((ln or {}).get("text") or "").strip()]
     if not lines:
-        raise ValueError(f"dialogue scene {scene.id} has no non-empty lines")
+        raise ValueError(f"dialogue scene {scene.id} has no usable shots")
 
     line_clips: list[Path] = []
     for idx, ln in enumerate(lines):
-        speaker = str(ln.get("speaker") or NARRATOR).strip() or NARRATOR
-        text = str(ln.get("text") or "").strip()
+        silent = _is_silent(ln)
+        speaker = "" if silent else (str(ln.get("speaker") or NARRATOR).strip() or NARRATOR)
+        clip = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.mp4"
 
-        cm = line_cm(scene, idx, len(lines), speaker) if line_cm else contextlib.nullcontext()
+        cm = line_cm(scene, idx, len(lines), speaker or "silent") if line_cm else contextlib.nullcontext()
         with cm:
-            wav = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.wav"
-            _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine)
-            dur = _duration(wav)
-
             still = make_still(scene, speaker, idx)
-            ew, eh = echo_dims_for_still(still)
 
-            clip = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.mp4"
-            _animate(
-                still, wav, clip, echomimic_host,
-                prompt=prompt_for(scene, speaker),
-                steps=steps, width=ew, height=eh,
-                video_length=echomimic.frames_for_audio(dur),
-            )
-            logger.info("  scene %d line %d (%s): %.1fs @%dx%d -> %s",
-                        scene.id, idx, speaker, dur, ew, eh, clip.name)
+            if silent:
+                if silent_video is None:
+                    raise RuntimeError(
+                        f"scene {scene.id} shot {idx} is silent but no silent-video renderer is configured")
+                silent_video(scene, ln, still, clip)
+                logger.info("  scene %d shot %d (silent, %.1fs) -> %s",
+                            scene.id, idx, float(ln.get("duration") or 3.0), clip.name)
+            else:
+                text = str(ln.get("text") or "").strip()
+                wav = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.wav"
+                _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine)
+                dur = _duration(wav)
+                ew, eh = echo_dims_for_still(still)
+                _animate(
+                    still, wav, clip, echomimic_host,
+                    prompt=prompt_for(scene, speaker),
+                    steps=steps, width=ew, height=eh,
+                    video_length=echomimic.frames_for_audio(dur),
+                )
+                logger.info("  scene %d line %d (%s): %.1fs @%dx%d -> %s",
+                            scene.id, idx, speaker, dur, ew, eh, clip.name)
+
             # Fit each shot onto the film canvas (blurred pillarbox when aspects
             # differ) so the in-scene concat and the cross-scene concat both see
             # uniform dimensions.

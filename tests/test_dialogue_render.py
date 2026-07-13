@@ -78,6 +78,45 @@ class DialogueRenderTests(unittest.TestCase):
             )
             self.assertTrue(final.exists())
 
+    def test_silent_shot_routes_to_video_not_tts(self):
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            hits = {"tts": 0, "animate": 0, "silent": []}
+
+            def fake_silent(scene, shot, still, out_clip):
+                Path(out_clip).write_bytes(b"mp4")
+                hits["silent"].append((shot.get("duration"), shot.get("video_prompt")))
+                return Path(out_clip)
+
+            scene = _scene([
+                {"speaker": "Kinho", "text": "Look out!"},
+                {"silent": True, "shot": "Kinho draws", "video_prompt": "hand snaps to holster", "duration": 3},
+            ])
+            dialogue_render.render_dialogue_scene(
+                scene, wd,
+                voice_ref_for=lambda sp: None,
+                make_still=lambda scene, sp, idx: (wd / f"s{idx}.png"),
+                echomimic_host="http://s1:8190", tts_host="http://s1:8189",
+                _tts=lambda *a, **k: hits.__setitem__("tts", hits["tts"] + 1) or Path(a[1]).write_bytes(b"w"),
+                _animate=lambda *a, **k: hits.__setitem__("animate", hits["animate"] + 1) or Path(a[2]).write_bytes(b"m"),
+                _duration=lambda p: 2.0, _concat=lambda clips, out: Path(out).write_bytes(b"f") or out,
+                silent_video=fake_silent,
+            )
+            self.assertEqual(hits["tts"], 1)       # only the speaking shot
+            self.assertEqual(hits["animate"], 1)   # only the speaking shot
+            self.assertEqual(hits["silent"], [(3, "hand snaps to holster")])
+
+    def test_silent_shot_without_renderer_raises(self):
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            scene = _scene([{"silent": True, "duration": 3}])
+            with self.assertRaises(RuntimeError):
+                dialogue_render.render_dialogue_scene(
+                    scene, wd, voice_ref_for=lambda s: None,
+                    make_still=lambda scene, sp, idx: (wd / "s.png"),
+                    echomimic_host="http://s1:8190", tts_host="http://s1:8189",
+                    _concat=lambda clips, out: out)
+
     def test_echo_dims_keep_aspect_and_grid(self):
         try:
             from PIL import Image

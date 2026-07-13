@@ -458,7 +458,11 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
 
 
 def _norm_scene_lines(item: dict) -> list[dict]:
-    """Extract validated dialogue lines/shots [{speaker,text[,shot]}] from an LLM scene item."""
+    """Validated shot sequence for a dialogue scene.
+
+    A shot is either SPEAKING — {speaker, text, shot?} rendered as a talking head
+    — or SILENT — {silent: true, shot?, video_prompt?, duration} rendered as a
+    motion clip (people move, no speech). Empty rows are dropped."""
     raw = item.get("lines")
     if not isinstance(raw, list):
         return []
@@ -467,14 +471,31 @@ def _norm_scene_lines(item: dict) -> list[dict]:
         if not isinstance(ln, dict):
             continue
         text = str(ln.get("text") or "").strip()
+        shot = str(ln.get("shot") or "").strip()
+        if ln.get("silent") or (not text and (ln.get("duration") or ln.get("video_prompt"))):
+            row = {"silent": True, "duration": _coerce_float(ln.get("duration"), 3.0)}
+            if shot:
+                row["shot"] = shot
+            vp = str(ln.get("video_prompt") or "").strip()
+            if vp:
+                row["video_prompt"] = vp
+            out.append(row)
+            continue
         if not text:
             continue
         row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
-        shot = str(ln.get("shot") or "").strip()
         if shot:
             row["shot"] = shot  # close framing of the speaker — rendered as this line's still
         out.append(row)
     return out
+
+
+def _coerce_float(v, default: float) -> float:
+    try:
+        f = float(v)
+        return f if f > 0 else default
+    except (TypeError, ValueError):
+        return default
 
 
 def _scene_mode_lines(item: dict) -> tuple[str, list[dict]]:
@@ -528,12 +549,16 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     dialogue_schema = (
         '\n      - "mode": "narration" | "dialogue" | "silent" — how the scene plays. '
         'Use "dialogue" when characters speak on screen, "silent" for a pure visual beat with no voice-over.'
-        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of shots, each '
+        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of shots. A SPEAKING shot is '
         '{"speaker": <character name>, "text": <1-2 short spoken sentences>, '
         '"shot": <20-40 word STATIC close framing of the SPEAKER in this scene\'s setting — '
         'medium close-up or close-up, the speaker\'s face LARGE and clearly visible, '
         'looking at the camera or their scene partner; include setting details behind them>}. '
-        'A dialogue scene is a sequence of such shots — the camera cuts to whoever is speaking. '
+        'A SILENT shot (optional, use occasionally for a beat where characters MOVE but do not '
+        'speak — a reaction, a draw, an entrance) is '
+        '{"silent": true, "shot": <static framing of the moment>, '
+        '"video_prompt": <the motion — what moves and how, camera included>, "duration": <seconds, 2-5>}. '
+        'A dialogue scene is a sequence of these shots — the camera cuts between them. '
         'Dialogue and silent scenes MUST have "narration": "". '
         'For dialogue scenes the "image_prompt" is the establishing wide shot of the setting.'
         if dialogue_note_str else ""
