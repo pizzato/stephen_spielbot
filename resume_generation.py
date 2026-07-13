@@ -47,7 +47,7 @@ from pipeline.tts_worker import generate_narration
 from pipeline.orchestrator import (
     DurableStore, TaskRun,
     JOB_DONE, JOB_ERROR, JOB_RUNNING,
-    job_id_from_work_dir, task_id, worker_id,
+    job_id_from_work_dir, task_id, worker_id, timing_signature,
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
@@ -560,8 +560,28 @@ def main(work_dir: Path) -> None:
     dialogue_scenes = [s for s in scenes if getattr(s, "mode", "narration") == "dialogue" and (s.lines or [])]
     classic_scenes = [s for s in scenes if s not in dialogue_scenes]
     dialogue_durs: dict[int, float] = {}
+    total_lines = sum(len(s.lines or []) for s in dialogue_scenes)
+
+    # Progress bands. Dialogue lines dominate a dialogue film's wall-clock, so
+    # the dialogue phase gets a share of the bar proportional to its weight;
+    # narration-only jobs keep the exact historical bands (invariant).
     if dialogue_scenes:
+        units_dlg, units_classic = 5 * total_lines, 3 * len(classic_scenes)
+        dlg_end = min(85.0, max(12.0, 2 + 88.0 * units_dlg / max(1, units_dlg + units_classic)))
+        tts_band = (dlg_end, dlg_end + 0.18 * (92.0 - dlg_end))
+        video_band = (tts_band[1], 92.0)
+    else:
+        dlg_end = 0.0
+        tts_band = (0.0, 20.0)
+        video_band = (35.0, 90.0)
+    n_classic = max(1, len(classic_scenes))
+
+    if dialogue_scenes:
+        from contextlib import contextmanager
+
         from pipeline.dialogue_render import render_dialogue_scene
+        from pipeline.timing import humanize_eta
+
         echo_hosts = [h for h in (cfg.get("echomimic_workers") or []) if str(h).startswith(("http://", "https://"))]
         if not echo_hosts:
             raise RuntimeError("Dialogue scenes present but no echomimic_workers are configured")
@@ -570,23 +590,66 @@ def main(work_dir: Path) -> None:
         voice_ref_for, make_still, prompt_for = _dialogue_resolvers(
             cfg, work_dir, voice_ref_str, vid_width=vid_width, vid_height=vid_height)
         tts_host = tts_hosts[0]
-        write_progress(status_file, 1, f"Rendering {len(dialogue_scenes)} dialogue scene(s)…")
+        timing_table = store.timing_table()
+        lines_done = [0]
+        cur_host = [echo_hosts[0]]
+
+        def _line_pct() -> float:
+            return 2 + (dlg_end - 2) * (lines_done[0] / max(1, total_lines))
+
+        @contextmanager
+        def line_cm(scene, idx, n_lines, speaker):
+            """Durable task + live progress around one talking-head line.
+
+            Completing the task feeds the learned timing table, which is what
+            gives the ETA banner a real number for dialogue renders."""
+            t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
+            payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
+                       "speaker": speaker, "vid_width": vid_width, "vid_height": vid_height,
+                       "resource_class": "echomimic"}
+            # Upsert — jobs planned before per-line tasks existed lack the row.
+            store.create_task(t_id, durable_job_id, "scene.dialogue.line",
+                              f"Scene {scene.id} · {speaker} speaks ({idx + 1}/{n_lines})",
+                              worker_kind="echomimic", payload=payload, max_attempts=2)
+            sig = timing_signature("scene.dialogue.line", payload)
+            entry = timing_table.get(sig) if sig else None
+            est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this line"
+                   if entry and entry.get("sample_count") else "")
+            write_progress(status_file, _line_pct(),
+                           f"Dialogue · scene {scene.id}: {speaker} speaks "
+                           f"(line {lines_done[0] + 1}/{total_lines}){est}")
+            with TaskRun(store, t_id, worker_id_value=worker_id("echomimic", cur_host[0]),
+                         lease_seconds=7200,
+                         start_message=f"{speaker} line {idx + 1}/{n_lines}") as run:
+                yield
+                run.complete({"scene_id": scene.id, "line_index": idx}, "line rendered")
+            lines_done[0] += 1
+            write_progress(status_file, _line_pct(),
+                           f"Dialogue · scene {scene.id}: {speaker}'s line done "
+                           f"({lines_done[0]}/{total_lines} lines)")
+
+        write_progress(status_file, 1,
+                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) — {total_lines} talking shot(s)…")
         for i, s in enumerate(dialogue_scenes):
             final = work_dir / f"scene_{s.id:02d}_final.mp4"
             if not (final.exists() and final.stat().st_size > 10_000):
+                cur_host[0] = echo_hosts[i % len(echo_hosts)]
                 render_dialogue_scene(
                     s, work_dir,
                     voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
-                    echomimic_host=echo_hosts[i % len(echo_hosts)],
+                    echomimic_host=cur_host[0],
                     tts_host=tts_host, tts_engine=tts_engine,
                     canvas=(vid_width, vid_height),
+                    line_cm=line_cm,
                 )
+            else:
+                lines_done[0] += len(s.lines or [])  # resumed scene — its lines are already done
             # EchoMimic output is portrait-shaped; fit it onto the film's canvas
             # (blurred pillarbox) so the cross-scene concat gets uniform dims.
             fit_video_canvas(final, vid_width, vid_height)
             dialogue_durs[s.id] = _get_duration(final)
-            write_progress(status_file, 1 + 14 * (i + 1) / len(dialogue_scenes),
-                           f"Dialogue scene {s.id} rendered ({i + 1}/{len(dialogue_scenes)})")
+            write_progress(status_file, _line_pct(),
+                           f"Dialogue scene {s.id} assembled ({i + 1}/{len(dialogue_scenes)})")
 
     # ── Narrations (0–20%) ───────────────────────────────────────────────────
     narration_paths: dict[int, Path] = {}
@@ -641,7 +704,7 @@ def main(work_dir: Path) -> None:
                 last_err = e
         raise RuntimeError(f"TTS failed on all hosts for scene {scene.id}: {last_err}")
 
-    write_progress(status_file, 0, f"Generating {n} narrations…")
+    write_progress(status_file, tts_band[0], f"Generating {len(classic_scenes)} narrations…")
     if not tts_hosts:
         raise RuntimeError("No TTS workers configured")
     tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(tts_hosts)))
@@ -663,14 +726,14 @@ def main(work_dir: Path) -> None:
                 narration_paths[sid] = out
                 narration_durs[sid]  = dur
                 tts_done += 1
-                pct = 20.0 * tts_done / n
+                pct = tts_band[0] + (tts_band[1] - tts_band[0]) * tts_done / n_classic
                 write_progress(status_file, pct, f"Narration {sid}/{n} done — {dur:.1f}s ({tts_done}/{n})")
     finally:
         tts_pool.shutdown(wait=False)
 
     total_dur = sum(narration_durs.values()) + sum(dialogue_durs.values())
     logger.info("All narrations done — %.1fs total", total_dur)
-    write_progress(status_file, 20, f"Narrations done — {total_dur:.0f}s, generating video…")
+    write_progress(status_file, tts_band[1], f"Narrations done — {total_dur:.0f}s, generating video…")
 
     # ── Background music (20–35%) ────────────────────────────────────────────
     music_dur  = max(total_dur * 1.05, 30.0)
@@ -692,7 +755,7 @@ def main(work_dir: Path) -> None:
             duration_seconds=_get_duration(music_path),
         )
     else:
-        write_progress(status_file, 20, f"Generating background music ({music_dur:.0f}s)…")
+        write_progress(status_file, tts_band[1], f"Generating background music ({music_dur:.0f}s)…")
         _MAX_MUSIC_ATTEMPTS = 3
         music_task = task_id(durable_job_id, "music")
         store.update_task_payload(
@@ -744,16 +807,16 @@ def main(work_dir: Path) -> None:
                 else:
                     worker_pool.release(music_url)
                 if attempt == _MAX_MUSIC_ATTEMPTS:
-                    write_progress(status_file, 20, f"Background music failed on {music_url}: {first_line}")
+                    write_progress(status_file, tts_band[1], f"Background music failed on {music_url}: {first_line}")
                     raise
                 write_progress(
                     status_file,
-                    20,
+                    tts_band[1],
                     f"Background music attempt {attempt}/{_MAX_MUSIC_ATTEMPTS} failed on {music_url}; "
                     f"retrying. {first_line}",
                 )
 
-    write_progress(status_file, 35, "Music ready. Generating cover image and scene videos…")
+    write_progress(status_file, video_band[0], "Music ready. Generating cover image and scene videos…")
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
@@ -793,7 +856,7 @@ def main(work_dir: Path) -> None:
     else:
         logger.info("Cover image already exists, skipping: %s", cover_path)
 
-    write_progress(status_file, 35, "Music ready. Generating scene videos…")
+    write_progress(status_file, video_band[0], "Music ready. Generating scene videos…")
 
     # ── Video generation (35–90%) ────────────────────────────────────────────
     scene_raws_map: dict[int, Path] = {}
@@ -970,7 +1033,7 @@ def main(work_dir: Path) -> None:
         raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
     n_workers = len(worker_pool.urls)
-    write_progress(status_file, 35, f"Generating {n} scenes across {n_workers} worker(s)…")
+    write_progress(status_file, video_band[0], f"Generating {len(classic_scenes)} scenes across {n_workers} worker(s)…")
 
     scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
     pending: dict[concurrent.futures.Future, Scene] = {
@@ -993,20 +1056,20 @@ def main(work_dir: Path) -> None:
                     scene_raws_map[sid]    = scene_raw
                     scene_ambient_map[sid] = scene_amb
                     completed += 1
-                    pct = 35 + 55 * completed / n
+                    pct = video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic
                     write_progress(status_file, pct, f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)")
                     last_yield = time.time()
                 except Exception as e:
                     logger.error("Scene %d failed permanently: %s", scene.id, e)
                     if first_error is None:
                         first_error = e
-                    write_progress(status_file, 35 + 55 * completed / n,
+                    write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
                                    f"Scene {scene.id} FAILED: {e}")
                     last_yield = time.time()
             now = time.time()
             if pending and first_error is None and (now - last_yield >= 30):
                 running = sorted(pending[f].id for f in pending)
-                write_progress(status_file, 35 + 55 * completed / n,
+                write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
                                f"Scenes {running} generating… ({completed}/{n} done)")
                 last_yield = now
     finally:
@@ -1080,7 +1143,7 @@ def main(work_dir: Path) -> None:
             "ambient_path": str(ambient_path) if ambient_path else "",
         },
     )
-    write_progress(status_file, 90, "Concatenating scenes…")
+    write_progress(status_file, max(90.0, video_band[1]), "Concatenating scenes…")
     with TaskRun(
         store,
         final_task,

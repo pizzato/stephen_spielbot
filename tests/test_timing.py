@@ -131,14 +131,14 @@ class EstimateEtaTests(unittest.TestCase):
         self.assertEqual(eta["eta_seconds"], 230)
         self.assertEqual(eta["total_seconds"], 230)
         self.assertEqual(eta["confidence"], "learned")
-        self.assertEqual(eta["workers"], {"comfy": 2, "tts": 1, "comfy_reserved": 0})
+        self.assertEqual(eta["workers"], {"comfy": 2, "tts": 1, "echomimic": 1, "comfy_reserved": 0})
 
     def test_reserved_worker_excluded_from_comfy_pool(self):
         # 2 comfy, 1 held for the UI (issue #98) -> render runs on 1:
         # comfy 4*100/1 = 400 ; tts 2*10/1 = 20 ; + finalize 30 -> 430
         eta = estimate_eta(self._job(), self.table, self.cfg, now=1000.0, reserved_comfy=1)
         self.assertEqual(eta["eta_seconds"], 430)
-        self.assertEqual(eta["workers"], {"comfy": 1, "tts": 1, "comfy_reserved": 1})
+        self.assertEqual(eta["workers"], {"comfy": 1, "tts": 1, "echomimic": 1, "comfy_reserved": 1})
 
     def test_reservation_never_takes_the_last_worker(self):
         # A lone comfy worker is never reserved — the render must keep running.

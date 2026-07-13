@@ -12,6 +12,7 @@ orchestrator can wire in its real workers and tests can drive it with fakes.
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -60,6 +61,9 @@ def render_dialogue_scene(
     tts_engine: str = "openf5",
     canvas: tuple[int, int] | None = None,   # film (width, height); line clips are fitted onto it
     steps: int = 8,
+    # (scene, idx, n_lines, speaker) -> context manager wrapping one line's work —
+    # the orchestrator uses it for progress messages + durable task tracking.
+    line_cm=None,
     # injected for testing / to plug the real workers
     _tts=generate_narration,
     _animate=echomimic.animate,
@@ -77,28 +81,30 @@ def render_dialogue_scene(
         speaker = str(ln.get("speaker") or NARRATOR).strip() or NARRATOR
         text = str(ln.get("text") or "").strip()
 
-        wav = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.wav"
-        _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine)
-        dur = _duration(wav)
+        cm = line_cm(scene, idx, len(lines), speaker) if line_cm else contextlib.nullcontext()
+        with cm:
+            wav = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.wav"
+            _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine)
+            dur = _duration(wav)
 
-        still = make_still(scene, speaker, idx)
-        ew, eh = echo_dims_for_still(still)
+            still = make_still(scene, speaker, idx)
+            ew, eh = echo_dims_for_still(still)
 
-        clip = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.mp4"
-        _animate(
-            still, wav, clip, echomimic_host,
-            prompt=prompt_for(scene, speaker),
-            steps=steps, width=ew, height=eh,
-            video_length=echomimic.frames_for_audio(dur),
-        )
-        logger.info("  scene %d line %d (%s): %.1fs @%dx%d -> %s",
-                    scene.id, idx, speaker, dur, ew, eh, clip.name)
-        # Fit each shot onto the film canvas (blurred pillarbox when aspects
-        # differ) so the in-scene concat and the cross-scene concat both see
-        # uniform dimensions.
-        if canvas:
-            _fit(clip, canvas[0], canvas[1])
-        line_clips.append(clip)
+            clip = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.mp4"
+            _animate(
+                still, wav, clip, echomimic_host,
+                prompt=prompt_for(scene, speaker),
+                steps=steps, width=ew, height=eh,
+                video_length=echomimic.frames_for_audio(dur),
+            )
+            logger.info("  scene %d line %d (%s): %.1fs @%dx%d -> %s",
+                        scene.id, idx, speaker, dur, ew, eh, clip.name)
+            # Fit each shot onto the film canvas (blurred pillarbox when aspects
+            # differ) so the in-scene concat and the cross-scene concat both see
+            # uniform dimensions.
+            if canvas:
+                _fit(clip, canvas[0], canvas[1])
+            line_clips.append(clip)
 
     final = work_dir / f"scene_{scene.id:02d}_final.mp4"
     if len(line_clips) == 1:

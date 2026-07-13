@@ -35,12 +35,15 @@ _DEFAULT_SECONDS = {
     "image": 40.0,
     "video": 240.0,
     "narration": 12.0,
+    # One talking-head line (EchoMimic): TTS + FLUX shot + animate. Heavily
+    # resolution-dependent; the seed reflects a small-preset line.
+    "dialogue line": 480.0,
     "music": 60.0,
     "mux": 8.0,
     "finalize": 25.0,
 }
 _FHD_PIXELS = 1920 * 1080
-_RES_SENSITIVE = ("image", "video", "finalize")
+_RES_SENSITIVE = ("image", "video", "finalize", "dialogue line")
 
 # Which worker pool each label competes for.
 _POOL = {
@@ -48,6 +51,7 @@ _POOL = {
     "video": "comfy",
     "music": "comfy",
     "narration": "tts",
+    "dialogue line": "echomimic",
     "mux": "local",
     "finalize": "local",
 }
@@ -191,12 +195,13 @@ def estimate_eta(
     now = now if now is not None else time.time()
     n_comfy_total = max(1, len(cfg.get("comfy_workers") or []))
     n_tts = max(1, len(cfg.get("tts_workers") or []))
+    n_echo = max(1, len(cfg.get("echomimic_workers") or []))
     reserved = max(0, min(int(reserved_comfy), n_comfy_total - 1))
     n_comfy = n_comfy_total - reserved
 
     # full = whole render (stable estimate); rem = work still outstanding.
-    full = {"comfy": 0.0, "tts": 0.0}
-    rem = {"comfy": 0.0, "tts": 0.0}
+    full = {"comfy": 0.0, "tts": 0.0, "echomimic": 0.0}
+    rem = {"comfy": 0.0, "tts": 0.0, "echomimic": 0.0}
     full_mux = full_finalize = 0.0
     rem_last_mux = rem_finalize = 0.0
     by_label: dict[str, dict[str, Any]] = {}
@@ -225,7 +230,7 @@ def estimate_eta(
             rem_one = est
 
         pool = _POOL.get(label, "local")
-        if pool in ("comfy", "tts"):
+        if pool in ("comfy", "tts", "echomimic"):
             full[pool] += est
             rem[pool] += rem_one
         elif label == "mux":
@@ -246,7 +251,9 @@ def estimate_eta(
         return None
 
     def _wall(d: dict[str, float]) -> float:
-        return max(d["comfy"] / n_comfy, d["tts"] / n_tts)
+        # Dialogue lines render sequentially today (one scene at a time), so the
+        # echomimic pool contributes serially rather than divided by workers.
+        return max(d["comfy"] / n_comfy, d["tts"] / n_tts, d["echomimic"])
 
     total_seconds = _wall(full) + full_mux + full_finalize
     eta_seconds = _wall(rem) + rem_last_mux + rem_finalize
@@ -263,6 +270,6 @@ def estimate_eta(
         "total_seconds": round(total_seconds),
         "total_text": humanize_eta(total_seconds),
         "confidence": "rough" if any_default else "learned",
-        "workers": {"comfy": n_comfy, "tts": n_tts, "comfy_reserved": reserved},
+        "workers": {"comfy": n_comfy, "tts": n_tts, "echomimic": n_echo, "comfy_reserved": reserved},
         "table": table_rows,
     }
