@@ -108,6 +108,12 @@ def _worker_activity(cfg: dict, tasks: list[dict], reserved_comfy: int = 0) -> l
     for ep in cfg.get("tts_workers") or []:
         ep_by_wid[worker_id("tts", ep)] = ep
         fleet.append(("tts", ep))
+    # EchoMimic talking-head workers (dialogue). Without these the fleet reads
+    # "all idle" during a dialogue render — the comfy/tts pools genuinely are
+    # idle while the work runs on echomimic.
+    for ep in cfg.get("echomimic_workers") or []:
+        ep_by_wid[worker_id("echomimic", ep)] = ep
+        fleet.append(("echomimic", ep))
 
     job_by_ep: dict[str, str] = {}
     for t in tasks:
