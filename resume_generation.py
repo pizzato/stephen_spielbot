@@ -1106,8 +1106,14 @@ def main(work_dir: Path) -> None:
     # ── Mux narrations into scene videos ────────────────────────────────────
     scene_finals: list[Path] = []
     for s in scenes:
-        raw = scene_raws_map.get(s.id)  # None for dialogue scenes (final pre-rendered)
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
+        # Dialogue scenes were rendered in the pre-pass and their artifacts are
+        # tracked per line — they have NO mux task, so recording a scene_final
+        # artifact against one fails the FK. Just collect the finished clip.
+        if getattr(s, "mode", "narration") == "dialogue" and (s.lines or []):
+            scene_finals.append(scene_final)
+            continue
+        raw = scene_raws_map.get(s.id)
         mux_task = task_id(durable_job_id, "scene", s.id, "mux")
         is_last = s.id == scenes[-1].id
         if scene_final.exists() and scene_final.stat().st_size > 10_000:
