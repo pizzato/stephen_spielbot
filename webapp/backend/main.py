@@ -653,11 +653,13 @@ def _live_render_activity_items() -> list[dict]:
         title = wd.name
         eta_text, eta_seconds = None, None
         started_at = None
+        eta, status = None, ""
         store = DurableStore.default()
         try:
             job_row = store.get_job_by_work_dir(str(wd))
             if job_row is not None:
                 job = _row_to_dict(job_row)
+                status = job.get("status", "")
                 title = job.get("title") or title
                 try:
                     started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
@@ -665,10 +667,9 @@ def _live_render_activity_items() -> list[dict]:
                     started_at = None
                 tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
                 cfg = gapp.load_config()
-                timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
-                reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
                 try:
-                    eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=reserved)
+                    eta = estimate_eta(tasks, store.timing_table(), cfg,
+                                       reserved_comfy=_ui_reserved_comfy(cfg))
                     if eta:
                         eta_text = eta.get("eta_text")
                         eta_seconds = eta.get("eta_seconds")
@@ -676,6 +677,11 @@ def _live_render_activity_items() -> list[dict]:
                     pass
         finally:
             store.close()
+        # Same reconciliation the Progress screen + sidebar badge use, so the
+        # Activity % matches the ETA instead of the raw band value.
+        final_path = gapp._final_path_for_work_dir(wd)
+        _done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+        pct = _display_pct(int(round(pct)), eta, status, _done)
         items.append(_make_activity_event(
             name="Rendering film",
             detail=msg or title,
@@ -2678,6 +2684,40 @@ def _display_pct(band_pct, eta, status: str, done: bool):
     return band_pct
 
 
+def _ui_reserved_comfy(cfg: dict) -> int:
+    """1 while a comfy worker is held for the active UI (issue #98), else 0.
+    Recomputed each poll so the ETA tracks the UI going active/idle."""
+    timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+    return 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+
+
+def _reconciled_render_pct(wd) -> int:
+    """Render % that agrees with the task ETA — the SAME number the sidebar badge,
+    the Activity row and the Progress screen all show. Falls back to the phase
+    band pct before durable tasks exist."""
+    band = gapp._status_for_work_dir(wd)[0]
+    final_path = gapp._final_path_for_work_dir(wd)
+    done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+    if done:
+        return 100
+    status, eta = "", None
+    store = DurableStore.default()
+    try:
+        job_row = store.get_job_by_work_dir(str(wd))
+        if job_row is None:
+            return int(round(band))
+        job = _row_to_dict(job_row)
+        status = job.get("status", "")
+        tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+        cfg = gapp.load_config()
+        eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=_ui_reserved_comfy(cfg))
+    except Exception:
+        return int(round(band))
+    finally:
+        store.close()
+    return _display_pct(int(round(band)), eta, status, done)
+
+
 @api.get("/api/progress")
 def progress(work_dir: str = Query("")) -> dict:
     wd = gapp._preferred_work_dir(work_dir)
@@ -2708,8 +2748,7 @@ def progress(work_dir: str = Query("")) -> dict:
             # there are ≥2 (the last is never reserved) — mirrors WorkerPool. This
             # is recomputed every poll, so the worker list and ETA track the UI
             # going active/idle mid-render.
-            timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
-            reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+            reserved = _ui_reserved_comfy(cfg)
             workers = _worker_activity(cfg, tasks, reserved)
             if not done:
                 try:
@@ -4474,7 +4513,7 @@ def badges() -> dict:
         try:
             wd = gapp._preferred_work_dir("")
             if wd is not None:
-                render_pct = int(round(gapp._status_for_work_dir(wd)[0]))
+                render_pct = _reconciled_render_pct(wd)
         except Exception:
             render_pct = 0
 
