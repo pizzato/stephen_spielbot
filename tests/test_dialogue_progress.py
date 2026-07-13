@@ -49,6 +49,19 @@ class DialoguePlanTests(unittest.TestCase):
         self.assertIn("job_x:scene:2:narration", kinds)
         self.assertIn("job_x:scene:2:mux", kinds)
 
+    def test_dialogue_scene_has_no_mux_task_so_artifact_must_not_target_it(self):
+        # The mux loop must skip dialogue scenes: they have no mux task, and
+        # recording a scene_final artifact against a non-existent task id fails
+        # the FK (the crash this guards). Reproduce the FK to lock the reason.
+        import sqlite3
+        self.store.ensure_generation_plan(
+            "job_fk", self.tmp.name, "T", _scenes(), {"vid_width": 512, "vid_height": 256})
+        mux_id = "job_fk:scene:1:mux"   # dialogue scene 1 → never planned
+        self.assertNotIn(mux_id, {r["id"] for r in self.store.task_rows("job_fk")})
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.store.record_artifact("job_fk", mux_id, "scene_final",
+                                       Path(self.tmp.name) / "x.mp4")
+
     def test_completed_line_feeds_timing_table(self):
         self.store.ensure_generation_plan(
             "job_y", self.tmp.name, "T", _scenes(),
