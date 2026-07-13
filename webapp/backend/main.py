@@ -2653,6 +2653,25 @@ def start_generation(body: GenerateBody) -> dict:
 
 # ── progress / orchestration ─────────────────────────────────────────────────
 
+def _display_pct(band_pct, eta, status: str, done: bool):
+    """The progress-bar percentage.
+
+    The phase-band pct (from write_progress) and the learned task ETA are two
+    independent signals; when they diverge the bar looks broken next to the
+    "X left" text (e.g. 49% while ~1 task / under a minute remains). Derive the
+    bar from the SAME numbers as the ETA — elapsed fraction = 1 - remaining/total
+    — so the two always agree. Fall back to the band pct before durable tasks
+    exist (script generation / character pre-build) or when there's no ETA."""
+    if done:
+        return 100
+    if isinstance(eta, dict) and status not in ("error", "cancelled", "failed"):
+        total = eta.get("total_seconds") or 0
+        rem = eta.get("eta_seconds") or 0
+        if total > 0:
+            return max(1, min(99, int(round(100.0 * (total - rem) / total))))
+    return band_pct
+
+
 @api.get("/api/progress")
 def progress(work_dir: str = Query("")) -> dict:
     wd = gapp._preferred_work_dir(work_dir)
@@ -2697,6 +2716,7 @@ def progress(work_dir: str = Query("")) -> dict:
         store.close()
 
     title = (job or {}).get("title", wd.name)
+    pct = _display_pct(pct, eta, (job or {}).get("status", ""), bool(done))
 
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
