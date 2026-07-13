@@ -2349,19 +2349,33 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
         rows = store.scene_rows(job_id)
     finally:
         store.close()
-    todo: list[tuple[dict, int, str]] = []  # (scene_row, line_idx, shot_prompt)
+    cfg = load_config()
+    # (scene_row, line_idx, line_dict). Speaking shots always get a solo still —
+    # even without an explicit "shot" — so the talking head is never animated
+    # from a two-person frame. Silent shots only when they carry a framing.
+    todo: list[tuple[dict, int, dict]] = []
     for row in rows:
         md = row.get("metadata") or {}
         if md.get("mode") != "dialogue":
             continue
         for idx, ln in enumerate(md.get("lines") or []):
-            shot = str((ln or {}).get("shot") or "").strip()
-            if shot:
-                todo.append((row, idx, shot))
+            ln = ln or {}
+            speaking = not ln.get("silent") and str(ln.get("text") or "").strip()
+            if speaking or str(ln.get("shot") or "").strip():
+                todo.append((row, idx, ln))
     if not todo:
         return 0
 
-    cfg = load_config()
+    def _speaker_char(name: str) -> dict | None:
+        n = (name or "").strip().lower()
+        if not n:
+            return None
+        for c in _job_characters(cfg, style_name, work_dir):
+            names = [c.get("name", ""), *(c.get("aliases") or [])]
+            if any(n == str(x).strip().lower() for x in names if str(x).strip()):
+                return c
+        return None
+
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
     img_width, img_height = _RESOLUTIONS.get(
         resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
@@ -2378,14 +2392,35 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
         worker_pool = WorkerPool(worker_urls)
 
     made = 0
-    for row, idx, shot in todo:
+    for row, idx, ln in todo:
         sid = int(row["id"])
+        shot = str(ln.get("shot") or "").strip()
         out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
         if out.exists() and _image_matches_resolution(out, img_width, img_height):
             continue
-        base_prompt = _inject_characters(shot, row, cfg, style_name, work_dir)
-        prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-        reference_images = _scene_reference_images(base_prompt, row, cfg, style_name, work_dir)
+        if ln.get("silent"):
+            # Silent (motion) shot — no lip-sync, so multiple people are fine.
+            base_prompt = _inject_characters(shot, row, cfg, style_name, work_dir)
+            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+            reference_images = _scene_reference_images(base_prompt, row, cfg, style_name, work_dir)
+        else:
+            # Speaking shot — force a SOLO close-up of just the speaker (only their
+            # description + reference face) so EchoMimic can't animate a second
+            # person in frame.
+            speaker = str(ln.get("speaker") or "").strip()
+            char = _speaker_char(speaker)
+            desc = (char or {}).get("description", "")
+            parts = [shot] if shot else [f"{speaker} speaks in the scene."]
+            parts.append(
+                f"Solo close-up of {speaker or 'the speaker'} — exactly ONE person, centered and "
+                "facing the camera, their face large and clearly visible and in focus. "
+                "No other people or characters anywhere in the frame.")
+            if desc and desc.lower() not in " ".join(parts).lower():
+                parts.append(f"{speaker}: {desc}.")
+            base_prompt = " ".join(parts)
+            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+            ref = char and (char.get("_ref_path") or _character_image_path(char.get("ref_image")))
+            reference_images = [Path(ref)] if ref and Path(ref).exists() else []
         url = worker_pool.acquire()
         try:
             generate_with_engine(
