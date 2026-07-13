@@ -382,7 +382,9 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
         if c and c.get("voice") and c["voice"] in voices:
             p = Path(voices[c["voice"]])
             if p.exists():
+                logger.info("  %s speaks with voice %r", speaker, c["voice"])
                 return p
+        logger.info("  %s speaks with the narrator voice", speaker)
         return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
 
     def _scene_frame(scene) -> Path | None:
