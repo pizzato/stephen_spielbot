@@ -348,14 +348,14 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
     """Build (voice_ref_for, make_still) for dialogue scenes.
 
     Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
-    own voice, else the style narrator — and (b) the still EchoMimic animates.
+    own voice, else the style narrator — (b) the still EchoMimic animates, and
+    (c) the text prompt guiding the animation.
 
-    The still is the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at the job
-    resolution — same rule as the classic video path) so the character speaks *in
-    the scene*, not on their reference portrait. Exceptions fall back to the
-    speaker's portrait: multi-speaker scenes (animating one two-person frame for
-    both voices would move the wrong lips — shot/reverse-shot instead) and scenes
-    with no usable frame on disk."""
+    The still is always the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at
+    the job resolution — same rule as the classic video path) so the character
+    speaks *in the scene*; the speaker's portrait is only a fallback when no frame
+    exists on disk. On multi-character frames the prompt names WHO is speaking so
+    the right lips move (best-effort text guidance)."""
     try:
         chars = json.loads((work_dir / "characters.json").read_text()) or []
     except Exception:
@@ -402,26 +402,32 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
         return None
 
     def make_still(scene, speaker: str, idx: int) -> Path:
-        speakers = {str((ln or {}).get("speaker") or "").strip().lower()
-                    for ln in (getattr(scene, "lines", None) or [])}
         frame = _scene_frame(scene)
-        portrait = _portrait(scene, speaker)
-        if frame is not None and len(speakers) <= 1:
+        if frame is not None:
             logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
             return frame
+        portrait = _portrait(scene, speaker)
         if portrait is not None:
-            if frame is not None:
-                logger.info("  scene %d: multi-speaker — %s speaks on their portrait (shot/reverse-shot)",
-                            scene.id, speaker)
+            logger.info("  scene %d: no scene frame at the job resolution — %s speaks on their portrait",
+                        scene.id, speaker)
             return portrait
-        if frame is not None:  # single portrait missing — the scene frame still works
-            return frame
         raise RuntimeError(
             f"dialogue speaker {speaker!r} (scene {scene.id}) has no scene first frame at the "
             "job resolution and no character portrait — generate the scene image or add a portrait"
         )
 
-    return voice_ref_for, make_still
+    def prompt_for(scene, speaker: str) -> str:
+        """Text guidance for EchoMimic: name WHO is speaking so a multi-character
+        scene frame animates the right character's lips (best-effort — the model
+        is text-guided)."""
+        c = _find(speaker)
+        who = (c or {}).get("description") or speaker
+        return (
+            f"{speaker} ({who}) is speaking, with natural facial expressions and subtle head "
+            "movement. Any other characters present listen silently, mouths closed, without talking."
+        )
+
+    return voice_ref_for, make_still, prompt_for
 
 
 def main(work_dir: Path) -> None:
@@ -552,7 +558,7 @@ def main(work_dir: Path) -> None:
             raise RuntimeError("Dialogue scenes present but no echomimic_workers are configured")
         if not tts_hosts:
             raise RuntimeError("Dialogue scenes need a TTS worker but none are configured")
-        voice_ref_for, make_still = _dialogue_resolvers(
+        voice_ref_for, make_still, prompt_for = _dialogue_resolvers(
             cfg, work_dir, voice_ref_str, vid_width=vid_width, vid_height=vid_height)
         tts_host = tts_hosts[0]
         write_progress(status_file, 1, f"Rendering {len(dialogue_scenes)} dialogue scene(s)…")
@@ -561,7 +567,7 @@ def main(work_dir: Path) -> None:
             if not (final.exists() and final.stat().st_size > 10_000):
                 render_dialogue_scene(
                     s, work_dir,
-                    voice_ref_for=voice_ref_for, make_still=make_still,
+                    voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
                     echomimic_host=echo_hosts[i % len(echo_hosts)],
                     tts_host=tts_host, tts_engine=tts_engine,
                     canvas=(vid_width, vid_height),
