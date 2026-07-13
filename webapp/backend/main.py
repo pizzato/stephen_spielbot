@@ -1421,6 +1421,22 @@ def _read_create_brief(wd: Path) -> dict:
         return {}
 
 
+def _clean_lines(raw_lines) -> list[dict]:
+    """Validated dialogue lines/shots from a client payload: drop empty-text rows,
+    default the speaker, keep the optional per-line shot framing."""
+    out = []
+    for ln in raw_lines or []:
+        if not isinstance(ln, dict) or not str(ln.get("text", "")).strip():
+            continue
+        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator",
+               "text": str(ln.get("text") or "").strip()}
+        shot = str(ln.get("shot") or "").strip()
+        if shot:
+            row["shot"] = shot
+        out.append(row)
+    return out
+
+
 def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
     """A Scene as a script.json row. Dialogue/silent fields go under "metadata"
     (only when non-default), so narration scripts stay byte-identical — and so
@@ -1457,12 +1473,15 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
     return (
         "DIALOGUE VIDEO — characters SPEAK rather than only a narrator. For EACH scene object, "
         "add a \"mode\" field: \"dialogue\" | \"silent\" | \"narration\". "
-        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of "
+        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of SHOTS, each "
         "{\"speaker\": <character name>, \"text\": <one or two SHORT spoken sentences — keep each "
-        "line under ~20 words / 8 seconds of speech>}, and leave "
-        "\"narration\" empty. When \"silent\", leave narration empty (visuals only). "
+        "line under ~20 words / 8 seconds of speech>, \"shot\": <static close framing of the "
+        "speaker, face large and clear>}, and leave \"narration\" empty. A dialogue scene plays "
+        "as a cut between these shots — the camera is always close on whoever speaks. "
+        "When \"silent\", leave narration empty (visuals only). "
         f"{speakers} {balance} "
-        "Still fill image_prompt and video_prompt as usual; for dialogue scenes frame the speaker(s)."
+        "Still fill image_prompt and video_prompt as usual; for dialogue scenes the image_prompt "
+        "is the establishing wide shot of the setting."
     )
 
 
@@ -1864,11 +1883,9 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
             else:
                 meta.pop("mode", None)
         if body.lines is not None:
-            ls = [ln for ln in body.lines
-                  if isinstance(ln, dict) and str(ln.get("text", "")).strip()]
+            ls = _clean_lines(body.lines)
             if ls:
-                meta["lines"] = [{"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator",
-                                  "text": str(ln.get("text") or "").strip()} for ln in ls]
+                meta["lines"] = ls
             else:
                 meta.pop("lines", None)
         if body.duration is not None:
@@ -2544,6 +2561,17 @@ def start_generation(body: GenerateBody) -> dict:
             generate_all_previews(job_id, resolution, body.style or "")
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
+
+    # Per-shot stills for dialogue lines (speaker close-ups in the scene setting) —
+    # the talking-head model needs a large, clear face; a wide scene frame gives
+    # poor lip-sync. Best-effort: a missing still falls back to the scene frame.
+    try:
+        made = gapp.generate_dialogue_shot_stills(job_id, ss["name"], resolution)
+        if made:
+            (work_dir / "progress.json").write_text(json.dumps(
+                {"pct": 0, "msg": f"Rendered {made} dialogue shot still(s)…", "ts": time.time()}))
+    except Exception as e:
+        gapp.logger.warning("Dialogue shot pre-build failed (non-fatal): %s", e)
 
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({

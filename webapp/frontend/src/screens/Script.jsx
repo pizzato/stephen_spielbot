@@ -68,8 +68,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [globalCast, setGlobalCast] = useState([])
   useEffect(() => {
     api.getConfig().then((c) => {
-      setVoiceOpts((c?.voices || []).map((v) => v.name))
-      setGlobalCast((c?.characters || []).map((x) => x?.name).filter(Boolean))
+      // /api/config nests the config under "config"; voices there are
+      // {name,path} rows while the top-level "voices" is plain names.
+      const cfg = c?.config || c || {}
+      setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
+      setGlobalCast((cfg.characters || []).map((x) => x?.name).filter(Boolean))
     }).catch(() => {})
   }, [])
 
@@ -767,16 +770,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     <div className="stack gap-10">
                       {(d.lines || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No lines yet — add one below.</span>}
                       {(d.lines || []).map((ln, i) => (
-                        <div key={i} className="row gap-8 center">
-                          <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
-                            onChange={(e) => setLineAndSave(i, 'speaker', e.target.value)}>
-                            {!castOpts.length && <option value="">(no characters yet)</option>}
-                            {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
-                            {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                          </select>
-                          <input className="input" style={{ flex: 1 }} placeholder="What they say…"
-                            value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
-                          <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeLine(i)} />
+                        <div key={i} className="stack gap-6">
+                          <div className="row gap-8 center">
+                            <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
+                              onChange={(e) => setLineAndSave(i, 'speaker', e.target.value)}>
+                              {!castOpts.length && <option value="">(no characters yet)</option>}
+                              {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
+                              {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                            </select>
+                            <input className="input" style={{ flex: 1 }} placeholder="What they say…"
+                              value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
+                            <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeLine(i)} />
+                          </div>
+                          <input className="input" style={{ marginLeft: 198, fontSize: 12.5 }}
+                            placeholder="Shot framing (optional) — e.g. close-up of Billy at the saloon bar, face large and clear"
+                            value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={() => persist(cur)} />
                         </div>
                       ))}
                       <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
