@@ -1618,6 +1618,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                     <textarea className="textarea" rows={3} value={c.description || ''}
                       onChange={(e) => updateChar(i, { description: e.target.value })} />
                   </Field>
+                  <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
+                    <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
+                      onChange={(e) => updateChar(i, { voice: e.target.value })}>
+                      <option value="">Style narrator (default)</option>
+                      {(cfg.voices || []).map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
                   <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                     <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
                       label="Enabled — available to use in scripts and renders" />
