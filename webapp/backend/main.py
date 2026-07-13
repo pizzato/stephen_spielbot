@@ -1511,6 +1511,11 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # Render look images in the background for the new ones; best-effort when
     # no worker is up (editor offers a manual "Generate look").
     new_characters = gapp._filter_identified_against_style(characters, cfg, ss["name"])
+    # Cast voices: each new character gets a fitting library voice (gender/age
+    # matched, the style narrator's voice excluded) so dialogue doesn't come out
+    # with the narrator speaking every part.
+    new_characters = gapp._auto_assign_character_voices(
+        new_characters, cfg, exclude=(ss.get("voice") or "").strip())
     saved_characters = gapp._write_script_characters(work_dir, new_characters)
     if saved_characters:
         threading.Thread(

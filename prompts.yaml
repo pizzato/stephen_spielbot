@@ -29,6 +29,8 @@ script_claude_initial:
       - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
       - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
+      - "gender": "male" | "female" — how the character would sound if voiced.
+      - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
     When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and keep their appearance consistent with the "description" above, so they look identical across every scene.
 
     "scenes": Array of scene objects, each with:
@@ -176,6 +178,8 @@ recurring_characters:
       - "name": the character's name as used in the narration
       - "aliases": array of other names/epithets used for them (e.g. ["the General"]); [] if none
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. If the narration gives no visual detail, infer a plausible, context-appropriate appearance.
+      - "gender": "male" | "female" — how the character would sound if voiced.
+      - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
       - "scenes": array of the scene numbers (integers) they appear in — must contain at least two
 
     If no character appears in two or more scenes, output exactly [].

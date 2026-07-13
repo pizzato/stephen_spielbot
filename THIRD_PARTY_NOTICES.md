@@ -56,3 +56,12 @@ a convenience summary, **not** legal advice — always check the linked model ca
 - `assets/StephenSpielbot.png` — original artwork for this project.
 - `assets/default_narrator.mp3` — reference voice clip, provenance under review
   (see the narration note above).
+
+## Bundled character voice library
+
+`make install` (via `scripts/download_voices.py`) downloads ten ~18-second voice
+reference clips carved from **LibriVox** audiobook recordings hosted on
+archive.org. LibriVox recordings are released into the **public domain** by
+their readers, so the clips (and voices cloned from them by F5-TTS) carry no
+usage restrictions, including commercial use. Each voice's source recording is
+recorded in `config.yaml` (`voices[].source`) for transparency.

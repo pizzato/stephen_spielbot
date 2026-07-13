@@ -130,10 +130,16 @@ def _norm_identified_characters(raw_list, cap: int = _MAX_MAIN_CHARACTERS) -> li
         if isinstance(aliases, str):
             aliases = aliases.split(",")
         aliases = [str(a).strip() for a in (aliases or []) if str(a).strip()]
+        gender = str(raw.get("gender") or "").strip().lower()
+        age = str(raw.get("age") or "").strip().lower()
         out.append({
             "name": name,
             "aliases": aliases,
             "description": str(raw.get("description") or "").strip(),
+            # voice-casting hints (used to auto-pick a library voice; free-form
+            # values are tolerated downstream, unknown ⟹ no constraint)
+            "gender": gender if gender in ("male", "female") else "",
+            "age": age if age in ("young", "adult", "mature", "elderly") else "",
         })
         if len(out) >= cap:
             break
