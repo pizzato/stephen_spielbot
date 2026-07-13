@@ -2400,11 +2400,29 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
         worker_pool = WorkerPool(worker_urls)
 
     made = 0
+    # First shot still per (scene, speaker) so a character's LATER lines in the
+    # same scene reuse their first close-up — the repeated shot then matches the
+    # first exactly (correct shot/reverse-shot continuity) instead of drifting to
+    # a different-looking generation.
+    first_by_speaker: dict[tuple[int, str], Path] = {}
     for row, idx, ln in todo:
         sid = int(row["id"])
         shot = str(ln.get("shot") or "").strip()
         out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
+        speaker = "" if ln.get("silent") else str(ln.get("speaker") or "").strip()
+        key = (sid, speaker.lower())
+
+        if speaker and key in first_by_speaker:
+            prior = first_by_speaker[key]
+            if prior.exists() and prior != out:
+                shutil.copy2(prior, out)
+                logger.info("[shots] scene %d line %d reuses %s's earlier close-up (%s)",
+                            sid, idx, speaker, prior.name)
+            continue
+
         if out.exists() and _image_matches_resolution(out, img_width, img_height):
+            if speaker:
+                first_by_speaker[key] = out
             continue
         if ln.get("silent"):
             # Silent (motion) shot — no lip-sync, so multiple people are fine.
@@ -2415,7 +2433,6 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
             # Speaking shot — force a SOLO close-up of just the speaker (only their
             # description + reference face) so EchoMimic can't animate a second
             # person in frame.
-            speaker = str(ln.get("speaker") or "").strip()
             char = _speaker_char(speaker)
             desc = (char or {}).get("description", "")
             parts = [shot] if shot else [f"{speaker} speaks in the scene."]
@@ -2437,6 +2454,8 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
                 reference_images=reference_images, comfy_url=url,
             )
             made += 1
+            if speaker:
+                first_by_speaker[key] = out
             logger.info("[shots] scene %d line %d shot still ready (%s)", sid, idx, out.name)
         except Exception:
             logger.warning("[shots] scene %d line %d shot failed — render will fall back",
