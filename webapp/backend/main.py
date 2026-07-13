@@ -844,6 +844,11 @@ class VoiceAdd(BaseModel):
     name: str
     filename: str = ""
     data: str
+    # casting metadata (drives the character voice auto-cast; all optional)
+    gender: str | None = None
+    age: str | None = None
+    accent: str | None = None
+    tone: str | None = None
 
 
 class VoiceUpdate(BaseModel):
@@ -851,6 +856,10 @@ class VoiceUpdate(BaseModel):
     new_name: str | None = None
     filename: str = ""
     data: str | None = None
+    gender: str | None = None
+    age: str | None = None
+    accent: str | None = None
+    tone: str | None = None
 
 
 class VoiceDelete(BaseModel):
@@ -861,7 +870,9 @@ class VoiceDelete(BaseModel):
 def voices_add(body: VoiceAdd) -> dict:
     raw, ext = _decode_audio(body.data, body.filename)
     try:
-        cfg = gapp.add_voice(body.name, raw, ext)
+        cfg = gapp.add_voice(body.name, raw, ext,
+                             gender=body.gender, age=body.age,
+                             accent=body.accent, tone=body.tone)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _voice_response(cfg)
@@ -873,7 +884,9 @@ def voices_update(body: VoiceUpdate) -> dict:
     if body.data:
         audio, ext = _decode_audio(body.data, body.filename)
     try:
-        cfg = gapp.update_voice(body.name, new_name=body.new_name, audio=audio, ext=ext)
+        cfg = gapp.update_voice(body.name, new_name=body.new_name, audio=audio, ext=ext,
+                                gender=body.gender, age=body.age,
+                                accent=body.accent, tone=body.tone)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _voice_response(cfg)

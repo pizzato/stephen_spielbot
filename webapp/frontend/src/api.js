@@ -58,7 +58,7 @@ export const api = {
   uiWorker: () => req('GET', '/ui/worker'),
 
   // voices (reference clips F5-TTS clones). `data` is a base64 / data-URL string.
-  addVoice: (name, filename, data) => req('POST', '/voices/add', { name, filename, data }),
+  addVoice: (name, filename, data, meta = {}) => req('POST', '/voices/add', { name, filename, data, ...meta }),
   updateVoice: (name, fields) => req('POST', '/voices/update', { name, ...fields }),
   deleteVoice: (name) => req('POST', '/voices/delete', { name }),
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.

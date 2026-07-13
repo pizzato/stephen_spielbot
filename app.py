@@ -1361,31 +1361,65 @@ def _new_voice_path(name: str, ext: str) -> Path:
     return candidate
 
 
-def add_voice(name: str, audio: bytes, ext: str = ".wav") -> dict:
+_VOICE_GENDERS = ("", "male", "female")
+_VOICE_AGES = ("", "young", "adult", "mature", "elderly")
+
+
+def _voice_meta_fields(gender=None, age=None, accent=None, tone=None) -> dict:
+    """Validated casting-metadata updates for a voice; None ⟹ leave untouched.
+
+    gender/age drive app._auto_assign_character_voices — a voice with no gender
+    is never auto-cast onto a character (it stays manual-pick only)."""
+    out = {}
+    if gender is not None:
+        g = str(gender).strip().lower()
+        if g not in _VOICE_GENDERS:
+            raise ValueError(f"gender must be one of {_VOICE_GENDERS[1:]} (or empty).")
+        out["gender"] = g
+    if age is not None:
+        a = str(age).strip().lower()
+        if a not in _VOICE_AGES:
+            raise ValueError(f"age must be one of {_VOICE_AGES[1:]} (or empty).")
+        out["age"] = a
+    if accent is not None:
+        out["accent"] = str(accent).strip()
+    if tone is not None:
+        out["tone"] = str(tone).strip()
+    return out
+
+
+def add_voice(name: str, audio: bytes, ext: str = ".wav",
+              gender=None, age=None, accent=None, tone=None) -> dict:
     """Save a new reference clip and register the voice. Returns the new config."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Voice name is required.")
+    meta = _voice_meta_fields(gender, age, accent, tone)
     cfg = load_config()
     voices = cfg.get("voices", []) or []
     if name == F5TTS_DEFAULT_OPTION or any(v["name"] == name for v in voices):
         raise ValueError(f"A voice named “{name}” already exists.")
     path = _new_voice_path(name, ext)
     path.write_bytes(audio)
-    voices.append({"name": name, "path": str(path)})
+    voices.append({"name": name, "path": str(path), **meta})
     cfg["voices"] = voices
     save_config(cfg)
     return cfg
 
 
 def update_voice(name: str, new_name: str | None = None,
-                 audio: bytes | None = None, ext: str = ".wav") -> dict:
-    """Rename a voice and/or replace its reference clip. Returns the new config."""
+                 audio: bytes | None = None, ext: str = ".wav",
+                 gender=None, age=None, accent=None, tone=None) -> dict:
+    """Rename a voice, replace its clip, and/or set its casting metadata
+    (gender/age/accent/tone — what the character auto-cast matches on).
+    Returns the new config."""
+    meta = _voice_meta_fields(gender, age, accent, tone)
     cfg = load_config()
     voices = cfg.get("voices", []) or []
     voice = next((v for v in voices if v["name"] == name), None)
     if voice is None:
         raise ValueError(f"No voice named “{name}”.")
+    voice.update(meta)
     if new_name is not None:
         new_name = new_name.strip()
         if not new_name:
