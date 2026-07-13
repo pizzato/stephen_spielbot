@@ -8,6 +8,21 @@ export function Icon({ name, brand, style, spin }) {
   return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
 }
 
+// Voice characteristics for the pickers. Build a name → "gender, age, accent"
+// map from the full voice catalogue (meta.config.voices / cfg.voices), then
+// label any voice name with it. Voices without metadata just show their name.
+export function voiceMetaMap(fullVoices) {
+  const m = {}
+  for (const v of (fullVoices || [])) {
+    if (v && v.name) m[v.name] = [v.gender, v.age, v.accent].filter(Boolean).join(', ')
+  }
+  return m
+}
+export function voiceLabel(name, metaMap) {
+  const c = metaMap && metaMap[name]
+  return c ? `${name} — ${c}` : name
+}
+
 export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button' }) {
   const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : size === 'sm' ? 'btn--sm' : '', block ? 'btn--block' : '']
     .filter(Boolean).join(' ')

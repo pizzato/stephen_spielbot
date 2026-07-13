@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -65,13 +65,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Named voices (per-character voice picker) + the global character catalogue
   // (their names are valid dialogue speakers too), loaded from config once.
   const [voiceOpts, setVoiceOpts] = useState([])
+  const [voiceMeta, setVoiceMeta] = useState({})
   const [globalCast, setGlobalCast] = useState([])
   useEffect(() => {
     api.getConfig().then((c) => {
       // /api/config nests the config under "config"; voices there are
-      // {name,path} rows while the top-level "voices" is plain names.
+      // {name,path,gender,age,accent} rows while top-level "voices" is names.
       const cfg = c?.config || c || {}
       setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
+      setVoiceMeta(voiceMetaMap(cfg.voices))
       setGlobalCast((cfg.characters || []).map((x) => x?.name).filter(Boolean))
     }).catch(() => {})
   }, [])
@@ -403,6 +405,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const setLineAndSave = (i, k, v) =>
     setAndSave('lines', (d.lines || []).map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln))
   const addLine = () => setAndSave('lines', [...(d.lines || []), { speaker: castOpts[0] || '', text: '' }])
+  const addSilentShot = () => setAndSave('lines', [...(d.lines || []), { silent: true, shot: '', video_prompt: '', duration: 3 }])
   const removeLine = (i) => setAndSave('lines', (d.lines || []).filter((_, idx) => idx !== i))
 
   const move = async (to) => {
@@ -766,34 +769,57 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 )}
 
                 {d.mode === 'dialogue' && (
-                  <Field label="Dialogue" hint="Each line becomes a talking-head shot in that character's voice. Speakers must be characters that have a portrait (Characters tab).">
-                    <div className="stack gap-10">
-                      {(d.lines || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No lines yet — add one below.</span>}
+                  <Field label="Shots" hint="A dialogue scene is a sequence of shots. A speaking shot is a talking-head close-up in that character's voice; a silent shot is a beat where people move but don't speak (rendered as motion). Speakers need a portrait (Characters tab).">
+                    <div className="stack gap-12">
+                      {(d.lines || []).length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No shots yet — add one below.</span>}
                       {(d.lines || []).map((ln, i) => (
-                        <div key={i} className="stack gap-6">
-                          <div className="row gap-8 center">
-                            <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
-                              onChange={(e) => setLineAndSave(i, 'speaker', e.target.value)}>
-                              {!castOpts.length && <option value="">(no characters yet)</option>}
-                              {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
-                              {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                            </select>
-                            <input className="input" style={{ flex: 1 }} placeholder="What they say…"
-                              value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
-                            <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeLine(i)} />
+                        <div key={i} className="stack gap-8"
+                          style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 10, background: 'var(--paper-2)' }}>
+                          <div className="row center between">
+                            <Chip tone={ln.silent ? 'neutral' : 'accent'} dot>{ln.silent ? `Silent shot ${i + 1}` : `Line ${i + 1}`}</Chip>
+                            <Button variant="quiet" icon="trash" title="Remove shot" onClick={() => removeLine(i)} />
                           </div>
-                          <input className="input" style={{ marginLeft: 198, fontSize: 12.5 }}
-                            placeholder="Shot framing (optional) — e.g. close-up of Billy at the saloon bar, face large and clear"
-                            value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={() => persist(cur)} />
+                          {ln.silent ? (
+                            <>
+                              <input className="input" placeholder="Shot framing — e.g. Billy's hand drops toward his holster, saloon behind"
+                                value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={() => persist(cur)} />
+                              <input className="input" placeholder="Motion / video prompt — what moves and how (camera included)"
+                                value={ln.video_prompt || ''} onChange={(e) => setLine(i, 'video_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                              <div className="row center gap-8">
+                                <span className="muted" style={{ fontSize: 12.5 }}>Duration (s)</span>
+                                <input className="input" type="number" min={1} step={1} style={{ maxWidth: 90 }}
+                                  value={ln.duration || 3} onChange={(e) => setLine(i, 'duration', Number(e.target.value) || 0)} onBlur={() => persist(cur)} />
+                              </div>
+                            </>
+                          ) : (
+                            <>
+                              <div className="row gap-8 center">
+                                <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
+                                  onChange={(e) => setLineAndSave(i, 'speaker', e.target.value)}>
+                                  {!castOpts.length && <option value="">(no characters yet)</option>}
+                                  {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
+                                  {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                                <input className="input" style={{ flex: 1 }} placeholder="What they say…"
+                                  value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={() => persist(cur)} />
+                              </div>
+                              <input className="input" style={{ fontSize: 12.5 }}
+                                placeholder="Shot framing (optional) — e.g. close-up of Billy at the saloon bar, face large and clear"
+                                value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={() => persist(cur)} />
+                            </>
+                          )}
                         </div>
                       ))}
-                      <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
+                      <div className="row gap-8">
+                        <Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button>
+                        <Button variant="ghost" icon="film" onClick={addSilentShot}>Add silent shot</Button>
+                      </div>
                     </div>
                   </Field>
                 )}
 
                 {d.mode === 'silent' && (
-                  <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over.">
+                  <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt below drive the frame and motion.">
                     <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
                       value={d.duration || 5} onChange={(e) => setField('duration', Number(e.target.value) || 0)} onBlur={() => persist(cur)} />
                   </Field>
@@ -989,7 +1015,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       <select className="input" value={c.voice || ''} disabled={b}
                         onChange={(e) => setCharVoice(c, e.target.value)}>
                         <option value="">Style narrator (default)</option>
-                        {voiceOpts.map((v) => <option key={v} value={v}>{v}</option>)}
+                        {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
                       </select>
                     </Field>
                     <div className="row gap-10 row--wrap">
