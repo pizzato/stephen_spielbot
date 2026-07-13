@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Card, Field, Button, Chip, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
@@ -67,7 +67,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
-  voices, filmVoice,
+  voices, filmVoice, voiceMeta = {},
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -372,7 +372,7 @@ function SceneCard({
                 <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
                   <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
                     <option value="">Film narrator ({filmVoice || 'Default (F5-TTS)'})</option>
-                    {(voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                    {(voices || []).map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
                   </select>
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
@@ -778,7 +778,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             <Field label="Narrator voice">
               <select className="select" value={voice} disabled={anyBusy}
                 onChange={(e) => setVoice(e.target.value)}>
-                {(data.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                {(data.voices || []).map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(meta.config?.voices))}</option>)}
               </select>
             </Field>
           </div>
@@ -1191,7 +1191,8 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
 
 // ── Scenes tab ────────────────────────────────────────────────────────────────
 
-function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
+function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
+  const voiceMeta = voiceMetaMap(meta.config?.voices)
   const [scenes, setScenes] = useState([])
   const [jobId, setJobId] = useState('')
   const [resolution, setResolution] = useState('')
@@ -1330,6 +1331,7 @@ function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
               style={style}
               voices={voices}
               filmVoice={filmVoice}
+              voiceMeta={voiceMeta}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}
@@ -1413,6 +1415,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       {tab === 'scenes' && (
         <ScenesTab
           workDir={workDir}
+          meta={meta}
           onTitle={setFilmTitle}
           onSwitchToFilm={() => setTab('film')}
         />

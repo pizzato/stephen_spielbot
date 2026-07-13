@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -26,6 +26,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const voiceChoices = useMemo(() => (
     meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
   ), [meta.voices])
+  const vmeta = useMemo(() => voiceMetaMap(meta.config?.voices), [meta.config?.voices])
 
   // Style profiles (issue #66): the picked style OWNS the narrator voice,
   // robotic toggle and visual style (those inputs are locked to it), prefills
@@ -214,7 +215,7 @@ export default function Create({ seed, meta, onGenerated }) {
             <Field label="Narrator voice"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : undefined}>
               <select className="select" value={voice} disabled={locked} onChange={(e) => setVoice(e.target.value)}>
-                {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+                {voiceChoices.map((v) => <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>)}
               </select>
               <div className="mt-8">
                 <Check checked={robotic} disabled={locked} onChange={setRobotic}
