@@ -5,6 +5,7 @@ of a narration/video/mux quartet that never runs and poisons the ETA), the
 timing model knows the "dialogue line" kind and the echomimic worker pool, and
 completed line tasks feed the learned table like any other kind.
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -92,6 +93,20 @@ class DialogueEtaTests(unittest.TestCase):
         # two seeded lines render serially (~480s each, res-scaled) + finalize
         self.assertGreater(eta["eta_seconds"], 100)
         self.assertTrue(any(r["label"].startswith("dialogue line") for r in eta["table"]))
+
+    def test_parallel_scenes_divide_echomimic_wall(self):
+        # 2 scenes × 2 lines each on 3 echomimic workers → 2 render in parallel,
+        # so the echomimic wall is ~half the serial time.
+        def lines(scene_id):
+            return [{"kind": "scene.dialogue.line", "status": "queued",
+                     "payload_json": json.dumps({"vid_width": 512, "vid_height": 256,
+                                                  "scene_id": scene_id})} for _ in range(2)]
+        cfg = {"comfy_workers": ["a"], "tts_workers": ["b"], "echomimic_workers": ["c", "d", "e"]}
+        one_scene = estimate_eta(lines(1), {}, cfg)          # 2 lines, 1 scene → serial
+        two_scenes = estimate_eta(lines(1) + lines(2), {}, cfg)  # 4 lines, 2 scenes → parallel
+        # twice the work but across 2 workers → about the same wall, not double
+        self.assertLess(two_scenes["eta_seconds"], 1.6 * one_scene["eta_seconds"])
+        self.assertEqual(two_scenes["workers"]["echomimic"], 3)
 
 
 if __name__ == "__main__":
