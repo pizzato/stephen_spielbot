@@ -116,6 +116,18 @@ export default function Create({ seed, meta, onGenerated }) {
     return () => clearTimeout(t)
   }, [videoTitle, direction, resolution, styleName])
 
+  // Switching to "No style" clears the style's imprint: blank the visual style
+  // and reset the narrator to the default voice (un-robotic), so you start from a
+  // clean slate rather than inheriting the last style's fields.
+  const onStyleChange = (name) => {
+    setStyleName(name)
+    if (name === NO_STYLE) {
+      setStyle('')
+      setVoice(voiceChoices[0] || 'Default (F5-TTS)')
+      setRobotic(false)
+    }
+  }
+
   // Improve the title or direction in place via the LLM (issue #88).
   const improve = async (field, instruction = '') => {
     setImproving(field); setError('')
@@ -173,7 +185,7 @@ export default function Create({ seed, meta, onGenerated }) {
                 hint={profile
                   ? (profile.description || 'Sets the narrator and visuals below, plus render quality and audio mix — manage styles in Settings.')
                   : 'Experiment freely — narrator and visuals are yours; render quality and audio mix come from the default style.'}>
-                <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => setStyleName(e.target.value)} style={{ maxWidth: 320 }}>
+                <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => onStyleChange(e.target.value)} style={{ maxWidth: 320 }}>
                   {styleList.map((s) => (
                     <option key={s.name} value={s.name}>
                       {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
@@ -196,7 +208,7 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Scenes — ${scenes}`} hint="Roughly 20 seconds each.">
-                  <input className="slider" type="range" min={4} max={40} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
+                  <input className="slider" type="range" min={1} max={40} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
                 </Field>
               </div>
               <div className="grow">
