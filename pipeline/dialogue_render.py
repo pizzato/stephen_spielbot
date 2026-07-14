@@ -18,12 +18,21 @@ import shutil
 from pathlib import Path
 
 from pipeline import echomimic
-from pipeline.assembler import _get_duration, concatenate_scenes_hard_cut, fit_video_canvas
+from pipeline.assembler import _get_duration, concatenate_scenes, fit_video_canvas
 from pipeline.tts_worker import generate_narration
 
 logger = logging.getLogger("video_gen")
 
 NARRATOR = "Narrator"
+
+
+def _normalized_concat(clips, out: Path) -> Path:
+    """Hard-cut concat that RE-ENCODES to a uniform fps + audio format. Dialogue
+    scenes mix clips of different audio (silent establishing 24k-mono vs talking
+    44.1k-stereo) and fps; a stream-copy concat of those produces a corrupt final
+    (non-monotonic timestamps, doubled fps) that later breaks the cross-scene
+    concat, so we always normalize here."""
+    return concatenate_scenes([Path(c) for c in clips], Path(out), fade=0.0)
 
 # EchoMimic (Wan-based) wants /16 dimensions; cap the long side for speed.
 _ECHO_MAX_SIDE = 768
@@ -75,7 +84,7 @@ def render_dialogue_scene(
     _tts=generate_narration,
     _animate=echomimic.animate,
     _duration=_get_duration,
-    _concat=concatenate_scenes_hard_cut,
+    _concat=_normalized_concat,
     _fit=fit_video_canvas,
 ) -> Path:
     """Render ``scene`` (mode 'dialogue') to ``scene_NN_final.mp4`` and return it.
