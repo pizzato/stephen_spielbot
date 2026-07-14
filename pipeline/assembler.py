@@ -782,6 +782,20 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     for p in scene_paths:
         inputs += ["-i", str(p)]
 
+    # A video-only clip (e.g. the silent LTX keyframe establishing shot) has no
+    # audio stream, so the per-input [i:a] below would match nothing and fail the
+    # concat. Give each such clip a silent stereo source of its own duration.
+    # Clips that already carry audio (all narration scenes) are untouched.
+    has_audio = [_has_audio_stream(p) for p in scene_paths]
+    silence_idx: dict[int, int] = {}
+    next_input = n
+    for i in range(n):
+        if not has_audio[i]:
+            inputs += ["-f", "lavfi", "-t", f"{durations[i]:.3f}",
+                       "-i", f"anullsrc=r={_FILM_AR}:cl=stereo"]
+            silence_idx[i] = next_input
+            next_input += 1
+
     filters = []
     fade_a = 0.05 if fade > 0 else 0.0
 
@@ -810,7 +824,8 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
         if fade_a > 0 and i < n - 1:
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
-        filters.append(f"[{i}:a]{','.join(af)}[fa{i}]")
+        a_src = i if has_audio[i] else silence_idx[i]
+        filters.append(f"[{a_src}:a]{','.join(af)}[fa{i}]")
 
     v_in = "".join(f"[fv{i}]" for i in range(n))
     a_in = "".join(f"[fa{i}]" for i in range(n))
