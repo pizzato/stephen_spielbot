@@ -196,8 +196,10 @@ DEFAULT_CFG = {
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
     # tts_workers:   hostnames for F5-TTS narration.
+    # echomimic_workers: EchoMimic-V3 talking-head URLs (dialogue/performance scenes).
     "comfy_workers": [],
     "tts_workers":   [],
+    "echomimic_workers": [],
     # UI worker reservation (issue #98): while the web UI is actively used, the
     # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
     # render pool once the UI has been idle this many seconds.
@@ -472,8 +474,81 @@ def _norm_characters(value) -> list[dict]:
             "ref_image": str(raw.get("ref_image") or "").strip(),
             "ref_strength": strength,
             "enabled": bool(raw.get("enabled", True)),
+            # Named voice (from the voices store) this character speaks with in
+            # dialogue scenes; "" ⟹ fall back to the style's narrator voice.
+            "voice": str(raw.get("voice") or "").strip(),
+            # Voice-casting hints (from the LLM identify or the user) driving
+            # the library-voice auto-pick; "" ⟹ unconstrained.
+            "gender": str(raw.get("gender") or "").strip().lower(),
+            "age": str(raw.get("age") or "").strip().lower(),
         })
     return out
+
+
+_FEMALE_CUES = ("woman", "female", "she ", "her ", "girl", "lady", "queen", "mrs", "miss", "mother", "sister")
+_MALE_CUES = ("man", "male", "he ", "his ", "boy", "gentleman", "king", "mr ", "mr.", "father", "brother", "sir ")
+_AGE_NEIGHBORS = {"young": "adult", "adult": "mature", "mature": "adult", "elderly": "mature"}
+
+
+def _guess_gender(char: dict) -> str:
+    """The character's stated gender, else a cue-word guess from the description."""
+    g = str(char.get("gender") or "").strip().lower()
+    if g in ("male", "female"):
+        return g
+    text = f" {char.get('description', '')} ".lower()
+    f = sum(text.count(c) for c in _FEMALE_CUES)
+    m = sum(text.count(c) for c in _MALE_CUES)
+    return "female" if f > m else ("male" if m > f else "")
+
+
+def _auto_assign_character_voices(chars: list[dict], cfg: dict,
+                                  exclude: str | None = None) -> list[dict]:
+    """Give each voiceless character a fitting voice from the library.
+
+    Library voices carry gender/age/accent metadata (scripts/download_voices.py).
+    Match gender first (hard requirement when known), then prefer the exact age
+    bracket, then a neighbouring one; spread picks across the cast so two
+    characters don't share a voice until the pool runs dry. The style narrator's
+    voice is excluded — a character sounding exactly like the narrator was the
+    original bug. Characters with a voice already set are untouched."""
+    pool = [v for v in (cfg.get("voices") or [])
+            if isinstance(v, dict) and v.get("gender") and v.get("name")
+            and v.get("name") != (exclude or "")]
+    if not pool:
+        return chars
+    used = {c.get("voice") for c in chars if c.get("voice")}
+
+    def pick(char: dict) -> str:
+        gender = _guess_gender(char)
+        age = str(char.get("age") or "").strip().lower()
+
+        def score(v: dict, allow_used: bool) -> float:
+            if not allow_used and v["name"] in used:
+                return -1
+            s = 0.0
+            if gender and v.get("gender") == gender:
+                s += 4
+            elif gender and v.get("gender") != gender:
+                s -= 4  # wrong-gender voice is worse than no match data
+            if age:
+                if v.get("age") == age:
+                    s += 2
+                elif v.get("age") == _AGE_NEIGHBORS.get(age):
+                    s += 1
+            return s
+        for allow_used in (False, True):
+            ranked = sorted(pool, key=lambda v: (-score(v, allow_used), v["name"]))
+            if ranked and score(ranked[0], allow_used) >= 0:
+                return ranked[0]["name"]
+        return ""
+
+    for c in chars:
+        if not c.get("voice"):
+            name = pick(c)
+            if name:
+                c["voice"] = name
+                used.add(name)
+    return chars
 
 
 def _norm_character_ids(value, valid_ids: set) -> list[str]:
@@ -1286,31 +1361,65 @@ def _new_voice_path(name: str, ext: str) -> Path:
     return candidate
 
 
-def add_voice(name: str, audio: bytes, ext: str = ".wav") -> dict:
+_VOICE_GENDERS = ("", "male", "female")
+_VOICE_AGES = ("", "young", "adult", "mature", "elderly")
+
+
+def _voice_meta_fields(gender=None, age=None, accent=None, tone=None) -> dict:
+    """Validated casting-metadata updates for a voice; None ⟹ leave untouched.
+
+    gender/age drive app._auto_assign_character_voices — a voice with no gender
+    is never auto-cast onto a character (it stays manual-pick only)."""
+    out = {}
+    if gender is not None:
+        g = str(gender).strip().lower()
+        if g not in _VOICE_GENDERS:
+            raise ValueError(f"gender must be one of {_VOICE_GENDERS[1:]} (or empty).")
+        out["gender"] = g
+    if age is not None:
+        a = str(age).strip().lower()
+        if a not in _VOICE_AGES:
+            raise ValueError(f"age must be one of {_VOICE_AGES[1:]} (or empty).")
+        out["age"] = a
+    if accent is not None:
+        out["accent"] = str(accent).strip()
+    if tone is not None:
+        out["tone"] = str(tone).strip()
+    return out
+
+
+def add_voice(name: str, audio: bytes, ext: str = ".wav",
+              gender=None, age=None, accent=None, tone=None) -> dict:
     """Save a new reference clip and register the voice. Returns the new config."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Voice name is required.")
+    meta = _voice_meta_fields(gender, age, accent, tone)
     cfg = load_config()
     voices = cfg.get("voices", []) or []
     if name == F5TTS_DEFAULT_OPTION or any(v["name"] == name for v in voices):
         raise ValueError(f"A voice named “{name}” already exists.")
     path = _new_voice_path(name, ext)
     path.write_bytes(audio)
-    voices.append({"name": name, "path": str(path)})
+    voices.append({"name": name, "path": str(path), **meta})
     cfg["voices"] = voices
     save_config(cfg)
     return cfg
 
 
 def update_voice(name: str, new_name: str | None = None,
-                 audio: bytes | None = None, ext: str = ".wav") -> dict:
-    """Rename a voice and/or replace its reference clip. Returns the new config."""
+                 audio: bytes | None = None, ext: str = ".wav",
+                 gender=None, age=None, accent=None, tone=None) -> dict:
+    """Rename a voice, replace its clip, and/or set its casting metadata
+    (gender/age/accent/tone — what the character auto-cast matches on).
+    Returns the new config."""
+    meta = _voice_meta_fields(gender, age, accent, tone)
     cfg = load_config()
     voices = cfg.get("voices", []) or []
     voice = next((v for v in voices if v["name"] == name), None)
     if voice is None:
         raise ValueError(f"No voice named “{name}”.")
+    voice.update(meta)
     if new_name is not None:
         new_name = new_name.strip()
         if not new_name:
@@ -2120,7 +2229,7 @@ def add_script_character(work_dir, name: str = "", aliases=None, description: st
 
 
 def update_script_character(work_dir, char_id: str, *, name=None, aliases=None,
-                            description=None) -> list[dict]:
+                            description=None, voice=None) -> list[dict]:
     """Patch a per-script character's editable fields; returns the saved list."""
     work_dir = Path(work_dir)
     chars = _read_script_characters(work_dir)
@@ -2131,6 +2240,8 @@ def update_script_character(work_dir, char_id: str, *, name=None, aliases=None,
         char["aliases"] = aliases
     if description is not None:
         char["description"] = description
+    if voice is not None:
+        char["voice"] = str(voice).strip()
     return _write_script_characters(work_dir, chars)
 
 
@@ -2206,6 +2317,183 @@ def _apply_prompt_instruction(prompt: str, instruction: str) -> str:
     if not (prompt or "").strip():
         return instruction
     return f"{prompt}. {instruction}"
+
+
+def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
+    """True only if *path* is a readable image of exactly width×height pixels."""
+    try:
+        from PIL import Image
+        with Image.open(path) as img:
+            return img.size == (width, height)
+    except Exception:
+        return False
+
+
+def _scene_establishing_frame(work_dir: Path, sid: int, row: dict,
+                              width: int, height: int) -> Path | None:
+    """The scene's wide establishing frame (the FLUX first frame) at width×height,
+    or None. Anchors dialogue close-ups and is the establishing shot's still."""
+    cands = []
+    pp = (row or {}).get("preview_path") or ""
+    if pp:
+        cands.append(Path(pp))
+    cands += [work_dir / f"scene_{sid:02d}_preview.png",
+              work_dir / f"scene_{sid:02d}_first_frame.png"]
+    for p in cands:
+        if p.exists() and _image_matches_resolution(p, width, height):
+            return p
+    return None
+
+
+def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
+                                  resolution: str = "",
+                                  worker_pool: WorkerPool | None = None) -> int:
+    """Render each dialogue line's per-shot still (speaker close-up, in-scene).
+
+    Dialogue lines may carry a "shot" framing (see the dialogue schema): a close
+    view of the speaker so the talking-head model has a large, clear face to
+    animate — lip-sync quality collapses when the speaker is small in the frame.
+    Writes scene_NN_line_MM_shot.png at the job resolution (the dialogue render
+    prefers it over the scene frame); skips shots already on disk at the right
+    size. Best-effort per shot: a failed still just falls back to the scene
+    frame at render time. Returns how many stills were generated."""
+    work_dir = _job_work_dir(job_id)
+    if work_dir is None:
+        return 0
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    cfg = load_config()
+    # (scene_row, line_idx, line_dict). Speaking shots always get a solo still —
+    # even without an explicit "shot" — so the talking head is never animated
+    # from a two-person frame. Silent shots only when they carry a framing.
+    todo: list[tuple[dict, int, dict]] = []
+    for row in rows:
+        md = row.get("metadata") or {}
+        if md.get("mode") != "dialogue":
+            continue
+        for idx, ln in enumerate(md.get("lines") or []):
+            ln = ln or {}
+            speaking = not ln.get("silent") and str(ln.get("text") or "").strip()
+            if speaking or str(ln.get("shot") or "").strip():
+                todo.append((row, idx, ln))
+    if not todo:
+        return 0
+
+    def _speaker_char(name: str) -> dict | None:
+        n = (name or "").strip().lower()
+        if not n:
+            return None
+        for c in _job_characters(cfg, style_name, work_dir):
+            names = [c.get("name", ""), *(c.get("aliases") or [])]
+            if any(n == str(x).strip().lower() for x in names if str(x).strip()):
+                return c
+        return None
+
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    # Shot stills MUST match the render resolution — the dialogue render only uses
+    # a still that matches, else it falls back to the (multi-person) scene frame.
+    # Prefer the job's own resolution over the style default. Also pick up the
+    # job's per-job visual style ("style") — the general art-direction instruction
+    # the user set at Create time — so close-ups match the scene previews (which
+    # DO include it) instead of only the profile default.
+    job_style = ""
+    try:
+        _jc = json.loads((work_dir / "job_config.json").read_text())
+        resolution = resolution or _jc.get("resolution") or ""
+        job_style = _jc.get("style") or ""
+    except Exception:
+        pass
+    img_width, img_height = _RESOLUTIONS.get(
+        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
+        (1024, 576),
+    )
+    img_width, img_height = ltx_dimensions(img_width, img_height)
+    combined_style = _compose_visual_style(job_style, cfg, style_name)
+
+    if worker_pool is None:
+        worker_urls = _preview_worker_urls()
+        if not worker_urls:
+            logger.warning("[shots] no image worker available — dialogue shots skipped")
+            return 0
+        worker_pool = WorkerPool(worker_urls)
+
+    made = 0
+    # First shot still per (scene, speaker) so a character's LATER lines in the
+    # same scene reuse their first close-up — the repeated shot then matches the
+    # first exactly (correct shot/reverse-shot continuity) instead of drifting to
+    # a different-looking generation.
+    first_by_speaker: dict[tuple[int, str], Path] = {}
+    for row, idx, ln in todo:
+        sid = int(row["id"])
+        shot = str(ln.get("shot") or "").strip()
+        out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
+        speaker = "" if ln.get("silent") else str(ln.get("speaker") or "").strip()
+        key = (sid, speaker.lower())
+
+        if speaker and key in first_by_speaker:
+            prior = first_by_speaker[key]
+            if prior.exists() and prior != out:
+                shutil.copy2(prior, out)
+                logger.info("[shots] scene %d line %d reuses %s's earlier close-up (%s)",
+                            sid, idx, speaker, prior.name)
+            continue
+
+        if out.exists() and _image_matches_resolution(out, img_width, img_height):
+            if speaker:
+                first_by_speaker[key] = out
+            continue
+        if ln.get("silent"):
+            # Silent (motion) shot — no lip-sync, so multiple people are fine.
+            base_prompt = _inject_characters(shot, row, cfg, style_name, work_dir)
+            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+            reference_images = _scene_reference_images(base_prompt, row, cfg, style_name, work_dir)
+        else:
+            # Speaking shot — force a SOLO close-up of just the speaker (only their
+            # description + reference face) so EchoMimic can't animate a second
+            # person in frame.
+            char = _speaker_char(speaker)
+            desc = (char or {}).get("description", "")
+            parts = [shot] if shot else [f"{speaker} speaks in the scene."]
+            parts.append(
+                f"Solo medium shot of {speaker or 'the speaker'} — exactly ONE person, roughly "
+                "waist-up, facing the camera, with the scene's setting visible around them; "
+                "their face clearly visible and in focus (not an extreme close-up). "
+                "No other people or characters anywhere in the frame.")
+            if desc and desc.lower() not in " ".join(parts).lower():
+                parts.append(f"{speaker}: {desc}.")
+            parts.append("Keep the SAME setting, background, lighting and wardrobe as the "
+                         "establishing shot — the same room, just framed close on the speaker.")
+            base_prompt = " ".join(parts)
+            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+            # Anchor the close-up to the scene's establishing frame (so its setting
+            # matches — coherent scene) AND the speaker's reference face.
+            reference_images = []
+            establishing = _scene_establishing_frame(work_dir, sid, row, img_width, img_height)
+            if establishing:
+                reference_images.append(establishing)
+            ref = char and (char.get("_ref_path") or _character_image_path(char.get("ref_image")))
+            if ref and Path(ref).exists():
+                reference_images.append(Path(ref))
+        url = worker_pool.acquire()
+        try:
+            generate_with_engine(
+                engine, prompt, out,
+                width=img_width, height=img_height,
+                reference_images=reference_images, comfy_url=url,
+            )
+            made += 1
+            if speaker:
+                first_by_speaker[key] = out
+            logger.info("[shots] scene %d line %d shot still ready (%s)", sid, idx, out.name)
+        except Exception:
+            logger.warning("[shots] scene %d line %d shot failed — render will fall back",
+                           sid, idx, exc_info=True)
+        finally:
+            worker_pool.release(url)
+    return made
 
 
 def _generate_active_scene_preview(

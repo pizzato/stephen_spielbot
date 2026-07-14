@@ -6,6 +6,7 @@ Usage:
 """
 import concurrent.futures
 import json
+import threading
 import logging
 import logging.handlers
 import shutil
@@ -41,12 +42,13 @@ from pipeline.assembler import (
     _get_duration, mux_video_audio,
     concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
+    fit_video_canvas,
 )
 from pipeline.tts_worker import generate_narration
 from pipeline.orchestrator import (
     DurableStore, TaskRun,
     JOB_DONE, JOB_ERROR, JOB_RUNNING,
-    job_id_from_work_dir, task_id, worker_id,
+    job_id_from_work_dir, task_id, worker_id, timing_signature,
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers
@@ -100,8 +102,18 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
     This recovers from any upstream save bug by calling the LLM to fill what's missing,
     and falls back to scene title text so generation NEVER produces a silent scene.
     """
-    bad = [s for s in scenes if not (s.narration or "").strip()
-           or not (s.image_prompt or "").strip()]
+    # Dialogue scenes carry spoken lines and silent scenes have no voice-over by
+    # design — never heal either into narrated scenes. Silent scenes still need
+    # an image_prompt (they render visuals).
+    def _needs_heal(s: Scene) -> bool:
+        mode = getattr(s, "mode", "narration")
+        if mode == "dialogue":
+            return False
+        if mode == "silent":
+            return not (s.image_prompt or "").strip()
+        return not (s.narration or "").strip() or not (s.image_prompt or "").strip()
+
+    bad = [s for s in scenes if _needs_heal(s)]
     if not bad:
         return
     logger.warning("Self-heal: %d scene(s) with empty fields — filling: %s",
@@ -121,23 +133,38 @@ def _heal_empty_scenes(scenes: list[Scene], title: str, cfg: dict, work_dir: Pat
         logger.warning("Self-heal LLM fill failed: %s — falling back to title text", exc)
 
     # Absolute last resort: never leave a scene with empty narration or image_prompt.
+    # Only narration-mode scenes get narration filled — dialogue/silent scenes are
+    # voiceless by design.
     for s in scenes:
-        if not (s.narration or "").strip():
+        mode = getattr(s, "mode", "narration")
+        if mode == "narration" and not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Self-heal: scene %d narration still empty after LLM — used title", s.id)
-        if not (s.image_prompt or "").strip():
+        if mode != "dialogue" and not (s.image_prompt or "").strip():
             s.image_prompt = s.title or f"Scene {s.id}: {title}"
             logger.warning("Self-heal: scene %d image_prompt still empty after LLM — used title", s.id)
         if not (s.video_prompt or "").strip():
             s.video_prompt = s.image_prompt
 
     # Persist the healed script so the next resume doesn't have to redo this work.
+    # Keep the dialogue/silent metadata — dropping it here would silently turn
+    # those scenes back into narration on the next load.
     try:
-        (work_dir / "script.json").write_text(json.dumps([
-            {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-             "video_prompt": s.video_prompt, "narration": s.narration}
-            for s in scenes
-        ], indent=2))
+        rows = []
+        for s in scenes:
+            row = {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
+                   "video_prompt": s.video_prompt, "narration": s.narration}
+            md = {}
+            if getattr(s, "mode", "narration") not in ("narration", "", None):
+                md["mode"] = s.mode
+            if getattr(s, "lines", None):
+                md["lines"] = s.lines
+            if getattr(s, "duration", 0):
+                md["duration"] = s.duration
+            if md:
+                row["metadata"] = md
+            rows.append(row)
+        (work_dir / "script.json").write_text(json.dumps(rows, indent=2))
         logger.info("Self-heal: rewrote script.json with %d filled scenes", len(scenes))
     except Exception as exc:
         logger.warning("Self-heal: could not rewrite script.json: %s", exc)
@@ -301,6 +328,118 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
     logger.info("PROGRESS %.0f%% — %s", pct, msg)
 
 
+_SILENT_DEFAULT_SECS = 5.0
+
+
+def _write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
+    """A silent WAV of *seconds* — the 'narration' of a silent scene, so the
+    normal duration/mux/concat pipeline runs unchanged with no spoken audio."""
+    import wave
+    n = max(1, int(seconds * rate))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * n)
+    return path
+
+
+def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
+                        vid_width: int = 0, vid_height: int = 0):
+    """Build (voice_ref_for, make_still) for dialogue scenes.
+
+    Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
+    own voice, else the style narrator — (b) the still EchoMimic animates, and
+    (c) the text prompt guiding the animation.
+
+    The still is always the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at
+    the job resolution — same rule as the classic video path) so the character
+    speaks *in the scene*; the speaker's portrait is only a fallback when no frame
+    exists on disk. On multi-character frames the prompt names WHO is speaking so
+    the right lips move (best-effort text guidance)."""
+    try:
+        chars = json.loads((work_dir / "characters.json").read_text()) or []
+    except Exception:
+        chars = []
+    # Global catalogue characters are speakable too (the per-script cast wins on
+    # a name clash) — e.g. a recurring presenter defined once in Settings.
+    seen = {str(c.get("name", "")).strip().lower() for c in chars if isinstance(c, dict)}
+    for c in (cfg.get("characters") or []):
+        if isinstance(c, dict) and str(c.get("name", "")).strip().lower() not in seen:
+            chars.append(c)
+    voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
+    global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
+
+    def _find(speaker: str):
+        s = (speaker or "").strip().lower()
+        for c in chars:
+            names = [c.get("name", "")] + list(c.get("aliases") or [])
+            if any(s == str(n).strip().lower() for n in names if str(n).strip()):
+                return c
+        return None
+
+    def voice_ref_for(speaker: str):
+        c = _find(speaker)
+        if c and c.get("voice") and c["voice"] in voices:
+            p = Path(voices[c["voice"]])
+            if p.exists():
+                logger.info("  %s speaks with voice %r", speaker, c["voice"])
+                return p
+        logger.info("  %s speaks with the narrator voice", speaker)
+        return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
+
+    def _scene_frame(scene) -> Path | None:
+        """The scene's first frame at the job resolution, if present on disk."""
+        for ext in ("_preview.png", "_first_frame.png"):
+            p = work_dir / f"scene_{scene.id:02d}{ext}"
+            if p.exists() and vid_width and vid_height and _image_matches_resolution(p, vid_width, vid_height):
+                return p
+        return None
+
+    def _portrait(scene, speaker: str) -> Path | None:
+        c = _find(speaker)
+        ref = (c or {}).get("ref_image") or ""
+        for cand in ((work_dir / "characters" / ref, global_char_dir / ref) if ref else ()):
+            if cand.exists():
+                return cand
+        return None
+
+    def make_still(scene, speaker: str, idx: int) -> Path:
+        # Per-line SHOT still (speaker close-up in the scene setting, generated at
+        # render start from the line's "shot" framing) — the best lip-sync source:
+        # face large, correct speaker, in-scene. Then the scene frame, then portrait.
+        shot = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}_shot.png"
+        if shot.exists() and vid_width and vid_height and _image_matches_resolution(shot, vid_width, vid_height):
+            logger.info("  scene %d line %d: talking still = shot close-up (%s)", scene.id, idx, shot.name)
+            return shot
+        frame = _scene_frame(scene)
+        if frame is not None:
+            logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
+            return frame
+        portrait = _portrait(scene, speaker)
+        if portrait is not None:
+            logger.info("  scene %d: no scene frame at the job resolution — %s speaks on their portrait",
+                        scene.id, speaker)
+            return portrait
+        raise RuntimeError(
+            f"dialogue speaker {speaker!r} (scene {scene.id}) has no shot still, no scene first "
+            "frame at the job resolution, and no character portrait"
+        )
+
+    def prompt_for(scene, speaker: str) -> str:
+        """Text guidance for EchoMimic: name WHO is speaking so a multi-character
+        scene frame animates the right character's lips (best-effort — the model
+        is text-guided)."""
+        c = _find(speaker)
+        who = (c or {}).get("description") or speaker
+        return (
+            f"{speaker} ({who}) is speaking, with natural facial expressions and subtle head "
+            "movement. Any other characters present listen silently, mouths closed, without talking."
+        )
+
+    return voice_ref_for, make_still, prompt_for
+
+
 def main(work_dir: Path) -> None:
     global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
@@ -317,6 +456,12 @@ def main(work_dir: Path) -> None:
             # Per-style video negative (blank → built-in default). job_config.json
             # carries the resolved value stamped at render time.
             negative_prompt=(cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT,
+            # Dialogue/performance fields ride in the scene's metadata sidecar
+            # (absent ⟹ narration — existing scripts hydrate unchanged).
+            mode=str((s.get("metadata") or {}).get("mode") or "narration"),
+            lines=list((s.get("metadata") or {}).get("lines") or []),
+            duration=float((s.get("metadata") or {}).get("duration") or 0.0),
+            metadata_extra=dict(s.get("metadata") or {}),
         )
         for s in script_data
     ]
@@ -408,6 +553,214 @@ def main(work_dir: Path) -> None:
 
     write_progress(status_file, 0, "Resume: starting…")
 
+    # ── Dialogue/performance scenes (talking-head via EchoMimic) ─────────────
+    # Rendered up front to scene_NN_final.mp4; the narration/video/mux phases then
+    # skip them (they operate on classic_scenes / find the final already present).
+    # A narration-only script has dialogue_scenes == [] and classic_scenes ==
+    # scenes, so everything below runs exactly as before.
+    dialogue_scenes = [s for s in scenes if getattr(s, "mode", "narration") == "dialogue" and (s.lines or [])]
+    classic_scenes = [s for s in scenes if s not in dialogue_scenes]
+    dialogue_durs: dict[int, float] = {}
+    total_lines = sum(len(s.lines or []) for s in dialogue_scenes)
+
+    # Progress bands. Dialogue lines dominate a dialogue film's wall-clock, so
+    # the dialogue phase gets a share of the bar proportional to its weight;
+    # narration-only jobs keep the exact historical bands (invariant).
+    if dialogue_scenes:
+        units_dlg, units_classic = 5 * total_lines, 3 * len(classic_scenes)
+        dlg_end = min(85.0, max(12.0, 2 + 88.0 * units_dlg / max(1, units_dlg + units_classic)))
+        tts_band = (dlg_end, dlg_end + 0.18 * (92.0 - dlg_end))
+        video_band = (tts_band[1], 92.0)
+    else:
+        dlg_end = 0.0
+        tts_band = (0.0, 20.0)
+        video_band = (35.0, 90.0)
+    n_classic = max(1, len(classic_scenes))
+
+    if dialogue_scenes:
+        from contextlib import contextmanager
+
+        from pipeline.dialogue_render import render_dialogue_scene, NARRATOR
+        from pipeline.timing import humanize_eta
+
+        echo_hosts = [h for h in (cfg.get("echomimic_workers") or []) if str(h).startswith(("http://", "https://"))]
+        if not echo_hosts:
+            raise RuntimeError("Dialogue scenes present but no echomimic_workers are configured")
+        if not tts_hosts:
+            raise RuntimeError("Dialogue scenes need a TTS worker but none are configured")
+        voice_ref_for, make_still, prompt_for = _dialogue_resolvers(
+            cfg, work_dir, voice_ref_str, vid_width=vid_width, vid_height=vid_height)
+        tts_host = tts_hosts[0]
+        timing_table = store.timing_table()
+        lines_done = [0]
+        _dlg_lock = threading.Lock()
+
+        def _line_pct() -> float:
+            return 2 + (dlg_end - 2) * (lines_done[0] / max(1, total_lines))
+
+        def _make_line_cm(host):
+            """A per-scene shot wrapper bound to that scene's echomimic host, so
+            concurrently-rendering scenes each record the right worker. Shared
+            counter + progress writes are locked (scenes run on separate threads)."""
+            @contextmanager
+            def line_cm(scene, idx, n_lines, speaker):
+                silent = (speaker == "silent")
+                who = "a silent motion shot" if silent else f"{speaker} speaks"
+                t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
+                payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
+                           "speaker": "" if silent else speaker, "silent": silent,
+                           "vid_width": vid_width, "vid_height": vid_height,
+                           "resource_class": "comfy:video" if silent else "echomimic"}
+                # Upsert — jobs planned before per-line tasks existed lack the row.
+                store.create_task(t_id, durable_job_id, "scene.dialogue.line",
+                                  f"Scene {scene.id} · {who} ({idx + 1}/{n_lines})",
+                                  worker_kind="comfy" if silent else "echomimic", payload=payload, max_attempts=2)
+                sig = timing_signature("scene.dialogue.line", payload)
+                entry = timing_table.get(sig) if sig else None
+                est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this shot"
+                       if entry and entry.get("sample_count") else "")
+                with _dlg_lock:
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue · scene {scene.id}: {who} "
+                                   f"(shot {lines_done[0] + 1}/{total_lines}){est}")
+                wid = worker_id("comfy", worker_pool.urls[0]) if silent else worker_id("echomimic", host)
+                with TaskRun(store, t_id, worker_id_value=wid, lease_seconds=7200,
+                             start_message=f"{who} — shot {idx + 1}/{n_lines}") as run:
+                    yield
+                    run.complete({"scene_id": scene.id, "line_index": idx}, "shot rendered")
+                with _dlg_lock:
+                    lines_done[0] += 1
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue · scene {scene.id}: {who} done "
+                                   f"({lines_done[0]}/{total_lines} shots)")
+            return line_cm
+
+        def silent_video(scene, shot, still, out_clip):
+            """Render a silent shot (people move, no speech) as an LTX i2v clip
+            from its still, reusing the classic scene-video path."""
+            vp = (str((shot or {}).get("video_prompt") or "").strip()
+                  or scene.video_prompt or scene.image_prompt or scene.title)
+            dur = float((shot or {}).get("duration") or 0) or _SILENT_DEFAULT_SECS
+            shot_scene = Scene(id=scene.id, title=scene.title, image_prompt="",
+                               video_prompt=vp, narration="", negative_prompt=NEGATIVE_PROMPT)
+            url = worker_pool.acquire()
+            try:
+                raw, _amb = _generate_scene_video(
+                    shot_scene, work_dir, dur, vid_width, vid_height,
+                    max_clip_secs, lora_strength, first_pass_cfg, first_pass_steps,
+                    second_pass_cfg, second_pass_steps, url,
+                    scene_first_frame=Path(still), flux_cfg=flux_cfg,
+                )
+            finally:
+                worker_pool.release(url)
+            if Path(raw) != Path(out_clip):
+                shutil.move(str(raw), str(out_clip))
+            return Path(out_clip)
+
+        from app import _scene_establishing_frame
+        from pipeline.comfyui import generate_keyframed_clip
+        _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
+
+        def _first_shot_still(scene):
+            """The first talking shot's solo close-up still — the frame the scene's
+            first talking-head line then animates. Only a real in-scene shot still
+            (not the multi-person scene frame or a portrait) is a good push-in
+            target, so anything else returns None."""
+            first = None
+            for ln in (scene.lines or []):
+                ln = ln or {}
+                silent = bool(ln.get("silent")) and not str(ln.get("text") or "").strip()
+                if silent or str(ln.get("text") or "").strip():
+                    first = ln
+                    break
+            if first is None:
+                return None
+            speaker = "" if (bool(first.get("silent")) and not str(first.get("text") or "").strip()) \
+                else str(first.get("speaker") or NARRATOR).strip()
+            try:
+                still = make_still(scene, speaker, 0)
+            except Exception:
+                return None
+            return still if still and still.name.endswith("_line_00_shot.png") else None
+
+        def establishing(scene):
+            """Open on the scene's wide establishing frame and push the camera in to
+            the first speaker's close-up — a REAL LTX first→last keyframe move, so
+            the setting is shown first, never lost, and the push lands exactly on the
+            still the talking head then animates (seamless arrival)."""
+            if _establish_secs <= 0:
+                return None
+            wide = _scene_establishing_frame(
+                work_dir, scene.id, {"preview_path": getattr(scene, "preview_path", "")},
+                vid_width, vid_height)
+            if wide is None:
+                return None
+            close = _first_shot_still(scene)
+            # No distinct in-scene close-up to push toward (the talking head would
+            # animate the wide frame itself) — skip the beat rather than render a
+            # pointless hold.
+            if close is None or Path(close) == Path(wide):
+                return None
+            out = work_dir / f"scene_{scene.id:02d}_establish.mp4"
+            url = worker_pool.acquire()
+            try:
+                generate_keyframed_clip(
+                    first_frame_path=wide, last_frame_path=close, output_path=out,
+                    positive_prompt=(
+                        "slow cinematic push-in from the wide establishing shot toward "
+                        "the speaker, steady smooth camera move, the setting and people "
+                        "stay consistent, subtle natural motion"),
+                    negative_prompt="static, jump cut, warp, morph, distortion, flicker, "
+                                    + ((cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT),
+                    width=vid_width, height=vid_height,
+                    duration_seconds=_establish_secs,
+                    lora_strength=lora_strength, comfy_url=url,
+                )
+            finally:
+                worker_pool.release(url)
+            return out
+
+        def _render_one(i: int, s: Scene) -> tuple[int, float]:
+            host = echo_hosts[i % len(echo_hosts)]
+            final = work_dir / f"scene_{s.id:02d}_final.mp4"
+            if not (final.exists() and final.stat().st_size > 10_000):
+                render_dialogue_scene(
+                    s, work_dir,
+                    voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
+                    echomimic_host=host,
+                    tts_host=tts_host, tts_engine=tts_engine,
+                    canvas=(vid_width, vid_height),
+                    line_cm=_make_line_cm(host), silent_video=silent_video,
+                    establishing=establishing,
+                )
+            else:
+                with _dlg_lock:
+                    lines_done[0] += len(s.lines or [])  # resumed scene — lines already done
+            # EchoMimic output is portrait-shaped; fit it onto the film's canvas
+            # (blurred pillarbox) so the cross-scene concat gets uniform dims.
+            fit_video_canvas(final, vid_width, vid_height)
+            return s.id, _get_duration(final)
+
+        # Render scenes CONCURRENTLY, one per echomimic worker, so the whole
+        # fleet is used instead of a single busy worker while the rest idle.
+        n_parallel = max(1, min(len(echo_hosts), len(dialogue_scenes)))
+        write_progress(status_file, 1,
+                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) across "
+                       f"{n_parallel} worker(s) — {total_lines} shot(s)…")
+        dlg_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_parallel)
+        try:
+            futs = {dlg_pool.submit(_render_one, i, s): s for i, s in enumerate(dialogue_scenes)}
+            done_scenes = 0
+            for fut in concurrent.futures.as_completed(futs):
+                sid, dur = fut.result()
+                dialogue_durs[sid] = dur
+                done_scenes += 1
+                with _dlg_lock:
+                    write_progress(status_file, _line_pct(),
+                                   f"Dialogue scene {sid} assembled ({done_scenes}/{len(dialogue_scenes)})")
+        finally:
+            dlg_pool.shutdown(wait=True)
+
     # ── Narrations (0–20%) ───────────────────────────────────────────────────
     narration_paths: dict[int, Path] = {}
     narration_durs:  dict[int, float] = {}
@@ -421,6 +774,15 @@ def main(work_dir: Path) -> None:
             dur = _get_duration(out)
             store.complete_task(narration_task, result={"path": str(out), "duration": dur, "skipped": True})
             store.record_artifact(durable_job_id, narration_task, "narration", out, duration_seconds=dur)
+            return scene.id, out
+        if getattr(scene, "mode", "narration") == "silent":
+            # No voice-over by design: a silent track of the scene's duration keeps
+            # the duration/mux/concat pipeline unchanged without speaking anything.
+            secs = float(getattr(scene, "duration", 0) or 0) or _SILENT_DEFAULT_SECS
+            _write_silence_wav(out, secs)
+            logger.info("Scene %d is silent — %.1fs silence instead of TTS", scene.id, secs)
+            store.complete_task(narration_task, result={"path": str(out), "duration": secs, "silent": True})
+            store.record_artifact(durable_job_id, narration_task, "narration", out, duration_seconds=secs)
             return scene.id, out
         hosts_to_try = [primary_host] + [h for h in tts_hosts if h != primary_host]
         last_err: Exception | None = None
@@ -452,13 +814,13 @@ def main(work_dir: Path) -> None:
                 last_err = e
         raise RuntimeError(f"TTS failed on all hosts for scene {scene.id}: {last_err}")
 
-    write_progress(status_file, 0, f"Generating {n} narrations…")
+    write_progress(status_file, tts_band[0], f"Generating {len(classic_scenes)} narrations…")
     if not tts_hosts:
         raise RuntimeError("No TTS workers configured")
     tts_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, len(tts_hosts)))
     tts_pending = {
         tts_pool.submit(_tts_scene, scene, tts_hosts[i % len(tts_hosts)]): scene
-        for i, scene in enumerate(scenes)
+        for i, scene in enumerate(classic_scenes)
     }
     tts_done = 0
     try:
@@ -474,14 +836,14 @@ def main(work_dir: Path) -> None:
                 narration_paths[sid] = out
                 narration_durs[sid]  = dur
                 tts_done += 1
-                pct = 20.0 * tts_done / n
+                pct = tts_band[0] + (tts_band[1] - tts_band[0]) * tts_done / n_classic
                 write_progress(status_file, pct, f"Narration {sid}/{n} done — {dur:.1f}s ({tts_done}/{n})")
     finally:
         tts_pool.shutdown(wait=False)
 
-    total_dur = sum(narration_durs.values())
+    total_dur = sum(narration_durs.values()) + sum(dialogue_durs.values())
     logger.info("All narrations done — %.1fs total", total_dur)
-    write_progress(status_file, 20, f"Narrations done — {total_dur:.0f}s, generating video…")
+    write_progress(status_file, tts_band[1], f"Narrations done — {total_dur:.0f}s, generating video…")
 
     # ── Background music (20–35%) ────────────────────────────────────────────
     music_dur  = max(total_dur * 1.05, 30.0)
@@ -503,7 +865,7 @@ def main(work_dir: Path) -> None:
             duration_seconds=_get_duration(music_path),
         )
     else:
-        write_progress(status_file, 20, f"Generating background music ({music_dur:.0f}s)…")
+        write_progress(status_file, tts_band[1], f"Generating background music ({music_dur:.0f}s)…")
         _MAX_MUSIC_ATTEMPTS = 3
         music_task = task_id(durable_job_id, "music")
         store.update_task_payload(
@@ -555,16 +917,16 @@ def main(work_dir: Path) -> None:
                 else:
                     worker_pool.release(music_url)
                 if attempt == _MAX_MUSIC_ATTEMPTS:
-                    write_progress(status_file, 20, f"Background music failed on {music_url}: {first_line}")
+                    write_progress(status_file, tts_band[1], f"Background music failed on {music_url}: {first_line}")
                     raise
                 write_progress(
                     status_file,
-                    20,
+                    tts_band[1],
                     f"Background music attempt {attempt}/{_MAX_MUSIC_ATTEMPTS} failed on {music_url}; "
                     f"retrying. {first_line}",
                 )
 
-    write_progress(status_file, 35, "Music ready. Generating cover image and scene videos…")
+    write_progress(status_file, video_band[0], "Music ready. Generating cover image and scene videos…")
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
@@ -604,7 +966,7 @@ def main(work_dir: Path) -> None:
     else:
         logger.info("Cover image already exists, skipping: %s", cover_path)
 
-    write_progress(status_file, 35, "Music ready. Generating scene videos…")
+    write_progress(status_file, video_band[0], "Music ready. Generating scene videos…")
 
     # ── Video generation (35–90%) ────────────────────────────────────────────
     scene_raws_map: dict[int, Path] = {}
@@ -781,11 +1143,11 @@ def main(work_dir: Path) -> None:
         raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
     n_workers = len(worker_pool.urls)
-    write_progress(status_file, 35, f"Generating {n} scenes across {n_workers} worker(s)…")
+    write_progress(status_file, video_band[0], f"Generating {len(classic_scenes)} scenes across {n_workers} worker(s)…")
 
     scene_pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(n, max(1, len(worker_pool.urls))))
     pending: dict[concurrent.futures.Future, Scene] = {
-        scene_pool.submit(_run_scene, scene): scene for scene in scenes
+        scene_pool.submit(_run_scene, scene): scene for scene in classic_scenes
     }
     completed = 0
     first_error: Exception | None = None
@@ -804,20 +1166,20 @@ def main(work_dir: Path) -> None:
                     scene_raws_map[sid]    = scene_raw
                     scene_ambient_map[sid] = scene_amb
                     completed += 1
-                    pct = 35 + 55 * completed / n
+                    pct = video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic
                     write_progress(status_file, pct, f"Scene {sid}/{n} complete ✓  ({completed}/{n} done)")
                     last_yield = time.time()
                 except Exception as e:
                     logger.error("Scene %d failed permanently: %s", scene.id, e)
                     if first_error is None:
                         first_error = e
-                    write_progress(status_file, 35 + 55 * completed / n,
+                    write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
                                    f"Scene {scene.id} FAILED: {e}")
                     last_yield = time.time()
             now = time.time()
             if pending and first_error is None and (now - last_yield >= 30):
                 running = sorted(pending[f].id for f in pending)
-                write_progress(status_file, 35 + 55 * completed / n,
+                write_progress(status_file, video_band[0] + (video_band[1] - video_band[0]) * completed / n_classic,
                                f"Scenes {running} generating… ({completed}/{n} done)")
                 last_yield = now
     finally:
@@ -829,8 +1191,14 @@ def main(work_dir: Path) -> None:
     # ── Mux narrations into scene videos ────────────────────────────────────
     scene_finals: list[Path] = []
     for s in scenes:
-        raw = scene_raws_map[s.id]
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
+        # Dialogue scenes were rendered in the pre-pass and their artifacts are
+        # tracked per line — they have NO mux task, so recording a scene_final
+        # artifact against one fails the FK. Just collect the finished clip.
+        if getattr(s, "mode", "narration") == "dialogue" and (s.lines or []):
+            scene_finals.append(scene_final)
+            continue
+        raw = scene_raws_map.get(s.id)
         mux_task = task_id(durable_job_id, "scene", s.id, "mux")
         is_last = s.id == scenes[-1].id
         if scene_final.exists() and scene_final.stat().st_size > 10_000:
@@ -891,7 +1259,7 @@ def main(work_dir: Path) -> None:
             "ambient_path": str(ambient_path) if ambient_path else "",
         },
     )
-    write_progress(status_file, 90, "Concatenating scenes…")
+    write_progress(status_file, max(90.0, video_band[1]), "Concatenating scenes…")
     with TaskRun(
         store,
         final_task,

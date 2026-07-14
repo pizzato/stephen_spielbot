@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -62,6 +62,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // Character look lightbox — { id, ver }: which character and which of its kept
   // look versions is shown full-resolution.
   const [charLightbox, setCharLightbox] = useState(null)
+  // Named voices (per-character voice picker) + the global character catalogue
+  // (their names are valid dialogue speakers too), loaded from config once.
+  const [voiceOpts, setVoiceOpts] = useState([])
+  const [voiceMeta, setVoiceMeta] = useState({})
+  const [globalCast, setGlobalCast] = useState([])
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      // /api/config nests the config under "config"; voices there are
+      // {name,path,gender,age,accent} rows while top-level "voices" is names.
+      const cfg = c?.config || c || {}
+      setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
+      setVoiceMeta(voiceMetaMap(cfg.voices))
+      setGlobalCast((cfg.characters || []).map((x) => x?.name).filter(Boolean))
+    }).catch(() => {})
+  }, [])
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -298,6 +313,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const total = scenes.length
   const d = scenes[cur] || {}
   const setField = (k, v) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, [k]: v } : s))
+  const patchScene = (patch) => setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, ...patch } : s))
   const aspect = (() => { const m = /\((\d+)[×x](\d+)\)/.exec(resolution || ''); return m ? `${m[1]} / ${m[2]}` : '16 / 9' })()
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
 
@@ -368,16 +384,22 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       onRegen={(instr) => regenField(field, instr)} chips={REGEN_CHIPS[field]}>{text}</RegenLabel>
   )
 
-  const persist = async (idx = cur) => {
-    const s = scenes[idx]
+  const persist = async (idx = cur, override = null) => {
+    const s = override || scenes[idx]
     if (!s) return
     try {
       await api.saveScene(job.job_id, s.id, {
         title: s.title || '', image_prompt: s.image_prompt || '',
         video_prompt: s.video_prompt || '', narration: s.narration || '',
+        mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       })
     } catch (e) { setError(e.message) }
   }
+
+  // Dialogue speakers: the script's own cast plus the global character catalogue
+  // (both render — the resolver falls back to catalogue portraits/voices). The
+  // shot editing itself lives in the shared SceneTypeControls component.
+  const castOpts = [...new Set([...characters.map((c) => c.name), ...globalCast])].filter(Boolean)
 
   const move = async (to) => {
     if (to < 0 || to >= total) return
@@ -445,6 +467,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const saveCharacter = (c) => charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, {
     name: c.name || '', aliases: c.aliases || [], description: c.description || '',
   }))
+  const setCharVoice = (c, v) => { setCharField(c.id, 'voice', v); charOp(c.id, () => api.updateScriptCharacter(job.job_id, c.id, { voice: v })) }
   const addCharacter = () => charOp('add', () =>
     api.addScriptCharacter(job.job_id, { name: '', aliases: [], description: '' }))
   const removeCharacter = (c) => charOp(c.id, () => api.deleteScriptCharacter(job.job_id, c.id))
@@ -722,9 +745,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Field label={fieldLabel('Scene title', 'title')}>
                   <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
-                <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
-                  <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
+
+                <SceneTypeControls scene={d} castOpts={castOpts}
+                  onChange={(patch, commit) => { patchScene(patch); if (commit) persist(cur, { ...scenes[cur], ...patch }) }}
+                  onCommit={() => persist(cur)} />
+
+                {(d.mode || 'narration') === 'narration' && (
+                  <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
+                    <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
+                  </Field>
+                )}
+
                 <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
                   <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
@@ -910,6 +941,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                       <textarea className="textarea" rows={4} value={c.description || ''}
                         onChange={(e) => setCharField(c.id, 'description', e.target.value)}
                         onBlur={() => saveCharacter(c)} />
+                    </Field>
+                    <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes.">
+                      <select className="input" value={c.voice || ''} disabled={b}
+                        onChange={(e) => setCharVoice(c, e.target.value)}>
+                        <option value="">Style narrator (default)</option>
+                        {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
+                      </select>
                     </Field>
                     <div className="row gap-10 row--wrap">
                       <Button variant="ghost" icon="bookmark" disabled={b || !(c.name || '').trim()} onClick={() => promoteCharacter(c)}>Save to catalogue</Button>

@@ -50,6 +50,12 @@ else
     "$VENV/bin/python" "$REPO_ROOT/scripts/init_config.py" $WORKERS
 fi
 
+# Bundled character voice library (public-domain LibriVox clips + gender/age/
+# accent metadata) — used to auto-cast voices for story characters. Idempotent;
+# best-effort (a network blip must not fail the install).
+"$VENV/bin/python" "$REPO_ROOT/scripts/download_voices.py" || \
+    echo "[voices] library download incomplete — rerun later with: make download-voices"
+
 if [[ -n "${TEMPORAL_VIDEO_UPSCALER_CMD:-}" || -n "${TEMPORAL_VIDEO_UPSCALER_TIMEOUT:-}" ]]; then
     "$VENV/bin/python" - "$CONFIG_YAML" <<'PY'
 import os
@@ -200,11 +206,13 @@ import sys, yaml
 path, hosts = sys.argv[1], sys.argv[2:]
 data = yaml.safe_load(open(path)) or {}
 data["tts_workers"] = [f"http://{h}:8189" for h in hosts]
+data["echomimic_workers"] = [f"http://{h}:8190" for h in hosts]
 data.pop("ui_workers", None)  # removed concept (issue #98)
 # Same dump options as app.save_config, so this matches an in-app settings save.
 with open(path, "w") as f:
     yaml.safe_dump(data, f, sort_keys=False, allow_unicode=True)
 print("[config] tts_workers ->", data["tts_workers"])
+print("[config] echomimic_workers ->", data["echomimic_workers"])
 PY
 
 echo ""

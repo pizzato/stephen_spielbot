@@ -4,7 +4,7 @@ SCRIPTS := scripts
 # containers. Examples:  make stop W=s2   make restart W=s3   make status W=s1
 W ?=
 
-.PHONY: install download-models download-flux download-flux-cluster \
+.PHONY: install download-models download-voices download-flux download-flux-cluster \
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale \
         launchd-install launchd-uninstall \
@@ -19,6 +19,11 @@ install:
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
 	@bash $(SCRIPTS)/download_models.sh
+
+## Download the bundled character voice library (public-domain LibriVox clips +
+## gender/age/accent metadata, used to auto-cast story characters). Idempotent.
+download-voices:
+	@.venv/bin/python $(SCRIPTS)/download_voices.py
 
 ## Download the legacy FLUX.1-schnell models locally (~13 GB).
 download-flux:

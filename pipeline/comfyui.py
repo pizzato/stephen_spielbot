@@ -605,6 +605,26 @@ def _apply_second_pass(workflow: dict, cfg: float, steps: int) -> None:
     workflow["28"]["inputs"]["sigmas"] = sigmas
 
 
+# LTX 2.3 generates each clip's audio from the same text prompt. Steer that audio
+# toward natural diegetic sound (the real sounds of what's happening in the scene)
+# and away from the music / dramatic score LTX otherwise invents — films are
+# scored separately (the user adds music where wanted). Applied to every LTX video.
+_AUDIO_POSITIVE = ("natural realistic diegetic sound of the scene — the actual ambient and "
+                   "environmental audio of what is happening, real room tone")
+_AUDIO_NEGATIVE = ("music, musical score, soundtrack, background music, dramatic orchestral score, "
+                   "ominous drone, suspenseful underscore, singing, song")
+
+
+def _steer_audio_natural(positive: str, negative: str) -> tuple[str, str]:
+    """Append the natural-sound directive to an LTX prompt pair so the generated
+    clip carries the scene's real sounds instead of invented music."""
+    p = (positive or "").rstrip().rstrip(".")
+    pos = f"{p}. {_AUDIO_POSITIVE}." if p else f"{_AUDIO_POSITIVE}."
+    n = (negative or "").rstrip().rstrip(",")
+    neg = f"{n}, {_AUDIO_NEGATIVE}" if n else _AUDIO_NEGATIVE
+    return pos, neg
+
+
 def generate_video_clip(
     positive_prompt: str,
     negative_prompt: str,
@@ -623,6 +643,7 @@ def generate_video_clip(
 ) -> Path:
     """Generate a video clip using LTX 2.3 T2V and save to output_path."""
     length = _frame_count(length, duration_seconds)
+    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -683,6 +704,7 @@ def generate_video_continuation(
 ) -> Path:
     """Continue a video clip from its last frame using LTX 2.3 I2V."""
     length = _frame_count(length, duration_seconds)
+    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -723,6 +745,65 @@ def generate_video_continuation(
     if not outputs:
         raise RuntimeError(f"No output files from ComfyUI for I2V prompt {prompt_id} ({comfy_url})")
 
+    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
+def generate_keyframed_clip(
+    first_frame_path: Path,
+    last_frame_path: Path,
+    output_path: Path,
+    positive_prompt: str,
+    negative_prompt: str = "",
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    length: int = DEFAULT_LENGTH,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    lora_strength: float = 0.5,
+    cfg: float = 1.0,
+    steps: int = 8,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """LTX 2.3 clip keyframed between a FIRST and LAST frame — the camera really
+    moves from one to the other (a generated push-in), not a fake 2D zoom.
+
+    Single-pass, silent (no audio track). Used for a dialogue scene's establishing
+    shot: first = the wide setting, last = the speaker's close-up, so the push-in
+    lands exactly on the still the talking head then animates."""
+    length = _frame_count(length, duration_seconds)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    first_name = _upload_image(first_frame_path, comfy_url=comfy_url)
+    last_name = _upload_image(last_frame_path, comfy_url=comfy_url)
+
+    workflow = _load_workflow("ltx23_i2v_keyframes.json")
+    workflow = _fill_template(workflow, {
+        "POSITIVE_PROMPT": positive_prompt,
+        "NEGATIVE_PROMPT": negative_prompt,
+        "WIDTH":  width,
+        "HEIGHT": height,
+        "LENGTH": length,
+        "SEED":   seed,
+        "FIRST_IMAGE": first_name,
+        "LAST_IMAGE":  last_name,
+        "CFG":    cfg,
+        "SIGMAS": _gen_first_pass_sigmas(steps),
+    })
+    workflow["3"]["inputs"]["strength_model"] = lora_strength
+
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info("[comfy] generate_keyframed_clip %dx%d length=%d timeout=%ds",
+                width, height, length, _video_timeout)
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output from ComfyUI for keyframe prompt {prompt_id} ({comfy_url})")
     video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 

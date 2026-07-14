@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
@@ -172,24 +172,54 @@ function VoiceTester({ voice, roboticAmount, speed, engine, onError }) {
 // Add / rename / replace / delete the reference clips F5-TTS clones. Each
 // operation persists immediately (it writes a file), independent of the
 // page-level "Save settings" button.
+const VOICE_GENDERS = ['', 'male', 'female']
+const VOICE_AGES = ['', 'young', 'adult', 'mature', 'elderly']
+
+// Casting-metadata inputs shared by the add form and the row editor. Gender +
+// age drive the automatic voice pick for story characters; a voice without a
+// gender is never auto-cast (manual pick only).
+function VoiceMetaFields({ meta, onChange }) {
+  const set = (k, v) => onChange({ ...meta, [k]: v })
+  return (
+    <>
+      <select className="input" style={{ maxWidth: 110 }} value={meta.gender || ''} onChange={(e) => set('gender', e.target.value)}>
+        {VOICE_GENDERS.map((g) => <option key={g} value={g}>{g || 'gender…'}</option>)}
+      </select>
+      <select className="input" style={{ maxWidth: 110 }} value={meta.age || ''} onChange={(e) => set('age', e.target.value)}>
+        {VOICE_AGES.map((a) => <option key={a} value={a}>{a || 'age…'}</option>)}
+      </select>
+      <input className="input" placeholder="accent (e.g. British)" value={meta.accent || ''}
+        onChange={(e) => set('accent', e.target.value)} style={{ maxWidth: 150 }} />
+      <input className="input" placeholder="tone (e.g. deep, warm)" value={meta.tone || ''}
+        onChange={(e) => set('tone', e.target.value)} style={{ maxWidth: 150 }} />
+    </>
+  )
+}
+
 function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
   const [name, setName] = useState('')
   const [file, setFile] = useState(null)
+  const [addMeta, setAddMeta] = useState({})
   const [editing, setEditing] = useState(null)   // name of the voice being edited
   const [editName, setEditName] = useState('')
   const [editFile, setEditFile] = useState(null)
+  const [editMeta, setEditMeta] = useState({})
   const addRef = useRef(null)
 
   const add = async () => {
-    try { await onAdd(name.trim(), file) } catch { return }
-    setName(''); setFile(null); if (addRef.current) addRef.current.value = ''
+    try { await onAdd(name.trim(), file, addMeta) } catch { return }
+    setName(''); setFile(null); setAddMeta({}); if (addRef.current) addRef.current.value = ''
   }
-  const startEdit = (v) => { setEditing(v.name); setEditName(v.name); setEditFile(null) }
-  const cancelEdit = () => { setEditing(null); setEditName(''); setEditFile(null) }
+  const startEdit = (v) => {
+    setEditing(v.name); setEditName(v.name); setEditFile(null)
+    setEditMeta({ gender: v.gender || '', age: v.age || '', accent: v.accent || '', tone: v.tone || '' })
+  }
+  const cancelEdit = () => { setEditing(null); setEditName(''); setEditFile(null); setEditMeta({}) }
   const saveEdit = async (v) => {
-    try { await onUpdate(v.name, editName.trim(), editFile) } catch { return }
+    try { await onUpdate(v.name, editName.trim(), editFile, editMeta) } catch { return }
     cancelEdit()
   }
+  const castChips = (v) => [v.gender, v.age, v.accent, v.tone].filter(Boolean).join(' · ')
 
   const rowStyle = { padding: '10px 12px', background: 'var(--paper-2)', borderRadius: 'var(--r-md)' }
 
@@ -200,7 +230,9 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
         <span className="muted" style={{ fontSize: 11.5 }}>changes save immediately</span>
       </div>
       <div className="field__hint" style={{ marginTop: 6 }}>
-        Reference clips (15–30s of clear speech) F5-TTS clones for narration. Pick each style's narrator voice under <strong>Styles</strong>.
+        Reference clips (15–30s of clear speech) F5-TTS clones for narration and dialogue. Pick each
+        style's narrator voice under <strong>Styles</strong>. <strong>Gender + age</strong> let story
+        characters be auto-cast with a fitting voice — a voice without a gender is never auto-cast.
       </div>
 
       <div className="stack gap-10 mt-16">
@@ -211,7 +243,8 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
           <div key={v.name} className="row center gap-10 row--wrap" style={rowStyle}>
             {editing === v.name ? (
               <>
-                <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ maxWidth: 220 }} />
+                <input className="input" value={editName} onChange={(e) => setEditName(e.target.value)} style={{ maxWidth: 170 }} />
+                <VoiceMetaFields meta={editMeta} onChange={setEditMeta} />
                 <label className="btn btn--ghost">
                   <Icon name="upload" /> {editFile ? editFile.name : 'Replace clip'}
                   <input type="file" accept="audio/*" hidden onChange={(e) => setEditFile(e.target.files?.[0] || null)} />
@@ -224,6 +257,8 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
               <>
                 <PlayButton src={fileUrl(v.path)} />
                 <span style={{ fontWeight: 600 }}>{v.name}</span>
+                {castChips(v) && <span className="muted" style={{ fontSize: 12 }}>{castChips(v)}</span>}
+                {v.library && <span className="muted" style={{ fontSize: 11, border: '1px solid var(--line)', borderRadius: 6, padding: '1px 6px' }}>library</span>}
                 <div className="grow" />
                 <Button variant="ghost" icon="pen" disabled={busy} onClick={() => startEdit(v)}>Edit</Button>
                 <Button variant="danger" icon="trash" disabled={busy} onClick={() => onDelete(v.name)}>Delete</Button>
@@ -234,7 +269,8 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
       </div>
 
       <div className="row center gap-10 row--wrap mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
-        <input className="input" placeholder="New voice name" value={name} onChange={(e) => setName(e.target.value)} style={{ maxWidth: 220 }} />
+        <input className="input" placeholder="New voice name" value={name} onChange={(e) => setName(e.target.value)} style={{ maxWidth: 170 }} />
+        <VoiceMetaFields meta={addMeta} onChange={setAddMeta} />
         <label className="btn btn--ghost">
           <Icon name="upload" /> {file ? file.name : 'Choose audio…'}
           <input ref={addRef} type="file" accept="audio/*" hidden onChange={(e) => setFile(e.target.files?.[0] || null)} />
@@ -942,6 +978,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
+      out.echomimic_workers = fromLines(toLines(cfg.echomimic_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
       dirtyRef.current = false; setDirty(false)   // saved — let the sync effect adopt r.config
@@ -970,10 +1007,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
       setMeta((m) => ({ ...m, config: r.config, voices: r.voices }))
     } catch (e) { setError(e.message); throw e } finally { setVbusy(false) }
   }
-  const addVoice = (name, file) => voiceOp(async () =>
-    api.addVoice(name, file.name, await fileToDataUrl(file)))
-  const updateVoice = (name, newName, file) => voiceOp(async () => {
-    const fields = {}
+  const addVoice = (name, file, meta = {}) => voiceOp(async () =>
+    api.addVoice(name, file.name, await fileToDataUrl(file), meta))
+  const updateVoice = (name, newName, file, meta = {}) => voiceOp(async () => {
+    const fields = { ...meta }
     if (newName && newName !== name) fields.new_name = newName
     if (file) { fields.filename = file.name; fields.data = await fileToDataUrl(file) }
     return api.updateVoice(name, fields)
@@ -1076,6 +1113,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
                 <WorkerStatus items={workers?.tts} />
+              </Field>
+              <Field label="EchoMimic workers" hint="One URL per line (port 8190). Talking-head engine for dialogue/performance scenes.">
+                <textarea className="textarea" rows={2} value={toLines(cfg.echomimic_workers)} onChange={(e) => set('echomimic_workers', e.target.value)} />
+                <WorkerStatus items={workers?.echomimic} />
               </Field>
               <WorkerControls workers={workers} busyHost={workerBusy} onAction={controlWorker} />
               <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">
@@ -1414,7 +1455,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
               <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
                 <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
                   <option value="">(F5-TTS default)</option>
-                  {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{v}</option>)}
+                  {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>)}
                 </select></Field></div>
                 <div className="grow" style={{ paddingBottom: 12 }}>
                   <Check checked={!!st.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
@@ -1576,6 +1617,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                   <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
                     <textarea className="textarea" rows={3} value={c.description || ''}
                       onChange={(e) => updateChar(i, { description: e.target.value })} />
+                  </Field>
+                  <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
+                    <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
+                      onChange={(e) => updateChar(i, { voice: e.target.value })}>
+                      <option value="">Style narrator (default)</option>
+                      {(cfg.voices || []).map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
+                        </option>
+                      ))}
+                    </select>
                   </Field>
                   <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
                     <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}

@@ -88,6 +88,15 @@ def build_srt(work_dir: Path) -> Path | None:
         if dur <= 0:
             continue  # scene not on disk — can't place it on the timeline
 
+        # Dialogue/silent scenes have no narration voice-over — any lingering
+        # narration text must not become captions. Their duration still advances
+        # the timeline so later narrated scenes stay in sync. (Per-line dialogue
+        # captions are a future improvement.)
+        mode = str((scene.get("metadata") or {}).get("mode") or "narration")
+        if mode != "narration":
+            cursor += dur
+            continue
+
         sentences = _split_sentences(str(scene.get("narration") or ""))
         if sentences:
             weights = [len(s) for s in sentences]

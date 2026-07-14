@@ -108,6 +108,12 @@ def _worker_activity(cfg: dict, tasks: list[dict], reserved_comfy: int = 0) -> l
     for ep in cfg.get("tts_workers") or []:
         ep_by_wid[worker_id("tts", ep)] = ep
         fleet.append(("tts", ep))
+    # EchoMimic talking-head workers (dialogue). Without these the fleet reads
+    # "all idle" during a dialogue render — the comfy/tts pools genuinely are
+    # idle while the work runs on echomimic.
+    for ep in cfg.get("echomimic_workers") or []:
+        ep_by_wid[worker_id("echomimic", ep)] = ep
+        fleet.append(("echomimic", ep))
 
     job_by_ep: dict[str, str] = {}
     for t in tasks:
@@ -159,6 +165,9 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "video_prompt": row.get("video_prompt", ""),
         "narration": row.get("narration", ""),
         "voice": meta.get("voice", ""),
+        "mode": meta.get("mode", "narration"),
+        "lines": meta.get("lines", []),
+        "duration": meta.get("duration", 0),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
@@ -178,6 +187,7 @@ def _character_to_json(wd: Path, c: dict) -> dict:
         "name": c.get("name", ""),
         "aliases": c.get("aliases") or [],
         "description": c.get("description", ""),
+        "voice": c.get("voice", ""),
         "has_image": has_image,
         "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has_image else "",
         "history": image_history.char_history(wd, c.get("id", "")),
@@ -643,11 +653,13 @@ def _live_render_activity_items() -> list[dict]:
         title = wd.name
         eta_text, eta_seconds = None, None
         started_at = None
+        eta, status = None, ""
         store = DurableStore.default()
         try:
             job_row = store.get_job_by_work_dir(str(wd))
             if job_row is not None:
                 job = _row_to_dict(job_row)
+                status = job.get("status", "")
                 title = job.get("title") or title
                 try:
                     started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
@@ -655,10 +667,9 @@ def _live_render_activity_items() -> list[dict]:
                     started_at = None
                 tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
                 cfg = gapp.load_config()
-                timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
-                reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
                 try:
-                    eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=reserved)
+                    eta = estimate_eta(tasks, store.timing_table(), cfg,
+                                       reserved_comfy=_ui_reserved_comfy(cfg))
                     if eta:
                         eta_text = eta.get("eta_text")
                         eta_seconds = eta.get("eta_seconds")
@@ -666,6 +677,11 @@ def _live_render_activity_items() -> list[dict]:
                     pass
         finally:
             store.close()
+        # Same reconciliation the Progress screen + sidebar badge use, so the
+        # Activity % matches the ETA instead of the raw band value.
+        final_path = gapp._final_path_for_work_dir(wd)
+        _done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+        pct = _display_pct(int(round(pct)), eta, status, _done)
         items.append(_make_activity_event(
             name="Rendering film",
             detail=msg or title,
@@ -840,6 +856,11 @@ class VoiceAdd(BaseModel):
     name: str
     filename: str = ""
     data: str
+    # casting metadata (drives the character voice auto-cast; all optional)
+    gender: str | None = None
+    age: str | None = None
+    accent: str | None = None
+    tone: str | None = None
 
 
 class VoiceUpdate(BaseModel):
@@ -847,6 +868,10 @@ class VoiceUpdate(BaseModel):
     new_name: str | None = None
     filename: str = ""
     data: str | None = None
+    gender: str | None = None
+    age: str | None = None
+    accent: str | None = None
+    tone: str | None = None
 
 
 class VoiceDelete(BaseModel):
@@ -857,7 +882,9 @@ class VoiceDelete(BaseModel):
 def voices_add(body: VoiceAdd) -> dict:
     raw, ext = _decode_audio(body.data, body.filename)
     try:
-        cfg = gapp.add_voice(body.name, raw, ext)
+        cfg = gapp.add_voice(body.name, raw, ext,
+                             gender=body.gender, age=body.age,
+                             accent=body.accent, tone=body.tone)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _voice_response(cfg)
@@ -869,7 +896,9 @@ def voices_update(body: VoiceUpdate) -> dict:
     if body.data:
         audio, ext = _decode_audio(body.data, body.filename)
     try:
-        cfg = gapp.update_voice(body.name, new_name=body.new_name, audio=audio, ext=ext)
+        cfg = gapp.update_voice(body.name, new_name=body.new_name, audio=audio, ext=ext,
+                                gender=body.gender, age=body.age,
+                                accent=body.accent, tone=body.tone)
     except ValueError as e:
         raise HTTPException(400, str(e))
     return _voice_response(cfg)
@@ -983,6 +1012,7 @@ class ScriptCharacterUpdate(BaseModel):
     name: str | None = None
     aliases: list[str] | None = None
     description: str | None = None
+    voice: str | None = None
 
 
 class ScriptCharacterImage(BaseModel):
@@ -1030,7 +1060,7 @@ def edit_script_character(job_id: str, char_id: str, body: ScriptCharacterUpdate
     wd = _job_wd_or_404(job_id)
     try:
         gapp.update_script_character(wd, char_id, name=body.name, aliases=body.aliases,
-                                     description=body.description)
+                                     description=body.description, voice=body.voice)
     except ValueError as e:
         raise HTTPException(404, str(e))
     return _script_chars_ok(wd)
@@ -1228,6 +1258,7 @@ def workers_status() -> dict:
     """
     from pipeline.worker_pool import queue_depth
     from pipeline.tts_worker import worker_alive as tts_alive
+    from pipeline.echomimic import worker_alive as echomimic_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -1241,6 +1272,7 @@ def workers_status() -> dict:
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
         "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
+        "echomimic": [{"endpoint": h, "up": echomimic_alive(h, timeout=3)} for h in cfg.get("echomimic_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
@@ -1266,7 +1298,7 @@ def _worker_hosts(cfg: dict) -> list[str]:
     Each host runs one docker compose stack (ComfyUI + F5-TTS) that
     scripts/worker.sh controls over SSH — same hosts `make stop W=<host>` uses."""
     hosts: list[str] = []
-    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []):
+    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []) + (cfg.get("echomimic_workers") or []):
         h = _host_of(entry)
         if h and h not in hosts:
             hosts.append(h)
@@ -1331,6 +1363,8 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
+    # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_performance_plan.md.
+    format: str = "narration"
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1399,6 +1433,87 @@ def _read_create_brief(wd: Path) -> dict:
         return {}
 
 
+def _clean_lines(raw_lines) -> list[dict]:
+    """Validated shot sequence from a client payload. Keeps SPEAKING shots
+    (non-empty text) and SILENT shots (marked; people move, no speech); drops
+    empty rows. Optional per-shot framing/video-prompt/duration preserved."""
+    out = []
+    for ln in raw_lines or []:
+        if not isinstance(ln, dict):
+            continue
+        text = str(ln.get("text") or "").strip()
+        shot = str(ln.get("shot") or "").strip()
+        if ln.get("silent"):
+            try:
+                dur = float(ln.get("duration") or 0)
+            except (TypeError, ValueError):
+                dur = 0.0
+            row = {"silent": True, "duration": dur if dur > 0 else 3.0}
+            if shot:
+                row["shot"] = shot
+            vp = str(ln.get("video_prompt") or "").strip()
+            if vp:
+                row["video_prompt"] = vp
+            out.append(row)
+            continue
+        if not text:
+            continue
+        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
+        if shot:
+            row["shot"] = shot
+        out.append(row)
+    return out
+
+
+def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
+    """A Scene as a script.json row. Dialogue/silent fields go under "metadata"
+    (only when non-default), so narration scripts stay byte-identical — and so
+    the render, which reads script.json, actually sees authored dialogue."""
+    row = {"id": s.id, "title": s.title,
+           "image_prompt": image_prompt if image_prompt is not None else s.image_prompt,
+           "video_prompt": s.video_prompt, "narration": s.narration}
+    md = getattr(s, "metadata", None) or {}
+    if md:
+        row["metadata"] = md
+    return row
+
+
+def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
+    """Instruction appended to the JSON script prompt so the LLM emits dialogue/
+    silent/narration scenes. None for the default narration format (no change)."""
+    fmt = (fmt or "narration").strip().lower()
+    if fmt not in ("dialogue", "mixed"):
+        return None
+    cast = ", ".join(n for n in cast_names if n)
+    speakers = (
+        f"Speakers are these existing characters ({cast}) and/or the main character(s) you "
+        "identify in the \"characters\" field. Do not invent speakers outside those."
+        if cast else
+        "Use the recurring character(s) you identify in the \"characters\" field as the speakers."
+    )
+    balance = (
+        "Almost every scene should be mode \"dialogue\": the characters carry the story by "
+        "speaking to the camera or to each other."
+        if fmt == "dialogue" else
+        "Mix freely: use \"dialogue\" when characters speak or interact, \"narration\" for "
+        "scene-setting voice-over, and \"silent\" for pure visual beats."
+    )
+    return (
+        "DIALOGUE VIDEO — characters SPEAK rather than only a narrator. For EACH scene object, "
+        "add a \"mode\" field: \"dialogue\" | \"silent\" | \"narration\". "
+        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of SHOTS, each "
+        "{\"speaker\": <character name>, \"text\": <one or two SHORT spoken sentences — keep each "
+        "line under ~20 words / 8 seconds of speech>, \"shot\": <static medium-shot framing of the "
+        "speaker — roughly waist-up with the setting around them, face clear but NOT an extreme "
+        "close-up>}, and leave \"narration\" empty. A dialogue scene plays "
+        "as a cut between these shots — the camera favors whoever speaks. "
+        "When \"silent\", leave narration empty (visuals only). "
+        f"{speakers} {balance} "
+        "Still fill image_prompt and video_prompt as usual; for dialogue scenes the image_prompt "
+        "is the establishing wide shot of the setting."
+    )
+
+
 def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
     app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
@@ -1419,14 +1534,16 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    style_cast = gapp._style_characters(cfg, body.style_name)
+    character_sheet = gapp._character_sheet(style_cast) or None
+    dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
                 llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint,
+                avoid_hint=avoid_hint, dialogue_note=dialogue_note,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
@@ -1439,12 +1556,11 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # The render step guards against re-adding a prefix that's already present.
     combined_style = gapp._compose_visual_style(style, cfg, ss["name"])
     scenes_list = [
-        {"id": s.id, "title": s.title,
-         "image_prompt": (f"{combined_style}. {s.image_prompt}"
-                          if combined_style and s.image_prompt
-                          and not s.image_prompt.startswith(combined_style)
-                          else s.image_prompt),
-         "video_prompt": s.video_prompt, "narration": s.narration}
+        _scene_snapshot_row(s, image_prompt=(
+            f"{combined_style}. {s.image_prompt}"
+            if combined_style and s.image_prompt
+            and not s.image_prompt.startswith(combined_style)
+            else s.image_prompt))
         for s in scenes
     ]
     gapp._persist_script_snapshot(work_dir, scenes_list)
@@ -1456,6 +1572,11 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # Render look images in the background for the new ones; best-effort when
     # no worker is up (editor offers a manual "Generate look").
     new_characters = gapp._filter_identified_against_style(characters, cfg, ss["name"])
+    # Cast voices: each new character gets a fitting library voice (gender/age
+    # matched, the style narrator's voice excluded) so dialogue doesn't come out
+    # with the narrator speaking every part.
+    new_characters = gapp._auto_assign_character_voices(
+        new_characters, cfg, exclude=(ss.get("voice") or "").strip())
     saved_characters = gapp._write_script_characters(work_dir, new_characters)
     if saved_characters:
         threading.Thread(
@@ -1474,6 +1595,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
+        "format": (body.format or "narration").strip().lower(),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -1761,6 +1883,10 @@ class SceneUpdate(BaseModel):
     video_prompt: str = ""
     narration: str = ""
     voice: str | None = None
+    # Dialogue/performance (optional; absent ⟹ narration — stored in scene metadata).
+    mode: str | None = None
+    lines: list | None = None
+    duration: float | None = None
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
@@ -1770,12 +1896,33 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     try:
         current = store.get_scene(job_id, sid) or {}
         meta = dict(current.get("metadata") or {})
+        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration")}
         if body.voice is not None:
             voice = (body.voice or "").strip()
             if voice:
                 meta["voice"] = voice
             else:
                 meta.pop("voice", None)
+        # Dialogue fields: store only when non-default so narration scenes' metadata
+        # (and thus script.json) stay byte-identical.
+        if body.mode is not None:
+            m = (body.mode or "").strip() or "narration"
+            if m != "narration":
+                meta["mode"] = m
+            else:
+                meta.pop("mode", None)
+        if body.lines is not None:
+            ls = _clean_lines(body.lines)
+            if ls:
+                meta["lines"] = ls
+            else:
+                meta.pop("lines", None)
+        if body.duration is not None:
+            d = float(body.duration or 0)
+            if d > 0:
+                meta["duration"] = d
+            else:
+                meta.pop("duration", None)
         store.upsert_scene(
             job_id,
             sid,
@@ -1792,6 +1939,19 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     work_dir = gapp._job_work_dir(job_id)
     if work_dir:
         gapp._persist_script_snapshot(work_dir, rows)
+        # A scene whose mode/lines/duration changed must not reuse its previously
+        # rendered files — the resume path skips scenes whose final already exists,
+        # which would silently serve the OLD (e.g. narrated) take.
+        if {k: meta.get(k) for k in ("mode", "lines", "duration")} != old_dialogue:
+            wd = Path(work_dir)
+            stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
+                     wd / f"scene_{sid:02d}_establish.mp4"]
+            stale += list(wd.glob(f"scene_{sid:02d}_line_*"))
+            for p in stale:
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
     return {"ok": True}
 
 
@@ -2399,13 +2559,16 @@ def start_generation(body: GenerateBody) -> dict:
             video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
             narration=row.get("narration") or "",
             negative_prompt=video_neg,
+            # Dialogue/performance fields ride in the scene metadata; dropping
+            # them here silently turned authored dialogue back into narration.
+            mode=str((row.get("metadata") or {}).get("mode") or "narration"),
+            lines=list((row.get("metadata") or {}).get("lines") or []),
+            duration=float((row.get("metadata") or {}).get("duration") or 0.0),
+            metadata_extra=dict(row.get("metadata") or {}),
         )
         for row in scene_rows[:n]
     ]
-    gapp._persist_script_snapshot(work_dir, [
-        {"id": s.id, "title": s.title, "image_prompt": s.image_prompt,
-         "video_prompt": s.video_prompt, "narration": s.narration} for s in scenes
-    ])
+    gapp._persist_script_snapshot(work_dir, [_scene_snapshot_row(s) for s in scenes])
 
     # Character-first pre-build (main-character consistency). BEFORE the render
     # plan is registered — so it holds even for a fully headless/automated render
@@ -2428,6 +2591,17 @@ def start_generation(body: GenerateBody) -> dict:
             generate_all_previews(job_id, resolution, body.style or "")
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
+
+    # Per-shot stills for dialogue lines (speaker close-ups in the scene setting) —
+    # the talking-head model needs a large, clear face; a wide scene frame gives
+    # poor lip-sync. Best-effort: a missing still falls back to the scene frame.
+    try:
+        made = gapp.generate_dialogue_shot_stills(job_id, ss["name"], resolution)
+        if made:
+            (work_dir / "progress.json").write_text(json.dumps(
+                {"pct": 0, "msg": f"Rendered {made} dialogue shot still(s)…", "ts": time.time()}))
+    except Exception as e:
+        gapp.logger.warning("Dialogue shot pre-build failed (non-fatal): %s", e)
 
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({
@@ -2493,6 +2667,59 @@ def start_generation(body: GenerateBody) -> dict:
 
 # ── progress / orchestration ─────────────────────────────────────────────────
 
+def _display_pct(band_pct, eta, status: str, done: bool):
+    """The progress-bar percentage.
+
+    The phase-band pct (from write_progress) and the learned task ETA are two
+    independent signals; when they diverge the bar looks broken next to the
+    "X left" text (e.g. 49% while ~1 task / under a minute remains). Derive the
+    bar from the SAME numbers as the ETA — elapsed fraction = 1 - remaining/total
+    — so the two always agree. Fall back to the band pct before durable tasks
+    exist (script generation / character pre-build) or when there's no ETA."""
+    if done:
+        return 100
+    if isinstance(eta, dict) and status not in ("error", "cancelled", "failed"):
+        total = eta.get("total_seconds") or 0
+        rem = eta.get("eta_seconds") or 0
+        if total > 0:
+            return max(1, min(99, int(round(100.0 * (total - rem) / total))))
+    return band_pct
+
+
+def _ui_reserved_comfy(cfg: dict) -> int:
+    """1 while a comfy worker is held for the active UI (issue #98), else 0.
+    Recomputed each poll so the ETA tracks the UI going active/idle."""
+    timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
+    return 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+
+
+def _reconciled_render_pct(wd) -> int:
+    """Render % that agrees with the task ETA — the SAME number the sidebar badge,
+    the Activity row and the Progress screen all show. Falls back to the phase
+    band pct before durable tasks exist."""
+    band = gapp._status_for_work_dir(wd)[0]
+    final_path = gapp._final_path_for_work_dir(wd)
+    done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+    if done:
+        return 100
+    status, eta = "", None
+    store = DurableStore.default()
+    try:
+        job_row = store.get_job_by_work_dir(str(wd))
+        if job_row is None:
+            return int(round(band))
+        job = _row_to_dict(job_row)
+        status = job.get("status", "")
+        tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+        cfg = gapp.load_config()
+        eta = estimate_eta(tasks, store.timing_table(), cfg, reserved_comfy=_ui_reserved_comfy(cfg))
+    except Exception:
+        return int(round(band))
+    finally:
+        store.close()
+    return _display_pct(int(round(band)), eta, status, done)
+
+
 @api.get("/api/progress")
 def progress(work_dir: str = Query("")) -> dict:
     wd = gapp._preferred_work_dir(work_dir)
@@ -2523,8 +2750,7 @@ def progress(work_dir: str = Query("")) -> dict:
             # there are ≥2 (the last is never reserved) — mirrors WorkerPool. This
             # is recomputed every poll, so the worker list and ETA track the UI
             # going active/idle mid-render.
-            timeout = float(cfg.get("ui_idle_timeout_seconds", ui_activity.DEFAULT_IDLE_TIMEOUT))
-            reserved = 1 if (len(cfg.get("comfy_workers") or []) >= 2 and ui_activity.is_active(timeout)) else 0
+            reserved = _ui_reserved_comfy(cfg)
             workers = _worker_activity(cfg, tasks, reserved)
             if not done:
                 try:
@@ -2537,6 +2763,7 @@ def progress(work_dir: str = Query("")) -> dict:
         store.close()
 
     title = (job or {}).get("title", wd.name)
+    pct = _display_pct(pct, eta, (job or {}).get("status", ""), bool(done))
 
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
@@ -4288,7 +4515,7 @@ def badges() -> dict:
         try:
             wd = gapp._preferred_work_dir("")
             if wd is not None:
-                render_pct = int(round(gapp._status_for_work_dir(wd)[0]))
+                render_pct = _reconciled_render_pct(wd)
         except Exception:
             render_pct = 0
 
