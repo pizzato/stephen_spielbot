@@ -22,7 +22,7 @@ import os
 import re
 import urllib.request
 import urllib.error
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -66,6 +66,36 @@ class Scene:
     video_prompt: str   # LTX I2V: motion, camera movement, action, pacing
     narration: str
     negative_prompt: str = NEGATIVE_PROMPT
+    # ── Dialogue/performance (additive; absent/"narration" ⟹ today's behavior) ──
+    # mode: "narration" (default) | "silent" | "dialogue". A scene with narration
+    # text and no explicit mode is narration — existing scripts are unchanged.
+    mode: str = "narration"
+    # dialogue lines: ordered [{"speaker": <character name|"Narrator">, "text": str}].
+    # Each line renders as a talking-head shot (EchoMimic) in the speaker's voice.
+    lines: list = field(default_factory=list)
+    # explicit length (seconds) for silent scenes that have no audio to time from.
+    duration: float = 0.0
+    # Any other metadata the scene sidecar carried (e.g. per-scene voice) —
+    # preserved through the `metadata` property below.
+    metadata_extra: dict = field(default_factory=dict)
+
+    @property
+    def metadata(self) -> dict:
+        """The scene's metadata sidecar, dialogue fields included.
+
+        The orchestrator mirrors scenes into its store via getattr(scene,
+        "metadata") — without this property every render start overwrote the
+        stored metadata with {} and authored dialogue silently reverted to
+        narration."""
+        md = {k: v for k, v in self.metadata_extra.items()
+              if k not in ("mode", "lines", "duration")}
+        if self.mode not in ("narration", "", None):
+            md["mode"] = self.mode
+        if self.lines:
+            md["lines"] = self.lines
+        if self.duration:
+            md["duration"] = self.duration
+        return md
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -100,10 +130,16 @@ def _norm_identified_characters(raw_list, cap: int = _MAX_MAIN_CHARACTERS) -> li
         if isinstance(aliases, str):
             aliases = aliases.split(",")
         aliases = [str(a).strip() for a in (aliases or []) if str(a).strip()]
+        gender = str(raw.get("gender") or "").strip().lower()
+        age = str(raw.get("age") or "").strip().lower()
         out.append({
             "name": name,
             "aliases": aliases,
             "description": str(raw.get("description") or "").strip(),
+            # voice-casting hints (used to auto-pick a library voice; free-form
+            # values are tolerated downstream, unknown ⟹ no constraint)
+            "gender": gender if gender in ("male", "female") else "",
+            "age": age if age in ("young", "adult", "mature", "elderly") else "",
         })
         if len(out) >= cap:
             break
@@ -421,12 +457,65 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
             logger.warning("Could not fill narration for scene %d: %s", scene.id, exc)
 
 
+def _norm_scene_lines(item: dict) -> list[dict]:
+    """Validated shot sequence for a dialogue scene.
+
+    A shot is either SPEAKING — {speaker, text, shot?} rendered as a talking head
+    — or SILENT — {silent: true, shot?, video_prompt?, duration} rendered as a
+    motion clip (people move, no speech). Empty rows are dropped."""
+    raw = item.get("lines")
+    if not isinstance(raw, list):
+        return []
+    out = []
+    for ln in raw:
+        if not isinstance(ln, dict):
+            continue
+        text = str(ln.get("text") or "").strip()
+        shot = str(ln.get("shot") or "").strip()
+        if ln.get("silent") or (not text and (ln.get("duration") or ln.get("video_prompt"))):
+            row = {"silent": True, "duration": _coerce_float(ln.get("duration"), 3.0)}
+            if shot:
+                row["shot"] = shot
+            vp = str(ln.get("video_prompt") or "").strip()
+            if vp:
+                row["video_prompt"] = vp
+            out.append(row)
+            continue
+        if not text:
+            continue
+        row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
+        if shot:
+            row["shot"] = shot  # close framing of the speaker — rendered as this line's still
+        out.append(row)
+    return out
+
+
+def _coerce_float(v, default: float) -> float:
+    try:
+        f = float(v)
+        return f if f > 0 else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _scene_mode_lines(item: dict) -> tuple[str, list[dict]]:
+    """(mode, lines) for a generated scene — 'narration' unless the LLM marked it."""
+    mode = str(item.get("mode") or "narration").strip().lower() or "narration"
+    lines = _norm_scene_lines(item) if mode == "dialogue" else []
+    if mode == "dialogue" and not lines:
+        mode = "narration"  # dialogue with no usable lines degrades to narration
+    if mode not in ("narration", "silent", "dialogue"):
+        mode = "narration"
+    return mode, lines
+
+
 def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
                           call_fn,
                           video_title: str | None = None,
                           video_style_hint: str | None = None,
                           character_sheet: str | None = None,
-                          avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                          avoid_hint: str | None = None,
+                          dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """JSON batch script generation shared by Claude and Grok.
 
     *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
@@ -450,6 +539,31 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         f"\n{character_sheet.strip()}"
         if character_sheet and character_sheet.strip() else ""
     )
+    dialogue_note_str = (
+        f"\n{dialogue_note.strip()}"
+        if dialogue_note and dialogue_note.strip() else ""
+    )
+    # The system prompt pins the scene schema, so dialogue fields must be added
+    # THERE — a user-message note alone gets ignored ("each with exactly these
+    # keys" wins). Empty when dialogue is off → the narration prompt is unchanged.
+    dialogue_schema = (
+        '\n      - "mode": "narration" | "dialogue" | "silent" — how the scene plays. '
+        'Use "dialogue" when characters speak on screen, "silent" for a pure visual beat with no voice-over.'
+        '\n      - "lines": ONLY for "dialogue" scenes — ordered array of shots. A SPEAKING shot is '
+        '{"speaker": <character name>, "text": <1-2 short spoken sentences>, '
+        '"shot": <20-40 word STATIC framing showing ONLY the speaker in this scene\'s setting — '
+        'a single person, a medium shot (roughly waist-up, some of the setting around them), '
+        'their face clearly visible and looking toward the camera (NOT an extreme close-up); '
+        'NO other characters in the frame; include setting details around them>}. '
+        'A SILENT shot (optional, use occasionally for a beat where characters MOVE but do not '
+        'speak — a reaction, a draw, an entrance) is '
+        '{"silent": true, "shot": <static framing of the moment>, '
+        '"video_prompt": <the motion — what moves and how, camera included>, "duration": <seconds, 2-5>}. '
+        'A dialogue scene is a sequence of these shots — the camera cuts between them. '
+        'Dialogue and silent scenes MUST have "narration": "". '
+        'For dialogue scenes the "image_prompt" is the establishing wide shot of the setting.'
+        if dialogue_note_str else ""
+    )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
         f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
@@ -467,10 +581,12 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         video_style_note=video_style_note,
         avoid_note=avoid_note,
         character_note=character_note,
+        dialogue_note=dialogue_note_str,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
-    raw = call_fn(_prompts.system("script_claude_initial"), user_msg, max_tokens, f"scenes 1–{first_batch}")
+    raw = call_fn(_prompts.system("script_claude_initial", dialogue_schema=dialogue_schema),
+                  user_msg, max_tokens, f"scenes 1–{first_batch}")
     outer = _parse_claude_response(raw, f"scenes 1–{first_batch}")
 
     style      = style_hint.strip() if style_hint and style_hint.strip() else outer.get("style", "")
@@ -484,16 +600,17 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     identified = _norm_identified_characters(outer.get("characters"))
     character_note = _merge_character_note(character_note, identified)
 
-    scenes = [
-        Scene(
+    scenes = []
+    for i, item in enumerate(scenes_data[:first_batch]):
+        mode, lines = _scene_mode_lines(item)
+        scenes.append(Scene(
             id=item.get("id", i + 1),
             title=item.get("title", f"Scene {i + 1}"),
             image_prompt=item.get("image_prompt", title),
             video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
             narration=item.get("narration", ""),
-        )
-        for i, item in enumerate(scenes_data[:first_batch])
-    ]
+            mode=mode, lines=lines,
+        ))
 
     # ── Continuation batches ──────────────────────────────────────────────────
     batch_start = first_batch + 1
@@ -523,21 +640,24 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             video_style_note=video_style_note,
             avoid_note=avoid_note,
             character_note=character_note,
+            dialogue_note=dialogue_note_str,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
-        raw = call_fn(_prompts.system("script_claude_continuation"), cont_msg,
+        raw = call_fn(_prompts.system("script_claude_continuation", dialogue_schema=dialogue_schema), cont_msg,
                       max_tokens, f"scenes {batch_start}–{batch_end}")
         items = _parse_claude_response(raw, f"scenes {batch_start}–{batch_end}")
         if not isinstance(items, list):
             items = items.get("scenes", [])
         for i, item in enumerate(items):
+            mode, lines = _scene_mode_lines(item)
             scenes.append(Scene(
                 id=batch_start + i,
                 title=item.get("title", f"Scene {batch_start + i}"),
                 image_prompt=item.get("image_prompt", title),
                 video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
                 narration=item.get("narration", ""),
+                mode=mode, lines=lines,
             ))
         batch_start = batch_end + 1
 
@@ -559,7 +679,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      video_title: str | None = None,
                      video_style_hint: str | None = None,
                      character_sheet: str | None = None,
-                     avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                     avoid_hint: str | None = None,
+                     dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -575,7 +696,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
     return _json_script_generate(
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
-        character_sheet=character_sheet, avoid_hint=avoid_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
     )
 
 
@@ -585,6 +706,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
                    video_style_hint: str | None = None,
                    character_sheet: str | None = None,
                    avoid_hint: str | None = None,
+                   dialogue_note: str | None = None,
                    api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Grok (xAI) uses the same JSON batch protocol as Claude."""
     url = api_url or _GROK_CHAT_URL_DEFAULT
@@ -597,7 +719,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
     return _json_script_generate(
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
-        character_sheet=character_sheet, avoid_hint=avoid_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
     )
 
 
@@ -607,6 +729,7 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
                      video_style_hint: str | None = None,
                      character_sheet: str | None = None,
                      avoid_hint: str | None = None,
+                     dialogue_note: str | None = None,
                      api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """OpenAI ChatGPT uses the same JSON batch protocol as Claude/Grok."""
     url = api_url or _OPENAI_CHAT_URL_DEFAULT
@@ -619,7 +742,7 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
     return _json_script_generate(
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
-        character_sheet=character_sheet, avoid_hint=avoid_hint,
+        character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
     )
 
 
@@ -965,6 +1088,7 @@ def generate_script(
     video_style_hint: str | None = None,
     character_sheet: str | None = None,
     avoid_hint: str | None = None,
+    dialogue_note: str | None = None,
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
@@ -995,7 +1119,8 @@ def generate_script(
         logger.info("Using Claude backend: model=%s", model)
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
-                                character_sheet=character_sheet, avoid_hint=avoid_hint)
+                                character_sheet=character_sheet, avoid_hint=avoid_hint,
+                                dialogue_note=dialogue_note)
 
     if backend == "grok":
         api_key = _grok_api_key(cfg)
@@ -1009,6 +1134,7 @@ def generate_script(
         return _grok_generate(title, n_scenes, style_hint, api_key, model,
                               video_title=video_title, video_style_hint=video_style_hint,
                               character_sheet=character_sheet, avoid_hint=avoid_hint,
+                              dialogue_note=dialogue_note,
                               api_url=cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT)
 
     if backend == "openai":
@@ -1023,8 +1149,15 @@ def generate_script(
         return _openai_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
                                 character_sheet=character_sheet, avoid_hint=avoid_hint,
+                                dialogue_note=dialogue_note,
                                 api_url=cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT)
 
+    if dialogue_note:
+        raise RuntimeError(
+            "Dialogue/mixed script generation needs the Claude, Grok, or OpenAI backend "
+            "(the local vLLM backend produces narration only). Switch the LLM "
+            "backend in Settings, or use the Narration format."
+        )
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
                            video_style_hint=video_style_hint, character_sheet=character_sheet,

@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 
@@ -67,7 +67,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
-  voices, filmVoice,
+  voices, filmVoice, voiceMeta = {}, castOpts = [],
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -77,6 +77,9 @@ function SceneCard({
   const [voice, setVoice] = useState(scene.voice || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
+  // Scene type (narration | dialogue | silent) + dialogue shots + silent
+  // duration — mirrors the Script editor via the shared SceneTypeControls.
+  const [sceneType, setSceneType] = useState({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [taskId, setTaskId] = useState(null)
@@ -97,16 +100,26 @@ function SceneCard({
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
+    setSceneType({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
     setEditing(false)
   }, [scene.id])
 
-  const persist = async () => {
+  const persist = async (override = null) => {
+    const st = override || sceneType
     try {
-      await api.saveScene(jobId, scene.id, { title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt })
+      await api.saveScene(jobId, scene.id, {
+        title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
+        mode: st.mode || 'narration', lines: st.lines || [], duration: st.duration || 0,
+      })
     } catch (e) {
       setError(e.message)
     }
   }
+  // Patch scene-type state; persist the computed value immediately for discrete
+  // edits (commit=true) and on blur (commitType) — functional updater reads the
+  // latest state so nothing saves a stale value.
+  const changeType = (patch, commit) => setSceneType((s) => { const u = { ...s, ...patch }; if (commit) persist(u); return u })
+  const commitType = () => setSceneType((s) => { persist(s); return s })
 
   const setters = { title: setTitle, narration: setNarration, image_prompt: setImagePrompt, video_prompt: setVideoPrompt }
   const regenField = async (field, instruction = '') => {
@@ -366,15 +379,18 @@ function SceneCard({
                 <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={(instr) => regenField('title', instr)} chips={REGEN_CHIPS.title}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
-                  <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
-                </Field>
-                <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
-                  <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
-                    <option value="">Film narrator ({filmVoice || 'Default (F5-TTS)'})</option>
-                    {(voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </Field>
+                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType} />
+                {(sceneType.mode || 'narration') === 'narration' && (<>
+                  <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
+                    <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
+                  </Field>
+                  <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
+                    <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
+                      <option value="">Film narrator ({filmVoice || 'Default (F5-TTS)'})</option>
+                      {(voices || []).map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
+                    </select>
+                  </Field>
+                </>)}
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
@@ -778,7 +794,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             <Field label="Narrator voice">
               <select className="select" value={voice} disabled={anyBusy}
                 onChange={(e) => setVoice(e.target.value)}>
-                {(data.voices || []).map((v) => <option key={v} value={v}>{v}</option>)}
+                {(data.voices || []).map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(meta.config?.voices))}</option>)}
               </select>
             </Field>
           </div>
@@ -1191,8 +1207,16 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
 
 // ── Scenes tab ────────────────────────────────────────────────────────────────
 
-function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
+function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
+  const voiceMeta = voiceMetaMap(meta.config?.voices)
   const [scenes, setScenes] = useState([])
+  // Dialogue speaker options: the catalogue characters plus any speakers already
+  // used across this film's scenes (so existing casts stay selectable).
+  const castOpts = useMemo(() => {
+    const names = new Set((meta.config?.characters || []).map((c) => c?.name).filter(Boolean))
+    for (const s of scenes) for (const ln of (s.lines || [])) if (ln?.speaker) names.add(ln.speaker)
+    return [...names]
+  }, [scenes, meta.config?.characters])
   const [jobId, setJobId] = useState('')
   const [resolution, setResolution] = useState('')
   const [style, setStyle] = useState('')
@@ -1330,6 +1354,8 @@ function ScenesTab({ workDir, onTitle, onSwitchToFilm }) {
               style={style}
               voices={voices}
               filmVoice={filmVoice}
+              voiceMeta={voiceMeta}
+              castOpts={castOpts}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}
@@ -1413,6 +1439,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       {tab === 'scenes' && (
         <ScenesTab
           workDir={workDir}
+          meta={meta}
           onTitle={setFilmTitle}
           onSwitchToFilm={() => setTab('film')}
         />

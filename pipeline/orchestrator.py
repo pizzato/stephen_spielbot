@@ -102,13 +102,14 @@ TIMING_KIND_LABELS = {
     "scene.image.generate": "image",
     "scene.video.generate": "video",
     "scene.narration.generate": "narration",
+    "scene.dialogue.line": "dialogue line",
     "music.generate": "music",
     "scene.video.mux": "mux",
     "video.finalize": "finalize",
 }
 
 # Labels whose duration depends on output resolution (the rest are flat).
-TIMING_RES_SENSITIVE = {"image", "video", "finalize"}
+TIMING_RES_SENSITIVE = {"image", "video", "finalize", "dialogue line"}
 
 
 def timing_signature(kind: str, payload: dict[str, Any] | None) -> str | None:
@@ -505,6 +506,32 @@ class DurableStore:
                 "narration": _scene_value(scene, "narration", ""),
             }
             scene_payload.update({k: v for k, v in common_scene_payload.items() if v is not None})
+
+            # Dialogue scenes render as one talking-head generation per line
+            # (EchoMimic) — plan those as real tasks so the progress/ETA system
+            # sees them; the narration/image/video/mux quartet never runs for a
+            # dialogue scene and would sit "queued" forever, poisoning the ETA.
+            scene_md = _scene_value(scene, "metadata", {}) or {}
+            dlg_lines = scene_md.get("lines") or []
+            if scene_md.get("mode") == "dialogue" and dlg_lines:
+                for idx, ln in enumerate(dlg_lines):
+                    line_task = task_id(job_id, "scene", sid, f"line-{idx}")
+                    self.create_task(
+                        line_task,
+                        job_id,
+                        "scene.dialogue.line",
+                        f"Scene {sid} · {str((ln or {}).get('speaker') or 'line')} speaks ({idx + 1}/{len(dlg_lines)})",
+                        worker_kind="echomimic",
+                        payload={**scene_payload, "line_index": idx,
+                                 "speaker": str((ln or {}).get("speaker") or ""),
+                                 "resource_class": "echomimic"},
+                        dependencies=[root],
+                        priority=30 + sid,
+                        max_attempts=2,
+                    )
+                    mux_task_ids.append(line_task)  # finalize waits on these
+                continue
+
             image_task = task_id(job_id, "scene", sid, "image")
             narration_task = task_id(job_id, "scene", sid, "narration")
             video_task = task_id(job_id, "scene", sid, "video")

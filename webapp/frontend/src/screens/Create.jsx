@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -26,6 +26,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const voiceChoices = useMemo(() => (
     meta.voices?.length ? meta.voices : ['Default (F5-TTS)']
   ), [meta.voices])
+  const vmeta = useMemo(() => voiceMetaMap(meta.config?.voices), [meta.config?.voices])
 
   // Style profiles (issue #66): the picked style OWNS the narrator voice,
   // robotic toggle and visual style (those inputs are locked to it), prefills
@@ -50,6 +51,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
+  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
@@ -114,6 +116,18 @@ export default function Create({ seed, meta, onGenerated }) {
     return () => clearTimeout(t)
   }, [videoTitle, direction, resolution, styleName])
 
+  // Switching to "No style" clears the style's imprint: blank the visual style
+  // and reset the narrator to the default voice (un-robotic), so you start from a
+  // clean slate rather than inheriting the last style's fields.
+  const onStyleChange = (name) => {
+    setStyleName(name)
+    if (name === NO_STYLE) {
+      setStyle('')
+      setVoice(voiceChoices[0] || 'Default (F5-TTS)')
+      setRobotic(false)
+    }
+  }
+
   // Improve the title or direction in place via the LLM (issue #88).
   const improve = async (field, instruction = '') => {
     setImproving(field); setError('')
@@ -136,6 +150,7 @@ export default function Create({ seed, meta, onGenerated }) {
         voice,
         voice_robotic: robotic,
         resolution,
+        format,
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
       })
@@ -170,7 +185,7 @@ export default function Create({ seed, meta, onGenerated }) {
                 hint={profile
                   ? (profile.description || 'Sets the narrator and visuals below, plus render quality and audio mix — manage styles in Settings.')
                   : 'Experiment freely — narrator and visuals are yours; render quality and audio mix come from the default style.'}>
-                <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => setStyleName(e.target.value)} style={{ maxWidth: 320 }}>
+                <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => onStyleChange(e.target.value)} style={{ maxWidth: 320 }}>
                   {styleList.map((s) => (
                     <option key={s.name} value={s.name}>
                       {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
@@ -193,7 +208,7 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Scenes — ${scenes}`} hint="Roughly 20 seconds each.">
-                  <input className="slider" type="range" min={4} max={40} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
+                  <input className="slider" type="range" min={1} max={40} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
                 </Field>
               </div>
               <div className="grow">
@@ -212,11 +227,20 @@ export default function Create({ seed, meta, onGenerated }) {
             <Field label="Narrator voice"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : undefined}>
               <select className="select" value={voice} disabled={locked} onChange={(e) => setVoice(e.target.value)}>
-                {voiceChoices.map((v) => <option key={v} value={v}>{v}</option>)}
+                {voiceChoices.map((v) => <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>)}
               </select>
               <div className="mt-8">
                 <Check checked={robotic} disabled={locked} onChange={setRobotic}
                   label="Make it robotic — a synthetic monotone so it isn't mistaken for a human" />
+              </div>
+            </Field>
+
+            <Field label="Format"
+              hint="Narration = classic voice-over. Dialogue = characters speak, lip-synced (needs characters with a portrait + voice). Mixed = the AI blends narration, dialogue and silent scenes.">
+              <div className="row gap-8">
+                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed']].map(([f, lbl]) => (
+                  <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
+                ))}
               </div>
             </Field>
 

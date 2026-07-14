@@ -23,6 +23,7 @@ fi
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
+ECHOMIMIC_PORT="${ECHOMIMIC_PORT:-8190}"
 STOP_NATIVE="${STOP_NATIVE:-true}"
 REMOTE_BUILD_DIR="spielbot-worker"   # under the remote $HOME
 
@@ -67,6 +68,7 @@ BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
 TTS_PORT=${TTS_PORT}
+ECHOMIMIC_PORT=${ECHOMIMIC_PORT}
 # DGX Spark / GB10: use cuBLASLt so FLUX.2's bf16 GEMMs don't hit the failing
 # legacy cuBLAS path (CUBLAS_STATUS_INTERNAL_ERROR). Harmless on other GPUs.
 TORCH_BLAS_PREFER_CUBLASLT=1
@@ -111,9 +113,9 @@ echo "[deploy] building + starting containers on $TARGET (first build downloads 
 ssh "$TARGET" "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build"
 
 # ── 6. Wait for health ────────────────────────────────────────────────────────
-echo -n "[deploy] waiting for ComfyUI (:$COMFYUI_PORT) and F5-TTS (:$TTS_PORT) on $TARGET"
+echo -n "[deploy] waiting for ComfyUI (:$COMFYUI_PORT), F5-TTS (:$TTS_PORT) and EchoMimic (:$ECHOMIMIC_PORT) on $TARGET"
 for i in $(seq 1 40); do
-    if ssh "$TARGET" "curl -sf http://localhost:$COMFYUI_PORT/system_stats >/dev/null 2>&1 && curl -sf http://localhost:$TTS_PORT/health >/dev/null 2>&1"; then
+    if ssh "$TARGET" "curl -sf http://localhost:$COMFYUI_PORT/system_stats >/dev/null 2>&1 && curl -sf http://localhost:$TTS_PORT/health >/dev/null 2>&1 && curl -sf http://localhost:$ECHOMIMIC_PORT/health >/dev/null 2>&1"; then
         echo " ✓"
         break
     fi
@@ -128,7 +130,7 @@ done
 # would run on CPU (very slow). See docker/README.md ("GPU lost at runtime").
 echo ""
 echo "[deploy] verifying GPU access inside the containers on $TARGET ..."
-for svc in comfyui tts; do
+for svc in comfyui tts echomimic; do
     if ssh "$TARGET" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -q '^GPU'"; then
         echo "  ✓ $svc on GPU"
     else
@@ -139,4 +141,4 @@ done
 
 echo ""
 echo "✅ Containerized worker ready on $TARGET"
-echo "   ComfyUI: http://${TARGET}:${COMFYUI_PORT}    F5-TTS: http://${TARGET}:${TTS_PORT}"
+echo "   ComfyUI: http://${TARGET}:${COMFYUI_PORT}    F5-TTS: http://${TARGET}:${TTS_PORT}    EchoMimic: http://${TARGET}:${ECHOMIMIC_PORT}"

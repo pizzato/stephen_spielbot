@@ -39,6 +39,12 @@ def _resolve_media_tool(name: str) -> str:
 
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
+# Canonical film format for cross-scene concatenation — the pipeline renders at
+# 25fps throughout (LTX, EchoMimic, Ken Burns), and heterogeneous scene finals
+# (e.g. a silent establishing track vs talking clips) are normalised to this
+# fps + audio rate/layout so the concat filter accepts them.
+_FILM_FPS = 25
+_FILM_AR = 48000
 # Prefer whole-scene upscale. The LTX graph rejects >1000 frames (~40s at 25fps);
 # only clips longer than that are split. Override with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS
 # if a worker runs out of VRAM on long scenes. Overlapped xfade joins rare long clips.
@@ -549,6 +555,70 @@ def _mux_source_audio(
     return output_path
 
 
+def ken_burns_clip(still_path: Path, out_path: Path, seconds: float,
+                   width: int, height: int, zoom_to: float = 1.12, fps: int = 25) -> Path:
+    """A held still with a gentle push-in (Ken Burns) + a silent audio track,
+    sized to width×height. Used as a dialogue scene's establishing shot — the
+    wide frame is shown for a beat and slowly zoomed before the talking close-ups,
+    so the scene's setting is established and never lost. Pre-upscales the still
+    to keep the zoom smooth (zoompan jitters at native resolution)."""
+    frames = max(1, int(round(seconds * fps)))
+    step = max(0.0, (zoom_to - 1.0)) / frames
+    vf = (
+        f"scale={width * 4}:{height * 4},"
+        f"zoompan=z='min(zoom+{step:.6f},{zoom_to})':d={frames}:"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps={fps}:s={width}x{height},"
+        f"setsar=1"
+    )
+    _run([
+        _FFMPEG, "-y",
+        "-loop", "1", "-i", str(still_path),
+        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+        "-t", f"{seconds}",
+        "-vf", vf,
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
+        str(out_path),
+    ], timeout=600)
+    return out_path
+
+
+def fit_video_canvas(video_path: Path, width: int, height: int) -> Path:
+    """Fit a clip onto an exact width×height canvas without cropping content.
+
+    Scales to fit inside the canvas and fills the leftover area with a blurred,
+    zoomed copy of the frame (the standard pillarbox/letterbox treatment) — used
+    for square talking-head clips inside a landscape/portrait film, where
+    ensure_video_resolution's center-crop would cut the speaker's face. In-place
+    (atomic swap); no-op when the clip already matches."""
+    actual_w, actual_h = _get_video_dimensions(video_path)
+    if (actual_w, actual_h) == (width, height):
+        return video_path
+    tmp_path = video_path.with_name(f"{video_path.stem}.fit{width}x{height}.tmp{video_path.suffix}")
+    logger.info("[ffmpeg] fit_video_canvas: %dx%d → %dx%d (%s)",
+                actual_w, actual_h, width, height, video_path.name)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(video_path),
+        "-filter_complex",
+        (
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},boxblur=20:5[bg];"
+            f"[0:v]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
+            "[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1[vout]"
+        ),
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(tmp_path),
+    ], timeout=1800)
+    tmp_path.replace(video_path)
+    return video_path
+
+
 def concatenate_scenes_hard_cut(scene_paths: list[Path], output_path: Path) -> Path:
     """Join scene clips back-to-back without fades or overlap."""
     if len(scene_paths) == 1:
@@ -712,6 +782,20 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
     for p in scene_paths:
         inputs += ["-i", str(p)]
 
+    # A video-only clip (e.g. the silent LTX keyframe establishing shot) has no
+    # audio stream, so the per-input [i:a] below would match nothing and fail the
+    # concat. Give each such clip a silent stereo source of its own duration.
+    # Clips that already carry audio (all narration scenes) are untouched.
+    has_audio = [_has_audio_stream(p) for p in scene_paths]
+    silence_idx: dict[int, int] = {}
+    next_input = n
+    for i in range(n):
+        if not has_audio[i]:
+            inputs += ["-f", "lavfi", "-t", f"{durations[i]:.3f}",
+                       "-i", f"anullsrc=r={_FILM_AR}:cl=stereo"]
+            silence_idx[i] = next_input
+            next_input += 1
+
     filters = []
     fade_a = 0.05 if fade > 0 else 0.0
 
@@ -722,19 +806,26 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # fade=t=in:st=0 actually covers the very first frame.  Without this,
         # clips muxed with -c:v copy retain the original ComfyUI PTS (which may
         # be non-zero), causing the first frame(s) to flash through un-faded.
-        vf = ["setpts=PTS-STARTPTS"]
+        # Normalise fps + SAR before concat: the concat filter demands identical
+        # video params across inputs, but scene finals can differ (e.g. a dialogue
+        # scene's within-concat re-encode lands at 50fps while narration is 25).
+        vf = [f"fps={_FILM_FPS}", "setsar=1", "setpts=PTS-STARTPTS"]
         if fade > 0 and i > 0:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
         if fade > 0 and i < n - 1:
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
         filters.append(f"[{i}:v]{','.join(vf)}[fv{i}]")
 
-        af = ["asetpts=PTS-STARTPTS"]
+        # Likewise normalise audio rate/layout — a silent establishing track
+        # (24k mono) mixed with talking clips (44.1k stereo) otherwise fails concat.
+        af = [f"aresample={_FILM_AR}", f"aformat=sample_rates={_FILM_AR}:channel_layouts=stereo",
+              "asetpts=PTS-STARTPTS"]
         if fade_a > 0 and i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
         if fade_a > 0 and i < n - 1:
             af.append(f"afade=t=out:st={dur - fade_a:.3f}:d={fade_a:.2f}")
-        filters.append(f"[{i}:a]{','.join(af)}[fa{i}]")
+        a_src = i if has_audio[i] else silence_idx[i]
+        filters.append(f"[{a_src}:a]{','.join(af)}[fa{i}]")
 
     v_in = "".join(f"[fv{i}]" for i in range(n))
     a_in = "".join(f"[fa{i}]" for i in range(n))

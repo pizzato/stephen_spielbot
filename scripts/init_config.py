@@ -28,8 +28,9 @@ def main(argv: list[str]) -> int:
 
     comfy = [f"http://{h}:8188" for h in hosts]
     tts = list(hosts)
+    echomimic = [f"http://{h}:8190" for h in hosts]
 
-    cfg = {"comfy_workers": comfy, "tts_workers": tts}
+    cfg = {"comfy_workers": comfy, "tts_workers": tts, "echomimic_workers": echomimic}
     if os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD"):
         cfg["temporal_video_upscaler_cmd"] = os.environ["TEMPORAL_VIDEO_UPSCALER_CMD"]
     if os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT"):
@@ -43,6 +44,7 @@ def main(argv: list[str]) -> int:
     print(f"[config] wrote {CONFIG}")
     print(f"  comfy_workers: {comfy or '(none — single machine, local ComfyUI)'}")
     print(f"  tts_workers:   {tts or '(none)'}")
+    print(f"  echomimic_workers: {echomimic or '(none)'}")
     print("  Edit these any time in the Settings screen, or in the file above.")
     return 0
 
