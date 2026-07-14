@@ -2395,18 +2395,23 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
     # Shot stills MUST match the render resolution — the dialogue render only uses
     # a still that matches, else it falls back to the (multi-person) scene frame.
-    # Prefer the job's own resolution over the style default.
-    if not resolution:
-        try:
-            resolution = json.loads((work_dir / "job_config.json").read_text()).get("resolution") or ""
-        except Exception:
-            resolution = ""
+    # Prefer the job's own resolution over the style default. Also pick up the
+    # job's per-job visual style ("style") — the general art-direction instruction
+    # the user set at Create time — so close-ups match the scene previews (which
+    # DO include it) instead of only the profile default.
+    job_style = ""
+    try:
+        _jc = json.loads((work_dir / "job_config.json").read_text())
+        resolution = resolution or _jc.get("resolution") or ""
+        job_style = _jc.get("style") or ""
+    except Exception:
+        pass
     img_width, img_height = _RESOLUTIONS.get(
         resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
         (1024, 576),
     )
     img_width, img_height = ltx_dimensions(img_width, img_height)
-    combined_style = _compose_visual_style("", cfg, style_name)
+    combined_style = _compose_visual_style(job_style, cfg, style_name)
 
     if worker_pool is None:
         worker_urls = _preview_worker_urls()
@@ -2453,8 +2458,9 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
             desc = (char or {}).get("description", "")
             parts = [shot] if shot else [f"{speaker} speaks in the scene."]
             parts.append(
-                f"Solo close-up of {speaker or 'the speaker'} — exactly ONE person, centered and "
-                "facing the camera, their face large and clearly visible and in focus. "
+                f"Solo medium shot of {speaker or 'the speaker'} — exactly ONE person, roughly "
+                "waist-up, facing the camera, with the scene's setting visible around them; "
+                "their face clearly visible and in focus (not an extreme close-up). "
                 "No other people or characters anywhere in the frame.")
             if desc and desc.lower() not in " ".join(parts).lower():
                 parts.append(f"{speaker}: {desc}.")
