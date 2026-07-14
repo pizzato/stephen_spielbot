@@ -2329,6 +2329,22 @@ def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
         return False
 
 
+def _scene_establishing_frame(work_dir: Path, sid: int, row: dict,
+                              width: int, height: int) -> Path | None:
+    """The scene's wide establishing frame (the FLUX first frame) at width×height,
+    or None. Anchors dialogue close-ups and is the establishing shot's still."""
+    cands = []
+    pp = (row or {}).get("preview_path") or ""
+    if pp:
+        cands.append(Path(pp))
+    cands += [work_dir / f"scene_{sid:02d}_preview.png",
+              work_dir / f"scene_{sid:02d}_first_frame.png"]
+    for p in cands:
+        if p.exists() and _image_matches_resolution(p, width, height):
+            return p
+    return None
+
+
 def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
                                   resolution: str = "",
                                   worker_pool: WorkerPool | None = None) -> int:
@@ -2442,10 +2458,19 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
                 "No other people or characters anywhere in the frame.")
             if desc and desc.lower() not in " ".join(parts).lower():
                 parts.append(f"{speaker}: {desc}.")
+            parts.append("Keep the SAME setting, background, lighting and wardrobe as the "
+                         "establishing shot — the same room, just framed close on the speaker.")
             base_prompt = " ".join(parts)
             prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
+            # Anchor the close-up to the scene's establishing frame (so its setting
+            # matches — coherent scene) AND the speaker's reference face.
+            reference_images = []
+            establishing = _scene_establishing_frame(work_dir, sid, row, img_width, img_height)
+            if establishing:
+                reference_images.append(establishing)
             ref = char and (char.get("_ref_path") or _character_image_path(char.get("ref_image")))
-            reference_images = [Path(ref)] if ref and Path(ref).exists() else []
+            if ref and Path(ref).exists():
+                reference_images.append(Path(ref))
         url = worker_pool.acquire()
         try:
             generate_with_engine(

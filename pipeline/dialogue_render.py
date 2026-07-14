@@ -67,6 +67,10 @@ def render_dialogue_scene(
     # (scene, shot, still, out_clip) -> Path — render a SILENT shot (motion, no
     # speech) as an LTX i2v clip. None ⟹ silent shots hold on their still.
     silent_video=None,
+    # (scene) -> Path | None — an establishing shot (the wide scene frame held with
+    # a gentle push-in) prepended to the scene so the setting is shown first and
+    # never lost. None ⟹ no establishing shot.
+    establishing=None,
     # injected for testing / to plug the real workers
     _tts=generate_narration,
     _animate=echomimic.animate,
@@ -87,6 +91,15 @@ def render_dialogue_scene(
         raise ValueError(f"dialogue scene {scene.id} has no usable shots")
 
     line_clips: list[Path] = []
+    # Establishing shot first — the wide scene frame, held + gently pushed in — so
+    # the scene's setting is shown before cutting to the talking close-ups.
+    if establishing is not None:
+        est = establishing(scene)
+        if est is not None:
+            if canvas:
+                _fit(est, canvas[0], canvas[1])
+            line_clips.append(Path(est))
+
     for idx, ln in enumerate(lines):
         silent = _is_silent(ln)
         speaker = "" if silent else (str(ln.get("speaker") or NARRATOR).strip() or NARRATOR)

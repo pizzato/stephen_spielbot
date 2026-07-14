@@ -657,6 +657,24 @@ def main(work_dir: Path) -> None:
                 shutil.move(str(raw), str(out_clip))
             return Path(out_clip)
 
+        from app import _scene_establishing_frame
+        from pipeline.assembler import ken_burns_clip
+        _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
+
+        def establishing(scene):
+            """The scene's wide establishing frame, held with a gentle push-in, so
+            the setting is shown before the talking close-ups (and never lost)."""
+            if _establish_secs <= 0:
+                return None
+            frame = _scene_establishing_frame(
+                work_dir, scene.id, {"preview_path": getattr(scene, "preview_path", "")},
+                vid_width, vid_height)
+            if frame is None:
+                return None
+            out = work_dir / f"scene_{scene.id:02d}_establish.mp4"
+            ken_burns_clip(frame, out, _establish_secs, vid_width, vid_height)
+            return out
+
         def _render_one(i: int, s: Scene) -> tuple[int, float]:
             host = echo_hosts[i % len(echo_hosts)]
             final = work_dir / f"scene_{s.id:02d}_final.mp4"
@@ -668,6 +686,7 @@ def main(work_dir: Path) -> None:
                     tts_host=tts_host, tts_engine=tts_engine,
                     canvas=(vid_width, vid_height),
                     line_cm=_make_line_cm(host), silent_video=silent_video,
+                    establishing=establishing,
                 )
             else:
                 with _dlg_lock:

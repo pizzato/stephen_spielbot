@@ -1943,7 +1943,8 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         # which would silently serve the OLD (e.g. narrated) take.
         if {k: meta.get(k) for k in ("mode", "lines", "duration")} != old_dialogue:
             wd = Path(work_dir)
-            stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav"]
+            stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
+                     wd / f"scene_{sid:02d}_establish.mp4"]
             stale += list(wd.glob(f"scene_{sid:02d}_line_*"))
             for p in stale:
                 try:
