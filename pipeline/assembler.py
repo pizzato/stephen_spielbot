@@ -39,6 +39,12 @@ def _resolve_media_tool(name: str) -> str:
 
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
+# Canonical film format for cross-scene concatenation — the pipeline renders at
+# 25fps throughout (LTX, EchoMimic, Ken Burns), and heterogeneous scene finals
+# (e.g. a silent establishing track vs talking clips) are normalised to this
+# fps + audio rate/layout so the concat filter accepts them.
+_FILM_FPS = 25
+_FILM_AR = 48000
 # Prefer whole-scene upscale. The LTX graph rejects >1000 frames (~40s at 25fps);
 # only clips longer than that are split. Override with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS
 # if a worker runs out of VRAM on long scenes. Overlapped xfade joins rare long clips.
@@ -786,14 +792,20 @@ def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float =
         # fade=t=in:st=0 actually covers the very first frame.  Without this,
         # clips muxed with -c:v copy retain the original ComfyUI PTS (which may
         # be non-zero), causing the first frame(s) to flash through un-faded.
-        vf = ["setpts=PTS-STARTPTS"]
+        # Normalise fps + SAR before concat: the concat filter demands identical
+        # video params across inputs, but scene finals can differ (e.g. a dialogue
+        # scene's within-concat re-encode lands at 50fps while narration is 25).
+        vf = [f"fps={_FILM_FPS}", "setsar=1", "setpts=PTS-STARTPTS"]
         if fade > 0 and i > 0:
             vf.append(f"fade=t=in:st=0:d={fade:.2f}")
         if fade > 0 and i < n - 1:
             vf.append(f"fade=t=out:st={dur - fade:.3f}:d={fade:.2f}")
         filters.append(f"[{i}:v]{','.join(vf)}[fv{i}]")
 
-        af = ["asetpts=PTS-STARTPTS"]
+        # Likewise normalise audio rate/layout — a silent establishing track
+        # (24k mono) mixed with talking clips (44.1k stereo) otherwise fails concat.
+        af = [f"aresample={_FILM_AR}", f"aformat=sample_rates={_FILM_AR}:channel_layouts=stereo",
+              "asetpts=PTS-STARTPTS"]
         if fade_a > 0 and i > 0:
             af.append(f"afade=t=in:st=0:d={fade_a:.2f}")
         if fade_a > 0 and i < n - 1:
