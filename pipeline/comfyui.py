@@ -749,6 +749,65 @@ def generate_video_continuation(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
+def generate_keyframed_clip(
+    first_frame_path: Path,
+    last_frame_path: Path,
+    output_path: Path,
+    positive_prompt: str,
+    negative_prompt: str = "",
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    length: int = DEFAULT_LENGTH,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    lora_strength: float = 0.5,
+    cfg: float = 1.0,
+    steps: int = 8,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """LTX 2.3 clip keyframed between a FIRST and LAST frame — the camera really
+    moves from one to the other (a generated push-in), not a fake 2D zoom.
+
+    Single-pass, silent (no audio track). Used for a dialogue scene's establishing
+    shot: first = the wide setting, last = the speaker's close-up, so the push-in
+    lands exactly on the still the talking head then animates."""
+    length = _frame_count(length, duration_seconds)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    first_name = _upload_image(first_frame_path, comfy_url=comfy_url)
+    last_name = _upload_image(last_frame_path, comfy_url=comfy_url)
+
+    workflow = _load_workflow("ltx23_i2v_keyframes.json")
+    workflow = _fill_template(workflow, {
+        "POSITIVE_PROMPT": positive_prompt,
+        "NEGATIVE_PROMPT": negative_prompt,
+        "WIDTH":  width,
+        "HEIGHT": height,
+        "LENGTH": length,
+        "SEED":   seed,
+        "FIRST_IMAGE": first_name,
+        "LAST_IMAGE":  last_name,
+        "CFG":    cfg,
+        "SIGMAS": _gen_first_pass_sigmas(steps),
+    })
+    workflow["3"]["inputs"]["strength_model"] = lora_strength
+
+    _video_timeout = _video_timeout_seconds(width, height, length)
+    logger.info("[comfy] generate_keyframed_clip %dx%d length=%d timeout=%ds",
+                width, height, length, _video_timeout)
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output from ComfyUI for keyframe prompt {prompt_id} ({comfy_url})")
+    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
 # Lightricks IC-LoRA Pixel Spatial Upscaler LoRAs (models/loras/).
 # https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler
 _IC_LORA_X2 = "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x2-0.9.safetensors"

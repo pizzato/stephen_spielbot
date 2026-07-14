@@ -580,7 +580,7 @@ def main(work_dir: Path) -> None:
     if dialogue_scenes:
         from contextlib import contextmanager
 
-        from pipeline.dialogue_render import render_dialogue_scene
+        from pipeline.dialogue_render import render_dialogue_scene, NARRATOR
         from pipeline.timing import humanize_eta
 
         echo_hosts = [h for h in (cfg.get("echomimic_workers") or []) if str(h).startswith(("http://", "https://"))]
@@ -658,21 +658,66 @@ def main(work_dir: Path) -> None:
             return Path(out_clip)
 
         from app import _scene_establishing_frame
-        from pipeline.assembler import ken_burns_clip
+        from pipeline.comfyui import generate_keyframed_clip
         _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
 
+        def _first_shot_still(scene):
+            """The first talking shot's solo close-up still — the frame the scene's
+            first talking-head line then animates. Only a real in-scene shot still
+            (not the multi-person scene frame or a portrait) is a good push-in
+            target, so anything else returns None."""
+            first = None
+            for ln in (scene.lines or []):
+                ln = ln or {}
+                silent = bool(ln.get("silent")) and not str(ln.get("text") or "").strip()
+                if silent or str(ln.get("text") or "").strip():
+                    first = ln
+                    break
+            if first is None:
+                return None
+            speaker = "" if (bool(first.get("silent")) and not str(first.get("text") or "").strip()) \
+                else str(first.get("speaker") or NARRATOR).strip()
+            try:
+                still = make_still(scene, speaker, 0)
+            except Exception:
+                return None
+            return still if still and still.name.endswith("_line_00_shot.png") else None
+
         def establishing(scene):
-            """The scene's wide establishing frame, held with a gentle push-in, so
-            the setting is shown before the talking close-ups (and never lost)."""
+            """Open on the scene's wide establishing frame and push the camera in to
+            the first speaker's close-up — a REAL LTX first→last keyframe move, so
+            the setting is shown first, never lost, and the push lands exactly on the
+            still the talking head then animates (seamless arrival)."""
             if _establish_secs <= 0:
                 return None
-            frame = _scene_establishing_frame(
+            wide = _scene_establishing_frame(
                 work_dir, scene.id, {"preview_path": getattr(scene, "preview_path", "")},
                 vid_width, vid_height)
-            if frame is None:
+            if wide is None:
+                return None
+            close = _first_shot_still(scene)
+            # No distinct in-scene close-up to push toward (the talking head would
+            # animate the wide frame itself) — skip the beat rather than render a
+            # pointless hold.
+            if close is None or Path(close) == Path(wide):
                 return None
             out = work_dir / f"scene_{scene.id:02d}_establish.mp4"
-            ken_burns_clip(frame, out, _establish_secs, vid_width, vid_height)
+            url = worker_pool.acquire()
+            try:
+                generate_keyframed_clip(
+                    first_frame_path=wide, last_frame_path=close, output_path=out,
+                    positive_prompt=(
+                        "slow cinematic push-in from the wide establishing shot toward "
+                        "the speaker, steady smooth camera move, the setting and people "
+                        "stay consistent, subtle natural motion"),
+                    negative_prompt="static, jump cut, warp, morph, distortion, flicker, "
+                                    + ((cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT),
+                    width=vid_width, height=vid_height,
+                    duration_seconds=_establish_secs,
+                    lora_strength=lora_strength, comfy_url=url,
+                )
+            finally:
+                worker_pool.release(url)
             return out
 
         def _render_one(i: int, s: Scene) -> tuple[int, float]:
