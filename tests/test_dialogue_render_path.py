@@ -184,6 +184,24 @@ class FitCanvasTests(unittest.TestCase):
             self.assertEqual(_get_video_dimensions(clip), (832, 480))
 
 
+class KenBurnsTests(unittest.TestCase):
+    def test_establishing_clip_size_duration_and_audio(self):
+        import subprocess
+        from pipeline.assembler import _FFMPEG, _get_duration, _get_video_dimensions, ken_burns_clip
+        with tempfile.TemporaryDirectory() as td:
+            still = Path(td) / "wide.png"
+            subprocess.run([_FFMPEG, "-y", "-f", "lavfi", "-i", "testsrc2=s=448x832:d=1",
+                            "-frames:v", "1", str(still)], capture_output=True, check=True)
+            out = Path(td) / "establish.mp4"
+            ken_burns_clip(still, out, 2.0, 448, 832)
+            self.assertEqual(_get_video_dimensions(out), (448, 832))
+            self.assertAlmostEqual(_get_duration(out), 2.0, delta=0.2)
+            a = subprocess.run([_FFMPEG.replace("ffmpeg", "ffprobe"), "-v", "error",
+                                "-select_streams", "a", "-show_entries", "stream=codec_name",
+                                "-of", "csv=p=0", str(out)], capture_output=True, text=True)
+            self.assertTrue(a.stdout.strip())  # has a (silent) audio track for concat
+
+
 class SceneLoadTests(unittest.TestCase):
     def test_resume_partition_reads_metadata(self):
         # mirrors resume_generation.main's hydration + partition

@@ -549,6 +549,35 @@ def _mux_source_audio(
     return output_path
 
 
+def ken_burns_clip(still_path: Path, out_path: Path, seconds: float,
+                   width: int, height: int, zoom_to: float = 1.12, fps: int = 25) -> Path:
+    """A held still with a gentle push-in (Ken Burns) + a silent audio track,
+    sized to width×height. Used as a dialogue scene's establishing shot — the
+    wide frame is shown for a beat and slowly zoomed before the talking close-ups,
+    so the scene's setting is established and never lost. Pre-upscales the still
+    to keep the zoom smooth (zoompan jitters at native resolution)."""
+    frames = max(1, int(round(seconds * fps)))
+    step = max(0.0, (zoom_to - 1.0)) / frames
+    vf = (
+        f"scale={width * 4}:{height * 4},"
+        f"zoompan=z='min(zoom+{step:.6f},{zoom_to})':d={frames}:"
+        f"x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':fps={fps}:s={width}x{height},"
+        f"setsar=1"
+    )
+    _run([
+        _FFMPEG, "-y",
+        "-loop", "1", "-i", str(still_path),
+        "-f", "lavfi", "-i", "anullsrc=r=24000:cl=mono",
+        "-t", f"{seconds}",
+        "-vf", vf,
+        "-map", "0:v", "-map", "1:a",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k", "-shortest", "-movflags", "+faststart",
+        str(out_path),
+    ], timeout=600)
+    return out_path
+
+
 def fit_video_canvas(video_path: Path, width: int, height: int) -> Path:
     """Fit a clip onto an exact width×height canvas without cropping content.
 

@@ -106,6 +106,35 @@ class DialogueRenderTests(unittest.TestCase):
             self.assertEqual(hits["animate"], 1)   # only the speaking shot
             self.assertEqual(hits["silent"], [(3, "hand snaps to holster")])
 
+    def test_establishing_clip_is_prepended(self):
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            concated = {}
+
+            def fake_concat(clips, out):
+                concated["names"] = [Path(c).name for c in clips]
+                Path(out).write_bytes(b"f")
+                return out
+
+            def est(scene):
+                p = wd / f"scene_{scene.id:02d}_establish.mp4"
+                p.write_bytes(b"est")
+                return p
+
+            dialogue_render.render_dialogue_scene(
+                _scene([{"speaker": "A", "text": "hi"}]), wd,
+                voice_ref_for=lambda s: None,
+                make_still=lambda scene, sp, idx: (wd / "s.png"),
+                echomimic_host="http://s1:8190", tts_host="http://s1:8189",
+                _tts=lambda *a, **k: Path(a[1]).write_bytes(b"w"),
+                _animate=lambda *a, **k: Path(a[2]).write_bytes(b"m"),
+                _duration=lambda p: 2.0, _concat=fake_concat, _fit=lambda c, w, h: None,
+                canvas=(512, 256), establishing=est,
+            )
+            # establishing shot first, then the talking clip
+            self.assertEqual(concated["names"][0], "scene_03_establish.mp4")
+            self.assertEqual(len(concated["names"]), 2)
+
     def test_silent_shot_without_renderer_raises(self):
         with tempfile.TemporaryDirectory() as td:
             wd = Path(td)
