@@ -135,9 +135,14 @@ function PromptCard({ prompt, expanded, onToggle, onSaved, onError }) {
               </>
             )}
             <div className="grow" />
-            {prompt.modified && (
-              <Button variant="danger" icon="rotate-left" onClick={revert} disabled={busy}>Revert to original</Button>
+            {/* Always shown, disabled when there's nothing to revert: hiding it
+                until a prompt is edited leaves no sign the escape hatch exists. */}
+            {!prompt.modified && (
+              <span className="muted" style={{ fontSize: 11.5 }}>Unedited — matches the built-in prompt</span>
             )}
+            <Button variant="danger" icon="rotate-left" onClick={revert} disabled={busy || !prompt.modified}>
+              Revert to original
+            </Button>
           </div>
         </div>
       )}
