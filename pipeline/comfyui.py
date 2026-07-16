@@ -625,66 +625,6 @@ def _steer_audio_natural(positive: str, negative: str) -> tuple[str, str]:
     return pos, neg
 
 
-def generate_video_clip(
-    positive_prompt: str,
-    negative_prompt: str,
-    output_path: Path,
-    width: int = DEFAULT_WIDTH,
-    height: int = DEFAULT_HEIGHT,
-    length: int = DEFAULT_LENGTH,
-    seed: int | None = None,
-    duration_seconds: float | None = None,
-    lora_strength: float = 0.5,
-    first_pass_cfg: float = 1.0,
-    first_pass_steps: int = 8,
-    second_pass_cfg: float = 1.0,
-    second_pass_steps: int = 6,
-    comfy_url: str = COMFYUI_URL,
-) -> Path:
-    """Generate a video clip using LTX 2.3 T2V and save to output_path."""
-    length = _frame_count(length, duration_seconds)
-    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
-
-    if seed is None:
-        seed = random.randint(0, 2**32 - 1)
-
-    half_w = width // 2
-    half_h = height // 2
-
-    workflow = _load_workflow("ltx23_t2v.json")
-    workflow = _fill_template(workflow, {
-        "POSITIVE_PROMPT":   positive_prompt,
-        "NEGATIVE_PROMPT":   negative_prompt,
-        "WIDTH":             width,
-        "HEIGHT":            height,
-        "HALF_WIDTH":        half_w,
-        "HALF_HEIGHT":       half_h,
-        "LENGTH":            length,
-        "SEED":              seed,
-        "FIRST_PASS_CFG":    first_pass_cfg,
-        "FIRST_PASS_SIGMAS": _gen_first_pass_sigmas(first_pass_steps),
-    })
-    workflow["3"]["inputs"]["strength_model"] = lora_strength
-    _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
-
-    _video_timeout = _video_timeout_seconds(width, height, length)
-    logger.info(
-        "[comfy] generate_video_clip %dx%d length=%d timeout=%ds",
-        width, height, length, _video_timeout,
-    )
-
-    client_id = str(uuid.uuid4())
-    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url)
-
-    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
-    if not outputs:
-        raise RuntimeError(f"No output files from ComfyUI for prompt {prompt_id} ({comfy_url})")
-
-    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
-    return _download_output(video_item, output_path, comfy_url=comfy_url)
-
-
 def generate_video_continuation(
     positive_prompt: str,
     negative_prompt: str,
