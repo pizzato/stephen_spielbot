@@ -696,7 +696,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
   )
 }
 
-export default function Settings({ meta, setMeta, leaveGuardRef }) {
+export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [cfg, setCfg] = useState(meta.config || {})
   // True while `cfg` holds Save-required edits not yet persisted. Voice and
   // channel ops auto-save server-side, so they deliberately don't set it.
@@ -1317,6 +1317,24 @@ export default function Settings({ meta, setMeta, leaveGuardRef }) {
                 <input ref={restoreRef} type="file" accept=".zip,application/zip" hidden disabled={restoring}
                   onChange={(e) => onRestoreFile(e.target.files?.[0] || null)} />
               </label>
+            </div>
+          </Card>
+
+          {/* ── Prompt editor ── Advanced: the raw model instructions behind every
+              generation. Lives on its own screen, and stays read-only there
+              until unlocked. */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Prompts</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>advanced</span>
+            </div>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              The raw instructions sent to the language and image models for every film — scripts, narration, image
+              prompts, descriptions, tags and replies. Editing them changes all future generations; the originals are
+              always one click away.
+            </div>
+            <div className="row center gap-10 mt-16">
+              <Button icon="sliders" onClick={() => go('prompts')}>Open prompt editor</Button>
             </div>
           </Card>
         </>)}

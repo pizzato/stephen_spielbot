@@ -15,6 +15,7 @@ import Ideas from './screens/Ideas.jsx'
 import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
 import Settings from './screens/Settings.jsx'
+import Prompts from './screens/Prompts.jsx'
 
 export default function App() {
   // The URL hash is the single source of truth for which page is shown and, for
@@ -270,7 +271,8 @@ export default function App() {
       case 'library': return <Library go={go} onOpenProgress={(wd) => go('progress', { workDir: wd })} onOpenEdit={(wd) => go('editfilm', { workDir: wd })} onNewVersion={onNewVersion} />
       case 'editfilm': return <EditFilm workDir={workDir} go={go} meta={meta} />
       case 'engagement': return <ChannelAnalytics meta={meta} go={go} initialTab="predictive" />
-      case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} />
+      case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} go={go} />
+      case 'prompts': return <Prompts go={go} leaveGuardRef={leaveGuardRef} />
       default: return <Home go={go} />
     }
   })()

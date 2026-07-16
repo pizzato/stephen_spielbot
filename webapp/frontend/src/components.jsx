@@ -731,6 +731,8 @@ const NAV = [
 // #/engagement (Predictive Model) deep link too, so it highlights for both.
 function navActive(id, route) {
   if (id === 'analytics') return route === 'analytics' || route === 'engagement'
+  // The prompt editor is opened from Settings and belongs to it.
+  if (id === 'settings') return route === 'settings' || route === 'prompts'
   return route === id
 }
 
