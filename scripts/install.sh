@@ -120,7 +120,7 @@ _models_present_on() {
 }
 
 _ask_hf_token() {
-    if [[ -z "$HF_TOKEN" ]]; then
+    if [[ -z "$HF_TOKEN" ]] && [[ -t 0 ]]; then
         echo ""
         echo "Models (~33 GB total) need to be downloaded."
         echo "A HuggingFace token speeds up downloads (optional — all models are public)."
@@ -170,13 +170,26 @@ else
     echo "  Install Node.js, then run: make web-build"
 fi
 
-# ── 3c. macOS LaunchAgent (auto-start + auto-restart on login) ───────────────
+# ── 3c. Optional system service (launchd, macOS only) ────────────────────────
+# Never installed without explicit approval: INSTALL_SERVICE=1 (non-interactive)
+# or answering yes at the prompt. On Linux there is no service to install —
+# 'make start' runs the app with nohup + a PID file.
 
-banner "Installing system service (launchd)"
-if [[ "$(uname)" == "Darwin" ]]; then
+banner "System service (optional)"
+if [[ "$(uname)" != "Darwin" ]]; then
+    echo "[service] skipped — launchd service is macOS-only."
+    echo "  On Linux, run 'make start' (nohup + PID file), or set up your own systemd unit."
+elif [[ "${INSTALL_SERVICE:-}" == "1" ]]; then
     bash "$REPO_ROOT/scripts/launchd.sh" install
+elif [[ -z "${INSTALL_SERVICE:-}" ]] && [[ -t 0 ]]; then
+    read -rp "Install the web server as a login service (launchd, auto-start/restart)? [y/N] " REPLY
+    if [[ "$REPLY" =~ ^[Yy] ]]; then
+        bash "$REPO_ROOT/scripts/launchd.sh" install
+    else
+        echo "[service] skipped — install later with: make launchd-install"
+    fi
 else
-    echo "[launchd] skipped (not macOS)"
+    echo "[service] skipped — install with: make launchd-install  (or INSTALL_SERVICE=1 make install)"
 fi
 
 # ── 4. Deploy worker containers ───────────────────────────────────────────────
