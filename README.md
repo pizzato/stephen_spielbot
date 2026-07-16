@@ -36,8 +36,8 @@ make worker-agent KIND=local ENDPOINT=assembler
 Worker agents lease ready tasks, heartbeat while running, and expired leases are
 made available for retry.  This gives recovery a persisted source of truth
 instead of relying only on process memory, ComfyUI queue state, and files.
-Current implementation and test status are tracked in
-[`docs/durable_orchestration_status.md`](docs/durable_orchestration_status.md).
+See [`docs/orchestration.md`](docs/orchestration.md) for how the durable layer
+and the render process fit together.
 
 ## Requirements
 

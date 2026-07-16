@@ -1363,7 +1363,7 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
-    # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_performance_plan.md.
+    # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
     format: str = "narration"
 
 

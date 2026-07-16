@@ -58,28 +58,28 @@ Stephen Spielbot uses the YouTube Data API v3 to fetch channel comments and uplo
 
 ## Step 5 — Configure in Stephen Spielbot
 
-1. Open Stephen Spielbot and go to the **⚙️ Settings** screen
-2. In the **YouTube Integration** section, verify the path shows:
+1. Open Stephen Spielbot and go to **Settings → Channels**
+2. In the **Google API** card, verify the **Client secrets file** path shows:
    `~/.config/video-generator/client_secrets.json`
-3. Configure your preferences:
-   - **Auto-approve** comment requests (confidence ≥ 70%)
-   - **Auto-post** videos when generation completes
-   - Default **Privacy** setting for uploads (start with "private" to verify uploads look correct)
-   - Default **Category**
+   (one OAuth app is shared by every channel you connect)
 
 ---
 
-## Step 6 — Connect Your Account
+## Step 6 — Connect a Channel
 
-1. Go to the **📺 YouTube** tab
-2. Click **Connect YouTube**
-3. Your browser will open a Google authorization page
-4. Sign in with **the same Google account you added as a test user in Step 3**
-5. You may see a warning "Google hasn't verified this app" — click **Advanced** → **Go to Stephen Spielbot (unsafe)**
-6. Grant the requested permissions
-7. The tab will show **Connected to "[Your Channel Name]"**
+1. In **Settings → Channels**, click **Connect channel**
+2. A Google authorization window opens **on the machine running the server**
+3. Sign in with **the same Google account you added as a test user in Step 3**
+4. You may see a warning "Google hasn't verified this app" — click **Advanced** → **Go to Stephen Spielbot (unsafe)**
+5. Grant the requested permissions
+6. The channel appears in the Channels list
 
-The OAuth token is saved at `~/.config/video-generator/youtube_token.json` and will be automatically refreshed. You only need to connect once.
+Each connected channel stores its own OAuth token under
+`~/.config/video-generator/` (`youtube_token_<key>.json`; the reserved "default"
+channel uses the legacy `youtube_token.json`) and refreshes automatically. You can
+connect **multiple channels** — each style picks which channel it publishes to in its
+style card, and each channel has its own settings (privacy, category, language,
+captions, engagement auto-reply, publish cadence) in the Channels list.
 
 ---
 
@@ -87,24 +87,25 @@ The OAuth token is saved at `~/.config/video-generator/youtube_token.json` and w
 
 ### Fetching and Evaluating Comments
 
-1. In the **📺 YouTube** tab, click **Fetch Comments** to load recent channel comments
-2. Click **Evaluate All with AI** — the LLM will analyze each comment and flag video requests (highlighted in green)
-3. Pending requests appear in the **Pending Requests** list with suggested titles
-4. Enter the row number, optionally override the title, and click **Approve**
-5. Click **Launch in Create tab →** to open the Create tab with the title pre-filled
+1. Go to the **Community** screen and click **Fetch & evaluate** — comments are pulled
+   from every connected channel and ranked by the LLM; video requests are flagged
+2. For a flagged request, click **Approve → queue** to add it to the render queue
+   (optionally editing the title first)
+3. Non-request comments can get AI-drafted engagement replies per channel, if enabled
+   in that channel's settings
 
-### Posting a Video
+### Publishing
 
-1. After generation completes, go to the **📤 Post** tab (or it auto-navigates if auto-post is on)
-2. Review the auto-filled fields: video file, title, description, cover image
-3. Edit as needed — click **↺ Regenerate Description** or **↺ Regenerate Cover Image** if desired
-4. Set **Privacy** (recommend starting with "private" to verify)
-5. Click **Post to YouTube**
-6. A YouTube link appears when the upload completes
+Finished videos land in the **publish queue** (Publishing screen). Per channel you can
+publish three ways:
 
-### Auto-Post
+- **Manual** — review each finished video and publish it yourself
+- **Immediate** — auto-post the moment a render finishes
+- **Scheduled** — release queued videos on a per-channel cadence (e.g. N per day);
+  reorder with **Manual order**, or force one out with **Publish now**
 
-Enable **Auto-post when generation completes** in Settings. When a video finishes generating, the app automatically uploads it from the YouTube → Publish screen with the default settings.
+Uploads attach the script-based captions, topic tags, and the style's playlist, and
+respect the channel's privacy/category/language settings.
 
 ---
 
@@ -112,12 +113,12 @@ Enable **Auto-post when generation completes** in Settings. When a video finishe
 
 **"Access blocked: Stephen Spielbot has not completed the Google verification process"** — You need to add your Google account as a test user. Go back to [Google Cloud Console](https://console.cloud.google.com/) → **APIs & Services** → **OAuth consent screen** → **Test users** → **+ Add Users** → enter your email → Save. Then try connecting again.
 
-**"client_secrets.json not configured"** — Check the path in the Settings screen → YouTube Integration section. Default: `~/.config/video-generator/client_secrets.json`
+**"client_secrets.json not configured"** — Check the path in Settings → Channels → Google API. Default: `~/.config/video-generator/client_secrets.json`
 
-**"Not authenticated"** — Click Connect YouTube in the YouTube → Publish screen.
+**"Not authenticated"** — Connect the channel in Settings → Channels.
 
 **"Google hasn't verified this app" warning** — This is expected. Click **Advanced** → **Go to Stephen Spielbot (unsafe)** to proceed.
 
-**Token expired errors** — The token auto-refreshes. If refresh fails, click Disconnect then Connect YouTube again.
+**Token expired errors** — Tokens auto-refresh. If a channel's refresh token dies, the app shows a "Reconnect YouTube" banner — reconnect that channel in Settings → Channels.
 
 **Upload quota errors** — YouTube API has a daily quota (10,000 units/day). Each video upload costs ~1,600 units. If you hit the limit, wait until the quota resets at midnight Pacific Time.
