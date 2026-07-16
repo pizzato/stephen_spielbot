@@ -13,8 +13,9 @@ W ?=
 ## Install everything: local deps, models, workers, config.yaml, AND the web UI
 ## (backend deps + React build). First run seeds config.yaml; set workers
 ## non-interactively: make install WORKERS="s1 s2 s3"
+## The macOS login service is opt-in: INSTALL_SERVICE=1 installs it without asking.
 install:
-	@WORKERS="$(WORKERS)" bash $(SCRIPTS)/install.sh
+	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" bash $(SCRIPTS)/install.sh
 
 ## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
 download-models:
@@ -58,8 +59,8 @@ restart:
 	fi
 
 ## Install the web server as a macOS LaunchAgent — auto-starts on login and
-## auto-restarts on crash. Also run by 'make install'. After this, make
-## start/stop/restart/restart-server use launchd automatically.
+## auto-restarts on crash. 'make install' offers this (opt-in). After this, make
+## start/stop/restart/restart-server use launchd automatically. macOS only.
 launchd-install:
 	@bash $(SCRIPTS)/launchd.sh install
 
@@ -171,6 +172,7 @@ help:
 	@echo "  restart-server  Restart only the web app (workers keep running)"
 	@echo "  status          Check health of the app, UI worker(s), and every worker container"
 	@echo "  launchd-install   Install web server as a macOS LaunchAgent (auto-start/restart)"
+	@echo "                    (opt-in; 'make install' asks, or INSTALL_SERVICE=1 make install)"
 	@echo "  launchd-uninstall Remove the LaunchAgent (reverts to manual nohup)"
 	@echo ""
 	@echo "  start/stop/restart/status/logs accept  W=<host>  to target one host's containers:"
