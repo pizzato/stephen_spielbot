@@ -45,6 +45,7 @@ import pipeline.publish_queue as pq  # noqa: E402
 import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 import pipeline.c2pa as _c2pa  # noqa: E402
+import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
@@ -823,6 +824,51 @@ def settings_restore(body: SettingsRestore) -> dict:
     except Exception:
         pass
     return {"ok": True, **result, "config": gapp.public_config(gapp.load_config())}
+
+
+# ── prompt editor ────────────────────────────────────────────────────────────
+# The LLM/image prompts behind every generation. The app's own prompts.yaml is
+# the baseline and is never written to; edits are stored as a sparse override in
+# the config dir, so any prompt can be reverted to the original at any time.
+
+@api.get("/api/prompts")
+def get_prompts() -> dict:
+    return {
+        "prompts": _prompts.catalogue(),
+        "override_path": str(_prompts._OVERRIDE_PATH),
+    }
+
+
+class PromptUpdate(BaseModel):
+    name: str
+    fields: dict
+
+
+@api.post("/api/prompts")
+def post_prompt(body: PromptUpdate) -> dict:
+    fields = {k: v for k, v in (body.fields or {}).items() if isinstance(v, str)}
+    if not fields:
+        raise HTTPException(400, "No prompt text supplied.")
+    if any(not v.strip() for v in fields.values()):
+        raise HTTPException(400, "A prompt cannot be saved empty — use Revert to restore the original.")
+    try:
+        _prompts.save(body.name, fields)
+    except KeyError:
+        raise HTTPException(404, f"Unknown prompt {body.name!r}.")
+    return {"ok": True, "prompts": _prompts.catalogue()}
+
+
+class PromptReset(BaseModel):
+    name: str | None = None
+
+
+@api.post("/api/prompts/reset")
+def post_prompt_reset(body: PromptReset) -> dict:
+    """Revert one prompt (name) or every prompt (name omitted) to the original."""
+    if body.name and body.name not in _prompts.defaults():
+        raise HTTPException(404, f"Unknown prompt {body.name!r}.")
+    _prompts.reset(body.name or None)
+    return {"ok": True, "prompts": _prompts.catalogue()}
 
 
 # ── voices ───────────────────────────────────────────────────────────────────

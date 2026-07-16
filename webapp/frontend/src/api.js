@@ -52,6 +52,12 @@ export const api = {
   backupUrl: (scope) => `/api/settings/backup?scope=${encodeURIComponent(scope || 'full')}`,
   restoreSettings: (data) => req('POST', '/settings/restore', { data }),
 
+  // The LLM/image prompts behind every generation. Edits are stored as an
+  // override; resetPrompt(name) reverts one, resetPrompt() reverts them all.
+  getPrompts: () => req('GET', '/prompts'),
+  savePrompt: (name, fields) => req('POST', '/prompts', { name, fields }),
+  resetPrompt: (name) => req('POST', '/prompts/reset', { name: name || null }),
+
   // UI-worker reservation (issue #98): heartbeat marks "the UI is in use" so the
   // render holds a worker idle for covers/previews; uiWorker polls that state.
   uiHeartbeat: () => req('POST', '/ui/heartbeat'),
