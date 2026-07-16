@@ -4,6 +4,11 @@
 # Usage: bash scripts/launchd.sh [install|uninstall|start|stop|restart|status]
 set -euo pipefail
 
+if [[ "$(uname)" != "Darwin" ]]; then
+    echo "ERROR: launchd is macOS-only — on Linux use 'make start' (nohup + PID file) or a systemd unit."
+    exit 1
+fi
+
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LABEL="com.stephen-spielbot.server"
 PLIST_DST="$HOME/Library/LaunchAgents/${LABEL}.plist"
