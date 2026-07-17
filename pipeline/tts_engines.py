@@ -1,18 +1,26 @@
 """TTS-engine registry: selectable narration models (mirrors pipeline/engines.py).
 
-A TTS *engine* is a bundle of {F5-TTS checkpoint + vocab + CLI flags + license}.
-The user-facing choice is an engine **key**, carried per style as ``tts_engine``
-(falls back to the Apache-2.0 default). Every engine here runs through the same
-F5-TTS CLI — zero-shot voice cloning from a reference WAV — so switching is a
-drop-in checkpoint swap, not a new inference backend.
+A TTS *engine* is a narration model the user can pick per style as
+``tts_engine`` (falls back to the Apache-2.0 default). All engines do
+zero-shot voice cloning from a reference WAV, so the voice library carries
+across. Each engine names a ``backend`` — the inference stack that runs it:
+
+- ``f5``          — the F5-TTS CLI; switching engines is a checkpoint swap.
+- ``chatterbox``  — Resemble AI's Chatterbox (``python -m pipeline.chatterbox``),
+  which adds multilingual narration (issue #176).
+
+Engines:
 
 - ``openf5``      — OpenF5-TTS-Base, Apache-2.0, commercial OK (the default).
 - ``f5-original`` — the original SWivid ``F5TTS_v1_Base``; generally higher
   quality but CC-BY-NC (non-commercial), so flagged "preview" in the UI. Useful
   to A/B against ``openf5``. See NOTICE.md for the licensing rationale.
+- ``chatterbox-multilingual`` — Chatterbox Multilingual, MIT, 23 languages;
+  the per-style ``tts_language`` picks which one it speaks.
 """
 from __future__ import annotations
 
+from pipeline.chatterbox import CHATTERBOX_FILES, CHATTERBOX_REPO, LANGUAGES
 from pipeline.openf5 import OPENF5_REPO, ensure_openf5_model
 
 TTS_ENGINES: dict[str, dict] = {
@@ -38,6 +46,18 @@ TTS_ENGINES: dict[str, dict] = {
         "repo": "SWivid/F5-TTS",
         "files": ["F5TTS_v1_Base/model_1250000.safetensors"],
     },
+    "chatterbox-multilingual": {
+        "key": "chatterbox-multilingual",
+        "label": "Chatterbox Multilingual",
+        "sub": "MIT · 23 languages · voice cloning · commercial OK",
+        "license": "MIT",
+        "commercial_ok": True,
+        "backend": "chatterbox",
+        # Language code -> name; drives the per-style narration-language picker.
+        "languages": LANGUAGES,
+        "repo": CHATTERBOX_REPO,
+        "files": CHATTERBOX_FILES,
+    },
 }
 
 # Default for new styles and the normalize/resolve fallback. MUST stay
@@ -54,17 +74,25 @@ def norm(key: str) -> str:
     return key if get(key) else DEFAULT_TTS_ENGINE
 
 
+def backend(key: str) -> str:
+    """Which inference stack runs *key*: "f5" (the default) or "chatterbox"."""
+    e = get(key) or TTS_ENGINES[DEFAULT_TTS_ENGINE]
+    return e.get("backend", "f5")
+
+
 def public_list() -> list[dict]:
     """Compact descriptors for the Settings UI (no download internals)."""
     return [
         {"key": e["key"], "label": e["label"], "sub": e["sub"],
-         "license": e["license"], "commercial_ok": e["commercial_ok"]}
+         "license": e["license"], "commercial_ok": e["commercial_ok"],
+         "languages": e.get("languages", {})}
         for e in TTS_ENGINES.values()
     ]
 
 
 def cli_args(key: str) -> list[str]:
-    """F5-TTS CLI flags selecting *key*'s weights.
+    """F5-TTS CLI flags selecting *key*'s weights (f5-backend engines only —
+    callers branch on backend() first; chatterbox runs its own CLI).
 
     Drop-in replacement for the old hardcoded ``["--model", "F5TTS_v1_Base"]``.
     For ``openf5`` this resolves (and caches) the OpenF5 config/checkpoint/vocab
@@ -72,6 +100,8 @@ def cli_args(key: str) -> list[str]:
     lets F5-TTS download it.
     """
     e = get(key) or TTS_ENGINES[DEFAULT_TTS_ENGINE]
+    if e.get("backend", "f5") != "f5":
+        raise ValueError(f"cli_args() is F5-only; engine {e['key']!r} uses backend {e['backend']!r}")
     if e["key"] == "openf5":
         cfg, ckpt, vocab = ensure_openf5_model()
         return ["--model_cfg", cfg, "--ckpt_file", ckpt, "--vocab_file", vocab]

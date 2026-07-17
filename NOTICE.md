@@ -37,6 +37,23 @@ OpenF5 source in [`pipeline/openf5.py`](pipeline/openf5.py); the `OPENF5_REPO`
 environment variable can point at a mirror or pinned fork but should remain an
 Apache/CC-BY-licensed repository.
 
+## Chatterbox Multilingual — the multilingual engine (issue #176)
+
+Multilingual narration (23 languages) uses **Chatterbox Multilingual** by
+Resemble AI, selectable in Settings as the `chatterbox-multilingual` engine:
+
+- **Code:** [`chatterbox-tts`](https://github.com/resemble-ai/chatterbox) — MIT.
+- **Weights:** [`ResembleAI/chatterbox`](https://huggingface.co/ResembleAI/chatterbox)
+  (`t3_mtl23ls_v2` + `s3gen` et al.) — MIT, commercial use permitted.
+- **Watermark:** Chatterbox embeds Resemble's **Perth** neural watermark in every
+  generated clip. We deliberately keep it enabled — the narration is meant to be
+  identifiable as synthetic (it complements the robotic-voice measure of issue #52
+  and the C2PA content credentials).
+- The per-style narration language lives in `tts_language`; the CLI wrapper is
+  [`pipeline/chatterbox.py`](pipeline/chatterbox.py). The `CHATTERBOX_REPO`
+  environment variable can point at a mirror or pinned fork but should remain an
+  MIT-licensed repository.
+
 ## Scope
 
 This note covers only the TTS narration weights. The reference voice clip used for
