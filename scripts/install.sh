@@ -249,6 +249,26 @@ print("[config] tts_workers ->", data["tts_workers"])
 print("[config] echomimic_workers ->", data["echomimic_workers"])
 PY
 
+# ── 5. Pre-warm TTS narration models (issue #176) ────────────────────────────
+# Chatterbox Multilingual's weights (~3.5 GB) download into each TTS worker's
+# HF cache on first use; fetch them now so the first multilingual narration
+# doesn't stall mid-render. Parallel across hosts, best-effort — a failure just
+# means the worker downloads lazily later (or via Settings → Voice models).
+banner "Pre-warming TTS narration models"
+for host in $HOSTS; do
+    (
+        if curl -sf -X POST "http://${host}:8189/prewarm" \
+                -H 'Content-Type: application/json' \
+                -d '{"engine": "chatterbox-multilingual"}' \
+                --max-time 3600 >/dev/null; then
+            echo "[tts] chatterbox-multilingual ready on $host"
+        else
+            echo "[tts] WARNING: pre-warm failed on $host — it will download on first use."
+        fi
+    ) &
+done
+wait
+
 echo ""
 echo "Installation complete. Containers are up (compose 'restart: unless-stopped')."
 echo "Run 'make start' to launch the web app (and (re)start every worker)."
