@@ -1185,6 +1185,7 @@ class VoiceTest(BaseModel):
     speed: float | None = None
     text: str = ""
     engine: str = ""
+    language: str = ""
 
 
 @api.post("/api/voices/test")
@@ -1213,6 +1214,7 @@ def voices_test(body: VoiceTest) -> dict:
     speed = (body.speed if body.speed is not None
              else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
     engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
+    language = gapp._norm_tts_language(body.language or gapp.style_settings(cfg).get("tts_language"))
 
     # Content-addressed cache key: a given (voice, robotic level, speed, text,
     # source clip) always maps to the same file, so F5-TTS never re-runs for a
@@ -1224,7 +1226,7 @@ def voices_test(body: VoiceTest) -> dict:
     except OSError:
         ref_stamp = ""
     key = hashlib.md5(
-        f"{voice}|{engine}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
+        f"{voice}|{engine}|{language}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
     ).hexdigest()[:16]
     out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
@@ -1236,7 +1238,7 @@ def voices_test(body: VoiceTest) -> dict:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
                                    robotic=robotic, robotic_amount=amount, speed=speed,
-                                   tts_engine=engine)
+                                   tts_engine=engine, language=language)
         except Exception as e:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
@@ -2657,6 +2659,7 @@ def start_generation(body: GenerateBody) -> dict:
         "voice_robotic_amount": ss.get("voice_robotic_amount", 0.35),
         "voice_speed": ss.get("voice_speed", 1.0),
         "tts_engine": gapp.tts_engines.norm(ss.get("tts_engine")),
+        "tts_language": gapp._norm_tts_language(ss.get("tts_language")),
         # Per-style render quality + audio mix (issue #66): the resumable
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
@@ -7768,11 +7771,12 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
     voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
     tts_engine = jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
+    tts_language = jc.get("tts_language", cfg.get("default_tts_language", "en"))
     tts_hosts = cfg.get("tts_workers") or []
     tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
     _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
-    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine)
+    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language)
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
     clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"

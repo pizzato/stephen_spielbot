@@ -41,6 +41,7 @@ class TTSRequest(BaseModel):
     ref_audio_b64: str | None = None
     speed: float = 1.0
     engine: str = "openf5"
+    language: str = "en"  # chatterbox backend only; F5 engines ignore it
 
 
 @app.get("/health")
@@ -84,8 +85,19 @@ def tts(req: TTSRequest) -> Response:
         else:
             ref = DEFAULT_REF
 
-        result = subprocess.run(
-            [
+        if tts_engines.backend(req.engine) == "chatterbox":
+            # Different inference stack: the multilingual Chatterbox CLI
+            # (pipeline/chatterbox.py) instead of the F5-TTS one.
+            cmd = [
+                F5TTS_PYTHON, "-m", "pipeline.chatterbox",
+                "--text",     text,
+                "--language", req.language,
+                "--ref",      str(ref),
+                "--out",      str(out),
+                "--speed",    str(req.speed),
+            ]
+        else:
+            cmd = [
                 F5TTS_PYTHON, "-m", "f5_tts.infer.infer_cli",
                 *tts_engines.cli_args(req.engine),
                 "--ref_audio",   str(ref),
@@ -93,10 +105,8 @@ def tts(req: TTSRequest) -> Response:
                 "--gen_text",    text,
                 "--output_file", str(out),
                 "--speed",       str(req.speed),
-            ],
-            capture_output=True,
-            text=True,
-        )
+            ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             # Trim to keep the error payload reasonable.
             raise HTTPException(status_code=500, detail=result.stderr[-2000:])

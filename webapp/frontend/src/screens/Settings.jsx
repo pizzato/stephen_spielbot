@@ -139,7 +139,7 @@ function PlayButton({ src }) {
 // robotic-level and voice-speed fields so you can dial them in by ear before
 // saving. Deliberately no voice picker of its own: a second dropdown here
 // looked like the style's voice setting but silently saved nothing.
-function VoiceTester({ voice, roboticAmount, speed, engine, onError }) {
+function VoiceTester({ voice, roboticAmount, speed, engine, language, onError }) {
   const [busy, setBusy] = useState(false)
   const audioRef = useRef(null)
 
@@ -147,7 +147,7 @@ function VoiceTester({ voice, roboticAmount, speed, engine, onError }) {
     onError(''); setBusy(true)
     try {
       const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '' })
+      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '', language: language || '' })
       const a = audioRef.current
       // Don't await play(): after a long first generation Chrome may block
       // autoplay (the click's activation window expired), and a blocked play()
@@ -1469,6 +1469,21 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   ))}
                 </select>
               </Field>
+              {/* Narration language — only multilingual voice models (Chatterbox) speak
+                  non-English; the F5 models ignore it, so the picker hides for them. */}
+              {(() => {
+                const langs = (ttsEngineInfo?.engines || []).find((e) => e.key === (st.tts_engine || 'openf5'))?.languages || {}
+                if (!Object.keys(langs).length) return null
+                return (
+                  <Field label="Narration language" hint="Which language this style's narration is spoken in — the script text itself should be written in the same language.">
+                    <select className="select" value={st.tts_language || 'en'} onChange={(e) => setStyleField('tts_language', e.target.value)} style={{ maxWidth: 320 }}>
+                      {Object.entries(langs).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
+                        <option key={code} value={code}>{name}</option>
+                      ))}
+                    </select>
+                  </Field>
+                )
+              })()}
               {/* Narration — narrator beside the robotic toggle, the dial-in sliders and test right below */}
               <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
                 <div className="grow"><Field label="Narrator voice"><select className="select" value={st.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
@@ -1494,7 +1509,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
                 </Field></div>
               </div>
-              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} engine={st.tts_engine} onError={setError} />
+              <VoiceTester voice={st.voice} roboticAmount={st.voice_robotic_amount} speed={st.voice_speed} engine={st.tts_engine} language={st.tts_language} onError={setError} />
             </div>
           </Card>
 

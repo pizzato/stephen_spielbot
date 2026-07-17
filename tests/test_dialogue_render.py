@@ -17,7 +17,7 @@ class DialogueRenderTests(unittest.TestCase):
             wd = Path(td)
             calls = {"tts": [], "animate": [], "stills": []}
 
-            def fake_tts(text, out, reference_wav=None, host="localhost", tts_engine="openf5"):
+            def fake_tts(text, out, reference_wav=None, host="localhost", tts_engine="openf5", language="en"):
                 Path(out).write_bytes(b"wav")
                 calls["tts"].append((text, str(reference_wav)))
 

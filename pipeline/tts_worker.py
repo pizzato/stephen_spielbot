@@ -97,31 +97,48 @@ def _robotize_wav(path: Path, amount: float | None = None) -> None:
 
 
 def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0,
-              tts_engine: str = "openf5") -> None:
+              tts_engine: str = "openf5", language: str = "en") -> None:
     from pipeline import tts_engines  # selectable narration model (per style)
+    if tts_engines.backend(tts_engine) == "chatterbox":
+        # Different inference stack: the multilingual Chatterbox CLI
+        # (pipeline/chatterbox.py) instead of the F5-TTS one. Run from the repo
+        # root so `-m pipeline.chatterbox` resolves regardless of caller cwd.
+        cmd = [
+            _LOCAL_PYTHON, "-m", "pipeline.chatterbox",
+            "--text",     text,
+            "--language", language,
+            "--ref",      str(ref),
+            "--out",      str(output_path),
+            "--speed",    str(speed),
+        ]
+        cwd = str(Path(__file__).parent.parent)
+    else:
+        cmd = [
+            _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
+            *tts_engines.cli_args(tts_engine),
+            "--ref_audio",   str(ref),
+            "--ref_text",    "",
+            "--gen_text",    text,
+            "--output_file", str(output_path),
+            "--speed",       str(speed),
+        ]
+        cwd = None
     try:
         result = subprocess.run(
-            [
-                _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",
-                *tts_engines.cli_args(tts_engine),
-                "--ref_audio",   str(ref),
-                "--ref_text",    "",
-                "--gen_text",    text,
-                "--output_file", str(output_path),
-                "--speed",       str(speed),
-            ],
+            cmd,
             capture_output=True,
             text=True,
             timeout=_TTS_TIMEOUT,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired:
-        raise RuntimeError(f"F5-TTS timed out after {_TTS_TIMEOUT}s (local)")
+        raise RuntimeError(f"TTS timed out after {_TTS_TIMEOUT}s (local)")
     if result.returncode != 0:
-        raise RuntimeError(f"F5-TTS failed:\n{result.stderr}")
+        raise RuntimeError(f"TTS failed:\n{result.stderr}")
 
 
 def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1.0,
-             tts_engine: str = "openf5") -> None:
+             tts_engine: str = "openf5", language: str = "en") -> None:
     """POST narration to a containerized F5-TTS HTTP worker (pipeline/tts_server.py).
 
     The TTS worker runs as a container with no SSH access. The request hits
@@ -134,6 +151,7 @@ def _f5_http(text: str, ref: Path, output_path: Path, url: str, speed: float = 1
         "ref_audio_b64": base64.b64encode(ref.read_bytes()).decode() if ref != DEFAULT_REF else None,
         "speed": speed,
         "engine": tts_engine,
+        "language": language,
     }).encode()
 
     req = urllib.request.Request(
@@ -180,6 +198,7 @@ def generate_narration(
     robotic_amount: float | None = None,
     speed: float | None = None,
     tts_engine: str = "openf5",
+    language: str = "en",
 ) -> Path:
     """Generate narration audio, running F5-TTS on host.
 
@@ -199,18 +218,23 @@ def generate_narration(
 
     tts_engine selects the narration model (see pipeline/tts_engines.py); it is
     carried per style and threaded through to the F5-TTS CLI / worker.
+
+    language is the narration language (ISO 639-1); only the multilingual
+    chatterbox backend uses it — the F5 engines ignore it.
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
         raise RuntimeError(f"TTS reference audio not found: {ref}")
 
     engine = tts_engine or "openf5"
+    language = language or "en"
     speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
-    logger.info("TTS on %s [%s]%s: %r", host, engine, " (robotic)" if robotic else "", text[:60])
+    logger.info("TTS on %s [%s/%s]%s: %r", host, engine, language,
+                " (robotic)" if robotic else "", text[:60])
     if host in ("localhost", "127.0.0.1"):
-        _f5_local(text, ref, output_path, speed, engine)
+        _f5_local(text, ref, output_path, speed, engine, language)
     elif host.startswith(("http://", "https://")):
-        _f5_http(text, ref, output_path, host, speed, engine)
+        _f5_http(text, ref, output_path, host, speed, engine, language)
     else:
         raise RuntimeError(
             f"TTS worker must be an http:// container URL (e.g. http://host:8189); "

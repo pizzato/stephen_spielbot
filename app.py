@@ -185,6 +185,9 @@ DEFAULT_CFG = {
     # TTS engine per style (see pipeline/tts_engines.py): which narration model
     # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
     "default_tts_engine":   "openf5",
+    # Narration language per style (ISO 639-1) — used by multilingual TTS
+    # engines (chatterbox); the F5 engines ignore it (issue #176).
+    "default_tts_language": "en",
     # One-time migration guard: when False, _ensure_styles flips styles still on
     # the old default (flux1-schnell) to the new default, then sets this True so a
     # later deliberate flux1-schnell choice is preserved.
@@ -376,6 +379,8 @@ STYLE_FIELD_TO_FLAT = {
     "edit_engine":          "default_edit_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
     "tts_engine":           "default_tts_engine",
+    # Narration language (multilingual TTS engines only)
+    "tts_language":         "default_tts_language",
     # Render quality
     "resolution":           "resolution",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
@@ -610,6 +615,12 @@ def _norm_tts_engine(value) -> str:
     return tts_engines.norm(value)
 
 
+def _norm_tts_language(value) -> str:
+    """Coerce a narration language to a supported code, falling back to English."""
+    from pipeline.chatterbox import norm_language
+    return norm_language(value if isinstance(value, str) else "")
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -663,6 +674,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
+        row["tts_language"] = _norm_tts_language(row.get("tts_language"))
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved.

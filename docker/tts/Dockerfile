@@ -44,10 +44,21 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
     fi \
     && pip install ${F5TTS_SPEC} fastapi "uvicorn[standard]"
 
+# Chatterbox Multilingual (issue #176) — the multilingual narration engine
+# (pipeline/chatterbox.py). Installed --no-deps because the package pins
+# torch==2.6.0 (no cu130/arm64 wheel — it would clobber the CUDA torch above)
+# plus gradio and other demo-only deps. The runtime deps f5-tts doesn't already
+# provide are listed explicitly instead (floating, like everything else here).
+ARG CHATTERBOX_SPEC="chatterbox-tts"
+RUN pip install --no-deps ${CHATTERBOX_SPEC} \
+    && pip install s3tokenizer resemble-perth conformer diffusers omegaconf \
+        pykakasi spacy-pkuseg pyloudnorm
+
 WORKDIR /app
 # pipeline must be importable as a package for `uvicorn pipeline.tts_server:app`.
 COPY pipeline/__init__.py /app/pipeline/__init__.py
 COPY pipeline/openf5.py /app/pipeline/openf5.py
+COPY pipeline/chatterbox.py /app/pipeline/chatterbox.py
 COPY pipeline/tts_engines.py /app/pipeline/tts_engines.py
 COPY pipeline/tts_server.py /app/pipeline/tts_server.py
 COPY assets/default_narrator.mp3 /app/assets/default_narrator.mp3

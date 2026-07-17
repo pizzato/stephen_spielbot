@@ -68,6 +68,7 @@ def render_dialogue_scene(
     tts_host: str = "localhost",
     prompt_for=lambda scene, speaker: "A person speaks to the camera, natural facial expression.",
     tts_engine: str = "openf5",
+    tts_language: str = "en",
     canvas: tuple[int, int] | None = None,   # film (width, height); line clips are fitted onto it
     steps: int = 8,
     # (scene, idx, n_lines, speaker) -> context manager wrapping one shot's work —
@@ -128,7 +129,7 @@ def render_dialogue_scene(
             else:
                 text = str(ln.get("text") or "").strip()
                 wav = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}.wav"
-                _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine)
+                _tts(text, wav, reference_wav=voice_ref_for(speaker), host=tts_host, tts_engine=tts_engine, language=tts_language)
                 dur = _duration(wav)
                 ew, eh = echo_dims_for_still(still)
                 _animate(
