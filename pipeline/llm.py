@@ -422,14 +422,26 @@ def _chat_complete(cfg: dict, system: str, user_msg: str, max_tokens: int,
     )
 
 
+def narration_language_name(code: str | None) -> str | None:
+    """Human name for a narration-language code ("pt" → "Portuguese"), or None
+    for English/unknown — English is the baseline, so no prompt note is needed."""
+    code = (code or "").strip().lower()
+    if not code or code == "en":
+        return None
+    from pipeline.chatterbox import LANGUAGES
+    return LANGUAGES.get(code)
+
+
 def _fill_empty_narrations(call_fn, scenes: list[Scene],
-                           title: str, video_title: str | None) -> None:
+                           title: str, video_title: str | None,
+                           language: str | None = None) -> None:
     """For any scene with empty narration, make a targeted LLM call to fill it.
 
     *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
     Mutates the scenes list in place.
     """
     topic = video_title or title
+    lang_name = narration_language_name(language)
     empty = [s for s in scenes if not (s.narration or "").strip()]
     if not empty:
         return
@@ -438,6 +450,8 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
         prev_narr = next((s.narration for s in scenes if s.id == scene.id - 1 and s.narration), "")
         next_narr = next((s.narration for s in scenes if s.id == scene.id + 1 and s.narration), "")
         ctx_parts = [f'Topic: "{topic}"', f'Scene {scene.id} title: "{scene.title}"']
+        if lang_name:
+            ctx_parts.append(f"Write the narration in {lang_name}.")
         if prev_narr:
             ctx_parts.append(f'Previous scene ends with: "{prev_narr}"')
         if next_narr:
@@ -515,7 +529,8 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
                           video_style_hint: str | None = None,
                           character_sheet: str | None = None,
                           avoid_hint: str | None = None,
-                          dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                          dialogue_note: str | None = None,
+                          language: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """JSON batch script generation shared by Claude and Grok.
 
     *call_fn(system, user_msg, max_tokens, label, retries=...)* → str.
@@ -542,6 +557,14 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     dialogue_note_str = (
         f"\n{dialogue_note.strip()}"
         if dialogue_note and dialogue_note.strip() else ""
+    )
+    lang_name = narration_language_name(language)
+    language_note = (
+        f'\nNARRATION LANGUAGE — write every scene\'s "narration" (and every dialogue '
+        f'line\'s "text") in {lang_name}. Everything else — "style", "music", scene '
+        f'titles, "image_prompt", "video_prompt", and character names/descriptions — '
+        f"stays in English (it feeds English-only image/video models)."
+        if lang_name else ""
     )
     # The system prompt pins the scene schema, so dialogue fields must be added
     # THERE — a user-message note alone gets ignored ("each with exactly these
@@ -582,6 +605,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         avoid_note=avoid_note,
         character_note=character_note,
         dialogue_note=dialogue_note_str,
+        language_note=language_note,
         conclusion_note=conclusion_note,
     )
     max_tokens = first_batch * 500 + 600  # 500 tokens/scene headroom + overhead
@@ -641,6 +665,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             avoid_note=avoid_note,
             character_note=character_note,
             dialogue_note=dialogue_note_str,
+            language_note=language_note,
             conclusion_note=conclusion_note,
         )
         max_tokens = (batch_end - batch_start + 1) * 350 + 300
@@ -662,7 +687,7 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         batch_start = batch_end + 1
 
     final_scenes = scenes[:n_scenes]
-    _fill_empty_narrations(call_fn, final_scenes, title, video_title)
+    _fill_empty_narrations(call_fn, final_scenes, title, video_title, language=language)
     # Absolute last-resort safety net: no Scene leaves with empty narration.
     for s in final_scenes:
         if not (s.narration or "").strip():
@@ -680,7 +705,8 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
                      video_style_hint: str | None = None,
                      character_sheet: str | None = None,
                      avoid_hint: str | None = None,
-                     dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                     dialogue_note: str | None = None,
+                     language: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     import anthropic
     import httpx
     # Force HTTP/1.1 — HTTP/2 multiplexed connections get RST_STREAM / GOAWAY
@@ -697,6 +723,7 @@ def _claude_generate(title: str, n_scenes: int, style_hint: str | None,
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
         character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
+        language=language,
     )
 
 
@@ -707,6 +734,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
                    character_sheet: str | None = None,
                    avoid_hint: str | None = None,
                    dialogue_note: str | None = None,
+                   language: str | None = None,
                    api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Grok (xAI) uses the same JSON batch protocol as Claude."""
     url = api_url or _GROK_CHAT_URL_DEFAULT
@@ -720,6 +748,7 @@ def _grok_generate(title: str, n_scenes: int, style_hint: str | None,
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
         character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
+        language=language,
     )
 
 
@@ -730,6 +759,7 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
                      character_sheet: str | None = None,
                      avoid_hint: str | None = None,
                      dialogue_note: str | None = None,
+                     language: str | None = None,
                      api_url: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """OpenAI ChatGPT uses the same JSON batch protocol as Claude/Grok."""
     url = api_url or _OPENAI_CHAT_URL_DEFAULT
@@ -743,6 +773,7 @@ def _openai_generate(title: str, n_scenes: int, style_hint: str | None,
         title, n_scenes, style_hint, call_fn,
         video_title=video_title, video_style_hint=video_style_hint,
         character_sheet=character_sheet, avoid_hint=avoid_hint, dialogue_note=dialogue_note,
+        language=language,
     )
 
 
@@ -850,7 +881,8 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
                           url: str, model: str,
                           video_title: str | None = None,
                           character_sheet: str | None = None,
-                          avoid_hint: str | None = None) -> dict:
+                          avoid_hint: str | None = None,
+                          language: str | None = None) -> dict:
     style_note = (
         f"\nIMPORTANT: Use exactly this text for the STYLE line: {style_hint}"
         if style_hint and style_hint.strip()
@@ -870,6 +902,13 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
         if video_title and video_title.strip()
         else f'the topic: "{title}"'
     )
+    lang_name = narration_language_name(language)
+    language_note = (
+        f"\nNARRATION LANGUAGE — write every NARRATION_N value in {lang_name}. "
+        f"Keep the STYLE, MUSIC, TITLE_N and CHARACTER_* lines in English "
+        f"(they feed English-only image/video models)."
+        if lang_name else ""
+    )
     user_msg = _prompts.user(
         "script_local_story",
         n_scenes=n_scenes,
@@ -877,6 +916,7 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
         style_note=style_note,
         avoid_note=avoid_note,
         character_note=character_note,
+        language_note=language_note,
     )
     raw = _local_llm(
         [
@@ -914,13 +954,15 @@ def _local_generate_story(title: str, n_scenes: int, style_hint: str | None,
 
 
 def _fill_empty_outlines_local(outlines: list[dict], title: str, video_title: str | None,
-                                 url: str, model: str) -> None:
+                                 url: str, model: str,
+                                 language: str | None = None) -> None:
     """Fill any outline dicts whose narration is empty via a targeted local-LLM call.
 
     Operates BEFORE visual generation so that downstream image/video prompts have
     proper narration context. Mutates the outlines list in place.
     """
     topic = video_title or title
+    lang_name = narration_language_name(language)
     empty = [o for o in outlines if not (o.get("narration") or "").strip()]
     if not empty:
         return
@@ -934,6 +976,8 @@ def _fill_empty_outlines_local(outlines: list[dict], title: str, video_title: st
                           if x.get("id") == sid + 1 and (x.get("narration") or "").strip()), "")
         scene_title = o.get("title") or f"Scene {sid}"
         ctx_parts = [f'Topic: "{topic}"', f'Scene {sid} title: "{scene_title}"']
+        if lang_name:
+            ctx_parts.append(f"Write the narration in {lang_name}.")
         if sid == 1:
             ctx_parts.append(
                 "This is SCENE 1 — open with a compelling hook that teases the most "
@@ -1019,7 +1063,8 @@ def _local_generate(title: str, n_scenes: int,
                     video_title: str | None = None,
                     video_style_hint: str | None = None,
                     character_sheet: str | None = None,
-                    avoid_hint: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                    avoid_hint: str | None = None,
+                    language: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     cfg   = _load_cfg()
     url   = cfg.get("local_llm_url",   _LOCAL_LLM_URL_DEFAULT)
     model = cfg.get("local_llm_model", _LOCAL_LLM_MODEL_DEFAULT)
@@ -1032,7 +1077,7 @@ def _local_generate(title: str, n_scenes: int,
 
     story      = _local_generate_story(title, n_scenes, style_hint, url, model,
                                        video_title=video_title, character_sheet=character_sheet,
-                                       avoid_hint=avoid_hint)
+                                       avoid_hint=avoid_hint, language=language)
     style      = (style_hint.strip() if style_hint and style_hint.strip()
                   else story.get("style", ""))
     music_desc = story.get("music", "cinematic orchestral background music, atmospheric, instrumental")
@@ -1046,7 +1091,7 @@ def _local_generate(title: str, n_scenes: int,
 
     # Critical: fill any empty narrations BEFORE visual generation so the image/video
     # prompts get proper context. Scene 1 is particularly prone to being left blank.
-    _fill_empty_outlines_local(outlines, title, video_title, url, model)
+    _fill_empty_outlines_local(outlines, title, video_title, url, model, language=language)
 
     logger.info("Story: %d scenes, style=%r", len(outlines), style)
 
@@ -1115,6 +1160,7 @@ def generate_script(
     character_sheet: str | None = None,
     avoid_hint: str | None = None,
     dialogue_note: str | None = None,
+    language: str | None = None,
 ) -> tuple[list[Scene], str, str, list[dict]]:
     """Return (scenes, music_description, style, characters).
 
@@ -1127,6 +1173,9 @@ def generate_script(
     look consistent (see app._character_sheet).
     avoid_hint is the per-style "avoid" instruction — topics/words/tropes to keep
     OUT of the generated script; woven into every batch (see style.script_avoid).
+    language is the style's narration-language code (see chatterbox.LANGUAGES):
+    narration and dialogue lines are written in that language, while prompts,
+    titles, style and music descriptions stay in English. None/"en" → all English.
     characters is the list of 0-2 main characters the model identified for THIS
     video, each {name, aliases, description}; [] when the topic has no recurring
     character. These are per-script (not the global catalogue) — the caller
@@ -1146,7 +1195,7 @@ def generate_script(
         return _claude_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
                                 character_sheet=character_sheet, avoid_hint=avoid_hint,
-                                dialogue_note=dialogue_note)
+                                dialogue_note=dialogue_note, language=language)
 
     if backend == "grok":
         api_key = _grok_api_key(cfg)
@@ -1160,7 +1209,7 @@ def generate_script(
         return _grok_generate(title, n_scenes, style_hint, api_key, model,
                               video_title=video_title, video_style_hint=video_style_hint,
                               character_sheet=character_sheet, avoid_hint=avoid_hint,
-                              dialogue_note=dialogue_note,
+                              dialogue_note=dialogue_note, language=language,
                               api_url=cfg.get("grok_api_url") or _GROK_CHAT_URL_DEFAULT)
 
     if backend == "openai":
@@ -1175,7 +1224,7 @@ def generate_script(
         return _openai_generate(title, n_scenes, style_hint, api_key, model,
                                 video_title=video_title, video_style_hint=video_style_hint,
                                 character_sheet=character_sheet, avoid_hint=avoid_hint,
-                                dialogue_note=dialogue_note,
+                                dialogue_note=dialogue_note, language=language,
                                 api_url=cfg.get("openai_api_url") or _OPENAI_CHAT_URL_DEFAULT)
 
     if dialogue_note:
@@ -1187,7 +1236,7 @@ def generate_script(
     logger.info("Using local vLLM backend")
     return _local_generate(title, n_scenes, style_hint, video_title=video_title,
                            video_style_hint=video_style_hint, character_sheet=character_sheet,
-                           avoid_hint=avoid_hint)
+                           avoid_hint=avoid_hint, language=language)
 
 
 # ── YouTube video prompt generation (director's brief) ───────────────────────

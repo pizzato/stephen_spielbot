@@ -1585,13 +1585,16 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     style_cast = gapp._style_characters(cfg, body.style_name)
     character_sheet = gapp._character_sheet(style_cast) or None
     dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
+    # Style narration language (issue #176 part 2): narration + dialogue lines are
+    # written in the style's TTS language; prompts/titles stay English.
+    language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
                 llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, dialogue_note=dialogue_note,
+                avoid_hint=avoid_hint, dialogue_note=dialogue_note, language=language,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
