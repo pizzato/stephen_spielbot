@@ -94,6 +94,20 @@ fi
 
 banner "Downloading models"
 
+# Fail fast (with a useful message) if a configured worker host is not
+# SSH-reachable, instead of dying later in the middle of an rsync.
+for host in $(remote_hosts); do
+    is_local_host "$host" && continue
+    if ! ssh -o BatchMode=yes -o ConnectTimeout=5 -- "$host" true 2>/dev/null; then
+        echo "ERROR: cannot SSH to worker host '$host'."
+        echo "  Workers must be SSH-reachable Linux hosts with Docker + the NVIDIA Container Toolkit"
+        echo "  (passwordless: ssh $host should just work)."
+        echo "  For a single-machine setup, leave WORKERS blank — that uses localhost, no SSH needed."
+        echo "  Worker hosts live in $CONFIG_YAML (comfy_workers) — fix the list and re-run."
+        exit 1
+    fi
+done
+
 COMFY_DIR="${COMFY_DIR:-$HOME/github/ComfyUI}"
 HF_TOKEN="${HF_TOKEN:-${HUGGING_FACE_HUB_TOKEN:-}}"
 
@@ -135,6 +149,11 @@ if [[ -z "$MODEL_SOURCE" ]]; then
     echo "[models] No comfy_workers in config.yaml — skipping model download."
 elif _models_present_on "$MODEL_SOURCE"; then
     echo "[models] All models already present on $MODEL_SOURCE — skipping download"
+elif is_local_host "$MODEL_SOURCE"; then
+    _ask_hf_token
+    echo "[models] Downloading models to $COMFY_DIR (mounted by the local worker containers)..."
+    mkdir -p "$COMFY_DIR"
+    HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 else
     _ask_hf_token
     echo "[models] Downloading models to $MODEL_SOURCE (first worker; others rsync from it during deploy)..."
@@ -194,13 +213,15 @@ fi
 
 # ── 4. Deploy worker containers ───────────────────────────────────────────────
 # Each render worker runs ComfyUI + F5-TTS as Docker containers, deployed over
-# SSH (issue #12). Needs Docker + the NVIDIA Container Toolkit on each worker.
+# SSH (issue #12) — or locally for "localhost" (single-machine setup). Needs
+# Docker + the NVIDIA Container Toolkit on each worker.
 
 HOSTS=$(remote_hosts)
 if [[ -z "$HOSTS" ]]; then
     echo ""
     echo "No workers defined in config.yaml (comfy_workers) — nothing to deploy."
-    echo "Add comfy_workers and re-run, or run 'make start' for just the web app."
+    echo "For this machine, add http://localhost:8188 to comfy_workers and re-run;"
+    echo "for remote workers add their http://HOST:8188 URLs. Config: $CONFIG_YAML"
     exit 0
 fi
 
