@@ -3,8 +3,9 @@
 
 Never clobbers an existing config. Worker hostnames come from argv (space- or
 comma-separated); comfy/tts worker lists are derived from them. With no hosts,
-writes a single-machine (localhost) config. Everything else is filled in at
-runtime from app.DEFAULT_CFG, so only the worker lists are seeded here.
+writes a single-machine config pointing at localhost (the worker containers
+run on this machine). Everything else is filled in at runtime from
+app.DEFAULT_CFG, so only the worker lists are seeded here.
 """
 import os
 import sys
@@ -25,9 +26,15 @@ def main(argv: list[str]) -> int:
     for token in argv:
         hosts.extend(h.strip() for h in token.replace(",", " ").split())
     hosts = [h for h in hosts if h]
+    if not hosts:
+        # Single machine: the worker containers run locally (deployed by
+        # install.sh without SSH).
+        hosts = ["localhost"]
 
     comfy = [f"http://{h}:8188" for h in hosts]
-    tts = list(hosts)
+    # http:// = the containers' HTTP transport (same form install.sh writes
+    # after deploying them).
+    tts = [f"http://{h}:8189" for h in hosts]
     echomimic = [f"http://{h}:8190" for h in hosts]
 
     cfg = {"comfy_workers": comfy, "tts_workers": tts, "echomimic_workers": echomimic}
@@ -42,9 +49,9 @@ def main(argv: list[str]) -> int:
     CONFIG.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
 
     print(f"[config] wrote {CONFIG}")
-    print(f"  comfy_workers: {comfy or '(none — single machine, local ComfyUI)'}")
-    print(f"  tts_workers:   {tts or '(none)'}")
-    print(f"  echomimic_workers: {echomimic or '(none)'}")
+    print(f"  comfy_workers: {comfy}")
+    print(f"  tts_workers:   {tts}")
+    print(f"  echomimic_workers: {echomimic}")
     print("  Edit these any time in the Settings screen, or in the file above.")
     return 0
 

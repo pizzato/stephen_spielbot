@@ -763,15 +763,21 @@ def _check_local_available(url: str) -> bool:
 
 def _local_llm(messages: list[dict], max_tokens: int,
                url: str, model: str, retries: int = 2) -> str:
-    payload = json.dumps({
-        "model":       model,
-        "messages":    messages,
-        "temperature": 0.7,
-        "max_tokens":  max_tokens,
-    }).encode()
+    # Reasoning models (Qwen3, DeepSeek-R1 distills, …) spend tokens "thinking"
+    # before the answer — either inline <think>…</think> in content, or in a
+    # separate reasoning_content field (llama.cpp). A small max_tokens can be
+    # eaten entirely by the thinking, so grow the budget on retry when that
+    # happens instead of repeating an identical doomed request.
+    tokens = max_tokens
 
     last_err: Exception | None = None
     for attempt in range(1 + retries):
+        payload = json.dumps({
+            "model":       model,
+            "messages":    messages,
+            "temperature": 0.7,
+            "max_tokens":  tokens,
+        }).encode()
         req = urllib.request.Request(
             url,
             data=payload,
@@ -781,6 +787,15 @@ def _local_llm(messages: list[dict], max_tokens: int,
         try:
             with urllib.request.urlopen(req, timeout=300) as resp:
                 data = json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            try:
+                detail = e.read(500).decode("utf-8", "replace")
+            except Exception:
+                detail = ""
+            last_err = RuntimeError(f"LLM request failed: {e}" + (f" — {detail}" if detail else ""))
+            logger.warning("Local LLM attempt %d/%d failed: %s %s",
+                           attempt + 1, 1 + retries, e, detail)
+            continue
         except urllib.error.URLError as e:
             last_err = RuntimeError(f"LLM request failed: {e}")
             logger.warning("Local LLM attempt %d/%d failed: %s", attempt + 1, 1 + retries, e)
@@ -788,16 +803,27 @@ def _local_llm(messages: list[dict], max_tokens: int,
 
         choice  = data["choices"][0]
         message = choice.get("message", {})
+        finish  = choice.get("finish_reason")
         content = message.get("content") or ""
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL)
+        if "<think>" in content:
+            # Unterminated thinking — the token limit cut it off mid-thought.
+            content = content.split("<think>")[0]
         if content.strip():
-            logger.debug("local LLM finish_reason=%s", choice.get("finish_reason"))
+            logger.debug("local LLM finish_reason=%s", finish)
             return content
 
+        thinking = bool(message.get("reasoning_content"))
+        if thinking or finish in ("length", "max_tokens"):
+            tokens = min(tokens * 4, 8192)
         last_err = RuntimeError(
-            f"Local LLM empty content (finish_reason={choice.get('finish_reason')})"
+            f"Local LLM empty content (finish_reason={finish}"
+            + (", reasoning used the whole token budget" if thinking else "")
+            + ")"
         )
-        logger.warning("Local LLM attempt %d/%d empty: %s",
-                       attempt + 1, 1 + retries, choice.get("finish_reason"))
+        logger.warning("Local LLM attempt %d/%d empty: %s%s (next max_tokens=%d)",
+                       attempt + 1, 1 + retries, finish,
+                       " — reasoning used the whole token budget" if thinking else "", tokens)
 
     raise last_err  # type: ignore[misc]
 

@@ -105,15 +105,17 @@ after the UI has been idle for `ui_idle_timeout_seconds` (default 5 min, set in
 **Settings**).
 
 Workers must be reachable via SSH without a password (`ssh-copy-id`) and have
-Docker + the NVIDIA Container Toolkit installed.
+Docker + the NVIDIA Container Toolkit installed. The exception is `localhost`
+(the single-machine setup): it is managed with plain local commands — no SSH
+needed — but still needs Docker + the NVIDIA Container Toolkit.
 
 ### Containerized workers
 
 `make install` deploys each render worker (ComfyUI + F5-TTS) as **Docker
-containers**, driven over SSH from the controller: it rsyncs the build context,
-mounts the host's existing models, runs `docker compose up -d --build`, and
-points the config at the container endpoints. See
-[`docker/README.md`](docker/README.md).
+containers**, driven over SSH from the controller (or locally for
+`localhost`): it rsyncs the build context, mounts the host's existing models,
+runs `docker compose up -d --build`, and points the config at the container
+endpoints. See [`docker/README.md`](docker/README.md).
 
 ```bash
 make install WORKERS="s1 s2 s3"

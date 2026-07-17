@@ -32,10 +32,17 @@ for item in (data.get(key) or []):
 PY
 }
 
-# ComfyUI/render hosts for SSH bootstrap — bare hostnames derived from
-# comfy_workers URLs (http://HOST:PORT -> HOST).
+# ComfyUI/render hosts for worker bootstrap — bare hostnames derived from
+# comfy_workers URLs (http://HOST:PORT -> HOST). May include "localhost" for a
+# single-machine setup (managed without SSH — see is_local_host).
 remote_hosts() {
     _cfg_list comfy_workers | sed -E 's#^https?://##; s#[:/].*$##' | awk 'NF' | sort -u
+}
+
+# True when a worker host is this machine — its containers are managed with
+# plain local commands instead of SSH.
+is_local_host() {
+    [[ "$1" == "localhost" || "$1" == "127.0.0.1" ]]
 }
 
 # Fallback ComfyUI endpoint for the controller-side cover agent. The dedicated

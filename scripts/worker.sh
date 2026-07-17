@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Manage one host's containerized worker stack (ComfyUI + F5-TTS) from the
-# controller, over SSH. The stack is deployed to ~/spielbot-worker/docker on the
-# host by `make install` / install_worker_container.sh.
+# controller — over SSH for remote hosts, with plain local commands for
+# "localhost" (single-machine setup). The stack is deployed to
+# ~/spielbot-worker/docker on the host by `make install` /
+# install_worker_container.sh.
 #
 # Usage: bash scripts/worker.sh <start|stop|restart|status|logs> <hostname>
 #   bash scripts/worker.sh stop    s2
@@ -31,9 +33,19 @@ TTS_PORT="${TTS_PORT:-8189}"
 ECHOMIMIC_PORT="${ECHOMIMIC_PORT:-8190}"
 REMOTE_DIR="spielbot-worker/docker"
 
-# Run a `docker compose` command on the host's deployed stack, over SSH.
+LOCAL=false
+if [[ "$HOST" == "localhost" || "$HOST" == "127.0.0.1" ]]; then
+    LOCAL=true
+fi
+
+# Run a command on the host: locally for localhost, over SSH otherwise.
+_run() {
+    if $LOCAL; then bash -c "$*"; else ssh -- "$HOST" "$*"; fi
+}
+
+# Run a `docker compose` command on the host's deployed stack.
 _compose() {
-    ssh -- "$HOST" "[ -d \$HOME/$REMOTE_DIR ] || { echo 'ERROR: no container stack at ~/$REMOTE_DIR on $HOST — run: make install'; exit 1; }; cd \$HOME/$REMOTE_DIR && docker compose $*"
+    _run "[ -d \$HOME/$REMOTE_DIR ] || { echo 'ERROR: no container stack at ~/$REMOTE_DIR on $HOST — run: make install'; exit 1; }; cd \$HOME/$REMOTE_DIR && docker compose $*"
 }
 
 _health() {
@@ -67,7 +79,7 @@ case "$ACTION" in
         # GPU device per container — surfaces a silent CPU fallback (a host
         # daemon-reload can revoke the GPU from a running container; see README).
         for svc in comfyui tts echomimic; do
-            dev=$(ssh -- "$HOST" "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
+            dev=$(_run "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
             if [ -n "$dev" ]; then
                 printf "    ✓ %-7s GPU  %s\n" "$svc" "$dev"
             else
