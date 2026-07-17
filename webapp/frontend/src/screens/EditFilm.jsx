@@ -13,6 +13,7 @@ const REGEN_CHIPS = {
   video_prompt: ['More motion', 'Slower pace', 'Static camera'],
   image: ['More detail', 'Brighter', 'Different angle'],
   video: ['More motion', 'Slower pace', 'Different angle'],
+  cover: ['Bolder', 'Simpler', 'More dramatic'],
 }
 
 const resPixels = (name) => {
@@ -484,6 +485,12 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [ytBusy, setYtBusy] = useState('')
   const [metaMsg, setMetaMsg] = useState('')
 
+  // Cover image (same store + endpoints as the Script Cover tab / Publish)
+  const [coverUrl, setCoverUrl] = useState('')
+  const [coverHist, setCoverHist] = useState(null)
+  const [coverEdit, setCoverEdit] = useState(false)
+  const [coverEditErr, setCoverEditErr] = useState('')
+
   const onVideoMeta = (e) => {
     const w = e.target.videoWidth, h = e.target.videoHeight
     if (w && h) { setAspect(`${w} / ${h}`); setPortrait(h > w); setVideoDims({ w, h }) }
@@ -506,14 +513,16 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       })
       .catch((e) => setError(e.message))
 
-    // Title + description for the finished film (same store as Cover / Publish).
+    // Title + description + cover for the finished film (same store as Cover / Publish).
     api.ytPostPrefill(workDir).then((p) => {
       if (p.title) {
         setCoverTitle(p.title)
         onTitleChange?.(p.title)
       }
       if (p.description) setDescription(p.description)
+      setCoverUrl(p.cover_url || '')
     }).catch(() => {})
+    api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
   }, [workDir])
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
@@ -559,6 +568,45 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       onTitleChange?.(title)
       setMetaMsg('Title and description saved.')
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const regenCover = async (instruction = '') => {
+    setYtBusy('cover'); setError('')
+    let pollTimer = null
+    try {
+      const { task_id: tid } = await api.ytCover({ work_dir: workDir, title: coverTitle || filmTitle || '', resolution: currentResolution, instruction })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const s = await api.ytCoverStatus(tid)
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); if (s.history) setCoverHist(s.history); resolve() }
+            else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
+            else pollTimer = setTimeout(check, 2000)
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setError(e.message) } finally {
+      clearTimeout(pollTimer)
+      setYtBusy('')
+    }
+  }
+
+  // Pick a kept cover version, or masked-edit the cover with the style's edit engine.
+  const selectCover = async (versionId) => {
+    setYtBusy('cover'); setError('')
+    try {
+      const r = await api.coverSelect(workDir, versionId)
+      setCoverUrl(r.cover_url || ''); setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  const applyCoverEdit = async (mask, editPrompt, denoise) => {
+    setYtBusy('coveredit'); setCoverEditErr('')
+    try {
+      const r = await api.coverInpaint(workDir, mask, editPrompt, denoise)
+      setCoverUrl(r.cover_url || ''); setCoverHist(r.history); setCoverEdit(false)
+    } catch (e) { setCoverEditErr(e.message) } finally { setYtBusy('') }
   }
 
   const regenMusic = async () => {
@@ -774,6 +822,25 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
         </Card>
 
+        {/* Cover image (same endpoints as the Script Cover tab / Publish) */}
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm">Cover image</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>YouTube thumbnail — reused when publishing.</p>
+          <div className="mt-16" style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect }}>
+            {coverUrl
+              ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+              : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
+          </div>
+          <GuidedRegenButton block variant="ghost" icon="rotate-right"
+            label={coverUrl ? 'Regenerate cover' : 'Generate cover'} busyLabel="Generating…"
+            busy={ytBusy === 'cover'} disabled={!!ytBusy}
+            onRegen={regenCover} chips={REGEN_CHIPS.cover} />
+          <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
+            onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
+          <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
+            onSelect={selectCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
+        </Card>
+
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm">Re-mix audio</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Balance the levels and re-mux without re-rendering the video.</p>
@@ -841,7 +908,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
         </Card>
 
-        <Card span={12} padLg className="reveal reveal-d2">
+        <Card span={8} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} /> Background music</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
           <div className="mt-24">
@@ -855,6 +922,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
             onSelect={selectMusic} busy={anyBusy} />
         </Card>
+
+        {coverEdit && (
+          <InpaintModal src={coverUrl} aspect={aspect} busy={ytBusy === 'coveredit'} error={coverEditErr}
+            onApply={applyCoverEdit} onClose={() => setCoverEdit(false)} />
+        )}
       </div>
     </div>
   )
