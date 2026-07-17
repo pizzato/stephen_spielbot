@@ -5447,15 +5447,9 @@ def yt_cover(body: CoverBody) -> dict:
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
-        # Generate the cover with the style's selected image engine (same as scenes).
-        style_name = ""
-        job_row = store.get_job(job_id)
-        if job_row is not None:
-            try:
-                style_name = json.loads(dict(job_row).get("config_json") or "{}").get("style_name", "")
-            except Exception:
-                style_name = ""
-        engine = gapp.engines.resolve(cfg, gapp.style_settings(cfg, style_name).get("image_engine"))
+        # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE): the title
+        # text must render legibly, and Klein garbles it.
+        engine = gapp.engines.resolve(cfg, gapp.engines.COVER_ENGINE)
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
