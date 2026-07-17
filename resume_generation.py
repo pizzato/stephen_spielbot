@@ -36,8 +36,9 @@ from PIL import Image as _PILImage
 sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT
+from pipeline import engines as _engines
 from pipeline import prompts as _prompts
-from pipeline.comfyui import generate_music, generate_scene_image, ltx_dimensions, StuckJobError
+from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio,
     concat_audio, concatenate_scenes,
@@ -940,16 +941,15 @@ def main(work_dir: Path) -> None:
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         try:
             _cover_url = worker_pool.acquire()
-            generate_scene_image(
+            # Use the job's per-style image engine (stamped into job_config.json as
+            # default_image_engine) so the render-time cover matches UI regens;
+            # resolve() keeps the flat flux_* overrides for flux1-schnell.
+            generate_with_engine(
+                _engines.resolve(cfg, cfg.get("default_image_engine")),
                 _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
                 height=cover_h,
-                steps=flux_cfg["steps"],
-                flux_model=flux_cfg["model"],
-                clip_t5=flux_cfg["clip_t5"],
-                clip_l=flux_cfg["clip_l"],
-                flux_vae=flux_cfg["vae"],
                 comfy_url=_cover_url,
             )
             worker_pool.release(_cover_url)

@@ -398,11 +398,15 @@ community_reply:
 
 cover_image:
   description: |
-    FLUX prompt for the 1280x720 YouTube cover thumbnail. The `subject_hint` is
+    FLUX prompt for the YouTube cover thumbnail. The `subject_hint` is
     auto-generated from a sample of scene image_prompts so the cover reflects the
-    actual video content (and is empty when no scenes are provided).
+    actual video content (and is empty when no scenes are provided). Written for
+    FLUX.2 Klein: concise natural language with explicit typography, and no
+    negative list — Klein is CFG-distilled (no negative channel), so words like
+    "misspelled" in the prompt can induce the artifacts they name. ${negative}
+    (the cover_negative prompt) is still substituted if added back here.
   user: |
-    Create a high-impact YouTube documentary thumbnail in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Composition: large readable title text dominates the centre, with supporting subject imagery arranged around it in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. Text: include the exact title: "${title}". The title must be spelled correctly, large, clean, bold, and easy to read. Use thick block lettering with strong shadow or outline. Do not add any extra words, fake letters, random symbols, or misspelled text. Visual content: show the key people, objects, places, and elements related to the topic. Make the image feel like a complete visual summary of the story. Layout: avoid clutter, keep the subject clear, make the title readable first, then the background details. Leave safe margins around the edges. No watermark, no logo, no UI elements. Avoid: ${negative}.
+    A high-impact YouTube documentary thumbnail. The exact title "${title}" dominates the centre of the image in thick bold white sans-serif capital letters with a strong black outline and drop shadow, spelled exactly as written — no other text anywhere in the image. ${style_line}${subject_hint}Behind and around the title, a dramatic cinematic collage of the story's key people, places, and objects: rich colors, bold contrast, dramatic lighting, sharp focus, readable at small thumbnail size. Clean uncluttered layout with safe margins, no watermark, no logo.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -418,6 +422,9 @@ video_negative:
 
 cover_negative:
   description: |
-    Substituted into the cover_image prompt as ${negative}.
+    Substituted into the cover_image prompt as ${negative}. The default
+    cover_image no longer references it (listing text artifacts in the positive
+    prompt hurts CFG-distilled models); it only takes effect if ${negative} is
+    added back to cover_image.
   value: |
     blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, random text, watermark, logo, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
