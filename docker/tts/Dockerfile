@@ -27,8 +27,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
 # only the statically-linked interpreter, so without this F5-TTS fails at
 # inference with "libpython3.12.so.1.0: cannot open shared object file".
 # ffmpeg supplies the libav* libs torchcodec links against (FFmpeg 6 on 24.04).
+# gcc: torch's Triton JIT compiles kernel launchers at runtime on some GPU
+# archs (e.g. sm_120 Blackwell workstation) and needs a C compiler.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3 python3-dev python3-pip ffmpeg libsndfile1 curl ca-certificates \
+        python3 python3-dev python3-pip gcc ffmpeg libsndfile1 curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # torch first (matched to the GPU's CUDA), then f5-tts + the HTTP server deps.
