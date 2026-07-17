@@ -941,11 +941,10 @@ def main(work_dir: Path) -> None:
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         try:
             _cover_url = worker_pool.acquire()
-            # Use the job's per-style image engine (stamped into job_config.json as
-            # default_image_engine) so the render-time cover matches UI regens;
-            # resolve() keeps the flat flux_* overrides for flux1-schnell.
+            # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE), same as
+            # UI re-generation; resolve() keeps the flat flux_* overrides.
             generate_with_engine(
-                _engines.resolve(cfg, cfg.get("default_image_engine")),
+                _engines.resolve(cfg, _engines.COVER_ENGINE),
                 _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
