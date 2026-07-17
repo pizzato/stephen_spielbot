@@ -56,7 +56,23 @@ fi
 if ! docker info 2>/dev/null | grep -qi nvidia; then
     echo "WARNING: NVIDIA runtime not detected in 'docker info' on $(hostname) — the GPU may be unavailable to containers."
 fi
-echo "[preflight] $(docker --version) — OK"
+# Smoke-test that a container actually starts, so host-level problems (e.g. a
+# kernel that can't create veth pairs after an unrebooted kernel upgrade) fail
+# here with guidance instead of minutes into the image build.
+if ! out=$(docker run --rm hello-world 2>&1); then
+    echo "ERROR: cannot start a test container on $(hostname):"
+    echo "$out" | tail -5 | sed 's/^/    /'
+    case "$out" in
+        *veth*|*"operation not supported"*)
+            echo "  The kernel refused to create container network interfaces — usually a kernel"
+            echo "  upgrade pending a reboot (the running kernel's 'veth' module is gone)."
+            echo "  Try: sudo modprobe veth — and if that fails, reboot, then re-run." ;;
+        *)
+            echo "  Fix Docker on this host (a plain 'docker run --rm hello-world' must work), then re-run." ;;
+    esac
+    exit 1
+fi
+echo "[preflight] $(docker --version) — container start OK"
 REMOTE
 
 # Resolve the target home so MODELS_DIR in .env is an absolute path (compose does
