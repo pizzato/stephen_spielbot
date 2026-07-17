@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip, RegenLabel, GuidedRegenButton } from '../components.jsx'
+import { Card, Field, Segmented, Button, Icon, Banner, Check, Chip, RegenLabel, GuidedRegenButton, VersionStrip } from '../components.jsx'
 import { api } from '../api.js'
 
 function fmtNum(n) {
@@ -55,6 +55,7 @@ export default function Publish({ initialWorkDir, go }) {
   const [category, setCategory] = useState('22')
   const [privacy, setPrivacy] = useState('private')
   const [coverUrl, setCoverUrl] = useState('')
+  const [coverHist, setCoverHist] = useState(null)
   const [finalUrl, setFinalUrl] = useState('')
   const [aspect, setAspect] = useState('16/9')
   const [includeThumbnail, setIncludeThumbnail] = useState(true)
@@ -118,6 +119,8 @@ export default function Publish({ initialWorkDir, go }) {
       setTitle(p.title || '')
       setDescription(p.description || '')
       setCoverUrl(p.cover_url || '')
+      setCoverHist(null)
+      api.coverHistory(wd).then((r) => setCoverHist(r.history)).catch(() => {})
       setFinalUrl(p.final_url || '')
       setYoutubeUrl(p.youtube_url || '')
       setYoutubeVideoId(p.youtube_video_id || '')
@@ -161,7 +164,7 @@ export default function Publish({ initialWorkDir, go }) {
         const check = async () => {
           try {
             const s = await api.ytCoverStatus(tid)
-            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); resolve() }
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); if (s.history) setCoverHist(s.history); resolve() }
             else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
             else pollTimer = setTimeout(check, 2000)
           } catch (e) { reject(e) }
@@ -172,6 +175,15 @@ export default function Publish({ initialWorkDir, go }) {
       clearTimeout(pollTimer)
       setBusy('')
     }
+  }
+
+  // Pick a previously kept cover version as the thumbnail.
+  const selectCover = async (versionId) => {
+    setBusy('cover'); setError('')
+    try {
+      const r = await api.coverSelect(workDir, versionId)
+      setCoverUrl(r.cover_url || ''); setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
   // Push the current cover to the already-published video's thumbnail.
@@ -400,6 +412,8 @@ export default function Publish({ initialWorkDir, go }) {
             <Button variant="ghost" block icon="image" disabled={busy === 'thumb' || !coverUrl} onClick={updateThumbnail}>
               {busy === 'thumb' ? 'Updating…' : 'Update thumbnail on YouTube'}</Button>
           )}
+          <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
+            onSelect={selectCover} aspect={aspect} busy={busy === 'cover'} />
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>
