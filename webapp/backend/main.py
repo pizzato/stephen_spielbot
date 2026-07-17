@@ -2664,6 +2664,10 @@ def start_generation(body: GenerateBody) -> dict:
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
+        # Resolved per-style image engine, so the render-time cover uses the same
+        # model as UI scene previews and cover regens (engines.resolve fallback
+        # covers older job_config.json files without this key).
+        "default_image_engine": ss.get("image_engine") or "",
         "lora_strength": ss.get("lora_strength"),
         "first_pass_cfg": ss.get("first_pass_cfg"),
         "first_pass_steps": ss.get("first_pass_steps"),
