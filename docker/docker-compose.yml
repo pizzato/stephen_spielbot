@@ -27,7 +27,7 @@ services:
       # FLUX.2 model; cuBLASLt avoids it. Set to 1 in .env on GB10 (no rebuild).
       - TORCH_BLAS_PREFER_CUBLASLT=${TORCH_BLAS_PREFER_CUBLASLT:-}
     volumes:
-      # ~33 GB of models live on the host; populate once (see docker/README.md).
+      # ~49 GB of models live on the host; populate once (see docker/README.md).
       - ${MODELS_DIR:?set MODELS_DIR in docker/.env}:/opt/ComfyUI/models
       # Large finished-film upscales are staged here instead of HTTP-uploaded
       # to ComfyUI, avoiding request-size limits on /upload/image.

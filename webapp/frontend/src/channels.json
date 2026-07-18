@@ -1,0 +1,21 @@
+[
+  {
+    "name": "Stephen Spielbot",
+    "platform": "youtube",
+    "url": "https://www.youtube.com/@StephenSpielbot",
+    "handle": "@StephenSpielbot",
+    "note": "The original"
+  },
+  {
+    "name": "A Brief History of Botkind",
+    "platform": "youtube",
+    "url": "https://www.youtube.com/@BHOBk",
+    "handle": "@BHOBk"
+  },
+  {
+    "name": "A Brief History of Botkind",
+    "platform": "x",
+    "url": "https://x.com/aBHOBk",
+    "handle": "@aBHOBk"
+  }
+]

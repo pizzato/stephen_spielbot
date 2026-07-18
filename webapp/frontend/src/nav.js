@@ -31,6 +31,8 @@ const ROUTES = {
   settings: { seg: ['settings'] },
   // Advanced prompt editor — reached from Settings → Infrastructure, not the sidebar.
   prompts: { seg: ['prompts'] },
+  // About the app — reached from the sidebar handle and the Home hero card.
+  about: { seg: ['about'] },
 }
 
 // First URL segment → route id, for parsing.

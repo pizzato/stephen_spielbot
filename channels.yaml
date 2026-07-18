@@ -1,0 +1,29 @@
+# Channels using Stephen Spielbot.
+#
+# Making films with this tool? Add your channel below and open a pull request —
+# a GitHub Action regenerates the README list and the app's About screen on merge,
+# so this file is the only thing you need to touch.
+#
+# Fields per entry:
+#   name      (required) display name of the channel
+#   url       (required) link to the channel
+#   platform  (optional) youtube | x | other   — picks the icon, default: other
+#   handle    (optional) e.g. "@StephenSpielbot"
+#   note      (optional) short descriptor, a few words
+#
+# Entries appear in the order listed here.
+
+channels:
+  - name: Stephen Spielbot
+    platform: youtube
+    url: https://www.youtube.com/@StephenSpielbot
+    handle: "@StephenSpielbot"
+    note: The original
+  - name: A Brief History of Botkind
+    platform: youtube
+    url: https://www.youtube.com/@BHOBk
+    handle: "@BHOBk"
+  - name: A Brief History of Botkind
+    platform: x
+    url: https://x.com/aBHOBk
+    handle: "@aBHOBk"

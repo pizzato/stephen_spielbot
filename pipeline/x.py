@@ -673,7 +673,12 @@ def _attach_subtitles(auth: dict, video_media_id: str, srt_path: str,
     srt_media_id = _chunked_upload(auth, srt_path, media_category="subtitles",
                                    media_type="text/plain; charset=UTF-8")
     lang = (language or "en").strip() or "en"
-    name = _LANGUAGE_DISPLAY_NAMES.get(lang.lower(), lang.upper())
+    try:  # the TTS language table names all 23 narration languages
+        from pipeline.chatterbox import LANGUAGES as _tts_langs
+    except Exception:
+        _tts_langs = {}
+    name = (_LANGUAGE_DISPLAY_NAMES.get(lang.lower())
+            or _tts_langs.get(lang.lower()) or lang.upper())
     if auth.get("oauth1") is not None:
         body = {
             "media_id": int(video_media_id),

@@ -1585,13 +1585,16 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     style_cast = gapp._style_characters(cfg, body.style_name)
     character_sheet = gapp._character_sheet(style_cast) or None
     dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
+    # Style narration language (issue #176 part 2): narration + dialogue lines are
+    # written in the style's TTS language; prompts/titles stay English.
+    language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
                 llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, dialogue_note=dialogue_note,
+                avoid_hint=avoid_hint, dialogue_note=dialogue_note, language=language,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
@@ -5390,6 +5393,20 @@ def _upload_prefs_for_channel(cfg: dict, channel_key: str) -> tuple[str, bool]:
     return language, attach_captions
 
 
+def _video_language_for_work_dir(wd: Path, fallback: str) -> str:
+    """The language the finished video is actually narrated in: the job's
+    tts_language (per-style, stamped into job_config.json at render) wins over
+    the channel-level upload preference; jobs predating the stamp fall back."""
+    try:
+        lang = str(json.loads((wd / "job_config.json").read_text())
+                   .get("tts_language") or "").strip()
+        if lang:
+            return lang
+    except Exception:
+        pass
+    return fallback
+
+
 @api.get("/api/youtube/channels")
 def yt_channels() -> dict:
     """Configured channels with live connection status, for Settings/Publish.
@@ -6396,6 +6413,10 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
     try:
         channel = body_dict.get("channel", "")
         language, attach_captions = _upload_prefs_for_channel(gapp.load_config(), channel)
+        # The video's own narration language wins over the channel preference,
+        # so a Portuguese-style film is labelled pt on YouTube (metadata +
+        # audio language + caption track) even on a mostly-English channel.
+        language = _video_language_for_work_dir(wd, language)
         # Per-style playlist the finished video is added to (resolved here so the
         # "__auto__" find-or-create can hit the API off the render path).
         playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
@@ -6833,6 +6854,10 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         # X video carries CC too. Reuses the film's channel language + upload_captions
         # preference (single source of truth); best-effort, like YouTube's captions.
         language, attach_captions = _upload_prefs_for_channel(cfg, _channel_for_work_dir(wd))
+        # Same rule as the YouTube upload: the film's own narration language
+        # (per-style tts_language stamped at render) is the fallback label;
+        # _publish_caption_tracks refines it to the published cut's language.
+        language = _video_language_for_work_dir(wd, language)
         caption_file, audio_lang, extra_caps = "", language, []
         if attach_captions:
             try:

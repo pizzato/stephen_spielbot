@@ -22,10 +22,16 @@ The wired end-to-end flow:
 
 **Create** (generate script) → **Script** (per-scene edit, regenerate preview)
 → **Approve & generate** (launches the real resumable worker subprocess) →
-**Render** (live progress + durable task/worker tables) → **Remix** (re-mux
-audio on the finished film). **Home**, **Queue**, **YouTube** (comments + AI
-ideas), **Films** and **Settings** read/write the real backend too. YouTube
-*publishing* (OAuth flow) runs from the **YouTube → Publish** screen.
+**Render** (live progress + durable task/worker tables) → **Edit film**
+(`#/edit/<name>`, also reachable as `#/remix/<name>`: per-scene re-renders,
+inpainting, upscales, audio remix on the finished film).
+
+The sidebar screens: **Home**, **Create**, **AI ideas**, **Queue**, **Script**,
+**Render**, **Activity** (live fleet + per-job ETAs), **Films**, **Publishing**
+(publish queue + scheduler), **Community** (comments + engagement replies),
+**Channel Analytics** (stats + predictive model), and **Settings**. The deep
+prompt templates (`prompts.yaml`) are editable at `#/prompts`, opened from
+Settings → Infrastructure. YouTube channel OAuth runs from Settings → Channels.
 
 ## Run it (development)
 

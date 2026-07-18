@@ -72,6 +72,26 @@ if ! out=$(docker run --rm hello-world 2>&1); then
     esac
     exit 1
 fi
+# CUDA needs /dev/nvidia-uvm; nvidia-smi does not (it auto-creates only
+# /dev/nvidiactl + /dev/nvidiaN). On a host that has never run CUDA (fresh
+# driver install, no reboot) the uvm node is often missing — containers then
+# see the GPU in nvidia-smi but torch fails with "Found no NVIDIA driver".
+# nvidia-modprobe is setuid root, so try creating it ourselves first.
+if [[ -e /dev/nvidiactl && ! -e /dev/nvidia-uvm ]]; then
+    echo "[preflight] /dev/nvidia-uvm missing — trying to load the nvidia-uvm module ..."
+    nvidia-modprobe -u -c=0 2>/dev/null || sudo -n modprobe nvidia-uvm 2>/dev/null || true
+    if [[ -e /dev/nvidia-uvm ]]; then
+        echo "[preflight] nvidia-uvm loaded"
+    else
+        echo "ERROR: /dev/nvidia-uvm is missing on $(hostname) and could not be created."
+        echo "  nvidia-smi works without it, but CUDA inside the containers will fail"
+        echo "  ('Found no NVIDIA driver on your system'). Fix on this host:"
+        echo "      sudo modprobe nvidia-uvm        # or reboot if that fails"
+        echo "      echo nvidia-uvm | sudo tee /etc/modules-load.d/nvidia-uvm.conf   # survive reboots"
+        echo "  then re-run."
+        exit 1
+    fi
+fi
 echo "[preflight] $(docker --version) — container start OK"
 REMOTE
 
@@ -152,8 +172,10 @@ REMOTE
 fi
 
 # ── 5. Build + start the containers on the host ───────────────────────────────
+# --force-recreate: always fresh containers, so they pick up the host's CURRENT
+# NVIDIA device nodes (see the note in worker.sh start).
 echo "[deploy] building + starting containers on $TARGET (first build downloads torch — a few minutes) ..."
-_sh "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build"
+_sh "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build --force-recreate"
 
 # ── 6. Wait for health ────────────────────────────────────────────────────────
 echo -n "[deploy] waiting for ComfyUI (:$COMFYUI_PORT), F5-TTS (:$TTS_PORT) and EchoMimic (:$ECHOMIMIC_PORT) on $TARGET"
@@ -166,19 +188,32 @@ for i in $(seq 1 40); do
     sleep 5
 done
 
-# ── 7. Verify the containers actually got the GPU (not a silent CPU fallback) ──
+# ── 7. Verify the containers actually got a WORKING GPU ───────────────────────
 # The HTTP health endpoints above return 200 even on CPU, so check the GPU
-# directly. nvidia-smi failing inside a container ("NVML: Unknown Error") means
-# the NVIDIA Container Toolkit isn't granting the GPU — the render/narration
-# would run on CPU (very slow). See docker/README.md ("GPU lost at runtime").
+# directly — in two stages, because they fail differently:
+#   • nvidia-smi failing ("NVML: Unknown Error") = the NVIDIA Container Toolkit
+#     isn't granting the GPU at all. See docker/README.md ("GPU lost at runtime").
+#   • nvidia-smi OK but CUDA init failing = NVML works without /dev/nvidia-uvm
+#     but CUDA does not (torch reports "Found no NVIDIA driver"), or the host
+#     driver is too old for the container's CUDA 13 stack.
+# Either way the render/narration would run on CPU (very slow) or crash-loop.
+CUDA_TEST='import ctypes,sys; sys.exit(ctypes.CDLL("libcuda.so.1").cuInit(0))'
 echo ""
 echo "[deploy] verifying GPU access inside the containers on $TARGET ..."
 for svc in comfyui tts echomimic; do
-    if _sh "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -q '^GPU'"; then
-        echo "  ✓ $svc on GPU"
-    else
+    if ! _sh "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -q '^GPU'"; then
         echo "  ✗ WARNING: $svc has NO GPU access — it will run on CPU (slow)."
         echo "    Check the NVIDIA Container Toolkit on $TARGET, then: bash scripts/worker.sh restart $TARGET"
+    elif ! _sh "docker exec spielbot-worker-${svc}-1 python3 -c '$CUDA_TEST' >/dev/null 2>&1"; then
+        echo "  ✗ WARNING: $svc sees the GPU (nvidia-smi) but CUDA cannot initialize."
+        echo "    Common causes on $TARGET:"
+        echo "      • /dev/nvidia-uvm missing (sudo modprobe nvidia-uvm)"
+        echo "      • the NVIDIA driver/modules were (re)loaded after the containers were"
+        echo "        created — the containers hold stale device nodes; RECREATE them:"
+        echo "        cd ~/spielbot-worker/docker && docker compose down && docker compose up -d"
+        echo "      • host driver too old for CUDA 13 (nvidia-smi header must show >= 13.0)"
+    else
+        echo "  ✓ $svc on GPU (CUDA OK)"
     fi
 done
 

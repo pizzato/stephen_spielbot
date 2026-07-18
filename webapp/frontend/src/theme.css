@@ -142,6 +142,9 @@ body {
   padding: 10px; border-radius: var(--r-md);
   border: 1px solid var(--line); background: var(--surface-2);
 }
+.channel--link { width: 100%; text-align: left; font: inherit; cursor: pointer; transition: border-color .16s ease, background .16s ease; }
+.channel--link:hover { border-color: var(--line-2); background: var(--paper-2); }
+.channel--link.is-active { border-color: var(--accent); }
 .channel__avatar { width: 30px; height: 30px; border-radius: 50%; background: var(--warm-soft); display: flex; align-items: center; justify-content: center; color: var(--warm); font-size: 13px; }
 .channel__name { font-size: 13px; font-weight: 600; line-height: 1.2; }
 .channel__meta { font-size: 11px; color: var(--ink-3); }

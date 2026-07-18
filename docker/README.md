@@ -1,20 +1,25 @@
 # Containerized workers
 
-Run the GPU workers (ComfyUI + F5-TTS) as containers so a new machine joins the
-render fleet with one command instead of the SSH + Miniconda + rsync bootstrap
-(issue #12).
+Run the GPU workers (ComfyUI + TTS + EchoMimic) as containers so a new machine
+joins the render fleet with one command instead of the SSH + Miniconda + rsync
+bootstrap (issue #12).
 
-Each worker machine runs the same two-service stack, sharing that machine's
-GPU(s). The controller (the web app, on your Mac) is unchanged — it just points
-at each machine over HTTP.
+Each worker machine runs the same stack, sharing that machine's GPU(s). The
+controller (the web app, on your Mac) is unchanged — it just points at each
+machine over HTTP.
 
 | Service | Port | What it is |
 |---|---|---|
 | `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.3 / ACE-Step / FLUX — all native nodes) |
-| `tts` | 8189 | F5-TTS behind a small HTTP server (`pipeline/tts_server.py`) |
+| `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server (`pipeline/tts_server.py`) |
+| `echomimic` | 8190 | EchoMimic-V3 talking-head server for dialogue scenes (`pipeline/echomimic_server.py`) |
+| `autoheal` | — | Restarts any container whose (GPU-aware) healthcheck fails |
 
-Models (~33 GB) are **not** baked into the image — they live on the host and are
-mounted in, so images stay small and rebuild fast.
+ComfyUI models (~49 GB) are **not** baked into the image — they live on the host
+and are mounted in, so images stay small and rebuild fast. The EchoMimic weights
+(~27 GB) live in a named Docker volume, fetched from Hugging Face on first use;
+Chatterbox weights (~3.5 GB) land in the TTS container's HF cache (pre-warmed by
+`make install`).
 
 ## Prerequisites (per worker machine)
 
@@ -38,7 +43,8 @@ Per host it: preflights Docker + the NVIDIA toolkit; rsyncs the build context
 `docker/.env` with `MODELS_DIR=~/github/ComfyUI/models` (the host's existing
 models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
-Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
+Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs and
+`echomimic_workers` to the `http://host:8190` URLs.
 
 The Edit film screen's `Upscale video → AI temporal` mode runs Lightricks'
 LTX-2.3 IC-LoRA Pixel Spatial Upscaler on the render workers. The ComfyUI image
@@ -72,6 +78,9 @@ comfy_workers:            # you set these
 tts_workers:              # set by install — http:// selects the HTTP transport
   - http://s1:8189
   - http://s2:8189
+echomimic_workers:        # set by install — talking-head (dialogue scenes)
+  - http://s1:8190
+  - http://s2:8190
 ```
 
 Cover/preview regen has no dedicated worker: while the UI is in use the backend
@@ -89,7 +98,7 @@ the value must be an `http://host:8189` URL.
 | `COMFYUI_REF` | `master` | Pin ComfyUI to a tag/branch/commit for reproducible workers |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
-| `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
+| `COMFYUI_PORT` / `TTS_PORT` / `ECHOMIMIC_PORT` | `8188` / `8189` / `8190` | Host ports; match them in the controller config |
 
 Temporal AI upscaling is configured by the app and submitted to the worker's
 ComfyUI API after the finished film has been reviewed on the Remix screen. The

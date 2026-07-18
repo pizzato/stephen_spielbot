@@ -136,7 +136,7 @@ _models_present_on() {
 _ask_hf_token() {
     if [[ -z "$HF_TOKEN" ]] && [[ -t 0 ]]; then
         echo ""
-        echo "Models (~33 GB total) need to be downloaded."
+        echo "Models (~49 GB total) need to be downloaded."
         echo "A HuggingFace token speeds up downloads (optional — all models are public)."
         read -rp "HuggingFace token (press Enter to skip): " HF_TOKEN
     fi
