@@ -172,8 +172,10 @@ REMOTE
 fi
 
 # ── 5. Build + start the containers on the host ───────────────────────────────
+# --force-recreate: always fresh containers, so they pick up the host's CURRENT
+# NVIDIA device nodes (see the note in worker.sh start).
 echo "[deploy] building + starting containers on $TARGET (first build downloads torch — a few minutes) ..."
-_sh "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build"
+_sh "cd ~/$REMOTE_BUILD_DIR/docker && docker compose up -d --build --force-recreate"
 
 # ── 6. Wait for health ────────────────────────────────────────────────────────
 echo -n "[deploy] waiting for ComfyUI (:$COMFYUI_PORT), F5-TTS (:$TTS_PORT) and EchoMimic (:$ECHOMIMIC_PORT) on $TARGET"

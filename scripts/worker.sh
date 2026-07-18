@@ -59,8 +59,14 @@ _health() {
 
 case "$ACTION" in
     start)
+        # --force-recreate: containers hold the NVIDIA device nodes they were
+        # CREATED with. If the driver/modules were (re)loaded since (boot race,
+        # driver upgrade, manual modprobe), /dev/nvidia-uvm's dynamic major has
+        # changed and CUDA fails ("unknown error") while nvidia-smi still works.
+        # Recreating on every start self-heals that; volumes persist, and the
+        # cost is a few seconds.
         echo "=== Starting containers ($HOST) ==="
-        _compose up -d
+        _compose up -d --force-recreate
         ;;
     stop)
         echo "=== Stopping containers ($HOST) ==="
