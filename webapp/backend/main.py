@@ -4805,6 +4805,20 @@ def _upload_prefs_for_channel(cfg: dict, channel_key: str) -> tuple[str, bool]:
     return language, attach_captions
 
 
+def _video_language_for_work_dir(wd: Path, fallback: str) -> str:
+    """The language the finished video is actually narrated in: the job's
+    tts_language (per-style, stamped into job_config.json at render) wins over
+    the channel-level upload preference; jobs predating the stamp fall back."""
+    try:
+        lang = str(json.loads((wd / "job_config.json").read_text())
+                   .get("tts_language") or "").strip()
+        if lang:
+            return lang
+    except Exception:
+        pass
+    return fallback
+
+
 @api.get("/api/youtube/channels")
 def yt_channels() -> dict:
     """Configured channels with live connection status, for Settings/Publish.
@@ -5757,6 +5771,10 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
     try:
         channel = body_dict.get("channel", "")
         language, attach_captions = _upload_prefs_for_channel(gapp.load_config(), channel)
+        # The video's own narration language wins over the channel preference,
+        # so a Portuguese-style film is labelled pt on YouTube (metadata +
+        # audio language + caption track) even on a mostly-English channel.
+        language = _video_language_for_work_dir(wd, language)
         # Per-style playlist the finished video is added to (resolved here so the
         # "__auto__" find-or-create can hit the API off the render path).
         playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
@@ -6192,6 +6210,9 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         # X video carries CC too. Reuses the film's channel language + upload_captions
         # preference (single source of truth); best-effort, like YouTube's captions.
         language, attach_captions = _upload_prefs_for_channel(cfg, _channel_for_work_dir(wd))
+        # Same rule as the YouTube upload: the film's own narration language
+        # (per-style tts_language stamped at render) labels the CC track.
+        language = _video_language_for_work_dir(wd, language)
         caption_file = ""
         if attach_captions:
             try:
