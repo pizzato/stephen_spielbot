@@ -1961,11 +1961,12 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     """Append each matched character's canonical appearance to the image prompt so
     the same subject looks consistent across scenes, even if the LLM paraphrased.
 
-    A character matches when its name/alias appears in the scene's image prompt or
-    narration. Its description is only appended when not already present, so
-    re-generating a scene never stacks duplicate clauses. No match → unchanged."""
-    scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
-    scene_text = f"{base_prompt} {scene_text}"
+    A character matches when its name/alias appears in the scene's image prompt
+    (NOT the narration — narration routinely names people who are talked about
+    but not on screen). Its description is only appended when not already
+    present, so re-generating a scene never stacks duplicate clauses. No match →
+    unchanged."""
+    scene_text = f"{base_prompt} {scene.get('image_prompt') or ''}"
     clauses = []
     for c in _characters_for_scene(scene_text, cfg, style_name, work_dir):
         desc = c["description"]
@@ -1982,12 +1983,12 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
                             work_dir: Path | None = None) -> list[Path]:
     """Existing reference images for the characters featured in this scene, capped
     at _MAX_SCENE_REFERENCES. A character contributes its image when it's enabled,
-    has a stored ref_image, and its name/alias appears in the scene (Phase 2 —
+    has a stored ref_image, and its name/alias appears in the scene's image
+    prompt — not the narration, which names off-screen people (Phase 2 —
     FLUX.2 reference conditioning). Includes the script's own characters when a
     work_dir is given. Empty list when nothing matches."""
     chars = _job_characters(cfg, style_name, work_dir)
-    scene_text = " ".join(str(scene.get(k) or "") for k in ("image_prompt", "narration"))
-    scene_text = f"{base_prompt} {scene_text}"
+    scene_text = f"{base_prompt} {scene.get('image_prompt') or ''}"
     paths = []
     for c in chars:
         if not c.get("enabled", True) or not c.get("ref_image"):

@@ -1080,13 +1080,20 @@ class CharacterTests(TempConfigCase):
         self.assertIn("matte-black humanoid chassis", out)
         self.assertTrue(out.startswith("Robot XYZ stands on a ridge."))
 
-    def test_inject_matches_alias_and_narration(self):
+    def test_inject_matches_alias_in_image_prompt(self):
         cfg = self._cfg_with_hero(aliases=["the machine"])
-        # name/alias only in the narration, not the base prompt
+        scene = {"image_prompt": "The machine crosses a wide desert vista.",
+                 "narration": ""}
+        out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
+        self.assertIn("matte-black humanoid chassis", out)
+
+    def test_inject_ignores_narration_only_mention(self):
+        cfg = self._cfg_with_hero(aliases=["the machine"])
+        # narration names people who are talked about, not shown — no injection
         scene = {"image_prompt": "A wide desert vista.",
                  "narration": "Then the machine appeared."}
         out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
-        self.assertIn("matte-black humanoid chassis", out)
+        self.assertEqual(out, "A wide desert vista.")
 
     def test_inject_noop_when_character_absent(self):
         cfg = self._cfg_with_hero()
