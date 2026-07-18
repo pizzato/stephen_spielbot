@@ -142,6 +142,9 @@ export const api = {
   regenNarrator: (body) => req('POST', '/remix/narrator', body),
   upscaleRemixVideo: (body) => req('POST', '/remix/upscale', body),
   localizeFilm: (body) => req('POST', '/remix/localize', body),
+  localizeScripts: (workDir) => req('GET', `/remix/localize/scripts?work_dir=${encodeURIComponent(workDir)}`),
+  saveLocalizeScript: (body) => req('POST', '/remix/localize/script', body),
+  buildLocalizeAudio: (body) => req('POST', '/remix/localize/audio', body),
   listLocalizeLanguages: () => api.listTtsEngines().then((r) =>
     (r.engines || []).find((e) => e.key === 'chatterbox-multilingual')?.languages || {}),
   regenMusic: (body) => req('POST', '/remix/music', body),

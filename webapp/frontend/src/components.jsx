@@ -469,7 +469,7 @@ export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 /
               type="button"
               onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
               disabled={busy}
-              title={isSel ? 'Current video' : 'Use this video'}
+              title={`${v.label || ''}${v.label ? ' — ' : ''}${isSel ? 'current video' : 'click to use'}`}
               style={{
                 position: 'relative', padding: 0, width: 84, aspectRatio: aspect,
                 borderRadius: 'var(--r-sm)', overflow: 'hidden', background: '#000',
@@ -482,8 +482,9 @@ export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 /
               <span style={{
                 position: 'absolute', left: 3, bottom: 3, fontSize: 9, color: '#fff',
                 background: 'rgba(0,0,0,.55)', padding: '1px 5px', borderRadius: 3,
+                letterSpacing: '.04em',
               }}>
-                <Icon name="film" />
+                <Icon name="film" />{v.lang ? ` ${v.lang.toUpperCase()}` : ''}
               </span>
               {isSel && (
                 <span style={{

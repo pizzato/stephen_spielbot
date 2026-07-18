@@ -85,5 +85,82 @@ class BuildSrtTests(unittest.TestCase):
             self.assertIsNone(captions.build_srt(wd))
 
 
+def _localized_film():
+    """Two-scene film with a Spanish localization whose scenes run at different
+    durations than the original cut (translated narration re-times scenes)."""
+    wd = Path(tempfile.mkdtemp(prefix="spielbot-cap-"))
+    (wd / "script.json").write_text(json.dumps(
+        [{"id": 1, "narration": "First scene."}, {"id": 2, "narration": "Second scene."}]
+    ))
+    (wd / "localize_scripts").mkdir()
+    (wd / "localize_scripts" / "es.json").write_text(json.dumps(
+        {"lang": "es", "scenes": {"1": "Primera escena.", "2": "Segunda escena."}}
+    ))
+    durations = {  # keyed on a path suffix so original vs localized differ
+        "localize/es/scene_01_narration.wav": 3.0,
+        "localize/es/scene_02_narration.wav": 4.0,
+        "scene_01_narration.wav": 2.0,
+        "scene_02_narration.wav": 3.0,
+    }
+
+    def _lookup(p):
+        p = str(p)
+        for suffix, dur in durations.items():
+            if p.endswith(suffix) and (("localize" in suffix) == ("localize" in p)):
+                return dur
+        return 0.0
+
+    return wd, mock.patch.object(captions, "_duration", side_effect=_lookup)
+
+
+class LocalizedSrtTests(unittest.TestCase):
+    def test_translated_text_on_original_timeline(self):
+        # Publishing the ORIGINAL cut with a Spanish caption track: Spanish
+        # words, original-cut timings.
+        wd, patch = _localized_film()
+        with patch:
+            path = captions.build_srt(wd, lang="es")
+        self.assertEqual(path.name, "captions_es.srt")
+        content = path.read_text()
+        self.assertIn("Primera escena.", content)
+        self.assertIn("00:00:00,000 --> 00:00:02,000", content)
+        self.assertIn("00:00:02,000 --> 00:00:05,000", content)
+
+    def test_localized_timeline_retimes_cues(self):
+        # Publishing the SPANISH cut: same words, timings from the localized
+        # scene durations (3s + 4s, not 2s + 3s).
+        wd, patch = _localized_film()
+        with patch:
+            path = captions.build_srt(wd, lang="es", timing_lang="es")
+        self.assertEqual(path.name, "captions_es_t-es.srt")
+        content = path.read_text()
+        self.assertIn("00:00:00,000 --> 00:00:03,000", content)
+        self.assertIn("00:00:03,000 --> 00:00:07,000", content)
+
+    def test_original_text_on_localized_timeline(self):
+        # English captions overlaying the Spanish cut.
+        wd, patch = _localized_film()
+        with patch:
+            path = captions.build_srt(wd, timing_lang="es")
+        content = path.read_text()
+        self.assertIn("First scene.", content)
+        self.assertIn("00:00:00,000 --> 00:00:03,000", content)
+
+    def test_unknown_language_returns_none(self):
+        wd, patch = _localized_film()
+        with patch:
+            self.assertIsNone(captions.build_srt(wd, lang="fr"))
+
+    def test_untranslated_scene_falls_back_to_original_text(self):
+        wd, patch = _localized_film()
+        (wd / "localize_scripts" / "es.json").write_text(json.dumps(
+            {"lang": "es", "scenes": {"1": "Primera escena."}}  # scene 2 untranslated
+        ))
+        with patch:
+            content = captions.build_srt(wd, lang="es").read_text()
+        self.assertIn("Primera escena.", content)
+        self.assertIn("Second scene.", content)
+
+
 if __name__ == "__main__":
     unittest.main()
