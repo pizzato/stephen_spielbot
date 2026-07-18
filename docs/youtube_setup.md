@@ -105,7 +105,9 @@ publish three ways:
   reorder with **Manual order**, or force one out with **Publish now**
 
 Uploads attach the script-based captions, topic tags, and the style's playlist, and
-respect the channel's privacy/category/language settings.
+respect the channel's privacy/category/language settings. When the video's style has a
+narration language set (`tts_language`), that language is stamped on the upload and its
+caption track (on both YouTube and X), overriding the channel-level default.
 
 ---
 

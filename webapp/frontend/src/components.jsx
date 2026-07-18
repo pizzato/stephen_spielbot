@@ -784,13 +784,15 @@ export function Sidebar({ route, go, badges = {} }) {
         ))}
       </nav>
       <div className="sidebar__foot">
-        <div className="channel">
+        <button type="button" className={`channel channel--link ${route === 'about' ? 'is-active' : ''}`}
+          onClick={() => go('about')} title="About Stephen Spielbot">
           <span className="channel__avatar"><Icon name="youtube" brand /></span>
           <div className="grow">
             <div className="channel__name">@StephenSpielbot</div>
             <div className="channel__meta">AI slop video director</div>
           </div>
-        </div>
+          <Icon name="circle-info" style={{ color: 'var(--ink-4)', fontSize: 13 }} />
+        </button>
       </div>
     </aside>
   )

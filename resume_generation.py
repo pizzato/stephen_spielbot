@@ -35,7 +35,7 @@ from PIL import Image as _PILImage
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from pipeline.llm import Scene, NEGATIVE_PROMPT
+from pipeline.llm import Scene, NEGATIVE_PROMPT, narration_language_name
 from pipeline import engines as _engines
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
@@ -178,6 +178,7 @@ def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dic
     if not api_key:
         return
     model = cfg.get("claude_model", "claude-sonnet-4-6")
+    lang_name = narration_language_name(cfg.get("tts_language", cfg.get("default_tts_language")))
     timeout = httpx.Timeout(connect=15.0, read=120.0, write=30.0, pool=30.0)
     client = anthropic.Anthropic(api_key=api_key, http_client=httpx.Client(http2=False, timeout=timeout))
     for s in scenes:
@@ -186,6 +187,7 @@ def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dic
         prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
         next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
         ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        if lang_name: ctx.append(f"Write the narration in {lang_name} (image_prompt stays in English).")
         if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
         if next_narr: ctx.append(f'Next scene: "{next_narr}"')
         need = []
@@ -214,12 +216,14 @@ def _fill_via_claude(scenes: list[Scene], title: str, video_title: str, cfg: dic
 def _fill_via_chat(scenes: list[Scene], title: str, video_title: str, cfg: dict) -> None:
     """Fill empty fields via the configured chat backend (Grok / shared path)."""
     from pipeline.llm import _chat_complete
+    lang_name = narration_language_name(cfg.get("tts_language", cfg.get("default_tts_language")))
     for s in scenes:
         if (s.narration or "").strip() and (s.image_prompt or "").strip():
             continue
         prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
         next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
         ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        if lang_name: ctx.append(f"Write the narration in {lang_name} (image_prompt stays in English).")
         if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')
         if next_narr: ctx.append(f'Next scene: "{next_narr}"')
         need = []
@@ -262,10 +266,12 @@ def _fill_via_local(scenes: list[Scene], title: str, video_title: str, cfg: dict
     import urllib.request
     url = cfg.get("local_llm_url", "http://localhost:8000/v1/chat/completions")
     model = cfg.get("local_llm_model", "openai/gpt-oss-120b")
+    lang_name = narration_language_name(cfg.get("tts_language", cfg.get("default_tts_language")))
     for s in scenes:
         if (s.narration or "").strip() and (s.image_prompt or "").strip():
             continue
         ctx = [f'Video topic: "{video_title}"', f'Scene {s.id} title: "{s.title or "(no title)"}"']
+        if lang_name: ctx.append(f"Write the narration in {lang_name}.")
         prev_narr = next((p.narration for p in scenes if p.id == s.id - 1 and p.narration), "")
         next_narr = next((p.narration for p in scenes if p.id == s.id + 1 and p.narration), "")
         if prev_narr: ctx.append(f'Previous scene: "{prev_narr}"')

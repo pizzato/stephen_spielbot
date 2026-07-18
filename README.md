@@ -8,11 +8,21 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 ## What it does
 
-1. **Script** — an LLM writes a multi-scene script with visual prompts, narration, and a mood-matched music description
-2. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-Video) generates each scene clip via ComfyUI (local or distributed workers)
-3. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech; supports voice cloning from a reference WAV. Uses the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) weights so narration is licensed for commercial use — see [NOTICE.md](NOTICE.md)
-4. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
-5. **Assembly** — FFmpeg mixes everything into a single video with synced audio
+1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) writes a multi-scene script with visual prompts, narration, and a mood-matched music description
+2. **Images** — FLUX.2 Klein (the default per-style image engine) generates each scene's first-frame still, with optional recurring [characters](docs/characters.md) kept consistent via reference images
+3. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-Video) animates each scene from its still via ComfyUI (local or distributed workers)
+4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [NOTICE.md](NOTICE.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
+5. **Dialogue** — scenes can instead be talking-head [dialogue or silent scenes](docs/dialogue_scenes.md): characters speak their lines in their own cloned voices, lip-synced by EchoMimic-V3
+6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
+7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
+
+Around the pipeline, the web app also handles the full channel workflow: a render
+queue with automation, AI-suggested video ideas, per-scene editing with image
+inpainting and version history, publishing to **YouTube** (multi-channel, with
+playlists, captions, and tags) and **X**, a publish scheduler with per-channel
+cadence, comment fetching / AI replies / community engagement, a predictive
+engagement model, and C2PA "AI-generated" content credentials on published
+videos.
 
 ## Durable orchestration
 
@@ -49,8 +59,9 @@ and the render process fit together.
 
 **Workers** (GPU machines):
 - Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-- ComfyUI (LTX 2.3) + F5-TTS run as containers — `make install` builds and
-  deploys them; the worker needs no Python/conda of its own
+- ComfyUI (LTX 2.3), F5-TTS/Chatterbox, and EchoMimic (talking-head dialogue)
+  run as containers — `make install` builds and deploys them; the worker needs
+  no Python/conda of its own
 
 ## Quick start
 
@@ -86,17 +97,20 @@ expose it to untrusted networks. `make tailscale` shares it with your tailnet
 
 Workers are configured in the single config file (see below) — there is no
 separate `cluster.conf`. List your render workers under `comfy_workers`;
-`make install` deploys the containers over SSH and derives `tts_workers` from
-them automatically:
+`make install` deploys the containers over SSH and derives `tts_workers` and
+`echomimic_workers` from them automatically:
 
 ```yaml
 # ~/.config/video-generator/config.yaml
 comfy_workers:           # you set these
   - http://s1:8188
   - http://s2:8188
-tts_workers:             # set by make install → containerized F5-TTS
+tts_workers:             # set by make install → containerized F5-TTS/Chatterbox
   - http://s1:8189
   - http://s2:8189
+echomimic_workers:       # set by make install → talking-head (dialogue scenes)
+  - http://s1:8190
+  - http://s2:8190
 ```
 
 Cover/preview regeneration has no dedicated worker: while the web UI is in use
@@ -111,8 +125,8 @@ needed — but still needs Docker + the NVIDIA Container Toolkit.
 
 ### Containerized workers
 
-`make install` deploys each render worker (ComfyUI + F5-TTS) as **Docker
-containers**, driven over SSH from the controller (or locally for
+`make install` deploys each render worker (ComfyUI + F5-TTS/Chatterbox +
+EchoMimic) as **Docker containers**, driven over SSH from the controller (or locally for
 `localhost`): it rsyncs the build context, mounts the host's existing models,
 runs `docker compose up -d --build`, and points the config at the container
 endpoints. See [`docker/README.md`](docker/README.md).
@@ -138,6 +152,12 @@ make logs W=s2              # tail s2's container logs
 
 `make start/stop/restart/status` drive `docker compose` on each host over SSH.
 Containers carry `restart: unless-stopped`, so they also survive a host reboot.
+`make start` recreates the containers (not just starts them) so they pick up
+the host's current NVIDIA device nodes — this self-heals the "nvidia-smi works
+but CUDA fails" state left behind when the driver or its modules were
+(re)loaded after the containers were created. To prevent that state at boot,
+load the modules before Docker: `printf 'nvidia\nnvidia-uvm\n' | sudo tee
+/etc/modules-load.d/nvidia.conf`.
 
 ## Configuration
 
@@ -148,27 +168,32 @@ cluster status panel). Worker lists are part of this file:
 | Setting | Description |
 |---|---|
 | ComfyUI Workers | One URL per line — scenes are distributed across workers in parallel |
-| TTS Workers | F5-TTS endpoints for parallel narration (one container per worker on port 8189, derived from your render workers by `make install`) |
+| TTS Workers | F5-TTS/Chatterbox endpoints for parallel narration (one container per worker on port 8189, derived from your render workers by `make install`) |
+| EchoMimic Workers | Talking-head endpoints for dialogue scenes (one container per worker on port 8190, derived by `make install`) |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM Backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` (ChatGPT) |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
 | Grok API key / model | xAI key (or `XAI_API_KEY`) and model name, e.g. `grok-4.5` |
 | OpenAI API key / model | OpenAI key (or `OPENAI_API_KEY`) and model name, e.g. `gpt-4o` |
-| Resolution | 832×480 default; portrait and square presets available |
+| Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + narration language), or the non-commercial `f5-original` preview |
+| Resolution | Portrait FHD (1080×1920) default; landscape / portrait / square presets from 512×288 up to 1920×1080 |
 
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
-| `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for *local* F5-TTS (workers use the container) |
-| `CHATTERBOX_PYTHON` | `~/miniconda3/envs/chatterbox/bin/python` | Python interpreter for Chatterbox TTS |
+| `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for *local* TTS (F5 and Chatterbox; workers use the container) |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
 | `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
 | `FFMPEG_PATH` | `$(which ffmpeg)` | Path to the ffmpeg binary (set when it isn't on `PATH`) |
 | `FFMPEG_TIMEOUT` | `600` | Per-call ffmpeg timeout, seconds |
-| `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Optional timeout for the packaged Remix temporal AI upscaler, in seconds |
-| `TTS_TIMEOUT` | `300` | Per-narration F5-TTS timeout, seconds |
+| `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the Remix temporal AI upscaler |
+| `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Timeout for the temporal AI upscaler, in seconds |
+| `TTS_TIMEOUT` | `300` | Per-narration TTS timeout, seconds |
+| `ECHOMIMIC_TIMEOUT` | `7200` | Per-clip talking-head (EchoMimic) timeout, seconds |
+| `OPENF5_REPO` | `mrfakename/OpenF5-TTS-Base` | Hugging Face repo for the narration weights (mirror/pin; keep it Apache/CC-BY licensed) |
+| `CHATTERBOX_REPO` | `ResembleAI/chatterbox` | Hugging Face repo for the Chatterbox weights (mirror/pin; keep it MIT licensed) |
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the durable orchestrator database |
 
 Final-film upscale on the Edit film screen has three modes:
@@ -213,7 +238,40 @@ huggingface-cli download Comfy-Org/vae-text-encorder-for-flux-klein-4b split_fil
 huggingface-cli download Comfy-Org/vae-text-encorder-for-flux-klein-4b split_files/vae/flux2-vae.safetensors --local-dir models/vae --local-dir-use-symlinks False
 ```
 
-The legacy FLUX.1 schnell engine is optional (`INSTALL_FLUX1=1 bash scripts/download_models.sh`).
+The legacy FLUX.1 schnell engine (also used for cover images) is optional
+(`INSTALL_FLUX1=1 bash scripts/download_models.sh`, or `make download-flux`).
+
+Two more model sets are fetched automatically outside this script:
+**Chatterbox Multilingual** TTS weights (~3.5 GB — `make install` pre-warms them
+into each TTS worker's Hugging Face cache) and the **EchoMimic-V3** talking-head
+weights (~27 GB: Wan2.1-Fun-1.3B + chinese-wav2vec2 + EchoMimicV3, fetched into
+the `echomimic` container's volume on first use). `make install` also downloads
+a 10-voice public-domain LibriVox **character voice library**
+(`make download-voices`) used to auto-cast dialogue characters.
+
+## Channels using this tool
+
+<!-- CHANNELS:START -->
+- [Stephen Spielbot (@StephenSpielbot)](https://www.youtube.com/@StephenSpielbot) — YouTube · The original
+- [A Brief History of Botkind (@BHOBk)](https://www.youtube.com/@BHOBk) — YouTube
+- [A Brief History of Botkind (@aBHOBk)](https://x.com/aBHOBk) — X
+<!-- CHANNELS:END -->
+
+Making films with Stephen Spielbot? Add your channel to
+[`channels.yaml`](channels.yaml) and open a pull request — that file is the only
+thing you need to edit. On merge, a GitHub Action regenerates this list and the
+app's **About** screen. Run `make channels` if you want to preview the result
+locally.
+
+## More docs
+
+- [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
+- [`docs/dialogue_scenes.md`](docs/dialogue_scenes.md) — dialogue, silent, and narration scene modes; the EchoMimic worker
+- [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
+- [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
+- [`docker/README.md`](docker/README.md) — the containerized worker stack in detail
+- [`webapp/README.md`](webapp/README.md) — web UI architecture and development workflow
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, tests, and the CI gate
 
 ## License
 

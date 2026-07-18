@@ -82,13 +82,17 @@ export default function Home({ go }) {
           </div>
         </Card>
 
-        <Card span={4} className="reveal reveal-d2" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
-          <div className="row center gap-16">
-            <img src="/assets/StephenSpielbot.png" alt="" style={{ width: 64, height: 64, borderRadius: 16, border: '1px solid var(--line)' }} />
-            <div>
-              <div className="h-title">Stephen Spielbot</div>
-              <div className="muted" style={{ fontSize: 13 }}>AI slop video director</div>
+        <Card span={4} className="reveal reveal-d2" link onClick={() => go('about')}
+          style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div className="row center between">
+            <div className="row center gap-16">
+              <img src="/assets/StephenSpielbot.png" alt="" style={{ width: 64, height: 64, borderRadius: 16, border: '1px solid var(--line)' }} />
+              <div>
+                <div className="h-title">Stephen Spielbot</div>
+                <div className="muted" style={{ fontSize: 13 }}>AI slop video director</div>
+              </div>
             </div>
+            <span className="card__arrow"><Icon name="circle-info" /></span>
           </div>
           <p className="body-1 mt-16" style={{ fontSize: 14 }}>
             Give me a topic. I'll write the script, paint every scene, record the narration, score it, and cut the whole thing together.
