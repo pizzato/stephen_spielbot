@@ -741,7 +741,8 @@ def _is_x_video_too_long(exc: Exception) -> bool:
 def post_video(client_id: str, client_secret: str, video_path: str, text: str,
                account: str = "", premium: bool | None = None,
                youtube_url: str = "", progress_callback=None,
-               captions_path: str = "", language: str = "en") -> dict:
+               captions_path: str = "", language: str = "en",
+               extra_captions: list[dict] | None = None) -> dict:
     """Post a video to X. Returns
     {tweet_id, url, error, fell_back_to_link, skipped, reason}.
 
@@ -751,6 +752,10 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
     When ``captions_path`` points to an SRT file, a closed-caption track is
     attached to the uploaded video (best-effort — a caption failure is logged but
     never blocks the post, and the link-fallback paths carry no video to caption).
+    ``extra_captions`` attaches further tracks in other languages, each
+    ``{"path", "language"}`` — same best-effort contract, and each track is a
+    separate association call (multiple tracks per video are unverified on the
+    public API, so one bad track never blocks the rest).
     """
     auth = _account_auth(client_id, client_secret, account)
     if not auth:
@@ -784,11 +789,16 @@ def post_video(client_id: str, client_secret: str, video_path: str, text: str,
         category = "amplify_video" if long else "tweet_video"
         try:
             media_id = _chunked_upload(auth, video_path, progress_callback, media_category=category)
-            if captions_path and Path(captions_path).exists():
+            caption_tracks = [{"path": captions_path, "language": language}] if captions_path else []
+            caption_tracks.extend(extra_captions or [])
+            for track in caption_tracks:
+                if not (track.get("path") and Path(track["path"]).exists()):
+                    continue
                 try:
-                    _attach_subtitles(auth, media_id, captions_path,
-                                      language=language, media_category=category)
-                    logger.info("Attached captions to X video (%s)", Path(captions_path).name)
+                    _attach_subtitles(auth, media_id, track["path"],
+                                      language=track.get("language") or "en",
+                                      media_category=category)
+                    logger.info("Attached captions to X video (%s)", Path(track["path"]).name)
                 except Exception as cexc:
                     detail = ""
                     resp = getattr(cexc, "response", None)

@@ -3218,6 +3218,587 @@ def remix_narrator(body: RemixNarratorBody) -> dict:
     return {"ok": True, "task_id": tid}
 
 
+class LocalizeFilmBody(BaseModel):
+    work_dir: str
+    language: str
+
+
+def _run_localize_film(task_id: str, wd: Path, lang: str) -> None:
+    """Background thread: translate narration + re-synthesize it in *lang* with
+    Chatterbox Multilingual, reusing the existing scene videos and background
+    music untouched. Never overwrites the original-language narration/scene
+    finals — those live under localize/{lang}/ until the final assembly step,
+    which only replaces the whole-film canonical file (kept as a switchable
+    final_video_history version, same mechanism as upscale)."""
+    import shutil
+    from pipeline.chatterbox import LANGUAGES
+    from pipeline.llm import translate_narrations
+
+    started = _film_task_started_at(task_id) or time.time()
+    lang_dir = wd / "localize" / lang
+    try:
+        jc = _film_job_config(wd)
+        final_path = gapp._final_path_for_work_dir(wd)
+        final_video_history.seed_if_empty(
+            wd, final_path, "Original", lang=gapp._norm_tts_language(jc.get("tts_language")),
+        )
+
+        rows = gapp._load_scenes_for_work_dir(wd)
+        if not rows:
+            raise RuntimeError("No scene data found.")
+        row_by_id = {int(r.get("id") or 0): r for r in rows}
+        order = _load_scene_order(wd) or list(row_by_id.keys())
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "translate"}
+        title = (jc.get("video_title") or jc.get("title") or wd.name).strip()
+        translatable = [
+            row_by_id[sid] for sid in order
+            if sid in row_by_id
+            and str((row_by_id[sid].get("metadata") or {}).get("mode") or "narration") != "silent"
+            and (row_by_id[sid].get("narration") or "").strip()
+        ]
+        translations = translate_narrations(translatable, LANGUAGES[lang], title=title) if translatable else {}
+        scripts_dir = wd / "localize_scripts"
+        scripts_dir.mkdir(parents=True, exist_ok=True)
+        (scripts_dir / f"{lang}.json").write_text(
+            json.dumps({"lang": lang, "scenes": {str(k): v for k, v in translations.items()}}, indent=2)
+        )
+        # Publish metadata (title/description) in the same language, ready for
+        # the Publish screen. Best-effort — it translates lazily there if this
+        # fails, and a metadata hiccup must not fail the whole localization.
+        try:
+            _localize_metadata(wd, lang)
+        except Exception as exc:
+            gapp.logger.warning("Localized metadata for %s failed (deferred): %s", lang, exc)
+
+        lang_dir.mkdir(parents=True, exist_ok=True)
+        jobs: dict[int, dict] = {}
+        for sid in order:
+            row = row_by_id.get(int(sid))
+            if not row:
+                continue
+            src_final = wd / f"scene_{int(sid):02d}_final.mp4"
+            if int(sid) not in translations:
+                # Silent/dialogue/untranslated scene — carry the original-language
+                # scene final through unchanged so the concatenation stays complete.
+                if src_final.exists():
+                    shutil.copy2(src_final, lang_dir / f"scene_{int(sid):02d}_final.mp4")
+                continue
+            jobs[int(sid)] = {**row, "narration": translations[int(sid)]}
+        if jobs:
+            _localize_synthesize_scenes(task_id, wd, jc, lang, jobs)
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "finalize"}
+        history, scene_count = _assemble_localized_final(wd, lang, jc, order)
+
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "video_history": history,
+            "lang": lang,
+            "scene_count": scene_count,
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Localized film",
+            failed_name="Localization failed",
+            cancelled_name="Localization cancelled",
+            detail=f"{wd.name} → {lang}",
+        )
+
+
+@api.post("/api/remix/localize")
+def remix_localize(body: LocalizeFilmBody) -> dict:
+    from pipeline.chatterbox import LANGUAGES, norm_language
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not (wd / "combined.mp4").exists():
+        raise HTTPException(404, f"combined.mp4 not found in {wd.name}.")
+    lang = norm_language(body.language)
+    if body.language not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {body.language}")
+    jc = _film_job_config(wd)
+    if lang == gapp._norm_tts_language(jc.get("tts_language")):
+        raise HTTPException(400, "That is already this film's original language.")
+
+    tid = f"localize_{lang}_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "translate"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "localize",
+        "started_at": time.time(),
+    }
+    threading.Thread(
+        target=_run_localize_film, args=(tid, wd, lang), daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid}
+
+
+def _localize_synthesize_scenes(task_id: str, wd: Path, jc: dict, lang: str,
+                                jobs: dict[int, dict]) -> None:
+    """Fan translated-scene synthesis across the TTS fleet.
+
+    *jobs* maps scene id → its row with the TRANSLATED narration already in
+    place. Each scene acquires one TTS worker from a per-URL semaphore pool
+    (all reachable ``tts_workers``), so with 3 workers three scenes voice at
+    once — same fanout shape as the parallel scene upscale, including per-scene
+    Activity sub-jobs. ``_film_tasks`` shows aggregate fanout progress."""
+    import concurrent.futures
+    from pipeline.chatterbox import LANGUAGES
+    from pipeline.tts_worker import worker_alive
+    from pipeline.worker_pool import WorkerPool
+
+    cfg = gapp.load_config()
+    configured = [h for h in (cfg.get("tts_workers") or []) if str(h).strip()]
+    hosts = [h for h in configured if worker_alive(h, timeout=3)]
+    if not hosts:
+        # No reachable remote worker — keep the sequential single-host behavior
+        # (_render_scene_narration falls back to the first configured/localhost).
+        hosts = configured[:1] or ["localhost"]
+    pool = WorkerPool(hosts)
+    n = len(jobs)
+    lang_dir = wd / "localize" / lang
+    try:
+        film_title = _video_title_for(wd)
+    except Exception:
+        film_title = wd.name
+    per_scene_est, _learned = film_timing.estimate("narrator_scene")
+    _film_tasks[task_id] = {
+        "status": "running", "step": "narration", "fanout": True,
+        "current": 0, "total": n,
+    }
+
+    def synth_one(sid: int, row: dict) -> int:
+        _film_checkpoint(task_id)
+        sub_id = f"film:{task_id}#s{sid}"
+        _register_film_subjob(
+            sub_id,
+            name=f"Voicing scene {sid} in {LANGUAGES.get(lang, lang)}",
+            detail=f"{n} scene{'s' if n != 1 else ''} → {LANGUAGES.get(lang, lang)}",
+            work_dir=str(wd),
+            title=film_title,
+            est_seconds=per_scene_est,
+        )
+        sub_started = time.time()
+        host = pool.acquire()
+        try:
+            _render_scene_narration(
+                task_id, wd, sid, jc, row,
+                voice_name=_scene_voice_name(row, jc),
+                language=lang,
+                tts_engine_override="chatterbox-multilingual",
+                out_dir=lang_dir,
+                record_video_history=False,
+                tts_host=host,
+                update_task=False,
+            )
+            film_timing.record("narrator_scene", time.time() - sub_started)
+            return sid
+        finally:
+            _clear_film_subjob(sub_id)
+            pool.release(host)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(hosts), n)) as executor:
+            futures = [executor.submit(synth_one, sid, row) for sid, row in jobs.items()]
+            done = 0
+            for fut in concurrent.futures.as_completed(futures):
+                fut.result()
+                done += 1
+                _film_tasks[task_id] = {
+                    "status": "running", "step": "narration", "fanout": True,
+                    "current": done, "total": n,
+                }
+    finally:
+        _clear_film_subjobs_for(task_id)
+
+
+def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -> tuple[dict, int]:
+    """Concatenate the localized scene finals in ``localize/{lang}/``, mix the
+    film's music/ambient back in at the film's volumes, swap the canonical
+    final, and record it as a switchable history version tagged with *lang*.
+    Scenes missing from the language folder fall back to the original cut's
+    scene final (silent/dialogue scenes are carried through, not re-voiced).
+    Returns ``(history, scene_count)``."""
+    import shutil
+    from pipeline.assembler import concatenate_scenes, mix_background_music
+    from pipeline.chatterbox import LANGUAGES
+
+    lang_dir = wd / "localize" / lang
+    final_path = gapp._final_path_for_work_dir(wd)
+    for sid in order:
+        loc = lang_dir / f"scene_{int(sid):02d}_final.mp4"
+        src = wd / f"scene_{int(sid):02d}_final.mp4"
+        if not loc.exists() and src.exists():
+            shutil.copy2(src, loc)
+    scene_finals = [
+        lang_dir / f"scene_{int(sid):02d}_final.mp4" for sid in order
+        if (lang_dir / f"scene_{int(sid):02d}_final.mp4").exists()
+        and (lang_dir / f"scene_{int(sid):02d}_final.mp4").stat().st_size > 10_000
+    ]
+    if not scene_finals:
+        raise RuntimeError("No scene clips produced for this language.")
+
+    combined = lang_dir / "combined.mp4"
+    music_path = wd / "background_music.wav"
+    if not music_path.exists():
+        raise RuntimeError("No background music found in this film folder.")
+    ambient = wd / "ambient.wav"
+    cfg = gapp.load_config()
+    concatenate_scenes(scene_finals, combined)
+    staged_final = wd / "final_localize.staging.mp4"
+    mix_background_music(
+        combined, music_path, staged_final,
+        volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
+        voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+        ambient_path=ambient if ambient.exists() else None,
+        ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+    )
+    staged_final.replace(final_path)
+    history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang)
+    return history, len(scene_finals)
+
+
+def _run_localize_edit(task_id: str, wd: Path, lang: str, changed: dict[int, str]) -> None:
+    """Background thread: re-voice only the scenes whose translated narration
+    was edited, then reassemble the localized final as a new history version.
+    The edits are persisted to localize_scripts/{lang}.json first, so captions
+    and future re-voicing always read what's actually spoken."""
+    started = _film_task_started_at(task_id) or time.time()
+    lang_dir = wd / "localize" / lang
+    try:
+        jc = _film_job_config(wd)
+        final_path = gapp._final_path_for_work_dir(wd)
+        final_video_history.seed_if_empty(
+            wd, final_path, "Original", lang=gapp._norm_tts_language(jc.get("tts_language")),
+        )
+        rows = gapp._load_scenes_for_work_dir(wd)
+        if not rows:
+            raise RuntimeError("No scene data found.")
+        row_by_id = {int(r.get("id") or 0): r for r in rows}
+        order = _load_scene_order(wd) or list(row_by_id.keys())
+
+        script_path = wd / "localize_scripts" / f"{lang}.json"
+        data = json.loads(script_path.read_text())
+        scenes_map = data.get("scenes") or {}
+        scenes_map.update({str(k): v for k, v in changed.items()})
+        data["scenes"] = scenes_map
+        script_path.write_text(json.dumps(data, indent=2))
+
+        jobs = {
+            sid: {**row_by_id[sid], "narration": text}
+            for sid, text in changed.items() if sid in row_by_id
+        }
+        if jobs:
+            _localize_synthesize_scenes(task_id, wd, jc, lang, jobs)
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "finalize"}
+        history, _count = _assemble_localized_final(wd, lang, jc, order)
+        # The narration changed — any previously exported dubbed audio is stale.
+        (lang_dir / "dubbed_audio.m4a").unlink(missing_ok=True)
+
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "video_history": history,
+            "lang": lang,
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Localized narration updated",
+            failed_name="Localization edit failed",
+            cancelled_name="Localization edit cancelled",
+            detail=f"{wd.name} → {lang}",
+        )
+
+
+@api.get("/api/remix/localize/scripts")
+def localize_scripts(work_dir: str = Query(...)) -> dict:
+    """Every saved localization for a film: per-scene original + translated
+    narration (for the edit UI), plus whether a dubbed-audio export exists."""
+    from pipeline.chatterbox import LANGUAGES
+
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    jc = _film_job_config(wd)
+    orig = gapp._norm_tts_language(jc.get("tts_language"))
+    rows = gapp._load_scenes_for_work_dir(wd)
+    row_by_id = {int(r.get("id") or 0): r for r in rows}
+    order = _load_scene_order(wd) or list(row_by_id.keys())
+
+    localizations = []
+    scripts_dir = wd / "localize_scripts"
+    for path in sorted(scripts_dir.glob("*.json")) if scripts_dir.exists() else []:
+        lang = path.stem
+        if lang not in LANGUAGES:
+            continue
+        try:
+            translations = {
+                int(k): v for k, v in (json.loads(path.read_text()).get("scenes") or {}).items()
+                if isinstance(v, str) and v.strip()
+            }
+        except Exception:
+            continue
+        scenes = [
+            {
+                "id": int(sid),
+                "original": (row_by_id[int(sid)].get("narration") or "").strip(),
+                "translated": translations[int(sid)],
+            }
+            for sid in order if int(sid) in translations and int(sid) in row_by_id
+        ]
+        audio = wd / "localize" / lang / "dubbed_audio.m4a"
+        localizations.append({
+            "lang": lang,
+            "name": LANGUAGES[lang],
+            "scenes": scenes,
+            "audio_url": f"/api/file?path={audio}" if audio.exists() else "",
+        })
+    return {
+        "original_lang": orig,
+        "original_name": LANGUAGES.get(orig, orig.upper()),
+        "localizations": localizations,
+    }
+
+
+class LocalizeScriptBody(BaseModel):
+    work_dir: str
+    language: str
+    scenes: dict[str, str]
+
+
+@api.post("/api/remix/localize/script")
+def localize_script_save(body: LocalizeScriptBody) -> dict:
+    """Apply edited translated narration lines: persists them, re-voices only
+    the changed scenes, and reassembles the localized final."""
+    from pipeline.chatterbox import LANGUAGES
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    lang = body.language
+    if lang not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {lang}")
+    script_path = wd / "localize_scripts" / f"{lang}.json"
+    if not script_path.exists():
+        raise HTTPException(404, f"No {LANGUAGES[lang]} localization exists for this film.")
+    try:
+        stored = json.loads(script_path.read_text()).get("scenes") or {}
+    except Exception:
+        stored = {}
+    changed = {}
+    for key, text in body.scenes.items():
+        try:
+            sid = int(key)
+        except (TypeError, ValueError):
+            continue
+        text = (text or "").strip()
+        # Only re-voice scenes that already have a translation and actually
+        # changed — an emptied line falls back to nothing (can't unvoice a scene
+        # from here) and an untouched line would waste a TTS round-trip.
+        if text and str(sid) in stored and text != (stored.get(str(sid)) or "").strip():
+            changed[sid] = text
+    if not changed:
+        raise HTTPException(400, "No changed lines to apply.")
+
+    tid = f"localize_edit_{lang}_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "narration"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "localize",
+        "started_at": time.time(),
+    }
+    threading.Thread(
+        target=_run_localize_edit, args=(tid, wd, lang, changed), daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid, "changed": sorted(changed)}
+
+
+def _localize_metadata(wd: Path, lang: str) -> dict[str, str]:
+    """Localized publish metadata (title + description) for *lang*, translating
+    and caching into localize_scripts/{lang}.json on first use. The source is
+    the film's canonical title and cached description at call time."""
+    from pipeline.chatterbox import LANGUAGES
+    from pipeline.llm import translate_metadata
+
+    script_path = wd / "localize_scripts" / f"{lang}.json"
+    if not script_path.exists():
+        raise FileNotFoundError(f"No {LANGUAGES.get(lang, lang)} localization exists for this film.")
+    data = json.loads(script_path.read_text())
+    if (data.get("title") or "").strip():
+        return {"title": data["title"], "description": data.get("description") or ""}
+    translated = translate_metadata(
+        _video_title_for(wd), _cached_description(wd), LANGUAGES.get(lang, lang),
+    )
+    data["title"] = translated["title"]
+    data["description"] = translated["description"]
+    script_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    return translated
+
+
+class LocalizeMetadataBody(BaseModel):
+    work_dir: str
+    language: str
+
+
+@api.post("/api/remix/localize/metadata")
+def localize_metadata(body: LocalizeMetadataBody) -> dict:
+    """Localized title + description for publishing a localized cut (translated
+    on first request, cached in the localization's script file after that)."""
+    from pipeline.chatterbox import LANGUAGES
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if body.language not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {body.language}")
+    try:
+        with _track_op("Translating metadata", wd.name):
+            out = _localize_metadata(wd, body.language)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Metadata translation failed: {str(e).splitlines()[0][:200]}")
+    return {"ok": True, **out}
+
+
+class LocalizeAudioBody(BaseModel):
+    work_dir: str
+    language: str
+
+
+def _build_dubbed_audio(wd: Path, lang: str) -> Path:
+    """Audio-only dub of the film in *lang*, time-aligned to the ORIGINAL cut.
+
+    YouTube's Multi-Language Audio replaces the published video's audio track
+    wholesale, so the dub must line up with the original video's timeline — but
+    the localized cut re-times every scene to its translated narration
+    (mux_video_audio sizes each scene to its narration). Realign per scene:
+    translated narration is padded with silence (shorter) or gently sped up
+    (longer) to the original scene's exact duration; untranslated scenes keep
+    their original audio; then the film's music/ambient mix is applied at the
+    same volumes. The result drops straight into YouTube Studio ▸ Languages."""
+    import shutil
+    import subprocess
+    from pipeline.assembler import _FFMPEG, _get_duration
+
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    lang_dir = wd / "localize" / lang
+    row_ids = [int(r.get("id") or 0) for r in gapp._load_scenes_for_work_dir(wd)]
+    order = _load_scene_order(wd) or row_ids
+
+    seg_dir = lang_dir / "mla_segments"
+    seg_dir.mkdir(parents=True, exist_ok=True)
+    segments: list[Path] = []
+    try:
+        for sid in order:
+            orig_final = wd / f"scene_{int(sid):02d}_final.mp4"
+            target = _get_duration(orig_final) if orig_final.exists() else 0.0
+            if target <= 0:
+                continue  # scene absent from the original cut's timeline too
+            seg = seg_dir / f"seg_{int(sid):02d}.wav"
+            loc_wav = lang_dir / f"scene_{int(sid):02d}_narration.wav"
+            common = ["-t", f"{target:.3f}", "-ar", "48000", "-ac", "2", str(seg)]
+            if loc_wav.exists():
+                dur = _get_duration(loc_wav)
+                # >2% over the slot: compress to fit (atempo keeps pitch); the
+                # translation prompt targets similar pacing so this stays subtle.
+                tempo = dur / target if target and dur > target * 1.02 else 1.0
+                filt = (f"atempo={min(tempo, 4.0):.4f}," if tempo > 1.0 else "") + "apad"
+                cmd = [_FFMPEG, "-y", "-i", str(loc_wav), "-af", filt, *common]
+            else:
+                # Untranslated (silent/dialogue) scene — keep its original audio.
+                cmd = [_FFMPEG, "-y", "-i", str(orig_final), "-vn", "-af", "apad", *common]
+            try:
+                subprocess.run(cmd, check=True, capture_output=True, timeout=300)
+            except subprocess.CalledProcessError:
+                # No audio stream on the source (fully silent scene) → silence.
+                subprocess.run(
+                    [_FFMPEG, "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", *common],
+                    check=True, capture_output=True, timeout=300,
+                )
+            segments.append(seg)
+        if not segments:
+            raise RuntimeError("No scene audio found to build the dubbed track from.")
+
+        concat_list = seg_dir / "segments.txt"
+        concat_list.write_text("".join(f"file '{p}'\n" for p in segments))
+        voice = seg_dir / "voice.wav"
+        subprocess.run(
+            [_FFMPEG, "-y", "-f", "concat", "-safe", "0", "-i", str(concat_list),
+             "-c:a", "pcm_s16le", str(voice)],
+            check=True, capture_output=True, timeout=600,
+        )
+
+        out = lang_dir / "dubbed_audio.m4a"
+        music = wd / "background_music.wav"
+        ambient = wd / "ambient.wav"
+        ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
+        voice_vol = float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0
+        music_vol = float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0
+        if music.exists():
+            # Same mix mix_background_music applies to the published final, so
+            # the dub sounds identical to the film — just voiced in *lang*.
+            use_ambient = ambient.exists() and ambient_vol > 0
+            chains = [f"[0:a]volume={voice_vol:.3f}[voice]", f"[1:a]volume={music_vol:.3f}[bg]"]
+            inputs = ["-i", str(voice), "-i", str(music)]
+            if use_ambient:
+                chains.append(f"[2:a]volume={ambient_vol:.3f}[amb]")
+                inputs += ["-i", str(ambient)]
+            labels = "[voice][bg][amb]" if use_ambient else "[voice][bg]"
+            filt = ";".join(chains) + (
+                f";{labels}amix=inputs={3 if use_ambient else 2}"
+                ":duration=first:dropout_transition=3:normalize=0[aout]"
+            )
+            subprocess.run(
+                [_FFMPEG, "-y", *inputs, "-filter_complex", filt, "-map", "[aout]",
+                 "-c:a", "aac", "-b:a", "192k", str(out)],
+                check=True, capture_output=True, timeout=600,
+            )
+        else:
+            subprocess.run(
+                [_FFMPEG, "-y", "-i", str(voice), "-c:a", "aac", "-b:a", "192k", str(out)],
+                check=True, capture_output=True, timeout=600,
+            )
+        return out
+    finally:
+        shutil.rmtree(seg_dir, ignore_errors=True)
+
+
+@api.post("/api/remix/localize/audio")
+def localize_audio(body: LocalizeAudioBody) -> dict:
+    """Build (or rebuild) the downloadable dubbed audio track for a localization
+    — an original-timeline dub ready for YouTube Studio's multi-language audio."""
+    from pipeline.chatterbox import LANGUAGES
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    lang = body.language
+    if lang not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {lang}")
+    if not (wd / "localize" / lang).exists():
+        raise HTTPException(404, f"No {LANGUAGES[lang]} localization exists for this film.")
+    try:
+        out = _build_dubbed_audio(wd, lang)
+    except Exception as e:
+        raise HTTPException(500, f"Dubbed audio build failed: {str(e).splitlines()[0][:200]}")
+    return {"ok": True, "audio_url": f"/api/file?path={out}&t={int(time.time())}"}
+
+
 class MusicRegenBody(BaseModel):
     work_dir: str
     music_desc: str = ""
@@ -3406,6 +3987,13 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             )
 
         final_video_history.seed_if_empty(wd, final_path, "Original")
+        # Carry the currently-selected version's language forward, so upscaling
+        # a localized cut doesn't lose its language tag in the new entry.
+        _hist_before = final_video_history.history(wd)
+        cur_lang = next(
+            (v.get("lang") for v in _hist_before["versions"] if v["id"] == _hist_before["selected"]),
+            None,
+        )
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
         if mode in {"ic_lora", "ltx_latent"}:
@@ -3426,7 +4014,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             "ic_lora": "LTX IC-LoRA",
         }.get(mode, mode)
         label = f"{mode_label} {target_w}x{target_h}"
-        final_video_history.record(wd, final_path, label=label)
+        final_video_history.record(wd, final_path, label=label, lang=cur_lang)
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -5037,6 +5625,15 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
     # Channel/account this film publishes to, resolved from its style (issue #22/#107).
     channel = _channel_for_work_dir(wd)
     x_account = _x_account_for_work_dir(wd)
+    # Final versions + language tags, so Publish can offer the localized cuts.
+    from pipeline.chatterbox import LANGUAGES
+    jc = _film_job_config(wd)
+    raw_lang = jc.get("tts_language")
+    original_lang = gapp._norm_tts_language(raw_lang) if raw_lang else "en"
+    try:
+        video_history = final_video_history.history(wd)
+    except Exception:
+        video_history = {"versions": [], "selected": None}
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -5055,6 +5652,10 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "vid_height": vid_h,
         # Shorts (portrait) don't take custom thumbnails — default the upload off.
         "include_thumbnail_default": orientation != "portrait",
+        # Version picker: which final cuts exist and what language each speaks.
+        "video_history": video_history,
+        "original_lang": original_lang,
+        "lang_names": LANGUAGES,
     }
 
 
@@ -5766,6 +6367,47 @@ def _resolve_upload_playlist(cfg: dict, wd: Path, channel: str) -> str:
     return choice
 
 
+def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, str, str, list[dict]]:
+    """Caption tracks for publishing the currently selected final cut.
+
+    Returns ``(main_srt, audio_lang, audio_lang_name, extra_tracks)``. The main
+    SRT is worded in the published cut's spoken language and timed to its
+    timeline; ``extra_tracks`` carries every OTHER language the film has (the
+    original + each saved localization) timed to that SAME timeline, since all
+    caption tracks overlay the one published video. ``fallback_lang`` (the
+    channel's language pref) is used when the film predates language tagging."""
+    from pipeline import captions as _captions
+    from pipeline.chatterbox import LANGUAGES
+
+    jc = _film_job_config(wd)
+    raw = jc.get("tts_language")
+    orig = gapp._norm_tts_language(raw) if raw else (fallback_lang or "en")
+    hist = final_video_history.history(wd)
+    sel = next((v for v in hist["versions"] if v["id"] == hist.get("selected")), None)
+    cut_lang = (sel or {}).get("lang") or orig
+    timing = None if cut_lang == orig else cut_lang
+
+    def _srt(code: str) -> Path | None:
+        return _captions.build_srt(
+            wd, lang=None if code == orig else code, timing_lang=timing,
+        )
+
+    main = _srt(cut_lang)
+    scripts_dir = wd / "localize_scripts"
+    langs = {orig} | ({p.stem for p in scripts_dir.glob("*.json")} if scripts_dir.exists() else set())
+    extras = []
+    for code in sorted((langs & set(LANGUAGES)) - {cut_lang}):
+        srt = _srt(code)
+        if srt:
+            extras.append({"path": str(srt), "language": code, "name": LANGUAGES[code]})
+    return (
+        str(main) if main else None,
+        cut_lang,
+        LANGUAGES.get(cut_lang, cut_lang.upper()),
+        extras,
+    )
+
+
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
@@ -5778,17 +6420,18 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
         # Per-style playlist the finished video is added to (resolved here so the
         # "__auto__" find-or-create can hit the API off the render path).
         playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
-        # Build a subtitle track from the known script so YouTube shows accurate
-        # captions instead of relying on speech recognition. Best-effort, and
-        # only when the channel has captions enabled.
-        caption_file = None
+        # Build subtitle tracks from the known scripts so YouTube shows accurate
+        # captions instead of relying on speech recognition: one track in the
+        # published cut's spoken language plus one per other language the film
+        # has (original + localizations). Best-effort, and only when the channel
+        # has captions enabled.
+        caption_file, audio_lang, audio_lang_name, extra_caps = None, language, "English", []
         if attach_captions:
             try:
-                from pipeline import captions as _captions
-                _srt = _captions.build_srt(wd)
-                caption_file = str(_srt) if _srt else None
+                caption_file, audio_lang, audio_lang_name, extra_caps = \
+                    _publish_caption_tracks(wd, language)
             except Exception:
-                caption_file = None
+                caption_file, extra_caps = None, []
         # Keyword tags (topic tags + style + narrator); best-effort.
         yt_tags = _youtube_tags_for(wd, gapp.load_config())
         # Content Credentials (C2PA): sign the final in place before it leaves
@@ -5809,7 +6452,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 thumbnail=thumb, thumbnail_path=thumb, thumb=thumb,
                 channel=channel, tags=yt_tags, keywords=yt_tags,
                 captions_path=caption_file, captions=caption_file,
-                default_language=language, default_audio_language=language,
+                captions_name=audio_lang_name, extra_captions=extra_caps,
+                default_language=language, default_audio_language=audio_lang,
                 playlist_id=playlist_id,
             )
     except Exception as e:
@@ -6211,16 +6855,16 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
         # preference (single source of truth); best-effort, like YouTube's captions.
         language, attach_captions = _upload_prefs_for_channel(cfg, _channel_for_work_dir(wd))
         # Same rule as the YouTube upload: the film's own narration language
-        # (per-style tts_language stamped at render) labels the CC track.
+        # (per-style tts_language stamped at render) is the fallback label;
+        # _publish_caption_tracks refines it to the published cut's language.
         language = _video_language_for_work_dir(wd, language)
-        caption_file = ""
+        caption_file, audio_lang, extra_caps = "", language, []
         if attach_captions:
             try:
-                from pipeline import captions as _captions
-                _srt = _captions.build_srt(wd)
-                caption_file = str(_srt) if _srt else ""
+                _main, audio_lang, _name, extra_caps = _publish_caption_tracks(wd, language)
+                caption_file = _main or ""
             except Exception:
-                caption_file = ""
+                caption_file, extra_caps = "", []
         # Content Credentials (C2PA): sign the final in place before it leaves
         # the machine — the last step, since a later re-encode breaks the
         # manifest. Best-effort, never blocks the post.
@@ -6229,7 +6873,8 @@ def _run_x_post_task(task_id: str, body_dict: dict, wd: Path, final: Path) -> No
             result = xt.post_video(
                 cid, secret, str(final), text, account=account,
                 premium=premium, youtube_url=youtube_url,
-                captions_path=caption_file, language=language)
+                captions_path=caption_file, language=audio_lang,
+                extra_captions=extra_caps)
     except Exception as e:
         _x_post_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
         _x_auto_release_on_failure(wd)
@@ -7776,12 +8421,24 @@ class RerenderSceneBody(BaseModel):
 
 
 def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                            voice_name: str | None = None) -> None:
+                            voice_name: str | None = None,
+                            language: str | None = None,
+                            tts_engine_override: str | None = None,
+                            out_dir: Path | None = None,
+                            record_video_history: bool = True,
+                            tts_host: str | None = None,
+                            update_task: bool = True) -> None:
     from pipeline.assembler import mux_video_audio
     from pipeline.tts_worker import generate_narration
 
-    narration_path = wd / f"scene_{sid:02d}_narration.wav"
-    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    # out_dir scopes the output to a language-specific subdirectory (localize
+    # feature) instead of the film's canonical top-level files; the raw scene
+    # video is always read from wd itself, since it's shared across languages.
+    target_dir = out_dir or wd
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+    narration_path = target_dir / f"scene_{sid:02d}_narration.wav"
+    final_path = target_dir / f"scene_{sid:02d}_final.mp4"
     cfg = gapp.load_config()
 
     _film_checkpoint(task_id)
@@ -7794,12 +8451,16 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     voice_robotic = bool(jc.get("voice_robotic", False))
     voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
     voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
-    tts_engine = jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
-    tts_language = jc.get("tts_language", cfg.get("default_tts_language", "en"))
-    tts_hosts = cfg.get("tts_workers") or []
-    tts_host = tts_hosts[0] if tts_hosts else "localhost"
+    tts_engine = tts_engine_override or jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
+    tts_language = language or jc.get("tts_language", cfg.get("default_tts_language", "en"))
+    if tts_host is None:
+        # tts_host lets fanout callers spread scenes across the TTS fleet; the
+        # single-scene paths keep the first-configured-worker default.
+        tts_hosts = cfg.get("tts_workers") or []
+        tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
-    _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
+    if update_task:
+        _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
     generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language)
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
@@ -7811,11 +8472,13 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     )
     if actual_video:
         _film_checkpoint(task_id)
-        _film_tasks[task_id]["step"] = "mux"
-        staged_final = wd / f"scene_{sid:02d}_final.staging.mp4"
+        if update_task:
+            _film_tasks[task_id]["step"] = "mux"
+        staged_final = target_dir / f"scene_{sid:02d}_final.staging.mp4"
         mux_video_audio(actual_video, narration_path, staged_final)
         staged_final.replace(final_path)
-        video_history.record(wd, sid, final_path)
+        if record_video_history:
+            video_history.record(wd, sid, final_path)
 
 
 def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
