@@ -2,7 +2,7 @@
 #
 # ComfyUI render worker (issue #12). Vanilla ComfyUI + PyTorch — every node our
 # workflows use (LTX 2.3, ACE-Step, FLUX) is native, so no custom nodes are
-# installed. The ~33 GB of models are NOT baked in; they are mounted at runtime
+# installed. The ~49 GB of models are NOT baked in; they are mounted at runtime
 # (see docker/docker-compose.yml). Listens on 0.0.0.0:8188, same as the
 # SSH-installed worker.
 
@@ -120,7 +120,7 @@ PY
 
 EXPOSE 8188
 
-# Models are mounted at /opt/ComfyUI/models by compose (not baked — ~33 GB).
+# Models are mounted at /opt/ComfyUI/models by compose (not baked — ~49 GB).
 # The healthcheck verifies BOTH that the server is up AND the GPU is still
 # reachable. nvidia-smi is probed fresh each time (not ComfyUI's startup-cached
 # device), so a GPU revoked mid-run by a host daemon-reload ("NVML: Unknown
