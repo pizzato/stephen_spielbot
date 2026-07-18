@@ -144,6 +144,7 @@ export const api = {
   localizeFilm: (body) => req('POST', '/remix/localize', body),
   localizeScripts: (workDir) => req('GET', `/remix/localize/scripts?work_dir=${encodeURIComponent(workDir)}`),
   saveLocalizeScript: (body) => req('POST', '/remix/localize/script', body),
+  localizeMetadata: (body) => req('POST', '/remix/localize/metadata', body),
   buildLocalizeAudio: (body) => req('POST', '/remix/localize/audio', body),
   listLocalizeLanguages: () => api.listTtsEngines().then((r) =>
     (r.engines || []).find((e) => e.key === 'chatterbox-multilingual')?.languages || {}),

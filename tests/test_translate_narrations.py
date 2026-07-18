@@ -57,6 +57,20 @@ class TranslateNarrationsTests(unittest.TestCase):
         self.assertEqual(len(out), 12)
         self.assertEqual(calls, [12, 6, 6])  # failed full batch, then two halves
 
+    def test_translate_metadata_parses_and_caps_title(self):
+        def fake(cfg, system, user_msg, max_tokens, label):
+            return json.dumps({"title": "T" * 150, "description": "Uma descrição."})
+
+        with mock.patch.object(llm, "_chat_complete", side_effect=fake):
+            out = llm.translate_metadata("A Title", "A description.", "Portuguese", cfg={})
+        self.assertEqual(len(out["title"]), 100)  # YouTube's hard cap
+        self.assertEqual(out["description"], "Uma descrição.")
+
+    def test_translate_metadata_missing_title_raises(self):
+        with mock.patch.object(llm, "_chat_complete", return_value='{"description": "x"}'):
+            with self.assertRaises(RuntimeError):
+                llm.translate_metadata("A Title", "", "Portuguese", cfg={})
+
     def test_missing_scene_raises(self):
         def drops_one(cfg, system, user_msg, max_tokens, label):
             payload = json.loads(user_msg[user_msg.index("{"):user_msg.rindex("}") + 1])

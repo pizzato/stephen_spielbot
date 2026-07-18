@@ -52,6 +52,10 @@ export default function Publish({ initialWorkDir, go }) {
   const [workDir, setWorkDir] = useState('')
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  const [videoHistory, setVideoHistory] = useState(null)
+  const [originalLang, setOriginalLang] = useState('en')
+  const [langNames, setLangNames] = useState({})
+  const [origMeta, setOrigMeta] = useState({ title: '', description: '' })
   const [category, setCategory] = useState('22')
   const [privacy, setPrivacy] = useState('private')
   const [coverUrl, setCoverUrl] = useState('')
@@ -118,6 +122,10 @@ export default function Publish({ initialWorkDir, go }) {
       const p = await api.ytPostPrefill(wd)
       setTitle(p.title || '')
       setDescription(p.description || '')
+      setOrigMeta({ title: p.title || '', description: p.description || '' })
+      setVideoHistory(p.video_history || null)
+      setOriginalLang(p.original_lang || 'en')
+      setLangNames(p.lang_names || {})
       setCoverUrl(p.cover_url || '')
       setCoverHist(null)
       api.coverHistory(wd).then((r) => setCoverHist(r.history)).catch(() => {})
@@ -136,7 +144,39 @@ export default function Publish({ initialWorkDir, go }) {
       const isShort = !!(p.vid_width && p.vid_height && Number(p.vid_height) > Number(p.vid_width))
       api.engagementBestTimes({ title: p.title || '', description: p.description || '', is_short: isShort, channel: p.channel || '' })
         .then(setBestTimes).catch(() => {})
+      // If the film's selected cut is a localized one, prefill its localized
+      // title/description too (translated on first use, cached after).
+      const selV = p.video_history?.versions?.find((v) => v.id === p.video_history?.selected)
+      if (selV?.lang && selV.lang !== (p.original_lang || 'en')) {
+        api.localizeMetadata({ work_dir: wd, language: selV.lang })
+          .then((m) => { if (m.title) setTitle(m.title); if (m.description) setDescription(m.description) })
+          .catch(() => {})
+      }
     } catch (e) { setError(e.message) }
+  }
+
+  // Switch which final cut (language/upscale version) gets published. Swapping
+  // to a localized cut also swaps in its translated title & description.
+  const selectVersion = async (versionId) => {
+    setBusy('version'); setError(''); setStatus('')
+    try {
+      const r = await api.selectRemixVideo(workDir, versionId)
+      setVideoHistory(r.video_history || null)
+      if (r.final_url) setFinalUrl(r.final_url)
+      const v = r.video_history?.versions?.find((x) => x.id === versionId)
+      const lang = v?.lang || originalLang
+      if (lang !== originalLang) {
+        setStatus(`Preparing the ${langNames[lang] || lang} title & description…`)
+        const m = await api.localizeMetadata({ work_dir: workDir, language: lang })
+        setTitle(m.title || origMeta.title)
+        setDescription(m.description || origMeta.description)
+        setStatus(`Publishing the ${langNames[lang] || lang} version — title & description localized.`)
+      } else {
+        setTitle(origMeta.title)
+        setDescription(origMeta.description)
+        setStatus('Publishing the original version.')
+      }
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
   const genDescription = async () => {
@@ -298,6 +338,18 @@ export default function Publish({ initialWorkDir, go }) {
               {opts.finished.map((f) => <option key={f.work_dir} value={f.work_dir}>{f.label}</option>)}
             </select>
           </Field>
+          {(videoHistory?.versions?.length || 0) > 1 && (
+            <Field label="Version" hint="Which final cut to publish — localized versions swap in their translated title & description.">
+              <select className="select" value={videoHistory.selected ?? ''} disabled={busy === 'version'}
+                onChange={(e) => selectVersion(Number(e.target.value))}>
+                {videoHistory.versions.map((v) => {
+                  const name = v.lang ? (langNames[v.lang] || v.lang.toUpperCase()) : ''
+                  const label = v.label === name ? name : `${v.label}${name ? ` (${name})` : ''}`
+                  return <option key={v.id} value={v.id}>{label}</option>
+                })}
+              </select>
+            </Field>
+          )}
           <Field label="Publish to">
             <div className="stack gap-10">
               <div className="row center gap-10 row--wrap">
@@ -408,6 +460,16 @@ export default function Publish({ initialWorkDir, go }) {
               Render busy — a worker will be free for covers in {uiWorker.eta_text}.
             </div>
           )}
+          {(() => {
+            const selV = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected)
+            return selV?.lang && selV.lang !== originalLang ? (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+                Publishing the {langNames[selV.lang] || selV.lang} version — the cover may
+                still show the original title. Regenerate it to render the localized one,
+                or pick an earlier take below.
+              </div>
+            ) : null
+          })()}
           {youtubeUrl && (
             <Button variant="ghost" block icon="image" disabled={busy === 'thumb' || !coverUrl} onClick={updateThumbnail}>
               {busy === 'thumb' ? 'Updating…' : 'Update thumbnail on YouTube'}</Button>
