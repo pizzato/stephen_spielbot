@@ -36,14 +36,28 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | ACE-Step 1.5 (music) + Qwen text encoders | `Comfy-Org/ace_step_1.5_ComfyUI_files` | Apache-2.0 | ✅ Yes |
 | **OpenF5-TTS-Base** (narration — **default**) | `mrfakename/OpenF5-TTS-Base` | Apache-2.0 | ✅ Yes |
 | F5-TTS Base original (narration — opt-in) | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
+| Chatterbox Multilingual (narration — 23-language option) | `ResembleAI/chatterbox` | MIT | ✅ Yes (embeds Resemble's Perth watermark — kept on purpose) |
 
 > Narration uses a **per-style voice-model picker** (`pipeline/tts_engines.py`):
-> the default `openf5` is Apache-2.0 and commercial-safe; the original SWivid
+> the default `openf5` is Apache-2.0 and commercial-safe, and the multilingual
+> `chatterbox-multilingual` engine is MIT (code and weights); the original SWivid
 > `f5-original` weights are CC-BY-NC and offered only as an opt-in "preview"
 > (flagged non-commercial in Settings) for A/B quality checks — **don't** select
 > it for monetized output. See [`NOTICE.md`](NOTICE.md) for the TTS-weights
 > rationale. The bundled reference clip (`assets/default_narrator.mp3`) provenance
 > is still pending a public-domain replacement (tracked TODO).
+
+## Talking-head models (dialogue scenes)
+
+The `echomimic` worker container downloads these on first use
+(`pipeline/echomimic_server.py`); **review each model card** before monetizing
+dialogue output:
+
+| Model | Hugging Face repo |
+|---|---|
+| EchoMimic-V3 (flash transformer) | `BadToBest/EchoMimicV3` |
+| Wan2.1-Fun-V1.1-1.3B-InP (base video model) | `alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP` |
+| chinese-wav2vec2-base (audio encoder) | `TencentGameMate/chinese-wav2vec2-base` |
 
 ## Runtime tools
 

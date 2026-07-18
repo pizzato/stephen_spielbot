@@ -17,7 +17,7 @@ W ?=
 install:
 	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" bash $(SCRIPTS)/install.sh
 
-## Download LTX 2.3 and ACE-Step models only (skips already-present files). No FLUX.
+## Download the LTX 2.3, ACE-Step and FLUX.2 Klein models (skips already-present files).
 download-models:
 	@bash $(SCRIPTS)/download_models.sh
 
