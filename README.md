@@ -253,6 +253,8 @@ a 10-voice public-domain LibriVox **character voice library**
 
 <!-- CHANNELS:START -->
 - [Stephen Spielbot (@StephenSpielbot)](https://www.youtube.com/@StephenSpielbot) — YouTube · The original
+- [A Brief History of Botkind (@BHOBk)](https://www.youtube.com/@BHOBk) — YouTube
+- [A Brief History of Botkind (@aBHOBk)](https://x.com/aBHOBk) — X
 <!-- CHANNELS:END -->
 
 Making films with Stephen Spielbot? Add your channel to
