@@ -3263,15 +3263,11 @@ def _run_localize_film(task_id: str, wd: Path, lang: str) -> None:
         )
 
         lang_dir.mkdir(parents=True, exist_ok=True)
-        for idx, sid in enumerate(order, start=1):
+        jobs: dict[int, dict] = {}
+        for sid in order:
             row = row_by_id.get(int(sid))
             if not row:
                 continue
-            _film_checkpoint(task_id)
-            _film_tasks[task_id] = {
-                "status": "running", "step": "narration",
-                "scene_id": int(sid), "current": idx, "total": len(order),
-            }
             src_final = wd / f"scene_{int(sid):02d}_final.mp4"
             if int(sid) not in translations:
                 # Silent/dialogue/untranslated scene — carry the original-language
@@ -3279,15 +3275,9 @@ def _run_localize_film(task_id: str, wd: Path, lang: str) -> None:
                 if src_final.exists():
                     shutil.copy2(src_final, lang_dir / f"scene_{int(sid):02d}_final.mp4")
                 continue
-            translated_row = {**row, "narration": translations[int(sid)]}
-            _render_scene_narration(
-                task_id, wd, int(sid), jc, translated_row,
-                voice_name=_scene_voice_name(row, jc),
-                language=lang,
-                tts_engine_override="chatterbox-multilingual",
-                out_dir=lang_dir,
-                record_video_history=False,
-            )
+            jobs[int(sid)] = {**row, "narration": translations[int(sid)]}
+        if jobs:
+            _localize_synthesize_scenes(task_id, wd, jc, lang, jobs)
 
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "finalize"}
@@ -3339,6 +3329,85 @@ def remix_localize(body: LocalizeFilmBody) -> dict:
         target=_run_localize_film, args=(tid, wd, lang), daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+def _localize_synthesize_scenes(task_id: str, wd: Path, jc: dict, lang: str,
+                                jobs: dict[int, dict]) -> None:
+    """Fan translated-scene synthesis across the TTS fleet.
+
+    *jobs* maps scene id → its row with the TRANSLATED narration already in
+    place. Each scene acquires one TTS worker from a per-URL semaphore pool
+    (all reachable ``tts_workers``), so with 3 workers three scenes voice at
+    once — same fanout shape as the parallel scene upscale, including per-scene
+    Activity sub-jobs. ``_film_tasks`` shows aggregate fanout progress."""
+    import concurrent.futures
+    from pipeline.chatterbox import LANGUAGES
+    from pipeline.tts_worker import worker_alive
+    from pipeline.worker_pool import WorkerPool
+
+    cfg = gapp.load_config()
+    configured = [h for h in (cfg.get("tts_workers") or []) if str(h).strip()]
+    hosts = [h for h in configured if worker_alive(h, timeout=3)]
+    if not hosts:
+        # No reachable remote worker — keep the sequential single-host behavior
+        # (_render_scene_narration falls back to the first configured/localhost).
+        hosts = configured[:1] or ["localhost"]
+    pool = WorkerPool(hosts)
+    n = len(jobs)
+    lang_dir = wd / "localize" / lang
+    try:
+        film_title = _video_title_for(wd)
+    except Exception:
+        film_title = wd.name
+    per_scene_est, _learned = film_timing.estimate("narrator_scene")
+    _film_tasks[task_id] = {
+        "status": "running", "step": "narration", "fanout": True,
+        "current": 0, "total": n,
+    }
+
+    def synth_one(sid: int, row: dict) -> int:
+        _film_checkpoint(task_id)
+        sub_id = f"film:{task_id}#s{sid}"
+        _register_film_subjob(
+            sub_id,
+            name=f"Voicing scene {sid} in {LANGUAGES.get(lang, lang)}",
+            detail=f"{n} scene{'s' if n != 1 else ''} → {LANGUAGES.get(lang, lang)}",
+            work_dir=str(wd),
+            title=film_title,
+            est_seconds=per_scene_est,
+        )
+        sub_started = time.time()
+        host = pool.acquire()
+        try:
+            _render_scene_narration(
+                task_id, wd, sid, jc, row,
+                voice_name=_scene_voice_name(row, jc),
+                language=lang,
+                tts_engine_override="chatterbox-multilingual",
+                out_dir=lang_dir,
+                record_video_history=False,
+                tts_host=host,
+                update_task=False,
+            )
+            film_timing.record("narrator_scene", time.time() - sub_started)
+            return sid
+        finally:
+            _clear_film_subjob(sub_id)
+            pool.release(host)
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(hosts), n)) as executor:
+            futures = [executor.submit(synth_one, sid, row) for sid, row in jobs.items()]
+            done = 0
+            for fut in concurrent.futures.as_completed(futures):
+                fut.result()
+                done += 1
+                _film_tasks[task_id] = {
+                    "status": "running", "step": "narration", "fanout": True,
+                    "current": done, "total": n,
+                }
+    finally:
+        _clear_film_subjobs_for(task_id)
 
 
 def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -> tuple[dict, int]:
@@ -3413,24 +3482,12 @@ def _run_localize_edit(task_id: str, wd: Path, lang: str, changed: dict[int, str
         data["scenes"] = scenes_map
         script_path.write_text(json.dumps(data, indent=2))
 
-        for idx, sid in enumerate(sorted(changed), start=1):
-            row = row_by_id.get(sid)
-            if not row:
-                continue
-            _film_checkpoint(task_id)
-            _film_tasks[task_id] = {
-                "status": "running", "step": "narration",
-                "scene_id": sid, "current": idx, "total": len(changed),
-            }
-            translated_row = {**row, "narration": changed[sid]}
-            _render_scene_narration(
-                task_id, wd, sid, jc, translated_row,
-                voice_name=_scene_voice_name(row, jc),
-                language=lang,
-                tts_engine_override="chatterbox-multilingual",
-                out_dir=lang_dir,
-                record_video_history=False,
-            )
+        jobs = {
+            sid: {**row_by_id[sid], "narration": text}
+            for sid, text in changed.items() if sid in row_by_id
+        }
+        if jobs:
+            _localize_synthesize_scenes(task_id, wd, jc, lang, jobs)
 
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "finalize"}
@@ -8275,7 +8332,9 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
                             language: str | None = None,
                             tts_engine_override: str | None = None,
                             out_dir: Path | None = None,
-                            record_video_history: bool = True) -> None:
+                            record_video_history: bool = True,
+                            tts_host: str | None = None,
+                            update_task: bool = True) -> None:
     from pipeline.assembler import mux_video_audio
     from pipeline.tts_worker import generate_narration
 
@@ -8301,10 +8360,14 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
     tts_engine = tts_engine_override or jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language = language or jc.get("tts_language", cfg.get("default_tts_language", "en"))
-    tts_hosts = cfg.get("tts_workers") or []
-    tts_host = tts_hosts[0] if tts_hosts else "localhost"
+    if tts_host is None:
+        # tts_host lets fanout callers spread scenes across the TTS fleet; the
+        # single-scene paths keep the first-configured-worker default.
+        tts_hosts = cfg.get("tts_workers") or []
+        tts_host = tts_hosts[0] if tts_hosts else "localhost"
 
-    _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
+    if update_task:
+        _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
     generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language)
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
@@ -8316,7 +8379,8 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     )
     if actual_video:
         _film_checkpoint(task_id)
-        _film_tasks[task_id]["step"] = "mux"
+        if update_task:
+            _film_tasks[task_id]["step"] = "mux"
         staged_final = target_dir / f"scene_{sid:02d}_final.staging.mp4"
         mux_video_audio(actual_video, narration_path, staged_final)
         staged_final.replace(final_path)

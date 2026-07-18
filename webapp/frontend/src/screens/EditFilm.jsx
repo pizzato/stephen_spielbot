@@ -741,6 +741,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           clearInterval(poll); reject(new Error(t.error || `Localization ${t.status}.`))
         } else if (t.step === 'translate') {
           setStatus('Translating narration…')
+        } else if (t.step === 'narration' && t.fanout) {
+          setStatus(`Synthesizing ${t.total} scenes across the TTS workers (${t.current}/${t.total} done)…`)
         } else if (t.step === 'narration' && t.scene_id) {
           setStatus(`Synthesizing scene ${t.scene_id}${t.total ? ` (${t.current}/${t.total})` : ''}…`)
         } else if (t.step === 'finalize') {
