@@ -141,6 +141,22 @@ Deploy or re-deploy a single host from the controller:
 bash scripts/install_worker_container.sh s1
 ```
 
+**GPU injection mode**: by default containers get the GPU via the toolkit's
+legacy path (`--gpus`-style device reservations). On very new drivers that path
+can break — the symptom is CUDA failing with "unknown error" (cuInit → 999)
+inside containers while `nvidia-smi` works, and
+`docker run --device nvidia.com/gpu=all …` working fine. For such hosts deploy
+with **CDI** injection instead:
+
+```bash
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml   # on the worker; redo after driver upgrades
+GPU_MODE=cdi bash scripts/install_worker_container.sh s1     # or: make install GPU_MODE=cdi
+```
+
+The mode is sticky per host (kept on re-deploys; pass `GPU_MODE=legacy` to
+revert) and is wired through `docker/.env`'s `COMPOSE_FILE`, so every plain
+`docker compose` command on that host uses it automatically.
+
 Manage the workers from the controller — all of them, or one with `W=<host>`:
 
 ```bash

@@ -1,0 +1,38 @@
+# CDI GPU injection override — the NVIDIA Container Toolkit's modern device
+# path. Use when the legacy injection is broken on a new driver: symptom is
+# cuInit -> 999 ("CUDA unknown error") in containers started with --gpus all
+# while `docker run --device nvidia.com/gpu=all ...` works, and nvidia-smi
+# works in both.
+#
+# Activated per host by GPU_MODE=cdi at deploy time (install_worker_container.sh
+# writes COMPOSE_FILE=docker-compose.yml:docker-compose.cdi.yml into docker/.env,
+# which every plain `docker compose` invocation then picks up automatically).
+#
+# Requires a CDI spec on the host:
+#   sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+# (regenerate after driver upgrades)
+services:
+  comfyui:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: cdi
+              device_ids:
+                - nvidia.com/gpu=all
+  tts:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: cdi
+              device_ids:
+                - nvidia.com/gpu=all
+  echomimic:
+    deploy:
+      resources:
+        reservations:
+          devices: !override
+            - driver: cdi
+              device_ids:
+                - nvidia.com/gpu=all
