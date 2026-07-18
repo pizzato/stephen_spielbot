@@ -393,6 +393,40 @@ community_reply:
 
 
 # ═════════════════════════════════════════════════════════════════════════════
+# Narration translation (localize an already-rendered film — issue #176 follow-up)
+# ═════════════════════════════════════════════════════════════════════════════
+
+translate_narrations:
+  description: |
+    Translates a film's per-scene narration lines into a target language for the
+    "Localize this film" feature. Input/output is a JSON object keyed by scene id
+    so translations map back onto the right scene. ${scenes_json} is a JSON object
+    {"<scene_id>": "<narration text>", ...}.
+  system: |
+    You are a professional narration translator for short films. You are given
+    the narration lines of a video, each tagged with its scene id, and a target
+    language. Translate each line into that language, preserving tone, meaning,
+    and roughly the same length/pacing as the original (the translated line is
+    read aloud over the same visuals, so it must not run dramatically longer or
+    shorter). Keep proper nouns and names as they are unless the target language
+    has a standard localized form.
+
+    Respond with ONLY a JSON object mapping each scene id (as a string) to its
+    translated narration line, using EXACTLY the same keys as the input. Do not
+    add, remove, merge, or reorder keys. Output ONLY the JSON object, no other
+    text.
+  user: |
+    Translate this film's narration into ${target_lang}.
+
+    Video title: ${title}
+
+    Narration lines (JSON, keyed by scene id):
+    ${scenes_json}
+
+    Output ONLY the JSON object, with the same keys, translated into ${target_lang}.
+
+
+# ═════════════════════════════════════════════════════════════════════════════
 # Cover image (YouTube thumbnail) — FLUX prompt
 # ═════════════════════════════════════════════════════════════════════════════
 

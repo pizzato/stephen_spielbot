@@ -1246,6 +1246,62 @@ def generate_community_reply(comment_text: str, commenter: str, thread_text: str
         return {**_COMMUNITY_SAFE_DEFAULT, "reason": f"Engagement error: {str(exc)[:120]}"}
 
 
+# ── Narration translation (localize an already-rendered film) ────────────────
+
+def _parse_translations(text: str, scene_ids: set[int]) -> dict[int, str]:
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        raise RuntimeError("Translation response did not contain a JSON object.")
+    raw = json.loads(m.group())
+    if not isinstance(raw, dict):
+        raise RuntimeError("Translation response JSON was not an object.")
+    out: dict[int, str] = {}
+    for key, val in raw.items():
+        try:
+            sid = int(key)
+        except (TypeError, ValueError):
+            continue
+        if sid in scene_ids and isinstance(val, str) and val.strip():
+            out[sid] = val.strip()
+    return out
+
+
+def translate_narrations(
+    scenes: list[dict], target_lang_name: str, title: str = "", cfg: dict | None = None,
+) -> dict[int, str]:
+    """Translate every scene's narration text into *target_lang_name* in ONE LLM
+    call. *scenes* are row dicts with an "id" (or "scene_id") and "narration".
+    Returns {scene_id: translated_text} — scenes with empty/whitespace-only
+    narration are omitted, the caller skips TTS for those. Raises on failure
+    (malformed response, LLM/network error) rather than silently returning
+    untranslated text, since a film mislabeled as translated but still in the
+    original language is a worse failure than a visible error."""
+    rows = {}
+    for row in scenes:
+        sid = int(row.get("id") if row.get("id") is not None else row.get("scene_id") or 0)
+        text = (row.get("narration") or "").strip()
+        if sid and text:
+            rows[sid] = text
+    if not rows:
+        return {}
+
+    cfg = cfg or _load_cfg()
+    sys_msg = _prompts.system("translate_narrations")
+    user_msg = _prompts.user(
+        "translate_narrations",
+        target_lang=target_lang_name,
+        title=(title or "").strip() or "(untitled)",
+        scenes_json=json.dumps({str(k): v for k, v in rows.items()}, ensure_ascii=False),
+    )
+    max_tokens = max(800, 200 + 60 * len(rows))
+    text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=max_tokens, label="translate_narrations")
+    translations = _parse_translations(text, set(rows.keys()))
+    missing = set(rows.keys()) - set(translations.keys())
+    if missing:
+        raise RuntimeError(f"Translation response was missing scenes: {sorted(missing)}")
+    return translations
+
+
 # ── Video topic suggestions ───────────────────────────────────────────────────
 
 def _parse_suggestions(text: str) -> list[dict]:

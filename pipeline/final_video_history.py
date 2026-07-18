@@ -50,6 +50,7 @@ def seed_if_empty(
     work_dir: str | Path,
     video_path: str | Path | None = None,
     label: str = "Original",
+    lang: str | None = None,
 ) -> dict[str, Any]:
     data = _load(work_dir)
     if data["versions"]:
@@ -57,10 +58,15 @@ def seed_if_empty(
     source = Path(video_path) if video_path else _final_path(work_dir)
     if not source.exists():
         return history(work_dir)
-    return record(work_dir, source, label=label)
+    return record(work_dir, source, label=label, lang=lang)
 
 
-def record(work_dir: str | Path, video_path: str | Path, label: str = "") -> dict[str, Any]:
+def record(
+    work_dir: str | Path,
+    video_path: str | Path,
+    label: str = "",
+    lang: str | None = None,
+) -> dict[str, Any]:
     source = Path(video_path)
     if not source.exists():
         raise FileNotFoundError(str(source))
@@ -78,6 +84,7 @@ def record(work_dir: str | Path, video_path: str | Path, label: str = "") -> dic
         "id": next_id,
         "file": str(Path(_SUBDIR) / dest_name),
         "label": label or f"Version {next_id}",
+        "lang": lang,
     }
     versions.append(entry)
     data = {"selected": next_id, "versions": versions}
@@ -118,6 +125,7 @@ def history(work_dir: str | Path) -> dict[str, Any]:
                 "id": int(version.get("id", 0) or 0),
                 "path": str(path),
                 "label": version.get("label") or "Version",
+                "lang": version.get("lang"),
             }
         )
     selected = data.get("selected")
