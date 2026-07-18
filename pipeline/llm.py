@@ -1266,16 +1266,60 @@ def _parse_translations(text: str, scene_ids: set[int]) -> dict[int, str]:
     return out
 
 
+# Scenes per translation call. Large scripts are translated in chunks so no
+# single response ever nears a backend's output-token ceiling (mirrors script
+# generation's batching protocol).
+_TRANSLATE_BATCH = 12
+
+
+def _translate_batch(rows: dict[int, str], target_lang_name: str, title: str,
+                     cfg: dict) -> dict[int, str]:
+    """Translate one batch of {scene_id: narration} rows; see translate_narrations."""
+    sys_msg = _prompts.system("translate_narrations")
+    user_msg = _prompts.user(
+        "translate_narrations",
+        target_lang=target_lang_name,
+        title=(title or "").strip() or "(untitled)",
+        scenes_json=json.dumps({str(k): v for k, v in rows.items()}, ensure_ascii=False),
+    )
+    # Translations run about the length of the source (some languages ~1.3×).
+    # Budget ~2× the source's estimated tokens (chars/3 is conservative for
+    # accented text) plus per-scene JSON overhead, so the model never truncates
+    # mid-object.
+    src_tokens = sum(len(t) for t in rows.values()) // 3
+    max_tokens = 800 + 2 * src_tokens + 30 * len(rows)
+    try:
+        text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=max_tokens,
+                              label="translate_narrations")
+    except RuntimeError as exc:
+        # Defense-in-depth: if a backend still reports its token limit (e.g. a
+        # local model with a small context), halve the batch and retry.
+        if "token limit" in str(exc) and len(rows) > 1:
+            ids = list(rows)
+            mid = len(ids) // 2
+            first = _translate_batch({k: rows[k] for k in ids[:mid]}, target_lang_name, title, cfg)
+            second = _translate_batch({k: rows[k] for k in ids[mid:]}, target_lang_name, title, cfg)
+            return {**first, **second}
+        raise
+    translations = _parse_translations(text, set(rows.keys()))
+    missing = set(rows.keys()) - set(translations.keys())
+    if missing:
+        raise RuntimeError(f"Translation response was missing scenes: {sorted(missing)}")
+    return translations
+
+
 def translate_narrations(
     scenes: list[dict], target_lang_name: str, title: str = "", cfg: dict | None = None,
 ) -> dict[int, str]:
-    """Translate every scene's narration text into *target_lang_name* in ONE LLM
-    call. *scenes* are row dicts with an "id" (or "scene_id") and "narration".
-    Returns {scene_id: translated_text} — scenes with empty/whitespace-only
-    narration are omitted, the caller skips TTS for those. Raises on failure
-    (malformed response, LLM/network error) rather than silently returning
-    untranslated text, since a film mislabeled as translated but still in the
-    original language is a worse failure than a visible error."""
+    """Translate every scene's narration text into *target_lang_name*, batching
+    _TRANSLATE_BATCH scenes per LLM call so large scripts stay well under any
+    backend's output-token limit. *scenes* are row dicts with an "id" (or
+    "scene_id") and "narration". Returns {scene_id: translated_text} — scenes
+    with empty/whitespace-only narration are omitted, the caller skips TTS for
+    those. Raises on failure (malformed response, LLM/network error) rather
+    than silently returning untranslated text, since a film mislabeled as
+    translated but still in the original language is a worse failure than a
+    visible error."""
     rows = {}
     for row in scenes:
         sid = int(row.get("id") if row.get("id") is not None else row.get("scene_id") or 0)
@@ -1286,20 +1330,12 @@ def translate_narrations(
         return {}
 
     cfg = cfg or _load_cfg()
-    sys_msg = _prompts.system("translate_narrations")
-    user_msg = _prompts.user(
-        "translate_narrations",
-        target_lang=target_lang_name,
-        title=(title or "").strip() or "(untitled)",
-        scenes_json=json.dumps({str(k): v for k, v in rows.items()}, ensure_ascii=False),
-    )
-    max_tokens = max(800, 200 + 60 * len(rows))
-    text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=max_tokens, label="translate_narrations")
-    translations = _parse_translations(text, set(rows.keys()))
-    missing = set(rows.keys()) - set(translations.keys())
-    if missing:
-        raise RuntimeError(f"Translation response was missing scenes: {sorted(missing)}")
-    return translations
+    ids = list(rows)
+    out: dict[int, str] = {}
+    for start in range(0, len(ids), _TRANSLATE_BATCH):
+        chunk = {sid: rows[sid] for sid in ids[start:start + _TRANSLATE_BATCH]}
+        out.update(_translate_batch(chunk, target_lang_name, title, cfg))
+    return out
 
 
 # ── Video topic suggestions ───────────────────────────────────────────────────
