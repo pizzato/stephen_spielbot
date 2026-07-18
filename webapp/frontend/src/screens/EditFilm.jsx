@@ -467,6 +467,14 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [musicBusy, setMusicBusy] = useState(false)
   const [narratorBusy, setNarratorBusy] = useState(false)
   const [upscaleBusy, setUpscaleBusy] = useState(false)
+  const [localizeLangs, setLocalizeLangs] = useState({})
+  const [localizeLang, setLocalizeLang] = useState('')
+  const [localizeBusy, setLocalizeBusy] = useState(false)
+  const [locData, setLocData] = useState(null)      // saved localizations + original language
+  const [locEdit, setLocEdit] = useState('')        // lang code open in the narration editor
+  const [locDraft, setLocDraft] = useState({})      // {sceneId: edited translated text}
+  const [locSaveBusy, setLocSaveBusy] = useState(false)
+  const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
   const [upscaleMode, setUpscaleMode] = useState('fast')
   const [error, setError] = useState('')
@@ -523,7 +531,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       setCoverUrl(p.cover_url || '')
     }).catch(() => {})
     api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
+    api.listLocalizeLanguages().then(setLocalizeLangs).catch(() => {})
+    api.localizeScripts(workDir).then(setLocData).catch(() => {})
   }, [workDir])
+
+  const refreshLocalizations = () => api.localizeScripts(workDir).then(setLocData).catch(() => {})
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
   const currentResolution = data?.resolution || meta.default_resolution || ''
@@ -714,6 +726,76 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setNarratorBusy(false) }
   }
 
+  // Poll a localize-family film task to completion, narrating progress in the
+  // status banner; resolves with the task's final payload.
+  const pollLocalizeTask = (taskId) => new Promise((resolve, reject) => {
+    const poll = setInterval(async () => {
+      try {
+        const t = await api.filmTaskStatus(taskId)
+        if (t.status === 'done') {
+          clearInterval(poll)
+          if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+          if (t.video_history) setVideoHistory(t.video_history)
+          resolve(t)
+        } else if (t.status === 'error' || t.status === 'cancelled') {
+          clearInterval(poll); reject(new Error(t.error || `Localization ${t.status}.`))
+        } else if (t.step === 'translate') {
+          setStatus('Translating narration…')
+        } else if (t.step === 'narration' && t.fanout) {
+          setStatus(`Synthesizing ${t.total} scenes across the TTS workers (${t.current}/${t.total} done)…`)
+        } else if (t.step === 'narration' && t.scene_id) {
+          setStatus(`Synthesizing scene ${t.scene_id}${t.total ? ` (${t.current}/${t.total})` : ''}…`)
+        } else if (t.step === 'finalize') {
+          setStatus('Assembling the localized film…')
+        }
+      } catch (e) { clearInterval(poll); reject(e) }
+    }, 3000)
+  })
+
+  const localizeFilm = async () => {
+    setLocalizeBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.localizeFilm({ work_dir: data.work_dir, language: localizeLang })
+      await pollLocalizeTask(task_id)
+      setStatus(`Localized the film to ${localizeLangs[localizeLang] || localizeLang}.`)
+      await refreshLocalizations()
+    } catch (e) { setError(e.message) } finally { setLocalizeBusy(false) }
+  }
+
+  const editingLoc = locData?.localizations?.find((l) => l.lang === locEdit)
+  const locChanged = editingLoc ? editingLoc.scenes.reduce((acc, s) => {
+    const t = (locDraft[s.id] ?? s.translated).trim()
+    if (t && t !== s.translated) acc[String(s.id)] = t
+    return acc
+  }, {}) : {}
+  const locChangedCount = Object.keys(locChanged).length
+
+  const saveLocalized = async () => {
+    if (!editingLoc || !locChangedCount) return
+    setLocSaveBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.saveLocalizeScript({
+        work_dir: data.work_dir, language: locEdit, scenes: locChanged,
+      })
+      await pollLocalizeTask(task_id)
+      setStatus(`Updated the ${editingLoc.name} narration.`)
+      setLocDraft({})
+      await refreshLocalizations()
+    } catch (e) { setError(e.message) } finally { setLocSaveBusy(false) }
+  }
+
+  const downloadDubbedAudio = async (lang) => {
+    setLocAudioBusy(lang); setError('')
+    try {
+      const { audio_url } = await api.buildLocalizeAudio({ work_dir: data.work_dir, language: lang })
+      const a = document.createElement('a')
+      a.href = audio_url
+      a.download = `${(filmTitle || 'film').replace(/[^\w-]+/g, '_')}_${lang}_audio.m4a`
+      document.body.appendChild(a); a.click(); a.remove()
+      await refreshLocalizations()
+    } catch (e) { setError(e.message) } finally { setLocAudioBusy('') }
+  }
+
   const remix = async () => {
     setBusy(true); setError(''); setStatus('')
     try {
@@ -752,7 +834,15 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || localizeBusy || locSaveBusy || !!locAudioBusy
+
+  // Language of the currently selected final cut, for the marking chip. Only
+  // shown once the film has language info (a localization or a tagged version).
+  const selVersion = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected)
+  const cutLang = selVersion?.lang || locData?.original_lang || ''
+  const isOriginalCut = !selVersion?.lang || selVersion?.lang === locData?.original_lang
+  const cutLangName = cutLang ? (localizeLangs[cutLang] || cutLang.toUpperCase()) : ''
+  const showLangChip = !!cutLang && ((locData?.localizations?.length || 0) > 0 || !!selVersion?.lang)
 
   return (
     <div>
@@ -782,7 +872,14 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             style={{ display: 'block', background: '#15171a', aspectRatio: aspect, margin: '0 auto',
               width: portrait ? 'auto' : '100%', height: portrait ? '78vh' : 'auto', maxHeight: '78vh' }} />
           <div className="row center between" style={{ padding: '16px 20px' }}>
-            <Chip tone="ok" dot>Final cut</Chip>
+            <span className="row center gap-8">
+              <Chip tone="ok" dot>Final cut</Chip>
+              {showLangChip && (
+                <Chip>
+                  <Icon name="language" /> {cutLangName}{isOriginalCut ? ' · original' : ''}
+                </Chip>
+              )}
+            </span>
             <span className="muted mono">{data.work_dir}</span>
           </div>
           {(videoHistory?.versions?.length || 0) > 1 && (
@@ -871,6 +968,102 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </Button>
           </div>
         </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="language" style={{ color: 'var(--ink-3)', width: 16 }} /> Localize this film</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Translate the narration and re-speak it in another language — same
+            voice, same visuals and music, no re-rendering. Kept as a switchable
+            version below. Dialogue and silent scenes keep their original language.
+          </p>
+          <div className="mt-24">
+            <Field label="Target language">
+              <select className="select" value={localizeLang} disabled={anyBusy}
+                onChange={(e) => setLocalizeLang(e.target.value)}>
+                <option value="">Choose a language…</option>
+                {Object.entries(localizeLangs).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="language" disabled={anyBusy || !localizeLang} onClick={localizeFilm}>
+              {localizeBusy ? 'Localizing…' : 'Localize film'}
+            </Button>
+          </div>
+          {(locData?.localizations?.length || 0) > 0 && (
+            <div className="mt-24">
+              <span className="label-sm">Localizations</span>
+              {locData.localizations.map((l) => (
+                <div key={l.lang} className="row center between gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: 13 }}>
+                    {l.name} <span className="muted mono" style={{ fontSize: 11 }}>{l.lang.toUpperCase()}</span>
+                  </span>
+                  <span className="row center gap-8">
+                    <Button variant="ghost" icon="pen" disabled={anyBusy}
+                      onClick={() => { setLocDraft({}); setLocEdit(locEdit === l.lang ? '' : l.lang) }}>
+                      {locEdit === l.lang ? 'Close editor' : 'Edit narration'}
+                    </Button>
+                    <Button variant="ghost" icon="music" disabled={anyBusy}
+                      onClick={() => downloadDubbedAudio(l.lang)}>
+                      {locAudioBusy === l.lang ? 'Building…' : 'Dubbed audio'}
+                    </Button>
+                  </span>
+                </div>
+              ))}
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                Publishing attaches captions in every localized language automatically.
+                “Dubbed audio” builds an audio file aligned to the original cut, ready
+                for YouTube Studio&apos;s multi-language audio tracks.
+              </p>
+            </div>
+          )}
+        </Card>
+
+        {editingLoc && (
+          <Card span={12} padLg className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm row center gap-10">
+                <Icon name="pen" style={{ color: 'var(--ink-3)', width: 16 }} />
+                Edit {editingLoc.name} narration
+              </span>
+              <Button variant="ghost" icon="xmark" disabled={locSaveBusy}
+                onClick={() => { setLocEdit(''); setLocDraft({}) }}>Close</Button>
+            </div>
+            <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              Fix any translated line, then apply — only the scenes you changed are
+              re-voiced, and the {editingLoc.name} film is reassembled as a new version.
+            </p>
+            <div className="mt-16" style={{ display: 'grid', gap: 14 }}>
+              {editingLoc.scenes.map((s) => {
+                const val = locDraft[s.id] ?? s.translated
+                const dirty = val.trim() && val.trim() !== s.translated
+                return (
+                  <div key={s.id}>
+                    <span className="label-sm">
+                      Scene {s.id}{dirty ? <span style={{ color: 'var(--accent)' }}> · edited</span> : null}
+                    </span>
+                    <p className="muted" style={{ fontSize: 12, margin: '4px 0 6px' }}>{s.original}</p>
+                    <textarea className="textarea" rows={2} value={val} disabled={locSaveBusy}
+                      onChange={(e) => setLocDraft((d) => ({ ...d, [s.id]: e.target.value }))} />
+                  </div>
+                )
+              })}
+            </div>
+            <div className="mt-16 row center gap-10">
+              <Button variant="primary" icon="microphone" disabled={anyBusy || !locChangedCount}
+                onClick={saveLocalized}>
+                {locSaveBusy ? 'Re-voicing…'
+                  : locChangedCount ? `Apply — re-voice ${locChangedCount} scene${locChangedCount > 1 ? 's' : ''}`
+                  : 'No changes yet'}
+              </Button>
+              {locChangedCount > 0 && !locSaveBusy && (
+                <Button variant="ghost" onClick={() => setLocDraft({})}>Discard edits</Button>
+              )}
+            </div>
+          </Card>
+        )}
 
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="up-right-and-down-left-from-center" style={{ color: 'var(--ink-3)', width: 16 }} /> Upscale video</span>
