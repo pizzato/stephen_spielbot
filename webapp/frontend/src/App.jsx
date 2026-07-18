@@ -16,6 +16,7 @@ import Library from './screens/Library.jsx'
 import EditFilm from './screens/EditFilm.jsx'
 import Settings from './screens/Settings.jsx'
 import Prompts from './screens/Prompts.jsx'
+import About from './screens/About.jsx'
 
 export default function App() {
   // The URL hash is the single source of truth for which page is shown and, for
@@ -273,6 +274,7 @@ export default function App() {
       case 'engagement': return <ChannelAnalytics meta={meta} go={go} initialTab="predictive" />
       case 'settings': return <Settings meta={meta} setMeta={setMeta} leaveGuardRef={leaveGuardRef} go={go} />
       case 'prompts': return <Prompts go={go} leaveGuardRef={leaveGuardRef} />
+      case 'about': return <About />
       default: return <Home go={go} />
     }
   })()

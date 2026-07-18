@@ -6,7 +6,7 @@ W ?=
 
 .PHONY: install download-models download-voices download-flux download-flux-cluster \
         start stop restart restart-server status logs worker-agent ui-worker help \
-        web-install web-build web web-dev tailscale \
+        web-install web-build web web-dev tailscale channels \
         launchd-install launchd-uninstall \
         lint lint-fix lint-web ensure-ruff
 
@@ -113,6 +113,10 @@ web-install:
 ## Build the React frontend to webapp/frontend/dist.
 web-build:
 	cd $(FRONTEND) && npm run build
+
+## Regenerate the channel list (About screen JSON + README section) from channels.yaml.
+channels:
+	@.venv/bin/python $(SCRIPTS)/gen_channels.py
 
 ## Build the SPA and serve the modern web UI + API from one process (localhost:8001).
 web: web-build

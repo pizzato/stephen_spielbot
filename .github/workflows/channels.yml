@@ -1,0 +1,60 @@
+name: Sync channels list
+
+# channels.yaml is the source of truth for "Channels using this tool". This
+# workflow keeps its two rendered copies — the README list and the About
+# screen's bundled channels.json — in step with it.
+#
+# On a pull request it only validates, so a malformed entry fails the check
+# before merge (and fork PRs need no write access). On merge to main it
+# regenerates and commits the result, so contributors only ever edit one file.
+on:
+  push:
+    branches: [main]
+    paths:
+      - channels.yaml
+      - scripts/gen_channels.py
+  pull_request:
+    paths:
+      - channels.yaml
+      - scripts/gen_channels.py
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    name: Render channels.yaml
+    runs-on: ubuntu-latest
+    # Needed by the post-merge commit step below. `permissions` takes no
+    # expressions, so it is granted for both events; only the push run writes,
+    # and GitHub downgrades the token to read-only for pull requests from forks.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pyyaml
+
+      # Fails the build on a malformed entry, naming the offending one.
+      - name: Render
+        run: python scripts/gen_channels.py
+
+      # The generator is deterministic, so a diff here means channels.yaml
+      # changed and the rendered copies need to catch up.
+      - name: Commit regenerated files
+        if: github.event_name == 'push'
+        run: |
+          if [ -z "$(git status --porcelain README.md webapp/frontend/src/channels.json)" ]; then
+            echo "Already up to date."
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md webapp/frontend/src/channels.json
+          git commit -m "chore: sync channels list from channels.yaml [skip ci]"
+          git push
