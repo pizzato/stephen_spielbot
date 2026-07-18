@@ -189,6 +189,59 @@ def worker_alive(host: str, timeout: int = 3) -> bool:
     return False
 
 
+def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
+                             window_secs: float = 0.1, pad_secs: float = 0.4) -> None:
+    """Cut Chatterbox's post-speech junk off the end of a narration WAV.
+
+    Chatterbox Multilingual often appends seconds of near-silence carrying
+    quiet babble and clicks after the last word (measured ~20 dB below speech
+    but well above the noise floor). Scene videos are stretched to narration
+    length, so that junk becomes an audible noisy freeze at the end of every
+    localized scene. Speech RMS sits far above *threshold_db* and the
+    artifacts sit below it, so: find the last window whose RMS clears the
+    threshold and cut *pad_secs* after it (keeping the natural decay).
+    Best-effort — on anything unexpected the file is left untouched.
+    """
+    import array
+    import math
+    import wave
+
+    try:
+        with wave.open(str(wav_path), "rb") as w:
+            if w.getsampwidth() != 2:
+                return
+            rate = w.getframerate()
+            channels = w.getnchannels()
+            params = w.getparams()
+            frames = w.readframes(w.getnframes())
+        samples = array.array("h", frames)
+        if not samples or not rate:
+            return
+        win = max(1, int(rate * window_secs)) * channels
+        threshold = (10 ** (threshold_db / 20.0)) * 32768.0
+        last_loud_end = None
+        for start in range(0, len(samples), win):
+            chunk = samples[start:start + win]
+            rms = math.sqrt(sum(x * x for x in chunk) / len(chunk))
+            if rms >= threshold:
+                last_loud_end = start + len(chunk)
+        if last_loud_end is None:
+            return  # no speech found at all — don't guess
+        keep = min(len(samples), last_loud_end + int(rate * pad_secs) * channels)
+        if len(samples) - keep < int(rate * 0.25) * channels:
+            return  # tail already tight — nothing worth rewriting
+        trimmed = samples[:keep]
+        tmp = wav_path.with_suffix(".trim.wav")
+        with wave.open(str(tmp), "wb") as w:
+            w.setparams(params)
+            w.writeframes(trimmed.tobytes())
+        tmp.replace(wav_path)
+        logger.info("Trimmed %.1fs of trailing TTS artifacts from %s",
+                    (len(samples) - keep) / (rate * channels), wav_path.name)
+    except Exception as exc:
+        logger.warning("Trailing-artifact trim skipped for %s: %s", wav_path.name, exc)
+
+
 def generate_narration(
     text: str,
     output_path: Path,
@@ -240,6 +293,10 @@ def generate_narration(
             f"TTS worker must be an http:// container URL (e.g. http://host:8189); "
             f"got bare host {host!r}. Set tts_workers to http:// URLs (issue #12)."
         )
+    if engine == "chatterbox-multilingual":
+        # Chatterbox tends to append quiet babble after the last word; the F5
+        # engines don't, so only its output gets the trim.
+        _trim_trailing_artifacts(output_path)
     if robotic:
         _robotize_wav(output_path, robotic_amount)
     return output_path
