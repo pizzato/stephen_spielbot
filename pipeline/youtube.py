@@ -478,6 +478,8 @@ def upload_video(
     default_language: str = "en",
     default_audio_language: str = "en",
     captions_path: str | None = None,
+    captions_name: str = "English",
+    extra_captions: list[dict] | None = None,
     playlist_id: str = "",
 ) -> dict:
     """Upload video to YouTube. Returns {video_id, url, error}.
@@ -486,7 +488,10 @@ def upload_video(
     progress_callback(pct, msg) is called during upload if provided.
     ``default_language``/``default_audio_language`` declare the metadata and
     spoken language (BCP-47, e.g. "en"). ``captions_path`` is an optional SRT
-    file uploaded as a subtitle track once the video is in place.
+    file uploaded as a subtitle track once the video is in place, displayed as
+    ``captions_name``. ``extra_captions`` adds further subtitle tracks in other
+    languages, each ``{"path", "language", "name"}`` (best-effort, like the
+    main track).
     ``playlist_id`` (optional) adds the finished video to that playlist (which
     must belong to ``channel``); best-effort, never fails the upload.
     """
@@ -544,21 +549,31 @@ def upload_video(
             except Exception as exc:
                 logger.warning("Thumbnail upload failed: %s", exc)
 
-        if captions_path and Path(captions_path).exists() and video_id:
+        caption_tracks = []
+        if captions_path:
+            caption_tracks.append({
+                "path": captions_path,
+                "language": default_audio_language or default_language or "en",
+                "name": captions_name or "English",
+            })
+        caption_tracks.extend(extra_captions or [])
+        for track in caption_tracks:
+            if not (track.get("path") and Path(track["path"]).exists() and video_id):
+                continue
             try:
                 youtube.captions().insert(
                     part="snippet",
                     body={"snippet": {
                         "videoId": video_id,
-                        "language": default_audio_language or default_language or "en",
-                        "name": "English",
+                        "language": track.get("language") or "en",
+                        "name": track.get("name") or (track.get("language") or "en").upper(),
                         "isDraft": False,
                     }},
-                    media_body=MediaFileUpload(captions_path, mimetype="application/octet-stream"),
+                    media_body=MediaFileUpload(track["path"], mimetype="application/octet-stream"),
                 ).execute()
-                logger.info("Captions uploaded for video %s", video_id)
+                logger.info("Captions (%s) uploaded for video %s", track.get("language"), video_id)
             except Exception as exc:
-                logger.warning("Caption upload failed: %s", exc)
+                logger.warning("Caption upload (%s) failed: %s", track.get("language"), exc)
 
         if playlist_id and video_id:
             try:

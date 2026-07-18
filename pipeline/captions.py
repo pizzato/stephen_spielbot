@@ -66,8 +66,49 @@ def _timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def build_srt(work_dir: Path) -> Path | None:
-    """Write ``captions.srt`` for the film in *work_dir*.
+def _load_translations(work_dir: Path, lang: str) -> dict[int, str]:
+    """{scene_id: translated narration} saved by the localize feature, or {}."""
+    path = work_dir / "localize_scripts" / f"{lang}.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+        return {int(k): v for k, v in (data.get("scenes") or {}).items()
+                if isinstance(v, str) and v.strip()}
+    except Exception:
+        return {}
+
+
+def _scene_duration(work_dir: Path, sid: int, timing_lang: str | None) -> float:
+    """Duration of scene *sid* on the published cut's timeline.
+
+    ``timing_lang`` names the localized cut whose scene files govern timing
+    (``localize/{lang}/``); ``None`` means the original cut. Localized cuts fall
+    back to the original files for scenes carried through untranslated (silent/
+    dialogue scenes are copied, not re-synthesized)."""
+    candidates: list[Path] = []
+    if timing_lang:
+        loc = work_dir / "localize" / timing_lang
+        candidates += [loc / f"scene_{sid:02d}_narration.wav", loc / f"scene_{sid:02d}_final.mp4"]
+    candidates += [work_dir / f"scene_{sid:02d}_narration.wav", work_dir / f"scene_{sid:02d}_final.mp4"]
+    for path in candidates:
+        dur = _duration(path)
+        if dur > 0:
+            return dur
+    return 0.0
+
+
+def build_srt(work_dir: Path, lang: str | None = None,
+              timing_lang: str | None = None) -> Path | None:
+    """Write an SRT caption track for the film in *work_dir*.
+
+    ``lang`` selects the caption TEXT: ``None`` for the original narration, or a
+    language code whose translations were saved by the localize feature
+    (``localize_scripts/{lang}.json``). ``timing_lang`` selects the TIMELINE the
+    cues are placed on: ``None`` for the original cut, or the localized cut
+    whose per-scene narration durations differ (translated narration re-times
+    every scene). The two are independent because one published video (one
+    timeline) can carry caption tracks in several languages.
 
     Returns the file path, or ``None`` if there's nothing to caption (no script,
     or none of the scenes have measurable narration on disk). Best-effort: a
@@ -77,14 +118,15 @@ def build_srt(work_dir: Path) -> Path | None:
     scenes = _load_scenes(work_dir)
     if not scenes:
         return None
+    translations = _load_translations(work_dir, lang) if lang else {}
+    if lang and not translations:
+        return None  # no saved translation for this language — nothing to caption
 
     cues: list[tuple[float, float, str]] = []
     cursor = 0.0  # start of the current scene on the final timeline
     for scene in scenes:
         sid = int(scene.get("id") or 0)
-        dur = _duration(work_dir / f"scene_{sid:02d}_narration.wav")
-        if dur <= 0:  # fall back to the muxed scene video (same length by design)
-            dur = _duration(work_dir / f"scene_{sid:02d}_final.mp4")
+        dur = _scene_duration(work_dir, sid, timing_lang)
         if dur <= 0:
             continue  # scene not on disk — can't place it on the timeline
 
@@ -97,7 +139,11 @@ def build_srt(work_dir: Path) -> Path | None:
             cursor += dur
             continue
 
-        sentences = _split_sentences(str(scene.get("narration") or ""))
+        # Translated text when captioning a localized language; the original
+        # narration is the fallback so the track stays complete if a scene was
+        # never translated (it plays in the original language on every cut).
+        text = translations.get(sid) or str(scene.get("narration") or "")
+        sentences = _split_sentences(text)
         if sentences:
             weights = [len(s) for s in sentences]
             total = sum(weights) or 1
@@ -115,7 +161,8 @@ def build_srt(work_dir: Path) -> Path | None:
         f"{i}\n{_timestamp(start)} --> {_timestamp(end)}\n{text}\n"
         for i, (start, end, text) in enumerate(cues, 1)
     ]
-    out_path = work_dir / "captions.srt"
+    suffix = (f"_{lang}" if lang else "") + (f"_t-{timing_lang}" if timing_lang else "")
+    out_path = work_dir / f"captions{suffix}.srt"
     out_path.write_text("\n".join(blocks), encoding="utf-8")
     logger.info("Built %d caption cues → %s", len(cues), out_path)
     return out_path
