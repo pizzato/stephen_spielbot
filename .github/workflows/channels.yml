@@ -13,10 +13,12 @@ on:
     paths:
       - channels.yaml
       - scripts/gen_channels.py
+      - .github/workflows/channels.yml
   pull_request:
     paths:
       - channels.yaml
       - scripts/gen_channels.py
+      - .github/workflows/channels.yml
 
 permissions:
   contents: read
