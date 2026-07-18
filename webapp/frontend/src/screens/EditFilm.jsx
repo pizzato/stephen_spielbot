@@ -467,6 +467,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [musicBusy, setMusicBusy] = useState(false)
   const [narratorBusy, setNarratorBusy] = useState(false)
   const [upscaleBusy, setUpscaleBusy] = useState(false)
+  const [localizeLangs, setLocalizeLangs] = useState({})
+  const [localizeLang, setLocalizeLang] = useState('')
+  const [localizeBusy, setLocalizeBusy] = useState(false)
   const [upscaleResolution, setUpscaleResolution] = useState('')
   const [upscaleMode, setUpscaleMode] = useState('fast')
   const [error, setError] = useState('')
@@ -523,6 +526,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       setCoverUrl(p.cover_url || '')
     }).catch(() => {})
     api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
+    api.listLocalizeLanguages().then(setLocalizeLangs).catch(() => {})
   }, [workDir])
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
@@ -714,6 +718,35 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setNarratorBusy(false) }
   }
 
+  const localizeFilm = async () => {
+    setLocalizeBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.localizeFilm({ work_dir: data.work_dir, language: localizeLang })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setStatus(`Localized the film to ${localizeLangs[localizeLang] || localizeLang}.`)
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Localization ${t.status}.`))
+            } else if (t.step === 'translate') {
+              setStatus('Translating narration…')
+            } else if (t.step === 'narration' && t.scene_id) {
+              setStatus(`Synthesizing scene ${t.scene_id}${t.total ? ` (${t.current}/${t.total})` : ''}…`)
+            } else if (t.step === 'finalize') {
+              setStatus('Assembling the localized film…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setLocalizeBusy(false) }
+  }
+
   const remix = async () => {
     setBusy(true); setError(''); setStatus('')
     try {
@@ -752,7 +785,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || localizeBusy
 
   return (
     <div>
@@ -868,6 +901,31 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <div className="mt-24">
             <Button variant="primary" block icon="microphone-lines" disabled={anyBusy} onClick={regenNarrator}>
               {narratorBusy ? 'Regenerating…' : 'Regenerate narration'}
+            </Button>
+          </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="language" style={{ color: 'var(--ink-3)', width: 16 }} /> Localize this film</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Translate the narration and re-speak it in another language — same
+            voice, same visuals and music, no re-rendering. Kept as a switchable
+            version below. Dialogue and silent scenes keep their original language.
+          </p>
+          <div className="mt-24">
+            <Field label="Target language">
+              <select className="select" value={localizeLang} disabled={anyBusy}
+                onChange={(e) => setLocalizeLang(e.target.value)}>
+                <option value="">Choose a language…</option>
+                {Object.entries(localizeLangs).sort((a, b) => a[1].localeCompare(b[1])).map(([code, name]) => (
+                  <option key={code} value={code}>{name}</option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="language" disabled={anyBusy || !localizeLang} onClick={localizeFilm}>
+              {localizeBusy ? 'Localizing…' : 'Localize film'}
             </Button>
           </div>
         </Card>
