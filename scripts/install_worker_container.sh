@@ -12,6 +12,10 @@
 # Usage: bash scripts/install_worker_container.sh <host>
 # Env:
 #   MODEL_SOURCE   host to rsync models from if <host> has none (set by install.sh)
+#   GPU_MODE       "cdi" = modern CDI device injection (fixes cuInit 999 on new
+#                  drivers where the legacy --gpus path is broken); default is
+#                  the legacy path. Sticky: a host once deployed with cdi keeps
+#                  it on later runs unless GPU_MODE=legacy is passed.
 #   COMFYUI_PORT (8188)  TTS_PORT (8189)  STOP_NATIVE (true)  MODELS_DIR (remote ~/github/ComfyUI/models)
 #   (the port/STOP_NATIVE overrides are mainly for non-disruptive testing)
 set -euo pipefail
@@ -27,6 +31,7 @@ COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
 ECHOMIMIC_PORT="${ECHOMIMIC_PORT:-8190}"
 STOP_NATIVE="${STOP_NATIVE:-true}"
+GPU_MODE="${GPU_MODE:-}"             # "" = keep host's previous mode (default legacy)
 REMOTE_BUILD_DIR="spielbot-worker"   # under the target $HOME
 
 LOCAL=false
@@ -104,6 +109,23 @@ else
 fi
 REMOTE_MODELS="${MODELS_DIR:-$REMOTE_HOME/github/ComfyUI/models}"
 
+# GPU injection mode. Sticky per host: read the previous .env (before the rsync
+# below replaces the build context) so a host once deployed with CDI stays on
+# CDI across re-deploys unless GPU_MODE=legacy is passed explicitly.
+if [[ -z "$GPU_MODE" ]] && _sh "grep -qs 'docker-compose.cdi.yml' ~/$REMOTE_BUILD_DIR/docker/.env" 2>/dev/null; then
+    GPU_MODE=cdi
+    echo "[deploy] keeping CDI GPU mode from the previous deploy (override with GPU_MODE=legacy)"
+fi
+if [[ "$GPU_MODE" == "cdi" ]]; then
+    if ! _sh "grep -qs 'nvidia.com/gpu' /etc/cdi/*.yaml /etc/cdi/*.json /var/run/cdi/*.yaml /var/run/cdi/*.json" 2>/dev/null; then
+        echo "ERROR: GPU_MODE=cdi but no NVIDIA CDI spec found on $TARGET."
+        echo "  Generate it there first:  sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
+        echo "  (and regenerate after driver upgrades), then re-run."
+        exit 1
+    fi
+    echo "[deploy] using CDI GPU injection (nvidia.com/gpu=all)"
+fi
+
 # ── 2. Rsync the build context (controller → host) ────────────────────────────
 if $LOCAL; then
     BUILD_DEST="$REMOTE_HOME/$REMOTE_BUILD_DIR"
@@ -131,6 +153,13 @@ ECHOMIMIC_PORT=${ECHOMIMIC_PORT}
 # legacy cuBLAS path (CUBLAS_STATUS_INTERNAL_ERROR). Harmless on other GPUs.
 TORCH_BLAS_PREFER_CUBLASLT=1
 ENV
+if [[ "$GPU_MODE" == "cdi" ]]; then
+    _sh "cat >> ~/$REMOTE_BUILD_DIR/docker/.env" <<'ENV'
+# CDI GPU injection (see docker-compose.cdi.yml) — every plain `docker compose`
+# run in this directory picks this up automatically.
+COMPOSE_FILE=docker-compose.yml:docker-compose.cdi.yml
+ENV
+fi
 echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 
 # The container mounts the host's existing models (it does not download them).
