@@ -81,15 +81,24 @@ class RenderMarkdownTests(unittest.TestCase):
 
 
 class RepoFilesTests(unittest.TestCase):
+    """Deliberately does NOT assert the generated copies are up to date.
+
+    README tells a contributor that channels.yaml is the only file they need to
+    edit, and the Sync channels list workflow regenerates README.md and
+    channels.json on merge. Asserting freshness here would fail exactly the pull
+    requests the flow is designed to accept — and, because the writers persist
+    on mismatch, would rewrite tracked files as a side effect of running tests.
+    """
+
     def test_checked_in_channels_yaml_is_valid(self):
         self.assertTrue(gen_channels.load())
 
-    def test_generated_copies_are_up_to_date(self):
-        """The Action commits the generator's output, so a stale checked-in copy
-        would silently reappear in the next unrelated push."""
+    def test_render_is_deterministic(self):
+        """The Action commits the generator's output, so unstable rendering
+        would produce a spurious commit on every unrelated push."""
         channels = gen_channels.load()
-        self.assertFalse(gen_channels.write_json(channels), "run `make channels`")
-        self.assertFalse(gen_channels.write_readme(channels), "run `make channels`")
+        self.assertEqual(gen_channels.render_markdown(channels),
+                         gen_channels.render_markdown(channels))
 
 
 if __name__ == "__main__":
