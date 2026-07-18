@@ -15,7 +15,7 @@ W ?=
 ## non-interactively: make install WORKERS="s1 s2 s3"
 ## The macOS login service is opt-in: INSTALL_SERVICE=1 installs it without asking.
 install:
-	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" bash $(SCRIPTS)/install.sh
+	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" GPU_MODE="$(GPU_MODE)" bash $(SCRIPTS)/install.sh
 
 ## Download the LTX 2.3, ACE-Step and FLUX.2 Klein models (skips already-present files).
 download-models:
