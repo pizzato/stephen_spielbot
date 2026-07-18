@@ -249,6 +249,18 @@ the `echomimic` container's volume on first use). `make install` also downloads
 a 10-voice public-domain LibriVox **character voice library**
 (`make download-voices`) used to auto-cast dialogue characters.
 
+## Channels using this tool
+
+<!-- CHANNELS:START -->
+- [Stephen Spielbot (@StephenSpielbot)](https://www.youtube.com/@StephenSpielbot) — YouTube · The original
+<!-- CHANNELS:END -->
+
+Making films with Stephen Spielbot? Add your channel to
+[`channels.yaml`](channels.yaml) and open a pull request — that file is the only
+thing you need to edit. On merge, a GitHub Action regenerates this list and the
+app's **About** screen. Run `make channels` if you want to preview the result
+locally.
+
 ## More docs
 
 - [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
