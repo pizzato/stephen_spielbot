@@ -25,9 +25,11 @@ jobs:
   sync:
     name: Render channels.yaml
     runs-on: ubuntu-latest
-    # Only the post-merge run commits, so it needs write access.
+    # Needed by the post-merge commit step below. `permissions` takes no
+    # expressions, so it is granted for both events; only the push run writes,
+    # and GitHub downgrades the token to read-only for pull requests from forks.
     permissions:
-      contents: ${{ github.event_name == 'push' && 'write' || 'read' }}
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
