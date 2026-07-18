@@ -3261,6 +3261,13 @@ def _run_localize_film(task_id: str, wd: Path, lang: str) -> None:
         (scripts_dir / f"{lang}.json").write_text(
             json.dumps({"lang": lang, "scenes": {str(k): v for k, v in translations.items()}}, indent=2)
         )
+        # Publish metadata (title/description) in the same language, ready for
+        # the Publish screen. Best-effort — it translates lazily there if this
+        # fails, and a metadata hiccup must not fail the whole localization.
+        try:
+            _localize_metadata(wd, lang)
+        except Exception as exc:
+            gapp.logger.warning("Localized metadata for %s failed (deferred): %s", lang, exc)
 
         lang_dir.mkdir(parents=True, exist_ok=True)
         jobs: dict[int, dict] = {}
@@ -3614,6 +3621,54 @@ def localize_script_save(body: LocalizeScriptBody) -> dict:
         target=_run_localize_edit, args=(tid, wd, lang, changed), daemon=True,
     ).start()
     return {"ok": True, "task_id": tid, "changed": sorted(changed)}
+
+
+def _localize_metadata(wd: Path, lang: str) -> dict[str, str]:
+    """Localized publish metadata (title + description) for *lang*, translating
+    and caching into localize_scripts/{lang}.json on first use. The source is
+    the film's canonical title and cached description at call time."""
+    from pipeline.chatterbox import LANGUAGES
+    from pipeline.llm import translate_metadata
+
+    script_path = wd / "localize_scripts" / f"{lang}.json"
+    if not script_path.exists():
+        raise FileNotFoundError(f"No {LANGUAGES.get(lang, lang)} localization exists for this film.")
+    data = json.loads(script_path.read_text())
+    if (data.get("title") or "").strip():
+        return {"title": data["title"], "description": data.get("description") or ""}
+    translated = translate_metadata(
+        _video_title_for(wd), _cached_description(wd), LANGUAGES.get(lang, lang),
+    )
+    data["title"] = translated["title"]
+    data["description"] = translated["description"]
+    script_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    return translated
+
+
+class LocalizeMetadataBody(BaseModel):
+    work_dir: str
+    language: str
+
+
+@api.post("/api/remix/localize/metadata")
+def localize_metadata(body: LocalizeMetadataBody) -> dict:
+    """Localized title + description for publishing a localized cut (translated
+    on first request, cached in the localization's script file after that)."""
+    from pipeline.chatterbox import LANGUAGES
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if body.language not in LANGUAGES:
+        raise HTTPException(400, f"Unknown language: {body.language}")
+    try:
+        with _track_op("Translating metadata", wd.name):
+            out = _localize_metadata(wd, body.language)
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Metadata translation failed: {str(e).splitlines()[0][:200]}")
+    return {"ok": True, **out}
 
 
 class LocalizeAudioBody(BaseModel):
@@ -5553,6 +5608,15 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
     # Channel/account this film publishes to, resolved from its style (issue #22/#107).
     channel = _channel_for_work_dir(wd)
     x_account = _x_account_for_work_dir(wd)
+    # Final versions + language tags, so Publish can offer the localized cuts.
+    from pipeline.chatterbox import LANGUAGES
+    jc = _film_job_config(wd)
+    raw_lang = jc.get("tts_language")
+    original_lang = gapp._norm_tts_language(raw_lang) if raw_lang else "en"
+    try:
+        video_history = final_video_history.history(wd)
+    except Exception:
+        video_history = {"versions": [], "selected": None}
     return {
         "work_dir": str(wd),
         "title": _video_title_for(wd),
@@ -5571,6 +5635,10 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "vid_height": vid_h,
         # Shorts (portrait) don't take custom thumbnails — default the upload off.
         "include_thumbnail_default": orientation != "portrait",
+        # Version picker: which final cuts exist and what language each speaks.
+        "video_history": video_history,
+        "original_lang": original_lang,
+        "lang_names": LANGUAGES,
     }
 
 

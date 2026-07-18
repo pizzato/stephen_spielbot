@@ -1338,6 +1338,34 @@ def translate_narrations(
     return out
 
 
+def translate_metadata(title: str, description: str, target_lang_name: str,
+                       cfg: dict | None = None) -> dict[str, str]:
+    """Translate a film's publish metadata (YouTube title + description) into
+    *target_lang_name*. Returns {"title": ..., "description": ...}. Raises on
+    failure — the caller decides whether localized metadata is best-effort."""
+    cfg = cfg or _load_cfg()
+    sys_msg = _prompts.system("translate_metadata")
+    user_msg = _prompts.user(
+        "translate_metadata",
+        target_lang=target_lang_name,
+        title=(title or "").strip(),
+        description=(description or "").strip(),
+    )
+    # Same sizing rationale as narration: output ≈ input, budget 2× + overhead.
+    src_tokens = (len(title) + len(description)) // 3
+    text = _chat_complete(cfg, sys_msg, user_msg,
+                          max_tokens=600 + 2 * src_tokens, label="translate_metadata")
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if not m:
+        raise RuntimeError("Metadata translation did not contain a JSON object.")
+    raw = json.loads(m.group())
+    out_title = str(raw.get("title") or "").strip()
+    if not out_title:
+        raise RuntimeError("Metadata translation was missing the title.")
+    return {"title": out_title[:100],
+            "description": str(raw.get("description") or "").strip()}
+
+
 # ── Video topic suggestions ───────────────────────────────────────────────────
 
 def _parse_suggestions(text: str) -> list[dict]:
