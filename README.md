@@ -138,6 +138,12 @@ make logs W=s2              # tail s2's container logs
 
 `make start/stop/restart/status` drive `docker compose` on each host over SSH.
 Containers carry `restart: unless-stopped`, so they also survive a host reboot.
+`make start` recreates the containers (not just starts them) so they pick up
+the host's current NVIDIA device nodes — this self-heals the "nvidia-smi works
+but CUDA fails" state left behind when the driver or its modules were
+(re)loaded after the containers were created. To prevent that state at boot,
+load the modules before Docker: `printf 'nvidia\nnvidia-uvm\n' | sudo tee
+/etc/modules-load.d/nvidia.conf`.
 
 ## Configuration
 
