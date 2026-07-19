@@ -113,6 +113,30 @@ def select(
     raise ValueError(f"Unknown final video version {version_id}")
 
 
+def delete(work_dir: str | Path, version_id: int) -> dict[str, Any]:
+    """Delete a kept final-video version (not the one in use — the manifest's
+    selected id, falling back to the newest like ``history``). Returns the history
+    dict. Raises ValueError if the version is unknown or currently in use."""
+    data = _load(work_dir)
+    versions = list(data.get("versions") or [])
+    vid = int(version_id)
+    match = next((v for v in versions if int(v.get("id", 0) or 0) == vid), None)
+    if match is None:
+        raise ValueError(f"Unknown final video version {version_id}")
+    ids = [int(v.get("id", 0) or 0) for v in versions]
+    selected = data.get("selected")
+    if selected not in ids:
+        selected = ids[-1] if ids else None
+    if vid == selected:
+        raise ValueError("This version is in use — pick another one first.")
+    fname = str(match.get("file", ""))
+    if fname:
+        (Path(work_dir) / fname).unlink(missing_ok=True)
+    data["versions"] = [v for v in versions if int(v.get("id", 0) or 0) != vid]
+    _save(work_dir, data)
+    return history(work_dir)
+
+
 def history(work_dir: str | Path) -> dict[str, Any]:
     data = _load(work_dir)
     versions = []

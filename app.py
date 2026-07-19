@@ -2049,6 +2049,14 @@ def select_character_image(char_id: str, version_id: int) -> dict:
     return load_config()
 
 
+def delete_character_image_version(char_id: str, version_id: int) -> dict:
+    """Delete a kept look version (not the one in use). Returns the reloaded config."""
+    cfg = load_config()
+    _find_character(cfg, char_id)
+    image_history.char_delete(_global_char_hist_root(), char_id, version_id)
+    return load_config()
+
+
 def clear_character_image(char_id: str) -> dict:
     """Delete a character's reference image and clear the field. Returns config."""
     cfg = load_config()
@@ -2302,6 +2310,15 @@ def select_script_character_image(work_dir, char_id: str, version_id: int) -> li
     image_history.char_select(work_dir, char_id, version_id)
     char["ref_image"] = f"{char_id}.png"
     return _write_script_characters(work_dir, chars)
+
+
+def delete_script_character_image_version(work_dir, char_id: str, version_id: int) -> list[dict]:
+    """Delete a kept look version (not the one in use). Returns the saved list."""
+    work_dir = Path(work_dir)
+    chars = _read_script_characters(work_dir)
+    _find_script_character(chars, char_id)
+    image_history.char_delete(work_dir, char_id, version_id)
+    return chars
 
 
 def clear_script_character_image(work_dir, char_id: str) -> list[dict]:
