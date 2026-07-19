@@ -85,6 +85,64 @@ class BuildSrtTests(unittest.TestCase):
             self.assertIsNone(captions.build_srt(wd))
 
 
+class EditedFilmOrderTests(unittest.TestCase):
+    """Films edited after render (scene delete/reorder/add, issue #193) publish
+    in scene_edit_order.json order — cues must be laid on that timeline."""
+
+    def test_cues_follow_scene_edit_order(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "First scene."},
+             {"id": 2, "narration": "Second scene."}],
+            {"scene_01_narration.wav": 2.0, "scene_02_narration.wav": 3.0},
+        )
+        (wd / "scene_edit_order.json").write_text("[2, 1]")
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        # Scene 2 opens the film: 0 -> 3.0, then scene 1: 3.0 -> 5.0.
+        self.assertIn("00:00:00,000 --> 00:00:03,000\nSecond scene.", content)
+        self.assertIn("00:00:03,000 --> 00:00:05,000\nFirst scene.", content)
+
+    def test_scene_removed_from_order_is_skipped(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "First scene."},
+             {"id": 2, "narration": "Second scene."},
+             {"id": 3, "narration": "Third scene."}],
+            {"scene_01_narration.wav": 2.0, "scene_02_narration.wav": 3.0,
+             "scene_03_narration.wav": 4.0},
+        )
+        (wd / "scene_edit_order.json").write_text("[1, 3]")
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertNotIn("Second scene.", content)
+        self.assertIn("00:00:02,000 --> 00:00:06,000\nThird scene.", content)
+
+    def test_unknown_ids_in_order_are_ignored(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "First scene."}],
+            {"scene_01_narration.wav": 2.0},
+        )
+        (wd / "scene_edit_order.json").write_text("[1, 9]")
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("First scene.", content)
+
+    def test_final_duration_governs_over_wav(self):
+        # The originally-last scene's final carries a ~2 s freeze tail its wav
+        # doesn't. Moved off the end, that tail still occupies the timeline, so
+        # the final's duration must win.
+        wd, patch = _film(
+            [{"id": 1, "narration": "First scene."},
+             {"id": 2, "narration": "Second scene."}],
+            {"scene_01_narration.wav": 2.0,
+             "scene_02_narration.wav": 3.0, "scene_02_final.mp4": 5.0},
+        )
+        (wd / "scene_edit_order.json").write_text("[2, 1]")
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,000 --> 00:00:05,000\nSecond scene.", content)
+        self.assertIn("00:00:05,000 --> 00:00:07,000\nFirst scene.", content)
+
+
 def _localized_film():
     """Two-scene film with a Spanish localization whose scenes run at different
     durations than the original cut (translated narration re-times scenes)."""
