@@ -44,6 +44,7 @@ from pipeline.assembler import (
     concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
     fit_video_canvas,
+    write_silence_wav as _write_silence_wav,
 )
 from pipeline.tts_worker import generate_narration
 from pipeline.orchestrator import (
@@ -57,7 +58,7 @@ from pipeline import ui_activity
 # Resolution name → (w, h) map. Import the canonical table from app rather than
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
-from app import _RESOLUTIONS, _DEFAULT_RESOLUTION
+from app import _RESOLUTIONS, _DEFAULT_RESOLUTION, _dialogue_resolvers
 from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
     cover_dimensions as _cover_dimensions,
@@ -337,114 +338,8 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
 
 _SILENT_DEFAULT_SECS = 5.0
 
-
-def _write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
-    """A silent WAV of *seconds* — the 'narration' of a silent scene, so the
-    normal duration/mux/concat pipeline runs unchanged with no spoken audio."""
-    import wave
-    n = max(1, int(seconds * rate))
-    with wave.open(str(path), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(rate)
-        w.writeframes(b"\x00\x00" * n)
-    return path
-
-
-def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
-                        vid_width: int = 0, vid_height: int = 0):
-    """Build (voice_ref_for, make_still) for dialogue scenes.
-
-    Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
-    own voice, else the style narrator — (b) the still EchoMimic animates, and
-    (c) the text prompt guiding the animation.
-
-    The still is always the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at
-    the job resolution — same rule as the classic video path) so the character
-    speaks *in the scene*; the speaker's portrait is only a fallback when no frame
-    exists on disk. On multi-character frames the prompt names WHO is speaking so
-    the right lips move (best-effort text guidance)."""
-    try:
-        chars = json.loads((work_dir / "characters.json").read_text()) or []
-    except Exception:
-        chars = []
-    # Global catalogue characters are speakable too (the per-script cast wins on
-    # a name clash) — e.g. a recurring presenter defined once in Settings.
-    seen = {str(c.get("name", "")).strip().lower() for c in chars if isinstance(c, dict)}
-    for c in (cfg.get("characters") or []):
-        if isinstance(c, dict) and str(c.get("name", "")).strip().lower() not in seen:
-            chars.append(c)
-    voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
-    global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
-
-    def _find(speaker: str):
-        s = (speaker or "").strip().lower()
-        for c in chars:
-            names = [c.get("name", "")] + list(c.get("aliases") or [])
-            if any(s == str(n).strip().lower() for n in names if str(n).strip()):
-                return c
-        return None
-
-    def voice_ref_for(speaker: str):
-        c = _find(speaker)
-        if c and c.get("voice") and c["voice"] in voices:
-            p = Path(voices[c["voice"]])
-            if p.exists():
-                logger.info("  %s speaks with voice %r", speaker, c["voice"])
-                return p
-        logger.info("  %s speaks with the narrator voice", speaker)
-        return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
-
-    def _scene_frame(scene) -> Path | None:
-        """The scene's first frame at the job resolution, if present on disk."""
-        for ext in ("_preview.png", "_first_frame.png"):
-            p = work_dir / f"scene_{scene.id:02d}{ext}"
-            if p.exists() and vid_width and vid_height and _image_matches_resolution(p, vid_width, vid_height):
-                return p
-        return None
-
-    def _portrait(scene, speaker: str) -> Path | None:
-        c = _find(speaker)
-        ref = (c or {}).get("ref_image") or ""
-        for cand in ((work_dir / "characters" / ref, global_char_dir / ref) if ref else ()):
-            if cand.exists():
-                return cand
-        return None
-
-    def make_still(scene, speaker: str, idx: int) -> Path:
-        # Per-line SHOT still (speaker close-up in the scene setting, generated at
-        # render start from the line's "shot" framing) — the best lip-sync source:
-        # face large, correct speaker, in-scene. Then the scene frame, then portrait.
-        shot = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}_shot.png"
-        if shot.exists() and vid_width and vid_height and _image_matches_resolution(shot, vid_width, vid_height):
-            logger.info("  scene %d line %d: talking still = shot close-up (%s)", scene.id, idx, shot.name)
-            return shot
-        frame = _scene_frame(scene)
-        if frame is not None:
-            logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
-            return frame
-        portrait = _portrait(scene, speaker)
-        if portrait is not None:
-            logger.info("  scene %d: no scene frame at the job resolution — %s speaks on their portrait",
-                        scene.id, speaker)
-            return portrait
-        raise RuntimeError(
-            f"dialogue speaker {speaker!r} (scene {scene.id}) has no shot still, no scene first "
-            "frame at the job resolution, and no character portrait"
-        )
-
-    def prompt_for(scene, speaker: str) -> str:
-        """Text guidance for EchoMimic: name WHO is speaking so a multi-character
-        scene frame animates the right character's lips (best-effort — the model
-        is text-guided)."""
-        c = _find(speaker)
-        who = (c or {}).get("description") or speaker
-        return (
-            f"{speaker} ({who}) is speaking, with natural facial expressions and subtle head "
-            "movement. Any other characters present listen silently, mouths closed, without talking."
-        )
-
-    return voice_ref_for, make_still, prompt_for
+# _write_silence_wav and _dialogue_resolvers moved to pipeline.assembler / app so
+# the web backend's per-scene dialogue re-render shares them (imported above).
 
 
 def main(work_dir: Path) -> None:
