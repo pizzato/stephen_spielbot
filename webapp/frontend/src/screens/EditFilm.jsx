@@ -439,10 +439,12 @@ function SceneCard({
                 </>
               )}
 
-              <Button variant="ghost" icon="microphone-lines" size="sm" disabled={isRendering}
-                onClick={() => rerender('narration')}>
-                {busy === 'narration' ? 'Rendering…' : 'Narration'}
-              </Button>
+              {(sceneType.mode || 'narration') === 'narration' && (
+                <Button variant="ghost" icon="microphone-lines" size="sm" disabled={isRendering}
+                  onClick={() => rerender('narration')}>
+                  {busy === 'narration' ? 'Rendering…' : 'Narration'}
+                </Button>
+              )}
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
                 label="Image" busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />

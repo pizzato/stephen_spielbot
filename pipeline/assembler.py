@@ -97,6 +97,19 @@ def _get_duration(path: Path) -> float:
     return float(result.stdout.strip())
 
 
+def write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
+    """A silent WAV of *seconds* — the 'narration' of a silent scene, so the
+    normal duration/mux/concat pipeline runs unchanged with no spoken audio."""
+    import wave
+    n = max(1, int(seconds * rate))
+    with wave.open(str(path), "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(b"\x00\x00" * n)
+    return path
+
+
 def _get_video_dimensions(path: Path) -> tuple[int, int]:
     result = subprocess.run(
         [
