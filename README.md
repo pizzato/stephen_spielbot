@@ -86,6 +86,11 @@ make stop      # stop everything
 make status    # check health of the app and all workers
 ```
 
+To remove an installation, `make uninstall` stops everything and removes the
+service + worker container stacks, keeping config, models, and rendered videos.
+`bash scripts/uninstall.sh --purge-data --purge-models` also removes those
+(videos in `~/videos` are never touched); delete the repo folder to finish.
+
 ## Security
 
 The web app has **no authentication** and is meant to run bound to `localhost`
@@ -156,6 +161,15 @@ GPU_MODE=cdi bash scripts/install_worker_container.sh s1     # or: make install 
 The mode is sticky per host (kept on re-deploys; pass `GPU_MODE=legacy` to
 revert) and is wired through `docker/.env`'s `COMPOSE_FILE`, so every plain
 `docker compose` command on that host uses it automatically.
+
+The CDI spec embeds versioned driver library paths, so a **driver upgrade
+stales it** — the deploy preflight detects the mismatch and tells you to
+regenerate. To keep it fresh automatically, enable the toolkit's refresh unit
+where available: `sudo systemctl enable --now nvidia-cdi-refresh.path`. Note
+that `nvidia-ctk cdi generate` also loads the NVIDIA kernel modules as a side
+effect — if a *reboot* (not an upgrade) "broke CDI", the actual fix is loading
+the modules before Docker at boot (see the `modules-load.d` note above), not
+regenerating the spec.
 
 Manage the workers from the controller — all of them, or one with `W=<host>`:
 

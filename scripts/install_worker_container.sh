@@ -123,6 +123,19 @@ if [[ "$GPU_MODE" == "cdi" ]]; then
         echo "  (and regenerate after driver upgrades), then re-run."
         exit 1
     fi
+    # The spec embeds versioned driver library paths (libcuda.so.<version>), so
+    # a driver upgrade silently stales it and containers fail at start. Compare
+    # against the running driver and refuse to deploy against a stale spec.
+    SPEC_VER="$(_sh "grep -rhoE 'libcuda\.so\.[0-9]+\.[0-9.]+' /etc/cdi/*.yaml /etc/cdi/*.json /var/run/cdi/*.yaml /var/run/cdi/*.json 2>/dev/null | head -1" 2>/dev/null | sed 's/^libcuda\.so\.//')"
+    DRV_VER="$(_sh "nvidia-smi --query-gpu=driver_version --format=csv,noheader 2>/dev/null | head -1" 2>/dev/null | tr -d '[:space:]')"
+    if [[ -n "$SPEC_VER" && -n "$DRV_VER" && "$SPEC_VER" != "$DRV_VER" ]]; then
+        echo "ERROR: the CDI spec on $TARGET is stale — it references driver $SPEC_VER but $DRV_VER is running."
+        echo "  Regenerate it:  sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml"
+        echo "  Tip: newer NVIDIA Container Toolkits ship an auto-refresh unit — enable it once with:"
+        echo "       sudo systemctl enable --now nvidia-cdi-refresh.path   (if present)"
+        echo "  then re-run."
+        exit 1
+    fi
     echo "[deploy] using CDI GPU injection (nvidia.com/gpu=all)"
 fi
 
