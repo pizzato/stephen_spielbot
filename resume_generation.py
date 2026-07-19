@@ -505,13 +505,17 @@ def main(work_dir: Path) -> None:
     first_pass_steps  = int(cfg.get("first_pass_steps", 8))
     second_pass_cfg   = float(cfg.get("second_pass_cfg", 1.5))
     second_pass_steps = int(cfg.get("second_pass_steps", 3))
-    flux_cfg = {
-        "model":  cfg.get("flux_model",   "flux1-schnell-fp8.safetensors"),
-        "clip_t5": cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-        "clip_l":  cfg.get("flux_clip_l",  "clip_l.safetensors"),
-        "vae":     cfg.get("flux_vae",     "ae.safetensors"),
-        "steps":   int(cfg.get("flux_steps", 4)),
-    }
+    # The style's image engine drives every first frame and the cover (same as
+    # the UI preview/cover paths). job_config stamps the resolved per-style key
+    # ("image_engine"); older job dirs fall back to a styles lookup, then the
+    # flat mirror of the default style.
+    engine_key = cfg.get("image_engine")
+    if not engine_key:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
+                engine_key = s.get("image_engine")
+                break
+    image_engine = _engines.resolve(cfg, engine_key or cfg.get("default_image_engine"))
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 
@@ -657,7 +661,7 @@ def main(work_dir: Path) -> None:
                     shot_scene, work_dir, dur, vid_width, vid_height,
                     max_clip_secs, lora_strength, first_pass_cfg, first_pass_steps,
                     second_pass_cfg, second_pass_steps, url,
-                    scene_first_frame=Path(still), flux_cfg=flux_cfg,
+                    scene_first_frame=Path(still), image_engine=image_engine,
                 )
             finally:
                 worker_pool.release(url)
@@ -1100,7 +1104,7 @@ def main(work_dir: Path) -> None:
                         second_pass_cfg, second_pass_steps,
                         comfy_url=url,
                         scene_first_frame=scene_first_frame,
-                        flux_cfg=flux_cfg,
+                        image_engine=image_engine,
                         on_first_frame=_finish_image,
                     )
                     store.record_artifact(
