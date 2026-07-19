@@ -2264,9 +2264,13 @@ def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_t
     results: dict[str, dict] = {}
     for host in hosts:
         try:
+            # localhost workers (single-machine setup) have no SSH — run locally.
+            if host in ("localhost", "127.0.0.1"):
+                cmd = ["bash", "-c", f"{env}bash -s"]
+            else:
+                cmd = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, f"{env}bash -s"]
             proc = subprocess.run(
-                ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, f"{env}bash -s"],
-                input=script_text, capture_output=True, text=True, timeout=6 * 3600)
+                cmd, input=script_text, capture_output=True, text=True, timeout=6 * 3600)
             results[host] = {"ok": proc.returncode == 0,
                              "log": (proc.stdout + proc.stderr).strip()[-3000:]}
         except Exception as ex:
@@ -2667,6 +2671,10 @@ def start_generation(body: GenerateBody) -> dict:
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
         "style_name": ss["name"],
+        # The style's image engine drives first frames + the render-time cover
+        # in resume_generation.py (previously those fell back to FLUX.1 via the
+        # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
+        "image_engine": ss.get("image_engine"),
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
@@ -8684,13 +8692,8 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                 int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
                 url,
                 scene_first_frame if scene_first_frame.exists() else None,
-                {
-                    "model": jc.get("flux_model") or cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),
-                    "clip_t5": jc.get("flux_clip_t5") or cfg.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-                    "clip_l": jc.get("flux_clip_l") or cfg.get("flux_clip_l", "clip_l.safetensors"),
-                    "vae": jc.get("flux_vae") or cfg.get("flux_vae", "ae.safetensors"),
-                    "steps": int(jc.get("flux_steps", cfg.get("flux_steps", 4))),
-                },
+                gapp.engines.resolve(cfg, jc.get("image_engine")
+                                     or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
             )
         finally:
             pool.release(url)
