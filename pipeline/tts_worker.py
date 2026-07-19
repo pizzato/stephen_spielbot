@@ -190,7 +190,8 @@ def worker_alive(host: str, timeout: int = 3) -> bool:
 
 
 def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
-                             window_secs: float = 0.1, pad_secs: float = 0.4) -> None:
+                             window_secs: float = 0.1, pad_secs: float = 0.4,
+                             max_gap_secs: float = 2.0) -> None:
     """Cut Chatterbox's post-speech junk off the end of a narration WAV.
 
     Chatterbox Multilingual often appends seconds of near-silence carrying
@@ -200,6 +201,12 @@ def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
     localized scene. Speech RMS sits far above *threshold_db* and the
     artifacts sit below it, so: find the last window whose RMS clears the
     threshold and cut *pad_secs* after it (keeping the natural decay).
+
+    Some takes hallucinate babble as LOUD as speech, separated from the real
+    narration by seconds of dead silence — those windows clear the threshold,
+    so loudness alone can't spot them. Narration never goes silent for
+    *max_gap_secs*, though, so everything after the first that-long gap
+    between loud windows is junk too, however loud it is.
     Best-effort — on anything unexpected the file is left untouched.
     """
     import array
@@ -219,14 +226,20 @@ def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
             return
         win = max(1, int(rate * window_secs)) * channels
         threshold = (10 ** (threshold_db / 20.0)) * 32768.0
-        last_loud_end = None
+        loud_ends = []
         for start in range(0, len(samples), win):
             chunk = samples[start:start + win]
             rms = math.sqrt(sum(x * x for x in chunk) / len(chunk))
             if rms >= threshold:
-                last_loud_end = start + len(chunk)
-        if last_loud_end is None:
+                loud_ends.append(start + len(chunk))
+        if not loud_ends:
             return  # no speech found at all — don't guess
+        last_loud_end = loud_ends[-1]
+        gap = int(rate * max_gap_secs) * channels
+        for a, b in zip(loud_ends, loud_ends[1:]):
+            if b - a > gap + win:  # dead air longer than any real pause
+                last_loud_end = a
+                break
         keep = min(len(samples), last_loud_end + int(rate * pad_secs) * channels)
         if len(samples) - keep < int(rate * 0.25) * channels:
             return  # tail already tight — nothing worth rewriting
