@@ -152,7 +152,14 @@ elif _models_present_on "$MODEL_SOURCE"; then
 elif is_local_host "$MODEL_SOURCE"; then
     _ask_hf_token
     echo "[models] Downloading models to $COMFY_DIR (mounted by the local worker containers)..."
-    mkdir -p "$COMFY_DIR"
+    if [[ ! -d "$COMFY_DIR" ]]; then
+        mkdir -p "$COMFY_DIR"
+        # Mark that Spielbot created this directory (it holds only our model
+        # downloads). uninstall --purge-models deletes the whole dir when the
+        # marker is present — a pre-existing ComfyUI install (no marker) is
+        # never touched.
+        touch "$COMFY_DIR/.spielbot_created"
+    fi
     HF_TOKEN="$HF_TOKEN" bash "$REPO_ROOT/scripts/download_models.sh" "$COMFY_DIR"
 else
     _ask_hf_token
