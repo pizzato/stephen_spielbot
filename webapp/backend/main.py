@@ -1032,6 +1032,16 @@ def characters_select_image(body: CharacterSelect) -> dict:
     return _character_response(cfg)
 
 
+@api.post("/api/characters/image/delete")
+def characters_delete_image(body: CharacterSelect) -> dict:
+    """Delete a kept look version (the one in use can't be deleted)."""
+    try:
+        cfg = gapp.delete_character_image_version(body.char_id, int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _character_response(cfg)
+
+
 @api.post("/api/characters/portrait")
 def characters_portrait(body: CharacterPortrait) -> dict:
     try:
@@ -1148,6 +1158,17 @@ def select_script_character_image(job_id: str, char_id: str, body: ScriptCharact
         gapp.select_script_character_image(wd, char_id, int(body.version_id))
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(404, str(e))
+    return _script_chars_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/characters/{char_id}/image/delete")
+def delete_script_character_image_version(job_id: str, char_id: str, body: ScriptCharacterSelect) -> dict:
+    """Delete a kept look version (the one in use can't be deleted)."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.delete_script_character_image_version(wd, char_id, int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return _script_chars_ok(wd)
 
 
@@ -2090,6 +2111,19 @@ def select_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) ->
         store.close()
     return {"ok": True, "preview_path": str(out),
             "history": image_history.history(wd, int(scene_id))}
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview-delete")
+def delete_scene_preview(job_id: str, scene_id: int, body: PreviewSelectBody) -> dict:
+    """Delete a kept image version (the one in use can't be deleted)."""
+    wd = gapp._job_work_dir(job_id)
+    if wd is None:
+        raise HTTPException(404, "No work directory for this job.")
+    try:
+        hist = image_history.delete(wd, int(scene_id), int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "history": hist}
 
 
 # ── masked image edit (FLUX inpaint) ─────────────────────────────────────────
@@ -4255,6 +4289,20 @@ def select_remix_video(body: RemixVideoSelectBody) -> dict:
     }
 
 
+@api.post("/api/remix/video-delete")
+def delete_remix_video(body: RemixVideoSelectBody) -> dict:
+    """Delete a kept final-video version, e.g. a duplicate localization
+    (the one in use can't be deleted)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    try:
+        hist = final_video_history.delete(wd, int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "video_history": hist}
+
+
 # ── queue ────────────────────────────────────────────────────────────────────
 
 def _title_key(title: str) -> str:
@@ -6222,6 +6270,19 @@ def select_cover(body: CoverSelectBody) -> dict:
         raise HTTPException(404, str(e))
     return {"ok": True, "cover_url": f"/api/file?path={cover}&t={int(time.time())}",
             "history": image_history.cover_history(wd)}
+
+
+@api.post("/api/youtube/cover/delete")
+def delete_cover_version(body: CoverSelectBody) -> dict:
+    """Delete a kept cover version (the one in use can't be deleted)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    try:
+        hist = image_history.cover_delete(wd, int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "history": hist}
 
 
 @api.get("/api/youtube/cover/history")
@@ -8856,6 +8917,32 @@ def select_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
         raise HTTPException(404, str(e))
     return {"ok": True, "final_path": str(out),
             "video_history": video_history.history(wd, int(scene_id))}
+
+
+@api.post("/api/films/scenes/{scene_id}/preview-delete")
+def delete_film_preview(scene_id: int, body: FilmPreviewSelectBody) -> dict:
+    """Delete a kept image version for a film scene (the one in use can't be deleted)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        hist = image_history.delete(wd, int(scene_id), int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "history": hist}
+
+
+@api.post("/api/films/scenes/{scene_id}/video-delete")
+def delete_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
+    """Delete a kept video take for a film scene (the one in use can't be deleted)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        hist = video_history.delete(wd, int(scene_id), int(body.version_id))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "video_history": hist}
 
 
 class FilmInpaintBody(BaseModel):
