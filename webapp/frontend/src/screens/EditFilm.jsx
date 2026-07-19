@@ -1539,6 +1539,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [assembleResult, setAssembleResult] = useState(null)
   const [activeRenders, setActiveRenders] = useState(0)
   const [resumeTasks, setResumeTasks] = useState({})
+  const [adding, setAdding] = useState(false)
 
   const load = useCallback(async () => {
     setError('')
@@ -1615,6 +1616,22 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
     }
   }
 
+  // Append a blank scene (issue #193): write its narration/prompts on the new
+  // card, then build it with the re-render buttons (narration → image → video)
+  // and reassemble. Position it with the card's move chevrons.
+  const addScene = async () => {
+    setAdding(true)
+    setError('')
+    try {
+      await api.addFilmScene(workDir)
+      await load()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setAdding(false)
+    }
+  }
+
   if (!loaded) return <p className="muted">Loading scenes…</p>
 
   return (
@@ -1622,6 +1639,9 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
         <Button variant="primary" icon="circle-nodes" disabled={assembling || activeRenders > 0 || scenes.length === 0} onClick={reassemble}>
           {assembling ? 'Assembling…' : 'Reassemble film'}
+        </Button>
+        <Button variant="ghost" icon="plus" disabled={adding || assembling} onClick={addScene}>
+          {adding ? 'Adding…' : 'Add scene'}
         </Button>
       </div>
 
@@ -1649,7 +1669,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
 
       {scenes.length === 0 ? (
         <Card span={12} well>
-          <p className="muted" style={{ margin: 0 }}>No scenes found for this film.</p>
+          <p className="muted" style={{ margin: 0 }}>No scenes found for this film. “Add scene” starts a new one from scratch.</p>
         </Card>
       ) : (
         <div className="bento" style={{ rowGap: 8 }}>

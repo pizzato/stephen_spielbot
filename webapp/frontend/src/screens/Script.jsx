@@ -89,6 +89,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [regenStatus, setRegenStatus] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [confirmDelScript, setConfirmDelScript] = useState(false)
+  const [confirmDelScene, setConfirmDelScene] = useState(false)
 
   // Sync state and switch to Cover when a new job loads
   useEffect(() => {
@@ -411,8 +412,49 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
   const move = async (to) => {
     if (to < 0 || to >= total) return
+    setConfirmDelScene(false)
     await persist(cur)
     setCur(to)
+  }
+
+  // Structural edits (issue #193): the backend renumbers scene ids to 1..N and
+  // returns the fresh list, so replace state wholesale. Every thumb gets a new
+  // cache-buster — renaming scene files reuses previously-served URLs.
+  const applyStructure = (r, focusIdx) => {
+    const fresh = (r.scenes || []).map((s) => ({ ...s, cb: Date.now() }))
+    setScenes(fresh)
+    setCur(Math.max(0, Math.min(focusIdx, fresh.length - 1)))
+    setConfirmDelScene(false)
+  }
+
+  const addSceneAfter = async () => {
+    setBusy('structure'); setError('')
+    try {
+      await persist(cur)
+      const r = await api.addScene(job.job_id, d.id || 0)
+      applyStructure(r, cur + 1)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const deleteScene = async () => {
+    setBusy('structure'); setError('')
+    try {
+      const r = await api.deleteScene(job.job_id, d.id)
+      applyStructure(r, cur)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const moveScene = async (di) => {
+    const to = cur + di
+    if (to < 0 || to >= total) return
+    setBusy('structure'); setError('')
+    try {
+      await persist(cur)
+      const order = scenes.map((s) => s.id)
+      ;[order[cur], order[to]] = [order[to], order[cur]]
+      const r = await api.reorderScenes(job.job_id, order)
+      applyStructure(r, to)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
   const regen = async (instruction = '') => {
@@ -756,7 +798,25 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   <span className="h-title">Scene {cur + 1}<span className="muted" style={{ fontWeight: 400 }}> / {total}</span></span>
                   <Button variant="quiet" iconRight="chevron-right" disabled={cur >= total - 1} onClick={() => move(cur + 1)}>Next</Button>
                 </div>
-                <Chip tone="accent" dot>~20s</Chip>
+                <div className="row center gap-8">
+                  <Button variant="quiet" icon="arrow-left" title="Move this scene earlier"
+                    disabled={cur === 0 || !!busy} onClick={() => moveScene(-1)} />
+                  <Button variant="quiet" icon="arrow-right" title="Move this scene later"
+                    disabled={cur >= total - 1 || !!busy} onClick={() => moveScene(1)} />
+                  <Button variant="ghost" icon="plus" disabled={!!busy} onClick={addSceneAfter}>
+                    {busy === 'structure' ? 'Working…' : 'Add scene'}
+                  </Button>
+                  {confirmDelScene ? (
+                    <>
+                      <Button variant="danger" icon="trash-can" disabled={!!busy} onClick={deleteScene}>Confirm delete</Button>
+                      <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmDelScene(false)}>Cancel</Button>
+                    </>
+                  ) : (
+                    <Button variant="quiet" icon="trash-can" title="Delete this scene"
+                      disabled={total <= 1 || !!busy} onClick={() => setConfirmDelScene(true)} />
+                  )}
+                  <Chip tone="accent" dot>~20s</Chip>
+                </div>
               </div>
 
               <div className="stack gap-22 mt-24">
