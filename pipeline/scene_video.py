@@ -6,8 +6,9 @@ import logging
 from collections.abc import Callable
 from pathlib import Path
 
+from pipeline import engines
 from pipeline.assembler import extract_audio, _get_duration
-from pipeline.comfyui import generate_scene_image, generate_video_continuation
+from pipeline.comfyui import generate_video_continuation, generate_with_engine
 from pipeline.llm import Scene
 
 
@@ -29,30 +30,31 @@ def generate_scene_video(
     second_pass_steps: int,
     comfy_url: str,
     scene_first_frame: Path | None = None,
-    flux_cfg: dict | None = None,
+    image_engine: dict | None = None,
     on_first_frame: Callable[[Path], None] | None = None,
 ) -> tuple[Path, Path | None]:
-    """Generate one video clip for the full scene using FLUX first frame plus LTX I2V.
+    """Generate one video clip for the full scene: image-engine first frame plus LTX I2V.
+
+    *image_engine* is an engine dict from :func:`pipeline.engines.resolve`
+    (the style's selected image engine); None falls back to the default engine.
 
     ``on_first_frame`` (if given) is invoked with the first-frame path the
-    instant FLUX finishes — before the much longer I2V step — so callers can
-    mark a separate image task done without conflating it with the video.
+    instant the image engine finishes — before the much longer I2V step — so
+    callers can mark a separate image task done without conflating it with the
+    video.
     """
 
     if scene_first_frame is None or not scene_first_frame.exists():
-        fx = flux_cfg or {}
+        engine = image_engine or engines.resolve({}, None)
         first_frame_path = work_dir / f"scene_{scene.id:02d}_first_frame.png"
-        logger.info("  [%s] scene %d: generating FLUX first frame inline", comfy_url, scene.id)
-        generate_scene_image(
+        logger.info("  [%s] scene %d: generating first frame inline (%s)",
+                    comfy_url, scene.id, engine.get("key"))
+        generate_with_engine(
+            engine,
             scene.image_prompt,
             first_frame_path,
             width=vid_width,
             height=vid_height,
-            flux_model=fx.get("model", "flux1-schnell-fp8.safetensors"),
-            clip_t5=fx.get("clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-            clip_l=fx.get("clip_l", "clip_l.safetensors"),
-            flux_vae=fx.get("vae", "ae.safetensors"),
-            steps=fx.get("steps", 4),
             comfy_url=comfy_url,
         )
         scene_first_frame = first_frame_path

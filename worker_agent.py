@@ -25,7 +25,8 @@ from pipeline.assembler import (  # noqa: E402
     mix_background_music,
     mux_video_audio,
 )
-from pipeline.comfyui import generate_music, generate_scene_image, generate_with_engine  # noqa: E402
+from pipeline import engines  # noqa: E402
+from pipeline.comfyui import generate_music, generate_with_engine  # noqa: E402
 from pipeline import image_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
@@ -64,16 +65,15 @@ def _execute_scene_image(store: DurableStore, task: TaskRecord, endpoint: str) -
     if store.skip_task_if_artifact_exists(task.id, output, artifact_kind="image", min_size=1000):
         return
 
-    generate_scene_image(
+    # The payload carries the style's engine key; resolve() falls back to the
+    # default engine, with flux1-schnell's filenames overridable by the
+    # payload's legacy flux_* keys.
+    generate_with_engine(
+        engines.resolve(p, p.get("image_engine")),
         p.get("image_prompt", ""),
         output,
         width=int(p.get("width", p.get("vid_width", 1024))),
         height=int(p.get("height", p.get("vid_height", 576))),
-        steps=int(p.get("flux_steps", 4)),
-        flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
-        clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-        clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
-        flux_vae=p.get("flux_vae", "ae.safetensors"),
         comfy_url=endpoint,
     )
     store.record_artifact(task.job_id, task.id, "image", output, width=int(p.get("width", 0)) or None, height=int(p.get("height", 0)) or None)
@@ -160,13 +160,7 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         negative_prompt=p.get("negative_prompt", ""),
     )
     first_frame = Path(p["first_frame"]).expanduser() if p.get("first_frame") else work_dir / f"scene_{sid:02d}_first_frame.png"
-    flux_cfg = {
-        "model": p.get("flux_model", "flux1-schnell-fp8.safetensors"),
-        "clip_t5": p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-        "clip_l": p.get("flux_clip_l", "clip_l.safetensors"),
-        "vae": p.get("flux_vae", "ae.safetensors"),
-        "steps": int(p.get("flux_steps", 4)),
-    }
+    image_engine = engines.resolve(p, p.get("image_engine"))
     scene_video, ambient = generate_scene_video_task(
         scene,
         work_dir,
@@ -181,7 +175,7 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         int(p.get("second_pass_steps", 6)),
         endpoint,
         first_frame if first_frame.exists() else None,
-        flux_cfg,
+        image_engine,
     )
     store.record_artifact(task.job_id, task.id, "scene_video", scene_video, duration_seconds=_get_duration(scene_video))
     if ambient:
@@ -274,24 +268,14 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # Keep the previous cover so the user can return to it (same as scenes).
     image_history.cover_seed_if_empty(work_dir, cover_path)
     engine = p.get("engine")
-    if engine:
-        # Generate with the style's selected image engine (FLUX.1/FLUX.2).
-        generate_with_engine(
-            engine, prompt, cover_path,
-            width=cover_w, height=cover_h, comfy_url=comfy_url,
-        )
-    else:
-        # Back-compat for tasks queued before per-style engines.
-        generate_scene_image(
-            prompt, cover_path,
-            width=cover_w, height=cover_h,
-            steps=int(p.get("flux_steps", 4)),
-            flux_model=p.get("flux_model", "flux1-schnell-fp8.safetensors"),
-            clip_t5=p.get("flux_clip_t5", "t5xxl_fp8_e4m3fn.safetensors"),
-            clip_l=p.get("flux_clip_l", "clip_l.safetensors"),
-            flux_vae=p.get("flux_vae", "ae.safetensors"),
-            comfy_url=comfy_url,
-        )
+    # Engine-less payloads (tasks queued before per-style engines) resolve to
+    # the default engine, with flux1-schnell filename overrides from flux_* keys.
+    if not isinstance(engine, dict) or not engine:
+        engine = engines.resolve(p, p.get("image_engine"))
+    generate_with_engine(
+        engine, prompt, cover_path,
+        width=cover_w, height=cover_h, comfy_url=comfy_url,
+    )
     image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")
