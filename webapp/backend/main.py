@@ -2027,6 +2027,181 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     return {"ok": True}
 
 
+# ── scene structure: add / remove / reorder (issue #193) ─────────────────────
+# The pre-render pipeline treats scene id order as THE order everywhere (render,
+# assembly, captions, scene_NN_* filenames), so structural edits renumber ids to
+# 1..N and rename every scene-numbered artifact to follow, instead of layering
+# an order sidecar over the whole pipeline. The film editor's post-render
+# scene_edit_order.json keeps its stable-id convention untouched.
+
+_SCENE_FILE_RE = re.compile(r"^scene_(\d+)_(.+)$")
+
+
+def _work_dir_render_active(wd: Path) -> bool:
+    """True while this work dir's render is in flight (job_config written, no
+    combined.mp4 yet, not terminally stamped) — mirrors _is_job_running's
+    per-directory logic, including its 24 h staleness cutoff so a phantom dir
+    can't lock the editor forever."""
+    cfg_file = wd / "job_config.json"
+    if not cfg_file.exists() or (wd / "combined.mp4").exists():
+        return False
+    try:
+        if cfg_file.stat().st_mtime <= time.time() - 86400:
+            return False
+    except OSError:
+        return False
+    try:
+        status = json.loads((wd / "job.json").read_text()).get("status")
+    except Exception:
+        status = None
+    return status not in ("error", "cancelled", "paused", "done")
+
+
+def _remap_scene_files(wd: Path, id_map: dict) -> None:
+    """Rename scene_NN_* files to follow renumbered scene ids, in the work dir
+    and any localized copies under localize/*/. *id_map* maps old id → new id
+    (None deletes the files — removed scene). Two-phase rename so swapped ids
+    never overwrite each other; renamed files are touched so mtime-cache-busted
+    URLs change with the content behind them."""
+    loc_root = wd / "localize"
+    dirs = [wd] + ([d for d in sorted(loc_root.iterdir()) if d.is_dir()] if loc_root.is_dir() else [])
+    for d in dirs:
+        renames: list[tuple[Path, Path]] = []
+        for f in d.iterdir():
+            if not f.is_file():
+                continue
+            m = _SCENE_FILE_RE.match(f.name)
+            if not m or int(m.group(1)) not in id_map:
+                continue
+            new_id = id_map[int(m.group(1))]
+            if new_id is None:
+                f.unlink(missing_ok=True)
+            elif int(m.group(1)) != new_id:
+                renames.append((f, d / f"scene_{new_id:02d}_{m.group(2)}"))
+        staged = []
+        for src, dst in renames:
+            tmp = dst.with_name(dst.name + ".remap-tmp")
+            src.replace(tmp)
+            staged.append((tmp, dst))
+        for tmp, dst in staged:
+            tmp.replace(dst)
+            dst.touch()
+
+
+def _remap_preview_path(preview_path: str, new_id: int) -> str:
+    """Re-point a stored preview_path at its renamed scene_NN_* file."""
+    if not preview_path:
+        return ""
+    p = Path(preview_path)
+    m = _SCENE_FILE_RE.match(p.name)
+    if not m:
+        return preview_path
+    return str(p.with_name(f"scene_{new_id:02d}_{m.group(2)}"))
+
+
+def _restructure_job_scenes(job_id: str, sequence: list) -> list[dict]:
+    """Rebuild a job's scenes from *sequence*: existing scene ids in their new
+    order, with None marking a brand-new blank scene at that position. Renumbers
+    to 1..N, swaps the DB rows, renames the scene-numbered artifacts, remaps the
+    image/video history manifests, and rewrites script.json. Returns the fresh
+    scene rows."""
+    work_dir = gapp._job_work_dir(job_id)
+    if not work_dir:
+        raise HTTPException(404, "Unknown job.")
+    wd = Path(work_dir)
+    if _work_dir_render_active(wd):
+        raise HTTPException(409, "This script is rendering right now — wait for it to finish (or cancel it) first.")
+    if not sequence:
+        raise HTTPException(400, "A script needs at least one scene.")
+
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+        by_id = {int(r["id"]): r for r in rows}
+        old_ids = [i for i in sequence if i is not None]
+        if len(set(old_ids)) != len(old_ids) or any(i not in by_id for i in old_ids):
+            raise HTTPException(400, "Scene list is out of date — reload the script and try again.")
+
+        id_map = {old: None for old in by_id}
+        new_rows = []
+        for pos, item in enumerate(sequence, start=1):
+            if item is None:
+                new_rows.append({"id": pos, "title": "", "image_prompt": "", "video_prompt": "",
+                                 "narration": "", "preview_path": "", "metadata": {}})
+                continue
+            id_map[item] = pos
+            r = dict(by_id[item])
+            r["id"] = pos
+            r["preview_path"] = _remap_preview_path(r.get("preview_path") or "", pos)
+            new_rows.append(r)
+
+        store.replace_scenes(job_id, new_rows)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    _remap_scene_files(wd, id_map)
+    image_history.remap_scene_ids(wd, id_map)
+    video_history.remap_scene_ids(wd, id_map)
+    # Id order IS the order again — a film-editor order sidecar would now point
+    # at renumbered ids, so retire it.
+    (wd / "scene_edit_order.json").unlink(missing_ok=True)
+    gapp._persist_script_snapshot(wd, rows)
+    return rows
+
+
+class SceneAddBody(BaseModel):
+    after_scene_id: int = 0  # insert after this scene; 0 ⟹ append at the end
+
+
+@api.post("/api/jobs/{job_id}/scenes/add")
+def add_job_scene(job_id: str, body: SceneAddBody) -> dict:
+    store = DurableStore.default()
+    try:
+        ids = [int(r["id"]) for r in store.scene_rows(job_id)]
+    finally:
+        store.close()
+    sequence: list = list(ids)
+    pos = sequence.index(body.after_scene_id) + 1 if body.after_scene_id in sequence else len(sequence)
+    sequence.insert(pos, None)
+    rows = _restructure_job_scenes(job_id, sequence)
+    wd = gapp._job_work_dir(job_id)
+    return {"scenes": [_scene_to_json(r, wd) for r in rows], "new_scene_id": pos + 1}
+
+
+@api.delete("/api/jobs/{job_id}/scenes/{scene_id}")
+def delete_job_scene(job_id: str, scene_id: int) -> dict:
+    store = DurableStore.default()
+    try:
+        ids = [int(r["id"]) for r in store.scene_rows(job_id)]
+    finally:
+        store.close()
+    if int(scene_id) not in ids:
+        raise HTTPException(404, f"Scene {scene_id} not found.")
+    rows = _restructure_job_scenes(job_id, [i for i in ids if i != int(scene_id)])
+    wd = gapp._job_work_dir(job_id)
+    return {"scenes": [_scene_to_json(r, wd) for r in rows]}
+
+
+class SceneReorderBody(BaseModel):
+    order: list
+
+
+@api.post("/api/jobs/{job_id}/scenes/reorder")
+def reorder_job_scenes(job_id: str, body: SceneReorderBody) -> dict:
+    store = DurableStore.default()
+    try:
+        ids = [int(r["id"]) for r in store.scene_rows(job_id)]
+    finally:
+        store.close()
+    order = [int(x) for x in body.order]
+    if sorted(order) != sorted(ids):
+        raise HTTPException(400, "Reorder must include every scene exactly once — reload the script and try again.")
+    rows = _restructure_job_scenes(job_id, order)
+    wd = gapp._job_work_dir(job_id)
+    return {"scenes": [_scene_to_json(r, wd) for r in rows]}
+
+
 # ── scene preview (FLUX first frame) ─────────────────────────────────────────
 
 @api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview")
@@ -8398,6 +8573,55 @@ def delete_film_scene(body: DeleteFilmSceneBody) -> dict:
     new_order = [i for i in order if i != sid]
     _save_scene_order(wd, new_order)
     return {"ok": True, "order": new_order}
+
+
+class AddFilmSceneBody(BaseModel):
+    work_dir: str
+    after_scene_id: int = 0  # insert after this scene in display order; 0 ⟹ end
+
+
+@api.post("/api/films/scenes/add")
+def add_film_scene(body: AddFilmSceneBody) -> dict:
+    """Add a blank scene to a rendered film (issue #193). Post-render scene ids
+    are stable filename keys, so the new scene takes max(id)+1 and its display
+    position lives in scene_edit_order.json — content is then built with the
+    existing per-scene re-render endpoints (narration → image → video) and
+    lands in the film on the next reassemble."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        if not store.get_job(job_id):
+            # Pre-durable-store film: scenes.job_id has an enforced FK to jobs.
+            jc = _film_job_config(wd)
+            store.create_or_update_job(job_id, wd, jc.get("video_title") or wd.name,
+                                       config=jc, metadata={})
+        rows = store.scene_rows(job_id)
+        if not rows and (wd / "script.json").exists():
+            # Heal the scene rows from script.json first, so the new row doesn't
+            # become the only one the editor can see.
+            store.upsert_scenes(job_id, _read_script_scenes(wd))
+            rows = store.scene_rows(job_id)
+        all_ids = [int(r["id"]) for r in rows]
+        new_id = (max(all_ids) if all_ids else 0) + 1
+        store.upsert_scene(job_id, new_id)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+
+    gapp._persist_script_snapshot(wd, rows)
+    order = _load_scene_order(wd) or all_ids
+    if body.after_scene_id and body.after_scene_id in order:
+        order.insert(order.index(body.after_scene_id) + 1, new_id)
+    else:
+        order.append(new_id)
+    _save_scene_order(wd, order)
+    return {"ok": True, "scene_id": new_id, "order": order}
 
 
 class ReorderFilmScenesBody(BaseModel):
