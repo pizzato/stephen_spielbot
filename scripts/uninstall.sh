@@ -12,8 +12,11 @@
 #   --purge-data    Also delete ~/.config/video-generator and
 #                   ~/.local/share/video-generator on this machine (config +
 #                   API tokens, orchestrator DB, voice library, logs).
-#   --purge-models  Also delete ~/github/ComfyUI/models on every worker
-#                   (the ~50+ GB model downloads).
+#   --purge-models  Also delete ~/github/ComfyUI on every worker (the ~50+ GB
+#                   model downloads) — but ONLY where Spielbot created that
+#                   directory (install.sh leaves a .spielbot_created marker).
+#                   A pre-existing ComfyUI install is never deleted (interactive
+#                   runs ask; non-interactive runs skip it).
 #   --yes           Skip the confirmation prompt.
 #
 # Rendered videos (~/videos) are NEVER touched. The repo itself (including
@@ -55,7 +58,7 @@ if [[ -n "$HOSTS" ]]; then
     echo "    ~/spielbot-worker) on: $(echo $HOSTS | tr '\n' ' ')"
 fi
 $PURGE_DATA   && echo "  • DELETE config + state: ~/.config/video-generator, ~/.local/share/video-generator"
-$PURGE_MODELS && echo "  • DELETE the downloaded models (~/github/ComfyUI/models) on every worker"
+$PURGE_MODELS && echo "  • DELETE the downloaded models (~/github/ComfyUI) on workers where Spielbot created it"
 echo "It will NOT touch rendered videos (~/videos) or this repo folder."
 echo ""
 if ! $YES; then
@@ -80,12 +83,33 @@ fi
 for host in $HOSTS; do
     echo ""
     echo "=== Removing worker stack on $host ==="
-    _on_host "$host" "cd ~/spielbot-worker/docker 2>/dev/null && docker compose down -v --rmi local" \
-        || echo "  (no running stack on $host)"
+    # --rmi all (not local): our images are tagged (spielbot-*:latest), which
+    # --rmi local skips. Then belt-and-braces cleanup by compose-project label
+    # and image tag, so leftovers go even when the compose dir is already gone.
+    _on_host "$host" "cd ~/spielbot-worker/docker 2>/dev/null && docker compose down -v --rmi all" \
+        || echo "  (no compose stack dir on $host — cleaning up directly)"
+    _on_host "$host" "docker ps -aq --filter label=com.docker.compose.project=spielbot-worker | xargs -r docker rm -f" 2>/dev/null || true
+    _on_host "$host" "docker volume ls -q --filter label=com.docker.compose.project=spielbot-worker | xargs -r docker volume rm -f" 2>/dev/null || true
+    _on_host "$host" "docker rmi spielbot-comfyui:latest spielbot-tts:latest spielbot-echomimic:latest" 2>/dev/null || true
     _on_host "$host" "rm -rf ~/spielbot-worker" || true
     if $PURGE_MODELS; then
-        echo "  deleting models on $host ..."
-        _on_host "$host" "rm -rf ~/github/ComfyUI/models" || true
+        # ~/github/ComfyUI is deleted ONLY if Spielbot created it (install.sh
+        # drops a marker) — a pre-existing ComfyUI install must survive.
+        if _on_host "$host" "[ -f ~/github/ComfyUI/.spielbot_created ]" 2>/dev/null; then
+            echo "  deleting ~/github/ComfyUI on $host (created by Spielbot) ..."
+            _on_host "$host" "rm -rf ~/github/ComfyUI" || true
+        elif ! _on_host "$host" "[ -d ~/github/ComfyUI ]" 2>/dev/null; then
+            echo "  no ~/github/ComfyUI on $host — nothing to delete"
+        elif [[ -t 0 ]]; then
+            read -rp "  ~/github/ComfyUI on $host has no Spielbot marker (pre-existing install?). Delete it anyway? [y/N] " R
+            if [[ "$R" =~ ^[Yy] ]]; then
+                _on_host "$host" "rm -rf ~/github/ComfyUI" || true
+            else
+                echo "  keeping ~/github/ComfyUI on $host"
+            fi
+        else
+            echo "  keeping ~/github/ComfyUI on $host — no Spielbot marker (pre-existing ComfyUI?); delete manually if intended."
+        fi
     fi
 done
 

@@ -87,9 +87,12 @@ make status    # check health of the app and all workers
 ```
 
 To remove an installation, `make uninstall` stops everything and removes the
-service + worker container stacks, keeping config, models, and rendered videos.
-`bash scripts/uninstall.sh --purge-data --purge-models` also removes those
-(videos in `~/videos` are never touched); delete the repo folder to finish.
+service + worker container stacks (containers, volumes, and the built
+`spielbot-*` images), keeping config, models, and rendered videos.
+`bash scripts/uninstall.sh --purge-data --purge-models` also removes those —
+`--purge-models` deletes `~/github/ComfyUI` only where the installer created it
+(a pre-existing ComfyUI install is never deleted; interactive runs ask). Videos
+in `~/videos` are never touched; delete the repo folder to finish.
 
 ## Security
 
