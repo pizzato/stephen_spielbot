@@ -66,6 +66,29 @@ def _entry(data: dict, scene_id: int) -> dict:
     return data.get(str(int(scene_id))) or {"versions": [], "selected": None, "next_id": 1}
 
 
+def _delete_version(work_dir: Path, entry: dict, version_id: int, what: str) -> dict:
+    """Remove a kept version from *entry*, deleting its file. The version in use
+    (the manifest's selected id, falling back to the newest like ``history``) can't
+    be deleted — pick another version first.
+
+    Mutates and returns *entry*; the caller is responsible for saving the manifest.
+    Raises ValueError if the version is unknown or currently in use."""
+    version_id = int(version_id)
+    versions = entry.get("versions", [])
+    match = next((v for v in versions if int(v["id"]) == version_id), None)
+    if match is None:
+        raise ValueError(f"No {what} version {version_id}")
+    ids = [int(v["id"]) for v in versions]
+    selected = entry.get("selected")
+    if selected not in ids:
+        selected = ids[-1] if ids else None
+    if version_id == selected:
+        raise ValueError("This version is in use — pick another one first.")
+    (_hist_dir(work_dir) / match["file"]).unlink(missing_ok=True)
+    entry["versions"] = [v for v in versions if int(v["id"]) != version_id]
+    return entry
+
+
 def _add_version(work_dir: Path, scene_id: int, image: Path, entry: dict) -> dict:
     """Copy *image* into the history dir as a new version and select it.
 
@@ -137,6 +160,18 @@ def select(work_dir: Path, scene_id: int, version_id: int) -> Path:
         data[str(int(scene_id))] = entry
         _save(work_dir, data)
         return preview
+
+
+def delete(work_dir: Path, scene_id: int, version_id: int) -> dict:
+    """Delete a kept image version (not the one in use). Returns the history dict."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = _entry(data, scene_id)
+        _delete_version(work_dir, entry, version_id, f"scene {int(scene_id)} image")
+        data[str(int(scene_id))] = entry
+        _save(work_dir, data)
+    return history(work_dir, scene_id)
 
 
 def history(work_dir: Path, scene_id: int) -> dict:
@@ -227,6 +262,18 @@ def cover_select(work_dir: Path, version_id: int) -> Path:
         data[_COVER_KEY] = entry
         _save(work_dir, data)
         return cover
+
+
+def cover_delete(work_dir: Path, version_id: int) -> dict:
+    """Delete a kept cover version (not the one in use). Returns the history dict."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
+        _delete_version(work_dir, entry, version_id, "cover")
+        data[_COVER_KEY] = entry
+        _save(work_dir, data)
+    return cover_history(work_dir)
 
 
 def cover_history(work_dir: Path) -> dict:
@@ -321,6 +368,18 @@ def char_select(work_dir: Path, char_id: str, version_id: int) -> Path:
         data[_char_key(char_id)] = entry
         _save(work_dir, data)
         return canonical
+
+
+def char_delete(work_dir: Path, char_id: str, version_id: int) -> dict:
+    """Delete a kept look version (not the one in use). Returns the history dict."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = data.get(_char_key(char_id)) or {"versions": [], "selected": None, "next_id": 1}
+        _delete_version(work_dir, entry, version_id, "character look")
+        data[_char_key(char_id)] = entry
+        _save(work_dir, data)
+    return char_history(work_dir, char_id)
 
 
 def char_history(work_dir: Path, char_id: str) -> dict:

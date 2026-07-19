@@ -73,6 +73,7 @@ export const api = {
   setCharacterImage: (charId, filename, data) => req('POST', '/characters/image', { char_id: charId, filename, data }),
   clearCharacterImage: (charId) => req('POST', '/characters/image/clear', { char_id: charId }),
   selectCharacterImage: (charId, versionId) => req('POST', '/characters/image/select', { char_id: charId, version_id: versionId }),
+  deleteCharacterImage: (charId, versionId) => req('POST', '/characters/image/delete', { char_id: charId, version_id: versionId }),
   generateCharacterPortrait: (charId, extraPrompt) => req('POST', '/characters/portrait', { char_id: charId, extra_prompt: extraPrompt || '' }),
 
   // Per-script characters (main-character consistency). Job-scoped: they live in
@@ -85,6 +86,7 @@ export const api = {
   setScriptCharacterImage: (jobId, charId, filename, data) => req('POST', `/jobs/${jobId}/characters/${charId}/image`, { filename, data }),
   clearScriptCharacterImage: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/clear`),
   selectScriptCharacterImage: (jobId, charId, versionId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/select`, { version_id: versionId }),
+  deleteScriptCharacterImage: (jobId, charId, versionId) => req('POST', `/jobs/${jobId}/characters/${charId}/image/delete`, { version_id: versionId }),
   generateScriptCharacterPortrait: (jobId, charId, extraPrompt) => req('POST', `/jobs/${jobId}/characters/${charId}/portrait`, { extra_prompt: extraPrompt || '' }),
   promoteScriptCharacter: (jobId, charId) => req('POST', `/jobs/${jobId}/characters/${charId}/promote`),
 
@@ -118,6 +120,8 @@ export const api = {
     req('POST', `/jobs/${jobId}/previews?force=true&resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}`),
   selectPreview: (jobId, sceneId, versionId) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-select`, { version_id: versionId }),
+  deletePreview: (jobId, sceneId, versionId) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-delete`, { version_id: versionId }),
   // Masked image edit (FLUX inpaint): `mask` is a base64 PNG data-URL where white
   // marks the region to change; `prompt` describes the change; `denoise` is the
   // edit strength (0.3–1.0, lower keeps more of the original).
@@ -151,6 +155,7 @@ export const api = {
   regenMusic: (body) => req('POST', '/remix/music', body),
   selectMusic: (workDir, versionId) => req('POST', '/remix/music-select', { work_dir: workDir, version_id: versionId }),
   selectRemixVideo: (workDir, versionId) => req('POST', '/remix/video-select', { work_dir: workDir, version_id: versionId }),
+  deleteRemixVideo: (workDir, versionId) => req('POST', '/remix/video-delete', { work_dir: workDir, version_id: versionId }),
 
   getActivity: ({ limit } = {}) => {
     const q = limit ? `?limit=${encodeURIComponent(limit)}` : ''
@@ -240,6 +245,7 @@ export const api = {
   coverHistory: (workDir) => req('GET', `/youtube/cover/history?work_dir=${encodeURIComponent(workDir || '')}`),
   coverInpaint: (workDir, mask, prompt, denoise) => req('POST', '/youtube/cover/inpaint', { work_dir: workDir, mask, prompt, denoise }),
   coverSelect: (workDir, versionId) => req('POST', '/youtube/cover/select', { work_dir: workDir, version_id: versionId }),
+  coverDelete: (workDir, versionId) => req('POST', '/youtube/cover/delete', { work_dir: workDir, version_id: versionId }),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
   ytPost: (body) => req('POST', '/youtube/post', body),
   ytPostStatus: (taskId) => req('GET', `/youtube/post/status?task_id=${encodeURIComponent(taskId)}`),
@@ -277,6 +283,8 @@ export const api = {
   rerenderFilmScene: (workDir, sceneId, component, instruction) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component, instruction: instruction || '' }),
   selectFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-select`, { work_dir: workDir, version_id: versionId }),
   selectFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-select`, { work_dir: workDir, version_id: versionId }),
+  deleteFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-delete`, { work_dir: workDir, version_id: versionId }),
+  deleteFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-delete`, { work_dir: workDir, version_id: versionId }),
   inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),

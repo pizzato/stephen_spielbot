@@ -218,6 +218,32 @@ function SceneCard({
     }
   }
 
+  const deleteVersion = async (versionId) => {
+    setSelecting(true)
+    setError('')
+    try {
+      const r = await api.deleteFilmPreview(workDir, scene.id, versionId)
+      setHistory(r.history)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSelecting(false)
+    }
+  }
+
+  const deleteVideoVersion = async (versionId) => {
+    setSelecting(true)
+    setError('')
+    try {
+      const r = await api.deleteFilmVideo(workDir, scene.id, versionId)
+      setVideoHistory(r.video_history)
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSelecting(false)
+    }
+  }
+
   const applyInpaint = async (mask, editPrompt, denoise) => {
     setBusy('inpaint'); setInpaintErr('')
     try {
@@ -444,10 +470,10 @@ function SceneCard({
             </div>
 
             <VersionStrip versions={history?.versions} selected={history?.selected}
-              onSelect={selectVersion} aspect={aspect} busy={selecting || isRendering} />
+              onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={selecting || isRendering} />
 
             <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
-              onSelect={selectVideoVersion} aspect={aspect} busy={selecting || isRendering} />
+              onSelect={selectVideoVersion} onDelete={deleteVideoVersion} aspect={aspect} busy={selecting || isRendering} />
           </div>
         </div>
       </Card>
@@ -613,6 +639,14 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
 
+  const deleteCover = async (versionId) => {
+    setYtBusy('cover'); setError('')
+    try {
+      const r = await api.coverDelete(workDir, versionId)
+      setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
   const applyCoverEdit = async (mask, editPrompt, denoise) => {
     setYtBusy('coveredit'); setCoverEditErr('')
     try {
@@ -696,6 +730,15 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
       if (r.video_history) setVideoHistory(r.video_history)
       setStatus('Switched the final-video version.')
+    } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
+  }
+
+  const deleteVideoVersion = async (versionId) => {
+    setUpscaleBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.deleteRemixVideo(data.work_dir, versionId)
+      if (r.video_history) setVideoHistory(r.video_history)
+      setStatus('Deleted the final-video version.')
     } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
   }
 
@@ -885,7 +928,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           {(videoHistory?.versions?.length || 0) > 1 && (
             <div style={{ padding: '0 20px 18px' }}>
               <VideoVersionStrip versions={videoHistory?.versions} selected={videoHistory?.selected}
-                onSelect={selectVideoVersion} aspect={aspect} busy={anyBusy}
+                onSelect={selectVideoVersion} onDelete={deleteVideoVersion} aspect={aspect} busy={anyBusy}
                 label="Final versions" hint="click to use" />
             </div>
           )}
@@ -935,7 +978,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
             onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
           <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
-            onSelect={selectCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
+            onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
         </Card>
 
         <Card span={4} padLg className="reveal reveal-d2">
@@ -1204,6 +1247,8 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
   })
   const selectCharVersion = (c, versionId) =>
     charOp(c.id, () => api.selectScriptCharacterImage(jobId, c.id, versionId))
+  const deleteCharVersion = (c, versionId) =>
+    charOp(c.id, () => api.deleteScriptCharacterImage(jobId, c.id, versionId))
 
   const scenesForChar = (c) => scenes.filter((s) => characterMentions(s, c))
 
@@ -1419,7 +1464,8 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
                 </div>
               </div>
               <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
-                onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={b} />
+                onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
+                aspect="1 / 1" busy={b} />
             </Card>
           )
         })}

@@ -157,6 +157,32 @@ def select(work_dir: Path, scene_id: int, version_id: int) -> Path:
         return final
 
 
+def delete(work_dir: Path, scene_id: int, version_id: int) -> dict:
+    """Delete a kept take (not the one in use — the manifest's selected id, falling
+    back to the newest like ``history``). Returns the history dict. Raises
+    ValueError if the take is unknown or currently in use."""
+    work_dir = Path(work_dir)
+    version_id = int(version_id)
+    with _LOCK:
+        data = _load(work_dir)
+        entry = _entry(data, scene_id)
+        versions = entry.get("versions", [])
+        match = next((v for v in versions if int(v["id"]) == version_id), None)
+        if match is None:
+            raise ValueError(f"No video take {version_id} for scene {scene_id}")
+        ids = [int(v["id"]) for v in versions]
+        selected = entry.get("selected")
+        if selected not in ids:
+            selected = ids[-1] if ids else None
+        if version_id == selected:
+            raise ValueError("This take is in use — pick another one first.")
+        (_hist_dir(work_dir) / match["file"]).unlink(missing_ok=True)
+        entry["versions"] = [v for v in versions if int(v["id"]) != version_id]
+        data[str(int(scene_id))] = entry
+        _save(work_dir, data)
+    return history(work_dir, scene_id)
+
+
 def history(work_dir: Path, scene_id: int) -> dict:
     """Return ``{"versions": [{"id", "path"}], "selected": id|None}`` for API
     responses, dropping any take whose file has gone missing."""
