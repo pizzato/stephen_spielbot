@@ -700,6 +700,14 @@ class DurableStore:
                 metadata=_scene_value(scene, "metadata", {}),
             )
 
+    def replace_scenes(self, job_id: str, scenes: Iterable[Any]) -> None:
+        """Swap a job's scene rows for *scenes* wholesale. Used by the script
+        editor's add/remove/reorder, which renumbers scene ids — a plain upsert
+        can neither drop removed ids nor clear a stale preview_path."""
+        with self._lock:
+            self._conn.execute("DELETE FROM scenes WHERE job_id=?", (job_id,))
+        self.upsert_scenes(job_id, scenes)
+
     def update_scene_preview(self, job_id: str, scene_id: int, preview_path: Path | str) -> None:
         with self._lock:
             self._conn.execute(
