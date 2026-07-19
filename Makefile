@@ -4,7 +4,7 @@ SCRIPTS := scripts
 # containers. Examples:  make stop W=s2   make restart W=s3   make status W=s1
 W ?=
 
-.PHONY: install download-models download-voices download-flux download-flux-cluster \
+.PHONY: install uninstall download-models download-voices download-flux download-flux-cluster \
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale channels \
         launchd-install launchd-uninstall \
@@ -16,6 +16,12 @@ W ?=
 ## The macOS login service is opt-in: INSTALL_SERVICE=1 installs it without asking.
 install:
 	@WORKERS="$(WORKERS)" INSTALL_SERVICE="$(INSTALL_SERVICE)" GPU_MODE="$(GPU_MODE)" bash $(SCRIPTS)/install.sh
+
+## Uninstall: stop everything, remove the service + worker container stacks.
+## Keeps config, models, and rendered videos — purge flags via:
+##   bash scripts/uninstall.sh [--purge-data] [--purge-models]
+uninstall:
+	@bash $(SCRIPTS)/uninstall.sh
 
 ## Download the LTX 2.3, ACE-Step and FLUX.2 Klein models (skips already-present files).
 download-models:
@@ -166,6 +172,8 @@ help:
 	@echo ""
 	@echo "  install         Install everything: deps, models, workers, web UI (backend+React build)"
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
+	@echo "  uninstall       Stop everything + remove the service and worker container stacks"
+	@echo "                  (keeps config/models/videos; purge: bash scripts/uninstall.sh --purge-data --purge-models)"
 	@echo "  download-models Download the defaults: LTX 2.3 + ACE-Step + FLUX.2 Klein (skips existing)"
 	@echo "  download-flux          Download the legacy FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
