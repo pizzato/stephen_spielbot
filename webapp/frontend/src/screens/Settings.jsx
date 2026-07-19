@@ -918,6 +918,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const clearCharImage = (char) => characterOp(char.id, () => api.clearCharacterImage(char.id))
   const genCharPortrait = (char) => characterOp(char.id, () => api.generateCharacterPortrait(char.id, ''))
   const selectCharVersion = (char, versionId) => characterOp(char.id, () => api.selectCharacterImage(char.id, versionId))
+  const deleteCharVersion = (char, versionId) => characterOp(char.id, () => api.deleteCharacterImage(char.id, versionId))
   // Index of the selected look within a character's version list — where the
   // full-res lightbox opens.
   const charSelVerIdx = (c) => {
@@ -1693,7 +1694,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                         {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
                       </div>
                       <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
-                        onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={charBusy === c.id} />
+                        onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
+                        aspect="1 / 1" busy={charBusy === c.id} />
                     </div>
                   ) : (
                     <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>

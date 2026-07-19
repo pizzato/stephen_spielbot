@@ -113,3 +113,42 @@ def test_scenes_are_tracked_independently(tmp_path):
     assert len(vh.history(tmp_path, 1)["versions"]) == 1
     assert len(vh.history(tmp_path, 2)["versions"]) == 1
     assert Path(vh.history(tmp_path, 2)["versions"][0]["path"]).read_bytes() == b"s2"
+
+
+def test_delete_removes_unused_take_and_file(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"two")
+    h = vh.record(tmp_path, 1, _final(tmp_path))
+    older = h["versions"][0]
+
+    h2 = vh.delete(tmp_path, 1, older["id"])
+
+    assert [v["id"] for v in h2["versions"]] == [h["selected"]]
+    assert not Path(older["path"]).exists()
+    assert _final(tmp_path).read_bytes() == b"two"   # canonical untouched
+
+
+def test_delete_refuses_the_take_in_use(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    _write(_final(tmp_path), b"two")
+    h = vh.record(tmp_path, 1, _final(tmp_path))
+    try:
+        vh.delete(tmp_path, 1, h["selected"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for the take in use")
+    assert len(vh.history(tmp_path, 1)["versions"]) == 2
+
+
+def test_delete_unknown_take_raises(tmp_path):
+    _write(_final(tmp_path), b"one")
+    vh.record(tmp_path, 1, _final(tmp_path))
+    try:
+        vh.delete(tmp_path, 1, 999)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown take id")
