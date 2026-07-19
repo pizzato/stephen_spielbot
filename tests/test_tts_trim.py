@@ -41,6 +41,25 @@ class TrimTrailingArtifactsTests(unittest.TestCase):
         _trim_trailing_artifacts(p)
         self.assertAlmostEqual(_duration(p), 2.4, delta=0.15)  # speech + 0.4s pad
 
+    def test_loud_babble_after_long_silence_is_cut(self):
+        # Junk isn't always quiet: some takes hallucinate babble as loud as
+        # speech, after seconds of dead silence. Loudness can't spot it, the
+        # silent gap can — cut at the last loud window before the gap.
+        p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
+        _write_wav(p, [(2.0, 0.2), (4.0, 0.001), (3.0, 0.15)])
+        self.assertAlmostEqual(_duration(p), 9.0, places=1)
+        _trim_trailing_artifacts(p)
+        self.assertAlmostEqual(_duration(p), 2.4, delta=0.15)  # speech + 0.4s pad
+
+    def test_sentence_pause_does_not_trigger_gap_cut(self):
+        # A ~1s pause between sentences is normal speech — the speech after it
+        # must survive untouched.
+        p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
+        _write_wav(p, [(2.0, 0.2), (1.0, 0.001), (2.0, 0.2)])
+        before = _duration(p)
+        _trim_trailing_artifacts(p)
+        self.assertEqual(_duration(p), before)
+
     def test_speech_to_the_end_is_untouched(self):
         p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
         _write_wav(p, [(3.0, 0.2)])
