@@ -3,12 +3,16 @@
 The narration text is known exactly — it's the script we fed to TTS — so we can
 hand YouTube accurate subtitles instead of relying on its speech recognition.
 
-Timing is reconstructed from the per-scene narration durations. ``mux_video_audio``
-makes every scene's video exactly as long as its narration (only the last scene
-gets a short freeze tail, after the final spoken word), and the published video is
-a straight back-to-back concatenation of those scenes — the cover is a thumbnail
-only and the music mux copies the video stream unchanged — so the cumulative
-narration durations line up with the published video's timeline.
+Timing is reconstructed from the per-scene durations, measured from the scene
+finals the published video actually concatenates (falling back to the narration
+wav, which ``mux_video_audio`` makes the video exactly as long as — except the
+originally-last scene's short freeze tail, which only the final carries). The
+published video is a straight back-to-back concatenation of those scenes — the
+cover is a thumbnail only and the music mux copies the video stream unchanged —
+so the cumulative scene durations line up with the published timeline. Scenes
+are walked in the published cut's order: ``scene_edit_order.json`` when the film
+editor reordered/removed/added scenes (the same file reassembly concatenates
+by), else script.json order.
 """
 from __future__ import annotations
 
@@ -49,6 +53,22 @@ def _load_scenes(work_dir: Path) -> list[dict]:
     return [s for s in scenes if isinstance(s, dict)]
 
 
+def _published_order(work_dir: Path, scenes: list[dict]) -> list[dict]:
+    """*scenes* in the published cut's order. The film editor's scene
+    delete/reorder/add write ``scene_edit_order.json`` and reassembly (original
+    and localized) concatenates by it, so the cues must be laid down in that
+    order too — a scene the editor removed is absent from it on purpose."""
+    path = work_dir / "scene_edit_order.json"
+    if not path.exists():
+        return scenes
+    try:
+        order = [int(x) for x in json.loads(path.read_text())]
+    except Exception:
+        return scenes
+    by_id = {int(s.get("id") or 0): s for s in scenes}
+    return [by_id[sid] for sid in order if sid in by_id]
+
+
 def _split_sentences(text: str) -> list[str]:
     """One caption line per sentence; collapses whitespace."""
     text = " ".join(text.split())
@@ -85,12 +105,15 @@ def _scene_duration(work_dir: Path, sid: int, timing_lang: str | None) -> float:
     ``timing_lang`` names the localized cut whose scene files govern timing
     (``localize/{lang}/``); ``None`` means the original cut. Localized cuts fall
     back to the original files for scenes carried through untranslated (silent/
-    dialogue scenes are copied, not re-synthesized)."""
+    dialogue scenes are copied, not re-synthesized). The scene final is preferred
+    over the narration wav: the published video concatenates the finals, and the
+    two differ on the originally-last scene (its final carries a freeze tail the
+    wav doesn't) — which matters once the editor moves that scene off the end."""
     candidates: list[Path] = []
     if timing_lang:
         loc = work_dir / "localize" / timing_lang
-        candidates += [loc / f"scene_{sid:02d}_narration.wav", loc / f"scene_{sid:02d}_final.mp4"]
-    candidates += [work_dir / f"scene_{sid:02d}_narration.wav", work_dir / f"scene_{sid:02d}_final.mp4"]
+        candidates += [loc / f"scene_{sid:02d}_final.mp4", loc / f"scene_{sid:02d}_narration.wav"]
+    candidates += [work_dir / f"scene_{sid:02d}_final.mp4", work_dir / f"scene_{sid:02d}_narration.wav"]
     for path in candidates:
         dur = _duration(path)
         if dur > 0:
@@ -115,7 +138,7 @@ def build_srt(work_dir: Path, lang: str | None = None,
     ``None`` means "skip captions" — callers should still upload the video.
     """
     work_dir = Path(work_dir)
-    scenes = _load_scenes(work_dir)
+    scenes = _published_order(work_dir, _load_scenes(work_dir))
     if not scenes:
         return None
     translations = _load_translations(work_dir, lang) if lang else {}

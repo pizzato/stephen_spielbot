@@ -112,6 +112,12 @@ export const api = {
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
+  // Scene structure (issue #193). Scene ids are renumbered to 1..N on every
+  // structural change, so each call returns the fresh { scenes } list to
+  // replace local state wholesale.
+  addScene: (jobId, afterSceneId) => req('POST', `/jobs/${jobId}/scenes/add`, { after_scene_id: afterSceneId || 0 }),
+  deleteScene: (jobId, sceneId) => req('DELETE', `/jobs/${jobId}/scenes/${sceneId}`),
+  reorderScenes: (jobId, order) => req('POST', `/jobs/${jobId}/scenes/reorder`, { order }),
   regenPreview: (jobId, sceneId, resolution, style, instruction) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}&instruction=${encodeURIComponent(instruction || '')}`),
   generateAllPreviews: (jobId, resolution, style) =>
@@ -278,6 +284,7 @@ export const api = {
 
   // film scene editor (post-render)
   filmScenes: (workDir) => req('GET', `/films/scenes?work_dir=${encodeURIComponent(workDir || '')}`),
+  addFilmScene: (workDir, afterSceneId) => req('POST', '/films/scenes/add', { work_dir: workDir, after_scene_id: afterSceneId || 0 }),
   deleteFilmScene: (workDir, sceneId) => req('POST', '/films/scenes/delete', { work_dir: workDir, scene_id: sceneId }),
   reorderFilmScenes: (workDir, order) => req('POST', '/films/scenes/reorder', { work_dir: workDir, order }),
   rerenderFilmScene: (workDir, sceneId, component, instruction) => req('POST', `/films/scenes/${sceneId}/rerender`, { work_dir: workDir, component, instruction: instruction || '' }),

@@ -184,8 +184,10 @@ def delete(work_dir: Path, scene_id: int, version_id: int) -> dict:
 
 
 def history(work_dir: Path, scene_id: int) -> dict:
-    """Return ``{"versions": [{"id", "path"}], "selected": id|None}`` for API
-    responses, dropping any take whose file has gone missing."""
+    """Return ``{"versions": [{"id", "path", "t"}], "selected": id|None}`` for API
+    responses, dropping any take whose file has gone missing. ``t`` is the file's
+    mtime, for cache-busting take thumbnails whose path was reused (scene
+    renumbering renames take files across scenes)."""
     work_dir = Path(work_dir)
     data = _load(work_dir)
     entry = _entry(data, scene_id)
@@ -194,9 +196,53 @@ def history(work_dir: Path, scene_id: int) -> dict:
     for v in entry.get("versions", []):
         f = hist / v["file"]
         if f.exists():
-            versions.append({"id": int(v["id"]), "path": str(f)})
+            versions.append({"id": int(v["id"]), "path": str(f), "t": int(f.stat().st_mtime)})
     selected = entry.get("selected")
     valid = {v["id"] for v in versions}
     if selected not in valid:
         selected = versions[-1]["id"] if versions else None
     return {"versions": versions, "selected": selected}
+
+
+def remap_scene_ids(work_dir: Path, id_map: dict) -> None:
+    """Renumber the scene-keyed manifest entries after the script editor
+    inserts/removes/reorders scenes. *id_map* maps old scene id → new id, or
+    → None to drop the scene's takes (deleted scene). Take files are renamed to
+    match their new scene id (two-phase, so swapped ids can't collide) and
+    touched so cache-busted URLs change with the content. Scene entries not in
+    *id_map* are orphans of scenes that no longer exist and are dropped."""
+    work_dir = Path(work_dir)
+    with _LOCK:
+        data = _load(work_dir)
+        if not data:
+            return
+        hist = _hist_dir(work_dir)
+        out: dict = {}
+        renames: list[tuple[Path, Path]] = []
+        for key, entry in data.items():
+            if not key.isdigit():
+                out[key] = entry
+                continue
+            new_id = id_map.get(int(key))
+            if new_id is None:
+                for v in entry.get("versions", []):
+                    (hist / v["file"]).unlink(missing_ok=True)
+                continue
+            for v in entry.get("versions", []):
+                new_name = f"scene_{int(new_id):02d}_v{int(v['id'])}{Path(v['file']).suffix}"
+                src = hist / v["file"]
+                if v["file"] != new_name and src.exists():
+                    renames.append((src, hist / new_name))
+                v["file"] = new_name
+            out[str(int(new_id))] = entry
+        # Two-phase rename: park every source under a unique temp name first so
+        # a swap (1↔2) never overwrites a file that is itself being moved.
+        staged = []
+        for src, dst in renames:
+            tmp = dst.with_name(dst.name + ".remap-tmp")
+            src.replace(tmp)
+            staged.append((tmp, dst))
+        for tmp, dst in staged:
+            tmp.replace(dst)
+            dst.touch()
+        _save(work_dir, out)
