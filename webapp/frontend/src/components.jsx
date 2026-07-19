@@ -42,6 +42,13 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
   const addLine = () => onChange({ lines: [...lines, { speaker: castOpts[0] || '', text: '' }] }, true)
   const addSilent = () => onChange({ lines: [...lines, { silent: true, shot: '', video_prompt: '', duration: 3 }] }, true)
   const removeShot = (i) => onChange({ lines: lines.filter((_, idx) => idx !== i) }, true)
+  const moveShot = (i, di) => {
+    const j = i + di
+    if (j < 0 || j >= lines.length) return
+    const next = [...lines]
+    ;[next[i], next[j]] = [next[j], next[i]]
+    onChange({ lines: next }, true)
+  }
   const setMode = (m) => onChange({ mode: m }, true)
 
   return (
@@ -63,7 +70,11 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
                 style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 10, background: 'var(--paper-2)' }}>
                 <div className="row center between">
                   <Chip tone={ln.silent ? 'neutral' : 'accent'} dot>{ln.silent ? `Silent shot ${i + 1}` : `Line ${i + 1}`}</Chip>
-                  <Button variant="quiet" icon="trash" title="Remove shot" onClick={() => removeShot(i)} />
+                  <div className="row center gap-4">
+                    <Button variant="quiet" icon="chevron-up" title="Move shot up" disabled={i === 0} onClick={() => moveShot(i, -1)} />
+                    <Button variant="quiet" icon="chevron-down" title="Move shot down" disabled={i === lines.length - 1} onClick={() => moveShot(i, 1)} />
+                    <Button variant="quiet" icon="trash" title="Remove shot" onClick={() => removeShot(i)} />
+                  </div>
                 </div>
                 {ln.silent ? (
                   <>
@@ -114,11 +125,11 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
   )
 }
 
-export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button' }) {
+export function Button({ variant = 'ghost', size, block, icon, iconRight, brand, children, onClick, disabled, type = 'button', title }) {
   const cls = ['btn', `btn--${variant}`, size === 'lg' ? 'btn--lg' : size === 'sm' ? 'btn--sm' : '', block ? 'btn--block' : '']
     .filter(Boolean).join(' ')
   return (
-    <button type={type} className={cls} onClick={onClick} disabled={disabled}>
+    <button type={type} className={cls} onClick={onClick} disabled={disabled} title={title}>
       {icon ? <Icon name={icon} brand={brand} /> : null}
       {children}
       {iconRight ? <Icon name={iconRight} brand={brand} /> : null}
@@ -395,7 +406,7 @@ export function VersionStrip({ versions, selected, onSelect, onDelete, aspect = 
                   border: `2px solid ${isSel ? 'var(--accent)' : armed ? 'var(--danger)' : 'var(--line)'}`,
                   opacity: busy && !isSel ? 0.5 : 1,
                 }}>
-                <img src={fileUrl(v.path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                <img src={fileUrl(v.path) + (v.t ? `&t=${v.t}` : '')} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
                 {isSel && (
                   <span style={{
                     position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
@@ -510,7 +521,7 @@ export function VideoVersionStrip({ versions, selected, onSelect, onDelete, aspe
                   border: `2px solid ${isSel ? 'var(--accent)' : armed ? 'var(--danger)' : 'var(--line)'}`,
                   opacity: busy && !isSel ? 0.5 : 1,
                 }}>
-                <video src={fileUrl(v.path)} muted preload="metadata" tabIndex={-1}
+                <video src={fileUrl(v.path) + (v.t ? `&t=${v.t}` : '')} muted preload="metadata" tabIndex={-1}
                   style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
                 <span style={{
                   position: 'absolute', left: 3, bottom: 3, fontSize: 9, color: '#fff',
