@@ -226,6 +226,14 @@ export default function Publish({ initialWorkDir, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const deleteCover = async (versionId) => {
+    setBusy('cover'); setError('')
+    try {
+      const r = await api.coverDelete(workDir, versionId)
+      setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   // Push the current cover to the already-published video's thumbnail.
   const updateThumbnail = async () => {
     setBusy('thumb'); setError(''); setStatus('')
@@ -475,7 +483,7 @@ export default function Publish({ initialWorkDir, go }) {
               {busy === 'thumb' ? 'Updating…' : 'Update thumbnail on YouTube'}</Button>
           )}
           <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
-            onSelect={selectCover} aspect={aspect} busy={busy === 'cover'} />
+            onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={busy === 'cover'} />
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>

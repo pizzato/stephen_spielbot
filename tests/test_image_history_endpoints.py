@@ -83,6 +83,36 @@ class ImageHistoryEndpointTests(unittest.TestCase):
                     "job1", self.sid, backend.PreviewSelectBody(version_id=999))
         self.assertEqual(ctx.exception.status_code, 404)
 
+    def test_delete_removes_unused_version_keeps_canonical(self):
+        self._regen(b"first")
+        r2 = self._regen(b"second")
+        older = r2["history"]["versions"][0]
+
+        with mock.patch.object(backend.gapp, "_job_work_dir", return_value=self.wd):
+            out = backend.delete_scene_preview(
+                "job1", self.sid, backend.PreviewSelectBody(version_id=older["id"]))
+
+        self.assertEqual(len(out["history"]["versions"]), 1)
+        self.assertFalse(Path(older["path"]).exists())
+        self.assertEqual(self.preview.read_bytes(), b"second")  # canonical untouched
+
+    def test_delete_version_in_use_is_400(self):
+        self._regen(b"first")
+        r2 = self._regen(b"second")
+
+        with mock.patch.object(backend.gapp, "_job_work_dir", return_value=self.wd):
+            with self.assertRaises(backend.HTTPException) as ctx:
+                backend.delete_scene_preview(
+                    "job1", self.sid,
+                    backend.PreviewSelectBody(version_id=r2["history"]["selected"]))
+        self.assertEqual(ctx.exception.status_code, 400)
+        # Nothing was deleted.
+        with mock.patch.object(backend.gapp, "_job_work_dir", return_value=self.wd):
+            out = backend.delete_scene_preview(
+                "job1", self.sid,
+                backend.PreviewSelectBody(version_id=r2["history"]["versions"][0]["id"]))
+        self.assertEqual(len(out["history"]["versions"]), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

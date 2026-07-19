@@ -272,6 +272,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
 
+  const deleteCover = async (versionId) => {
+    setYtBusy('cover'); setError('')
+    try {
+      const r = await api.coverDelete(job.work_dir, versionId)
+      setCoverHist(r.history)
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
   const applyCoverEdit = async (mask, editPrompt, denoise) => {
     setYtBusy('coveredit'); setCoverEditErr('')
     try {
@@ -424,6 +432,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  const deleteVersion = async (versionId) => {
+    setBusy('preview'); setError('')
+    try {
+      const r = await api.deletePreview(job.job_id, scenes[cur].id, versionId)
+      setScenes((arr) => arr.map((s, i) => i === cur ? { ...s, history: r.history } : s))
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
   const applyInpaint = async (mask, editPrompt, denoise) => {
     setBusy('inpaint'); setInpaintErr('')
     try {
@@ -482,6 +498,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   })
   const selectCharVersion = (c, versionId) =>
     charOp(c.id, () => api.selectScriptCharacterImage(job.job_id, c.id, versionId))
+  const deleteCharVersion = (c, versionId) =>
+    charOp(c.id, () => api.deleteScriptCharacterImage(job.job_id, c.id, versionId))
 
   // ── Character look lightbox ─────────────────────────────────────────────────
   // Open on the selected version; up/down (and arrow keys) flip between the looks
@@ -697,7 +715,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
                 onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
               <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
-                onSelect={selectCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
+                onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
             </Card>
             <Card well className="reveal reveal-d3">
               <div className="row center gap-10">
@@ -786,7 +804,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!d.has_preview || !!busy}
                   onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
-                  onSelect={selectVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
+                  onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
               </Card>
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">
@@ -956,7 +974,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </div>
                 </div>
                 <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
-                  onSelect={(vid) => selectCharVersion(c, vid)} aspect="1 / 1" busy={b} />
+                  onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
+                  aspect="1 / 1" busy={b} />
               </Card>
             )
           })}

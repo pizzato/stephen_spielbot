@@ -347,10 +347,31 @@ export function Thumb({ variant = 0, loading, label, src, aspect }) {
   )
 }
 
+// Tiny × badge on a version thumbnail: first click arms it (turns red), second
+// click confirms the delete; leaving the thumb disarms. Rendered as a sibling of
+// the thumb button (a nested <button> would be invalid HTML).
+function VersionDeleteBadge({ armed, busy, onArm, onConfirm }) {
+  return (
+    <button type="button" disabled={busy}
+      title={armed ? 'Click again to delete' : 'Delete this version'}
+      onClick={() => { if (busy) return; armed ? onConfirm() : onArm() }}
+      style={{
+        position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
+        border: 'none', padding: 0, fontSize: 9, cursor: 'pointer',
+        background: armed ? 'var(--danger)' : 'rgba(20,22,24,.62)', color: '#fff',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}>
+      <Icon name={armed ? 'trash-can' : 'xmark'} />
+    </button>
+  )
+}
+
 // Browse kept image regenerations and click to pick the one in use. Hidden when
 // there's nothing to compare (fewer than two versions). `versions` items are
-// { id, path }; `selected` is the id currently in use; `onSelect(id)` switches.
-export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy }) {
+// { id, path }; `selected` is the id currently in use; `onSelect(id)` switches;
+// `onDelete(id)` (optional) enables a confirm-armed × on the unused versions.
+export function VersionStrip({ versions, selected, onSelect, onDelete, aspect = '16 / 9', busy }) {
+  const [confirmDel, setConfirmDel] = useState(null)
   if (!versions || versions.length < 2) return null
   return (
     <div className="mt-16">
@@ -358,31 +379,39 @@ export function VersionStrip({ versions, selected, onSelect, aspect = '16 / 9', 
       <div className="row gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
         {versions.map((v) => {
           const isSel = v.id === selected
+          const armed = confirmDel === v.id
           return (
-            <button
-              key={v.id}
-              type="button"
-              onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
-              disabled={busy}
-              title={isSel ? 'Current image' : 'Use this image'}
-              style={{
-                position: 'relative', padding: 0, width: 60, aspectRatio: aspect,
-                borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--paper-2)',
-                cursor: isSel ? 'default' : 'pointer',
-                border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
-                opacity: busy && !isSel ? 0.5 : 1,
-              }}>
-              <img src={fileUrl(v.path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
-              {isSel && (
-                <span style={{
-                  position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
-                  background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+            <div key={v.id} style={{ position: 'relative' }}
+              onMouseLeave={() => armed && setConfirmDel(null)}>
+              <button
+                type="button"
+                onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
+                disabled={busy}
+                title={isSel ? 'Current image' : 'Use this image'}
+                style={{
+                  position: 'relative', display: 'block', padding: 0, width: 60, aspectRatio: aspect,
+                  borderRadius: 'var(--r-sm)', overflow: 'hidden', background: 'var(--paper-2)',
+                  cursor: isSel ? 'default' : 'pointer',
+                  border: `2px solid ${isSel ? 'var(--accent)' : armed ? 'var(--danger)' : 'var(--line)'}`,
+                  opacity: busy && !isSel ? 0.5 : 1,
                 }}>
-                  <Icon name="check" />
-                </span>
+                <img src={fileUrl(v.path)} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
+                {isSel && (
+                  <span style={{
+                    position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
+                    background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Icon name="check" />
+                  </span>
+                )}
+              </button>
+              {onDelete && !isSel && (
+                <VersionDeleteBadge armed={armed} busy={busy}
+                  onArm={() => setConfirmDel(v.id)}
+                  onConfirm={() => { setConfirmDel(null); onDelete(v.id) }} />
               )}
-            </button>
+            </div>
           )
         })}
       </div>
@@ -454,8 +483,10 @@ export function ImageLightbox({ versions = [], start = 0, fallback = '', title =
 
 // Like VersionStrip, but for rendered video takes: each thumbnail is a muted
 // <video> (preload=metadata shows the first frame) so the user can flip between
-// re-renders of a scene and pick the best one.
-export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 / 9', busy, label = 'Video takes', hint = 'click to use' }) {
+// re-renders of a scene and pick the best one. `onDelete(id)` (optional) enables
+// a confirm-armed × on the unused takes.
+export function VideoVersionStrip({ versions, selected, onSelect, onDelete, aspect = '16 / 9', busy, label = 'Video takes', hint = 'click to use' }) {
+  const [confirmDel, setConfirmDel] = useState(null)
   if (!versions || versions.length < 2) return null
   return (
     <div className="mt-16">
@@ -463,39 +494,47 @@ export function VideoVersionStrip({ versions, selected, onSelect, aspect = '16 /
       <div className="row gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
         {versions.map((v) => {
           const isSel = v.id === selected
+          const armed = confirmDel === v.id
           return (
-            <button
-              key={v.id}
-              type="button"
-              onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
-              disabled={busy}
-              title={`${v.label || ''}${v.label ? ' — ' : ''}${isSel ? 'current video' : 'click to use'}`}
-              style={{
-                position: 'relative', padding: 0, width: 84, aspectRatio: aspect,
-                borderRadius: 'var(--r-sm)', overflow: 'hidden', background: '#000',
-                cursor: isSel ? 'default' : 'pointer',
-                border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
-                opacity: busy && !isSel ? 0.5 : 1,
-              }}>
-              <video src={fileUrl(v.path)} muted preload="metadata" tabIndex={-1}
-                style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
-              <span style={{
-                position: 'absolute', left: 3, bottom: 3, fontSize: 9, color: '#fff',
-                background: 'rgba(0,0,0,.55)', padding: '1px 5px', borderRadius: 3,
-                letterSpacing: '.04em',
-              }}>
-                <Icon name="film" />{v.lang ? ` ${v.lang.toUpperCase()}` : ''}
-              </span>
-              {isSel && (
-                <span style={{
-                  position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
-                  background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+            <div key={v.id} style={{ position: 'relative' }}
+              onMouseLeave={() => armed && setConfirmDel(null)}>
+              <button
+                type="button"
+                onClick={() => !isSel && !busy && onSelect && onSelect(v.id)}
+                disabled={busy}
+                title={`${v.label || ''}${v.label ? ' — ' : ''}${isSel ? 'current video' : 'click to use'}`}
+                style={{
+                  position: 'relative', display: 'block', padding: 0, width: 84, aspectRatio: aspect,
+                  borderRadius: 'var(--r-sm)', overflow: 'hidden', background: '#000',
+                  cursor: isSel ? 'default' : 'pointer',
+                  border: `2px solid ${isSel ? 'var(--accent)' : armed ? 'var(--danger)' : 'var(--line)'}`,
+                  opacity: busy && !isSel ? 0.5 : 1,
                 }}>
-                  <Icon name="check" />
+                <video src={fileUrl(v.path)} muted preload="metadata" tabIndex={-1}
+                  style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', pointerEvents: 'none' }} />
+                <span style={{
+                  position: 'absolute', left: 3, bottom: 3, fontSize: 9, color: '#fff',
+                  background: 'rgba(0,0,0,.55)', padding: '1px 5px', borderRadius: 3,
+                  letterSpacing: '.04em',
+                }}>
+                  <Icon name="film" />{v.lang ? ` ${v.lang.toUpperCase()}` : ''}
                 </span>
+                {isSel && (
+                  <span style={{
+                    position: 'absolute', right: 3, top: 3, width: 16, height: 16, borderRadius: '50%',
+                    background: 'var(--accent)', color: 'var(--accent-ink)', fontSize: 9,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Icon name="check" />
+                  </span>
+                )}
+              </button>
+              {onDelete && !isSel && (
+                <VersionDeleteBadge armed={armed} busy={busy}
+                  onArm={() => setConfirmDel(v.id)}
+                  onConfirm={() => { setConfirmDel(null); onDelete(v.id) }} />
               )}
-            </button>
+            </div>
           )
         })}
       </div>

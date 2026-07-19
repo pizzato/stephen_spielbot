@@ -68,3 +68,42 @@ def test_select_unknown_version_raises(tmp_path):
         pass
     else:
         raise AssertionError("expected ValueError for unknown version id")
+
+
+def test_delete_removes_unused_version_and_file(tmp_path):
+    _write(_final(tmp_path), b"one")
+    fvh.record(tmp_path, _final(tmp_path), "first")
+    _write(_final(tmp_path), b"two")
+    h = fvh.record(tmp_path, _final(tmp_path), "second")
+    older = h["versions"][0]
+
+    h2 = fvh.delete(tmp_path, older["id"])
+
+    assert [v["id"] for v in h2["versions"]] == [h["selected"]]
+    assert not Path(older["path"]).exists()
+    assert _final(tmp_path).read_bytes() == b"two"   # canonical untouched
+
+
+def test_delete_refuses_the_version_in_use(tmp_path):
+    _write(_final(tmp_path), b"one")
+    fvh.record(tmp_path, _final(tmp_path), "first")
+    _write(_final(tmp_path), b"two")
+    h = fvh.record(tmp_path, _final(tmp_path), "second")
+    try:
+        fvh.delete(tmp_path, h["selected"])
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for the version in use")
+    assert len(fvh.history(tmp_path)["versions"]) == 2
+
+
+def test_delete_unknown_version_raises(tmp_path):
+    _write(_final(tmp_path), b"one")
+    fvh.record(tmp_path, _final(tmp_path))
+    try:
+        fvh.delete(tmp_path, 999)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for unknown version id")
