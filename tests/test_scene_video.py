@@ -69,7 +69,7 @@ class SceneVideoTests(unittest.TestCase):
 
             order: list[str] = []
 
-            def fake_image(prompt, output_path, **kwargs):
+            def fake_image(engine, prompt, output_path, **kwargs):
                 order.append("flux")
                 Path(output_path).write_bytes(b"png")
 
@@ -87,7 +87,7 @@ class SceneVideoTests(unittest.TestCase):
                 order.append("callback")
                 seen.append(frame)
 
-            with mock.patch("pipeline.scene_video.generate_scene_image", side_effect=fake_image), \
+            with mock.patch("pipeline.scene_video.generate_with_engine", side_effect=fake_image), \
                  mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_video), \
                  mock.patch("pipeline.scene_video._get_duration", return_value=31.2), \
                  mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
