@@ -69,6 +69,8 @@ export const api = {
   deleteVoice: (name) => req('POST', '/voices/delete', { name }),
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.
   testVoice: (body) => req('POST', '/voices/test', body),
+  // Short read-aloud script for the record-a-voice screen (issue #192).
+  voiceReadingScript: (language, fresh = false) => req('POST', '/voices/reading-script', { language, fresh }),
   // Character reference images (global character library). `data` is a base64 / data-URL.
   setCharacterImage: (charId, filename, data) => req('POST', '/characters/image', { char_id: charId, filename, data }),
   clearCharacterImage: (charId) => req('POST', '/characters/image/clear', { char_id: charId }),
