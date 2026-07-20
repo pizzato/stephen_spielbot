@@ -510,6 +510,7 @@ class InstructionSteeringTests(unittest.TestCase):
              mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
              mock.patch.object(backend, "_film_job_config", return_value={}), \
              mock.patch.object(backend.image_history, "seed_if_empty"), \
+             mock.patch.object(backend, "_RERENDER_JOURNAL_PATH", wd / "rerender_journal.json"), \
              mock.patch.object(backend.threading, "Thread", side_effect=fake_thread):
             result = backend.rerender_film_scene(
                 1, backend.RerenderSceneBody(work_dir=str(wd), component="image",
@@ -517,6 +518,65 @@ class InstructionSteeringTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         # args = (target, tid, wd, sid, component, jc, row, instruction)
         self.assertEqual(started[0][-1], "make it all robots")
+
+
+class RerenderJournalTests(unittest.TestCase):
+    """Scene re-renders survive a backend restart like a full render does:
+    dispatch journals the intent to disk, reaching a terminal state clears it,
+    and startup requeues whatever a dead process left behind."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        journal_dir = Path(tempfile.mkdtemp(prefix="spielbot-journal-", dir=_OUT))
+        j = mock.patch.object(backend, "_RERENDER_JOURNAL_PATH",
+                              journal_dir / "rerender_journal.json")
+        j.start()
+        self.addCleanup(j.stop)
+        backend._film_tasks.clear()
+        backend._film_task_meta.clear()
+        backend._film_cancelled_tids.clear()
+
+    def test_dispatch_journals_intent_and_terminal_state_clears_it(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        store = mock.Mock()
+        store.scene_rows.return_value = [{"id": 2, "image_prompt": "p", "video_prompt": "v"}]
+
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend, "job_id_from_work_dir", return_value="job1"), \
+             mock.patch.object(backend, "_film_job_config", return_value={}), \
+             mock.patch.object(backend.video_history, "seed_if_empty"), \
+             mock.patch.object(backend.threading, "Thread",
+                               side_effect=lambda **kw: mock.Mock(start=lambda: None)):
+            tid = backend._start_scene_rerender(wd, 2, "video", "more dragons")
+
+        entries = backend._load_rerender_journal()
+        self.assertEqual([e["task_id"] for e in entries], [tid])
+        self.assertEqual(entries[0]["scene_id"], 2)
+        self.assertEqual(entries[0]["instruction"], "more dragons")
+
+        # The wrapper clears the entry once the worker reaches a terminal state
+        # (done here; error/cancelled hit the same finally).
+        with mock.patch.object(backend, "_append_activity_locked"), \
+             mock.patch.object(backend.film_timing, "record"):
+            backend._run_rerender_logged(lambda *a, **k: None, tid, wd, 2, "video", {}, {})
+        self.assertEqual(backend._load_rerender_journal(), [])
+
+    def test_startup_requeues_interrupted_rerenders_and_drops_vanished_films(self):
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        backend._journal_rerender_add("rerender_02_video_1", wd, 2, "video", "more dragons")
+        backend._journal_rerender_add("rerender_01_video_1", _OUT / "no-such-film", 1, "video", "")
+
+        started = []
+        with mock.patch.object(backend, "_start_scene_rerender",
+                               side_effect=lambda *a: started.append(a) or "tid-new"):
+            backend._resume_interrupted_rerenders()
+
+        self.assertEqual(started, [(wd, 2, "video", "more dragons")])
+        # Old entries are consumed; the live requeue re-journals under its new
+        # task id via the (mocked-out) dispatch.
+        self.assertEqual(backend._load_rerender_journal(), [])
 
 
 if __name__ == "__main__":

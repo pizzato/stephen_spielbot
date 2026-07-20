@@ -62,6 +62,9 @@ async def _lifespan(_app: "FastAPI"):
     # bottom of this module; the name resolves at startup, not import). Replaces
     # the deprecated @app.on_event("startup") handler.
     _start_automation_loop()
+    # Requeue scene re-renders a restart killed mid-flight (in-process threads,
+    # unlike the full render's subprocess). Off-thread: it probes sqlite + disk.
+    threading.Thread(target=_resume_interrupted_rerenders, daemon=True).start()
     yield
     # Shutdown: nothing to clean up — the loop runs in a daemon thread.
 
@@ -9281,6 +9284,48 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
         _finish_film_task_error(task_id, e)
 
 
+# Scene re-renders run as in-process daemon threads, unlike the full film
+# render's separate subprocess — a backend restart kills them silently, mid-
+# flight. This journal persists each dispatched re-render's *intent* (not its
+# progress) so startup can requeue whatever was interrupted, mirroring how a
+# killed full render resumes: the in-flight scene redoes from scratch, and the
+# atomic staging swap means nothing already on disk was lost.
+_RERENDER_JOURNAL_PATH = _ACTIVITY_LOG_PATH.parent / "rerender_journal.json"
+_rerender_journal_lock = threading.Lock()
+
+
+def _load_rerender_journal() -> list[dict]:
+    try:
+        data = json.loads(_RERENDER_JOURNAL_PATH.read_text(encoding="utf-8"))
+        return [e for e in data if isinstance(e, dict)] if isinstance(data, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _save_rerender_journal_locked(entries: list[dict]) -> None:
+    _RERENDER_JOURNAL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _RERENDER_JOURNAL_PATH.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(entries, indent=2), encoding="utf-8")
+    tmp.replace(_RERENDER_JOURNAL_PATH)
+
+
+def _journal_rerender_add(tid: str, wd: Path, sid: int, component: str, instruction: str) -> None:
+    with _rerender_journal_lock:
+        entries = [e for e in _load_rerender_journal() if e.get("task_id") != tid]
+        entries.append({"task_id": tid, "work_dir": str(wd), "scene_id": sid,
+                        "component": component, "instruction": instruction or "",
+                        "created_at": time.time()})
+        _save_rerender_journal_locked(entries)
+
+
+def _journal_rerender_remove(tid: str) -> None:
+    with _rerender_journal_lock:
+        entries = _load_rerender_journal()
+        kept = [e for e in entries if e.get("task_id") != tid]
+        if len(kept) != len(entries):
+            _save_rerender_journal_locked(kept)
+
+
 def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, jc: dict, row: dict,
                          instruction: str = "") -> None:
     """Run a re-render worker, then record a completion entry in the Activity log.
@@ -9292,6 +9337,9 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
     try:
         target(tid, wd, sid, jc, row, instruction)
     finally:
+        # Terminal (done, error, or cancelled) — the journal only requeues
+        # tasks the process died under, never ones that finished.
+        _journal_rerender_remove(tid)
         _film_cancelled_tids.discard(tid)
         end = time.time()
         status = (_film_tasks.get(tid) or {}).get("status")
@@ -9316,15 +9364,15 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
             )
 
 
-@api.post("/api/films/scenes/{scene_id}/rerender")
-def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
-    wd = Path(body.work_dir)
-    if not _safe_under(wd, gapp.OUTPUT_DIR):
-        raise HTTPException(400, "Path is outside the output folder.")
-    if body.component not in ("narration", "image", "video"):
-        raise HTTPException(400, f"Unknown component: {body.component!r}")
+def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str = "") -> str:
+    """Validate and dispatch one scene re-render worker thread; returns the task id.
 
-    sid = scene_id
+    Shared by the endpoint and the startup requeue of journaled re-renders, so it
+    raises ValueError (bad request) / LookupError (unknown scene) instead of HTTP
+    errors."""
+    if component not in ("narration", "image", "video"):
+        raise ValueError(f"Unknown component: {component!r}")
+
     job_id = job_id_from_work_dir(wd)
     store = DurableStore.default()
     try:
@@ -9334,27 +9382,27 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
 
     row = next((r for r in rows if int(r.get("id") or r.get("scene_id") or 0) == sid), None)
     if not row:
-        raise HTTPException(404, f"Scene {sid} not found.")
+        raise LookupError(f"Scene {sid} not found.")
 
     scene_meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     scene_mode = str((scene_meta or {}).get("mode") or "narration")
-    if body.component == "narration" and scene_mode != "narration":
+    if component == "narration" and scene_mode != "narration":
         # Dialogue audio is voiced per line by the Video render; silent scenes
         # have no voice-over at all — voicing the scene here would be wrong.
-        raise HTTPException(400, f"A {scene_mode} scene has no scene narration — "
-                                 "use Video to re-render its shots.")
+        raise ValueError(f"A {scene_mode} scene has no scene narration — "
+                         "use Video to re-render its shots.")
 
     jc = _film_job_config(wd)
 
     # Delete stale files for the component and its dependents
-    if body.component == "narration":
+    if component == "narration":
         # Don't delete anything up front: generate_narration overwrites the wav,
         # and the new final.mp4 is swapped in atomically (see _run_narration_rerender).
         # Pre-deleting final.mp4 would leave the scene with no video if the re-mux is
         # interrupted (backend restart / crash mid-render). Keep the current video as a
         # take so the re-mux can be reverted.
         video_history.seed_if_empty(wd, sid, wd / f"scene_{sid:02d}_final.mp4")
-    elif body.component == "image":
+    elif component == "image":
         # Preserve the current image before deleting it so the user can return to it.
         cur = wd / f"scene_{sid:02d}_preview.png"
         if not cur.exists():
@@ -9362,7 +9410,7 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         image_history.seed_if_empty(wd, sid, cur)
         for f in [f"scene_{sid:02d}_first_frame.png", f"scene_{sid:02d}_preview.png"]:
             (wd / f).unlink(missing_ok=True)
-    elif body.component == "video":
+    elif component == "video":
         # Keep the existing first frame AND the existing video. The new clip/final
         # are rendered to staging paths and swapped in atomically only on success
         # (see _run_video_rerender). Deleting the old video here would lose it if the
@@ -9375,13 +9423,13 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
     # clear a stale "failed" badge and stop terminal records accumulating.
     _clear_finished_film_tasks(str(wd), sid)
 
-    tid = f"rerender_{sid:02d}_{body.component}_{int(time.time())}"
-    _film_tasks[tid] = {"status": "running", "step": body.component}
-    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": body.component}
+    tid = f"rerender_{sid:02d}_{component}_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": component}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": component}
 
-    if body.component == "narration":
+    if component == "narration":
         target = _run_narration_rerender
-    elif body.component == "image":
+    elif component == "image":
         target = _run_image_rerender
     elif scene_mode == "dialogue":
         # Dialogue scenes re-render the whole scene: per-line TTS + talking
@@ -9389,12 +9437,58 @@ def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
         target = _run_dialogue_rerender
     else:
         target = _run_video_rerender
+    # Persist the intent before the thread starts, so a restart in any window
+    # of the render requeues it (_run_rerender_logged clears it when terminal).
+    _journal_rerender_add(tid, wd, sid, component, instruction)
     threading.Thread(
         target=_run_rerender_logged,
-        args=(target, tid, wd, sid, body.component, jc, row, body.instruction),
+        args=(target, tid, wd, sid, component, jc, row, instruction),
         daemon=True,
     ).start()
+    return tid
+
+
+@api.post("/api/films/scenes/{scene_id}/rerender")
+def rerender_film_scene(scene_id: int, body: RerenderSceneBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    try:
+        tid = _start_scene_rerender(wd, scene_id, body.component, body.instruction)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return {"ok": True, "task_id": tid}
+
+
+def _resume_interrupted_rerenders() -> None:
+    """Requeue scene re-renders a dead backend left in the journal.
+
+    Runs once at startup. Entries are re-dispatched through the normal path (new
+    task id, fresh journal entry) so they queue on the shared pool like any other
+    re-render; entries whose film or scene vanished are dropped."""
+    entries = _load_rerender_journal()
+    if not entries:
+        return
+    for e in entries:
+        _journal_rerender_remove(str(e.get("task_id") or ""))
+    for e in entries:
+        wd = Path(str(e.get("work_dir") or ""))
+        try:
+            sid = int(e.get("scene_id") or 0)
+        except (TypeError, ValueError):
+            sid = 0
+        if sid <= 0 or not wd.is_dir() or not _safe_under(wd, gapp.OUTPUT_DIR):
+            continue
+        component = str(e.get("component") or "")
+        try:
+            tid = _start_scene_rerender(wd, sid, component, str(e.get("instruction") or ""))
+            gapp.logger.info("Requeued interrupted re-render %s (%s scene %s, %s)",
+                             tid, wd.name, sid, component)
+        except Exception as exc:
+            gapp.logger.warning("Could not requeue re-render for %s scene %s: %s",
+                                wd.name, sid, exc)
 
 
 class FilmPreviewSelectBody(BaseModel):
