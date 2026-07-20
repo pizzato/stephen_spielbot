@@ -123,8 +123,11 @@ export default function Home({ go }) {
           <div className="stream" style={{ marginTop: 4 }}>
             {visibleOps.map((active, i) => (
               <div className="stream-entry" key={`${active.name || 'active'}-${active.started_at || i}`}>
-                <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}>
-                  <Icon name="rotate" spin />
+                <span className="stream-ico" style={{
+                  background: active.status === 'queued' ? 'var(--paper-2)' : 'var(--accent-soft)',
+                  color: active.status === 'queued' ? 'var(--ink-3)' : 'var(--accent)',
+                }}>
+                  <Icon name={active.status === 'queued' ? 'hourglass-half' : 'rotate'} spin={active.status !== 'queued'} />
                 </span>
                 <div className="grow">
                   <span className="stream-title">{active.name}</span>

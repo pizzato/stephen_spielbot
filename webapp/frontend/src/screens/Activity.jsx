@@ -38,6 +38,7 @@ function wallTime(ts) {
 
 const STATUS_TONE = {
   running: 'ok',
+  queued: 'info',
   done: 'neutral',
   error: 'danger',
   cancelled: 'warn',
@@ -55,6 +56,8 @@ const CATEGORY_ICON = {
 
 function EventRow({ ev, go }) {
   const running = ev.status === 'running'
+  const queued = ev.status === 'queued'
+  const live = running || queued
   const icon = CATEGORY_ICON[ev.category] || 'circle-info'
   const right = running
     ? [
@@ -62,10 +65,12 @@ function EventRow({ ev, go }) {
         ev.elapsed_s != null ? `${fmtDuration(ev.elapsed_s)} elapsed` : null,
         ev.pct != null ? `${ev.pct}%` : null,
       ].filter(Boolean).join(' · ')
-    : [
-        ev.duration_s != null ? fmtDuration(ev.duration_s) : null,
-        timeAgo(ev.ts),
-      ].filter(Boolean).join(' · ')
+    : queued
+      ? (ev.elapsed_s != null ? `waiting ${fmtDuration(ev.elapsed_s)}` : 'waiting')
+      : [
+          ev.duration_s != null ? fmtDuration(ev.duration_s) : null,
+          timeAgo(ev.ts),
+        ].filter(Boolean).join(' · ')
 
   const openFilm = () => {
     if (!ev.work_dir || !go) return
@@ -83,7 +88,7 @@ function EventRow({ ev, go }) {
           marginTop: 2,
         }}
       >
-        <Icon name={running ? 'rotate' : icon} spin={running} />
+        <Icon name={running ? 'rotate' : queued ? 'hourglass-half' : icon} spin={running} />
       </span>
       <div className="grow" style={{ minWidth: 0 }}>
         <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
@@ -104,7 +109,7 @@ function EventRow({ ev, go }) {
             <ProgressBar pct={ev.pct} />
           </div>
         ) : null}
-        {!running && ev.ts ? (
+        {!live && ev.ts ? (
           <div className="muted" style={{ fontSize: 11, marginTop: 3 }}>
             {wallTime(ev.started_at || ev.ts)}
             {ev.duration_s != null ? ` · took ${fmtDuration(ev.duration_s)}` : ''}
@@ -149,7 +154,8 @@ function GroupCard({ group, expandAll, go }) {
   }, [live])
   const items = group.items || []
   const runningItems = items.filter((e) => e.status === 'running')
-  const historyItems = items.filter((e) => e.status !== 'running')
+  const queuedItems = items.filter((e) => e.status === 'queued')
+  const historyItems = items.filter((e) => e.status !== 'running' && e.status !== 'queued')
 
   return (
     <Card span={12} className="reveal">
@@ -211,6 +217,9 @@ function GroupCard({ group, expandAll, go }) {
       {open && (
         <div className="stream" style={{ marginTop: 14 }}>
           {runningItems.map((ev) => (
+            <EventRow key={ev.id || `${ev.name}-${ev.started_at}`} ev={ev} go={go} />
+          ))}
+          {queuedItems.map((ev) => (
             <EventRow key={ev.id || `${ev.name}-${ev.started_at}`} ev={ev} go={go} />
           ))}
           {historyItems.map((ev) => (
