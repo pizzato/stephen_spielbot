@@ -959,6 +959,56 @@ def voices_delete(body: VoiceDelete) -> dict:
     return _voice_response(cfg)
 
 
+# A ready-made passage for the record-a-voice screen (issue #192): English gets
+# it instantly with no LLM call; other languages (and "New script") are written
+# by the LLM. ~60 words ≈ 20–25 seconds read aloud.
+_DEFAULT_READING_SCRIPT = (
+    "Hello! I'm recording a short sample of my voice so it can narrate videos. "
+    "I love telling stories — some are funny, some are serious, and a few are "
+    "downright strange. When I read aloud, I try to speak clearly and calmly, "
+    "with a little warmth in my voice. Thanks for listening; I think this is "
+    "just about long enough."
+)
+
+
+class VoiceReadingScript(BaseModel):
+    language: str = "en"
+    fresh: bool = False   # True = write a new script even where a canned one exists
+
+
+@api.post("/api/voices/reading-script")
+def voices_reading_script(body: VoiceReadingScript) -> dict:
+    """A short passage to read aloud when recording a voice clip (issue #192)."""
+    from pipeline.chatterbox import LANGUAGES, norm_language
+    cfg = gapp.load_config()
+    lang = norm_language(body.language)
+    lang_name = LANGUAGES.get(lang, "English")
+    canned = _DEFAULT_READING_SCRIPT if lang == "en" else ""
+    if canned and not body.fresh:
+        return {"ok": True, "text": canned, "language": lang}
+    if not llm.llm_backend_ready(cfg):
+        if canned:
+            return {"ok": True, "text": canned, "language": lang}
+        raise HTTPException(503, f"Writing a script in {lang_name} needs the LLM backend (Settings → Infrastructure).")
+    system = ("You write short scripts people read aloud to record a voice-cloning "
+              "reference clip. Return ONLY the passage — no title, no quotes, no notes.")
+    user = (f"Write a passage of roughly 50-70 words (about 20 seconds read aloud), "
+            f"entirely in {lang_name}. First person, friendly and natural, with varied "
+            "sentence lengths and a touch of emotion so the recording captures the "
+            "speaker's range. Easy to read aloud: no numbers, abbreviations, or "
+            "hard-to-pronounce names.")
+    try:
+        with _track_op("Writing a reading script", lang_name):
+            text = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+    except Exception as e:
+        if canned:
+            return {"ok": True, "text": canned, "language": lang}
+        raise HTTPException(503, f"Script generation failed: {str(e).splitlines()[0][:200]}")
+    if not text and not canned:
+        raise HTTPException(503, "The LLM returned an empty script.")
+    return {"ok": True, "text": text or canned, "language": lang}
+
+
 # ── Character reference images (consistent characters, Phase 2) ──────────────
 # Characters are a global library, identified by char_id. These persist
 # immediately (mirroring voice ops) and return the fresh config; the client
