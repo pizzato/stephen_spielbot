@@ -139,7 +139,7 @@ def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) 
     except urllib.error.URLError as e:
         raise RuntimeError(
             f"ComfyUI is not reachable at {comfy_url} — is it running?\n"
-            f"Start it with:  cd ~/github/ComfyUI && source ../comfyui-env/bin/activate && python main.py --listen\n"
+            f"Start the worker containers with:  make start W=<host>\n"
             f"({e.reason})"
         )
 
