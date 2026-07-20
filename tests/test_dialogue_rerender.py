@@ -40,6 +40,14 @@ def _png(path: Path, width: int, height: int) -> None:
 class _SceneCase(TempConfigCase):
     """A film work dir + durable-store scene row to re-render."""
 
+    def setUp(self):
+        super().setUp()
+        # Keep the restart-requeue journal out of the real state dir.
+        p = mock.patch.object(backend, "_RERENDER_JOURNAL_PATH",
+                              self.output_dir / "rerender_journal.json")
+        p.start()
+        self.addCleanup(p.stop)
+
     def _seed(self, sid: int, metadata: dict | None, **row_kw):
         self.write_config({
             "styles": [_style("Hero")], "default_style": "Hero",
