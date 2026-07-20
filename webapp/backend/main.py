@@ -491,6 +491,10 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
     started = _film_task_started_at(task_id) or time.time()
     step = str(task.get("step") or component or "").strip()
     detail = _RERENDER_STEP_LABELS.get(step, step)
+    # Blocked in _acquire_render_worker: in line for a worker, not on a GPU yet.
+    queued = bool(task.get("queued"))
+    if queued:
+        detail = f"waiting for a free worker · {detail}" if detail else "waiting for a free worker"
     work_dir = str(meta.get("work_dir") or "")
 
     scene_id = int(meta.get("scene_id") or task.get("scene_id") or 0)
@@ -533,13 +537,18 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         except (TypeError, ValueError):
             pct = None
 
-    eta_text, eta_seconds = _film_task_eta(component, task, started, _film_job_dims(work_dir))
+    if queued:
+        # No countdown while nothing runs — the step ETA starts once a worker
+        # is acquired; elapsed keeps ticking so the wait itself is visible.
+        eta_text, eta_seconds = None, None
+    else:
+        eta_text, eta_seconds = _film_task_eta(component, task, started, _film_job_dims(work_dir))
 
     return _make_activity_event(
         name=name,
         detail=detail,
         started_at=started,
-        status="running",
+        status="queued" if queued else "running",
         work_dir=work_dir,
         title=title,
         pct=pct,
@@ -720,7 +729,7 @@ def _group_activity_events(events: list[dict]) -> list[dict]:
             }
         g = buckets[key]
         g["items"].append(ev)
-        if ev.get("status") == "running":
+        if ev.get("status") in ("running", "queued"):
             g["live_count"] += 1
         # Prefer a non-empty film title/work_dir on the group header.
         if not g["work_dir"] and ev.get("work_dir"):
@@ -8361,6 +8370,22 @@ def _shared_edit_render_pool():
         return _edit_render_pool
 
 
+def _acquire_render_worker(pool, task_id: str) -> str:
+    """pool.acquire() that surfaces the wait: the shared re-render pool is a
+    FIFO, so re-renders past the worker count block here for minutes. While
+    blocked the task carries queued=True, which the Activity screen shows as a
+    "queued" row instead of a green "running" one."""
+    task = _film_tasks.get(task_id)
+    if isinstance(task, dict):
+        task["queued"] = True
+    try:
+        return pool.acquire()
+    finally:
+        task = _film_tasks.get(task_id)
+        if isinstance(task, dict):
+            task.pop("queued", None)
+
+
 class _FilmTaskCancelled(Exception):
     """Raised inside a re-render worker when its film was deleted mid-task."""
 
@@ -8887,7 +8912,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
         new_seed = secrets.randbelow(2 ** 32)
         _film_tasks[task_id] = {"status": "running", "step": "image"}
-        url = pool.acquire()
+        url = _acquire_render_worker(pool, task_id)
         try:
             # acquire() can block a long time behind a busy GPU — re-check
             # before submitting work the film may no longer exist to receive.
@@ -8980,7 +9005,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
         if scene_first_frame is None:
             _film_tasks[task_id] = {"status": "running", "step": "image"}
-            url = pool.acquire()
+            url = _acquire_render_worker(pool, task_id)
             try:
                 _film_checkpoint(task_id)
                 generate_with_engine(
@@ -9020,7 +9045,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             # the value stamped at render time so a re-render stays consistent.
             negative_prompt=(jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT,
         )
-        url = pool.acquire()
+        url = _acquire_render_worker(pool, task_id)
         try:
             # acquire() can block a long time behind a busy GPU — re-check
             # before submitting work the film may no longer exist to receive.
@@ -9146,7 +9171,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
             shot_scene = Scene(id=scene_obj.id, title=scene_obj.title, image_prompt="",
                                video_prompt=vp, narration="",
                                negative_prompt=scene_obj.negative_prompt)
-            url = pool.acquire()
+            url = _acquire_render_worker(pool, task_id)
             try:
                 _film_checkpoint(task_id)
                 raw, _amb = gen_scene_video(
@@ -9202,7 +9227,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
             if close is None or Path(close) == Path(wide):
                 return None
             out = wd / f"scene_{scene_obj.id:02d}_establish.mp4"
-            url = pool.acquire()
+            url = _acquire_render_worker(pool, task_id)
             try:
                 _film_checkpoint(task_id)
                 generate_keyframed_clip(
