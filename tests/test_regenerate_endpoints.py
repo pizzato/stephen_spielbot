@@ -336,6 +336,46 @@ class FilmUpscaleTests(unittest.TestCase):
         self.assertEqual(activity["active_ops"][0]["name"], "Upscaling final video")
         self.assertIn("upscaling final video", activity["active_ops"][0]["detail"])
 
+    def test_activity_marks_waiting_rerender_as_queued(self):
+        """A re-render blocked in _acquire_render_worker (queued=True) surfaces as
+        status "queued" with no ETA countdown, not as a green "running" row."""
+        backend._film_tasks["rerender_7_1"] = {"status": "running", "step": "video", "queued": True}
+        backend._film_task_meta["rerender_7_1"] = {
+            "work_dir": str(_OUT / "film-a"),
+            "scene_id": 7,
+            "component": "video",
+            "started_at": 123.0,
+        }
+
+        with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[]):
+            activity = backend.get_activity()
+
+        op = activity["active_ops"][0]
+        self.assertEqual(op["name"], "Re-rendering scene 7")
+        self.assertEqual(op["status"], "queued")
+        self.assertIn("waiting for a free worker", op["detail"])
+        self.assertIsNone(op["eta_text"])
+        # Queued work is still live: its group must sort with the live ones.
+        group = next(g for g in activity["groups"] if any(i["id"] == op["id"] for i in g["items"]))
+        self.assertEqual(group["live_count"], 1)
+
+    def test_acquire_render_worker_flags_queue_wait(self):
+        """The queued flag is set while blocked in pool.acquire() and cleared
+        once a worker is handed out."""
+        backend._film_tasks["tid"] = {"status": "running", "step": "video"}
+        seen = {}
+
+        class FakePool:
+            def acquire(self):
+                seen["queued_during_acquire"] = backend._film_tasks["tid"].get("queued")
+                return "http://worker:8188"
+
+        url = backend._acquire_render_worker(FakePool(), "tid")
+        self.assertEqual(url, "http://worker:8188")
+        self.assertTrue(seen["queued_during_acquire"])
+        self.assertNotIn("queued", backend._film_tasks["tid"])
+
     def test_track_op_keeps_concurrent_operations_visible(self):
         with backend._track_op("First task", "a"):
             with backend._track_op("Second task", "b"):
