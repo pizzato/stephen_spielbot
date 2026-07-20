@@ -117,6 +117,156 @@ function fileToDataUrl(file) {
   })
 }
 
+// Decode a recorded blob and re-encode it as 16-bit PCM mono WAV so the TTS
+// workers never see a browser codec (webm/opus from MediaRecorder).
+async function blobToWavFile(blob, name) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)()
+  try {
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer())
+    const n = buf.length, rate = buf.sampleRate, ch = buf.numberOfChannels
+    const mono = new Float32Array(n)
+    for (let c = 0; c < ch; c++) {
+      const d = buf.getChannelData(c)
+      for (let i = 0; i < n; i++) mono[i] += d[i] / ch
+    }
+    const out = new DataView(new ArrayBuffer(44 + n * 2))
+    const str = (o, s) => { for (let i = 0; i < s.length; i++) out.setUint8(o + i, s.charCodeAt(i)) }
+    str(0, 'RIFF'); out.setUint32(4, 36 + n * 2, true); str(8, 'WAVEfmt ')
+    out.setUint32(16, 16, true); out.setUint16(20, 1, true); out.setUint16(22, 1, true)
+    out.setUint32(24, rate, true); out.setUint32(28, rate * 2, true)
+    out.setUint16(32, 2, true); out.setUint16(34, 16, true)
+    str(36, 'data'); out.setUint32(40, n * 2, true)
+    for (let i = 0; i < n; i++) {
+      const s = Math.max(-1, Math.min(1, mono[i]))
+      out.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true)
+    }
+    return new File([out.buffer], name, { type: 'audio/wav' })
+  } finally { ctx.close() }
+}
+
+// Record a reference clip with the microphone (issue #192): pick a script
+// language, read the passage shown, review the take, and hand it to the
+// add-voice form as if it had been chosen from disk.
+function RecordVoiceModal({ languages, onUse, onClose }) {
+  const [lang, setLang] = useState('en')
+  const [script, setScript] = useState('')
+  const [scriptBusy, setScriptBusy] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [processing, setProcessing] = useState(false)
+  const [elapsed, setElapsed] = useState(0)
+  const [take, setTake] = useState(null)          // { file, url }
+  const [error, setError] = useState('')
+  const recRef = useRef(null)                     // { mr, stream, timer }
+
+  const langs = languages && Object.keys(languages).length ? languages : { en: 'English' }
+
+  const fetchScript = async (l, fresh = false) => {
+    setScriptBusy(true); setError('')
+    try { const r = await api.voiceReadingScript(l, fresh); setScript(r.text || '') }
+    catch (e) { setError(e.message) } finally { setScriptBusy(false) }
+  }
+  useEffect(() => { fetchScript(lang) }, [lang])
+
+  // Whatever way the modal goes away, release the mic and the timer.
+  useEffect(() => () => {
+    const r = recRef.current
+    if (r) { clearInterval(r.timer); r.stream.getTracks().forEach((t) => t.stop()) }
+  }, [])
+
+  const start = async () => {
+    setError('')
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setError('Recording needs a secure connection (HTTPS or localhost) — the browser exposes no microphone here.')
+      return
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const mr = new MediaRecorder(stream)
+      const chunks = []
+      mr.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data) }
+      mr.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop())
+        clearInterval(recRef.current?.timer)
+        recRef.current = null
+        setRecording(false); setProcessing(true)
+        try {
+          const raw = new Blob(chunks, { type: mr.mimeType || 'audio/webm' })
+          const file = await blobToWavFile(raw, 'voice-recording.wav')
+          setTake((old) => { if (old) URL.revokeObjectURL(old.url); return { file, url: URL.createObjectURL(file) } })
+        } catch (e) { setError(`Could not process the recording: ${e.message}`) }
+        setProcessing(false)
+      }
+      recRef.current = { mr, stream, timer: setInterval(() => setElapsed((s) => s + 1), 1000) }
+      setElapsed(0)
+      mr.start()
+      setRecording(true)
+    } catch (e) {
+      setError(e.name === 'NotAllowedError'
+        ? 'Microphone access was denied — allow it in the browser and try again.'
+        : `Microphone unavailable: ${e.message}`)
+    }
+  }
+  const stop = () => { const r = recRef.current; if (r && r.mr.state !== 'inactive') r.mr.stop() }
+  const fmt = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+
+  return (
+    <div onClick={() => !recording && onClose()}
+      style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--paper)', borderRadius: 'var(--r-lg)', padding: 20, width: 'min(640px, 96vw)', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,.5)' }}>
+        <div className="row center between" style={{ marginBottom: 12 }}>
+          <span className="h-title">Record a voice</span>
+          <button type="button" className="btn btn--quiet" onClick={onClose}><Icon name="xmark" /></button>
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+          Read the script below in a quiet room — aim for 15–30 seconds of clear, natural speech.
+          The take becomes the voice's reference clip.
+        </p>
+
+        <div className="row center gap-10 row--wrap" style={{ marginBottom: 12 }}>
+          <select className="input" style={{ maxWidth: 180 }} value={lang} disabled={recording}
+            onChange={(e) => setLang(e.target.value)}>
+            {Object.entries(langs).map(([c, l]) => <option key={c} value={c}>{l}</option>)}
+          </select>
+          <Button variant="ghost" icon="rotate" disabled={scriptBusy || recording}
+            onClick={() => fetchScript(lang, true)}>{scriptBusy ? 'Writing…' : 'New script'}</Button>
+        </div>
+
+        <div style={{ background: 'var(--paper-2)', borderRadius: 'var(--r-md)', padding: '14px 16px', fontSize: 15.5, lineHeight: 1.55, minHeight: 72, whiteSpace: 'pre-wrap' }}>
+          {script || (scriptBusy ? 'Writing a script…' : '')}
+        </div>
+
+        <div className="row center gap-10 row--wrap mt-16">
+          {!recording && (
+            <Button variant="primary" icon="microphone" disabled={processing} onClick={start}>
+              {take ? 'Re-record' : 'Start recording'}
+            </Button>
+          )}
+          {recording && (
+            <>
+              <Button variant="danger" icon="stop" onClick={stop}>Stop</Button>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontWeight: 600 }}>
+                <span style={{ width: 10, height: 10, borderRadius: '50%', background: 'var(--danger)', animation: 'recpulse 1.1s ease-in-out infinite' }} />
+                {fmt(elapsed)}
+              </span>
+            </>
+          )}
+          {processing && <span className="muted" style={{ fontSize: 13 }}>Processing…</span>}
+          {take && !recording && !processing && (
+            <>
+              <audio controls src={take.url} style={{ height: 34 }} />
+              <div className="grow" />
+              <Button variant="primary" icon="check" onClick={() => onUse(take.file)}>Use this recording</Button>
+            </>
+          )}
+        </div>
+
+        {error && <Banner tone="danger">{error}</Banner>}
+      </div>
+    </div>
+  )
+}
+
 // Compact play/pause toggle for a voice's reference clip.
 function PlayButton({ src }) {
   const ref = useRef(null)
@@ -196,7 +346,7 @@ function VoiceMetaFields({ meta, onChange }) {
   )
 }
 
-function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
+function VoicesManager({ voices, busy, ttsLanguages, onAdd, onUpdate, onDelete }) {
   const [name, setName] = useState('')
   const [file, setFile] = useState(null)
   const [addMeta, setAddMeta] = useState({})
@@ -204,6 +354,7 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
   const [editName, setEditName] = useState('')
   const [editFile, setEditFile] = useState(null)
   const [editMeta, setEditMeta] = useState({})
+  const [recOpen, setRecOpen] = useState(false)
   const addRef = useRef(null)
 
   const add = async () => {
@@ -275,8 +426,13 @@ function VoicesManager({ voices, busy, onAdd, onUpdate, onDelete }) {
           <Icon name="upload" /> {file ? file.name : 'Choose audio…'}
           <input ref={addRef} type="file" accept="audio/*" hidden onChange={(e) => setFile(e.target.files?.[0] || null)} />
         </label>
+        <Button variant="ghost" icon="microphone" disabled={busy} onClick={() => setRecOpen(true)}>Record…</Button>
         <Button variant="primary" icon="plus" disabled={busy || !name.trim() || !file} onClick={add}>Add voice</Button>
       </div>
+      {recOpen && (
+        <RecordVoiceModal languages={ttsLanguages} onClose={() => setRecOpen(false)}
+          onUse={(f) => { setFile(f); setRecOpen(false); if (addRef.current) addRef.current.value = '' }} />
+      )}
     </Card>
   )
 }
@@ -1719,7 +1875,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
 
         {tab === 'voices' && (<>
           {/* ── Voices (narrator reference clips) ── */}
-          <VoicesManager voices={cfg.voices} busy={vbusy} onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+          <VoicesManager voices={cfg.voices} busy={vbusy}
+            ttsLanguages={(ttsEngineInfo?.engines || []).find((e) => Object.keys(e.languages || {}).length)?.languages}
+            onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
         </>)}
 
         {tab === 'channels' && (<>
