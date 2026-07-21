@@ -4,11 +4,14 @@
 # rendered videos survive unless explicitly purged.
 #
 # Usage: bash scripts/uninstall.sh [--yes] [--purge-data] [--purge-models]
+#                                  [--workers-only]
 #
 #   (default)       Stop the web app + cover agent, remove the macOS launchd
 #                   service, and on every worker host: remove the container
 #                   stack (containers, volumes, locally-built images) and the
 #                   ~/spielbot-worker build dir. Keeps config, state, models.
+#   --workers-only  Only remove the worker container stacks — leave the web app
+#                   and the launchd service alone (used by 'make clean workers').
 #   --purge-data    Also delete ~/.config/video-generator and
 #                   ~/.local/share/video-generator on this machine (config +
 #                   API tokens, orchestrator DB, voice library, logs).
@@ -31,12 +34,14 @@ source "$REPO_ROOT/scripts/_config.sh"
 YES=false
 PURGE_DATA=false
 PURGE_MODELS=false
+WORKERS_ONLY=false
 for arg in "$@"; do
     case "$arg" in
-        --yes)          YES=true ;;
-        --purge-data)   PURGE_DATA=true ;;
-        --purge-models) PURGE_MODELS=true ;;
-        *) echo "Unknown option: $arg"; echo "Usage: $0 [--yes] [--purge-data] [--purge-models]"; exit 1 ;;
+        --yes)           YES=true ;;
+        --purge-data)    PURGE_DATA=true ;;
+        --purge-models)  PURGE_MODELS=true ;;
+        --workers-only)  WORKERS_ONLY=true ;;
+        *) echo "Unknown option: $arg"; echo "Usage: $0 [--yes] [--purge-data] [--purge-models] [--workers-only]"; exit 1 ;;
     esac
 done
 
@@ -49,17 +54,21 @@ _on_host() {
 HOSTS="$(remote_hosts || true)"
 
 echo "This will:"
-echo "  • stop the web app and cover agent on this machine"
-if [[ "$(uname)" == "Darwin" ]]; then
-    echo "  • remove the launchd service (if installed)"
+if ! $WORKERS_ONLY; then
+    echo "  • stop the web app and cover agent on this machine"
+    if [[ "$(uname)" == "Darwin" ]]; then
+        echo "  • remove the launchd service (if installed)"
+    fi
 fi
 if [[ -n "$HOSTS" ]]; then
     echo "  • remove the worker container stack (containers, volumes, images,"
     echo "    ~/spielbot-worker) on: $(echo $HOSTS | tr '\n' ' ')"
+elif $WORKERS_ONLY; then
+    echo "  • nothing — no worker hosts are configured"
 fi
 $PURGE_DATA   && echo "  • DELETE config + state: ~/.config/video-generator, ~/.local/share/video-generator"
 $PURGE_MODELS && echo "  • DELETE the downloaded models (~/github/ComfyUI) on workers where Spielbot created it"
-echo "It will NOT touch rendered videos (~/videos) or this repo folder."
+$WORKERS_ONLY || echo "It will NOT touch rendered videos (~/videos) or this repo folder."
 echo ""
 if ! $YES; then
     if [[ -t 0 ]]; then
@@ -72,11 +81,13 @@ if ! $YES; then
 fi
 
 # ── 1. Stop the app + cover agent ─────────────────────────────────────────────
-bash "$REPO_ROOT/scripts/stop_server.sh" || true
+if ! $WORKERS_ONLY; then
+    bash "$REPO_ROOT/scripts/stop_server.sh" || true
 
-# ── 2. Remove the macOS launchd service ───────────────────────────────────────
-if [[ "$(uname)" == "Darwin" ]]; then
-    bash "$REPO_ROOT/scripts/launchd.sh" uninstall || true
+    # ── 2. Remove the macOS launchd service ───────────────────────────────────
+    if [[ "$(uname)" == "Darwin" ]]; then
+        bash "$REPO_ROOT/scripts/launchd.sh" uninstall || true
+    fi
 fi
 
 # ── 3. Remove the worker container stacks ─────────────────────────────────────
@@ -122,6 +133,10 @@ if $PURGE_DATA; then
 fi
 
 echo ""
+if $WORKERS_ONLY; then
+    echo "Worker stacks removed. Re-deploy them with: make install"
+    exit 0
+fi
 echo "Uninstall complete."
 echo "  Kept: rendered videos (~/videos) and this repo folder (delete it to finish)."
 $PURGE_DATA || echo "  Kept: config + state (remove with: bash scripts/uninstall.sh --purge-data)."
