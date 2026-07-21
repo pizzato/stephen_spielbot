@@ -142,10 +142,15 @@ export default function Ideas({ go, meta = {} }) {
   // First visit loads the cached set (no LLM call); only regenerates if empty.
   useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded() }, [])
   // Switching style swaps to that style's cached ideas (generates when empty).
+  // The guidance box is cleared with it (issue #202): it was steering the style
+  // you just left, and carrying it over generates off-theme ideas for the new
+  // one whenever that style has nothing cached. Pass '' rather than `guidance`
+  // — the setGuidance above doesn't apply until the next render.
   const pickStyle = (name) => {
     setStyleSel(name)
     setIdeas([])
-    loadIdeas(guidance, false, name)
+    setGuidance('')
+    loadIdeas('', false, name)
     loadDiscarded(name)
   }
 
