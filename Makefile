@@ -8,6 +8,7 @@ W ?=
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale channels \
         launchd-install launchd-uninstall \
+        clean \
         lint lint-fix lint-web ensure-ruff
 
 ## Install everything: local deps, models, workers, config.yaml, AND the web UI
@@ -22,6 +23,25 @@ install:
 ##   bash scripts/uninstall.sh [--purge-data] [--purge-models]
 uninstall:
 	@bash $(SCRIPTS)/uninstall.sh
+
+## Reset part of the local install. Each mode prints what it will delete and
+## asks for confirmation first:
+##   make clean queue      Clear the render + publish queues (keeps rendered videos)
+##   make clean workers    Remove the worker Docker stacks (containers, volumes, images)
+##   make clean settings   Delete config.yaml + the YouTube/X credentials
+##   make clean all        All of the above
+CLEAN_MODES := queue workers settings all
+clean:
+	@bash $(SCRIPTS)/clean.sh $(filter $(CLEAN_MODES),$(MAKECMDGOALS))
+
+# The mode words are typed as extra goals ("make clean queue"); absorb them so
+# make does not try to build them as targets of their own. Only while 'clean' is
+# a goal, so they stay unknown targets otherwise ("make queue" is still an error).
+ifneq ($(filter clean,$(MAKECMDGOALS)),)
+.PHONY: $(CLEAN_MODES)
+$(CLEAN_MODES):
+	@:
+endif
 
 ## Download the LTX 2.3, ACE-Step and FLUX.2 Klein models (skips already-present files).
 download-models:
@@ -174,6 +194,11 @@ help:
 	@echo "                  (first run seeds config.yaml — set hosts: make install WORKERS=\"s1 s2 s3\")"
 	@echo "  uninstall       Stop everything + remove the service and worker container stacks"
 	@echo "                  (keeps config/models/videos; purge: bash scripts/uninstall.sh --purge-data --purge-models)"
+	@echo "  clean <what>    Reset part of the install — warns and confirms before deleting:"
+	@echo "                    make clean queue     Clear the render + publish queues"
+	@echo "                    make clean workers   Remove the worker Docker stacks"
+	@echo "                    make clean settings  Delete config.yaml + YouTube/X credentials"
+	@echo "                    make clean all       All of the above"
 	@echo "  download-models Download the defaults: LTX 2.3 + ACE-Step + FLUX.2 Klein (skips existing)"
 	@echo "  download-flux          Download the legacy FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
