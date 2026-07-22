@@ -1315,8 +1315,7 @@ def voices_test(body: VoiceTest) -> dict:
 
     cached = out.exists() and out.stat().st_size > 1000
     if not cached:
-        tts_hosts = cfg.get("tts_workers") or []
-        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+        tts_host = _first_live_tts_host(cfg)
         try:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
@@ -1326,6 +1325,23 @@ def voices_test(body: VoiceTest) -> dict:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
     return {"ok": True, "url": f"/api/file?path={out}&t={int(out.stat().st_mtime)}", "cached": cached}
+
+
+def _first_live_tts_host(cfg: dict) -> str:
+    """Pick a reachable TTS worker for the single-scene narration paths.
+
+    Those paths default to one worker. Blindly using the first-configured worker
+    fails the whole request when it happens to be down, even though other workers
+    are up (e.g. s1 offline while s2/s3 are healthy). Probe the configured workers
+    and return the first reachable one; fall back to the first configured worker
+    (so any resulting error names a real endpoint) or localhost when none are set.
+    """
+    from pipeline.tts_worker import worker_alive
+    configured = [h for h in (cfg.get("tts_workers") or []) if str(h).strip()]
+    for h in configured:
+        if worker_alive(h, timeout=3):
+            return h
+    return configured[0] if configured else "localhost"
 
 
 def _next_worker_free_eta(cfg: dict) -> float | None:
@@ -8826,9 +8842,9 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     tts_language = language or jc.get("tts_language", cfg.get("default_tts_language", "en"))
     if tts_host is None:
         # tts_host lets fanout callers spread scenes across the TTS fleet; the
-        # single-scene paths keep the first-configured-worker default.
-        tts_hosts = cfg.get("tts_workers") or []
-        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+        # single-scene paths pick the first *reachable* worker so a downed lead
+        # worker (e.g. s1) doesn't block narration when others are up.
+        tts_host = _first_live_tts_host(cfg)
 
     if update_task:
         _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
@@ -9119,8 +9135,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
         pool = _shared_edit_render_pool()
         if pool is None:
             raise RuntimeError("No ComfyUI workers reachable.")
-        tts_hosts = cfg.get("tts_workers") or []
-        tts_host = tts_hosts[0] if tts_hosts else "localhost"
+        tts_host = _first_live_tts_host(cfg)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
