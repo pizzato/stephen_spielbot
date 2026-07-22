@@ -2670,7 +2670,7 @@ def install_tts_engine(body: TTSInstallBody) -> dict:
 
 _FIELD_INSTRUCTIONS = {
     "title": "Write ONE short, vivid scene title (max ~8 words). Return only the title — no quotes, no label.",
-    "narration": "Rewrite the narration for this scene: 2–4 sentences in an engaging documentary voice, consistent with the video topic and the surrounding scenes. Return only the narration text.",
+    "narration": "Rewrite the narration for this scene in an engaging documentary voice, consistent with the video topic and the surrounding scenes. Return only the narration text.",
     "image_prompt": "Write a single detailed text-to-image (FLUX) prompt for this scene's first frame: highly detailed, static, incorporating the visual style. Return only the prompt.",
     "video_prompt": "Write a single concise video-motion (LTX) prompt for this scene describing camera movement and motion. Return only the prompt.",
 }
