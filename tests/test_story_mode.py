@@ -243,5 +243,28 @@ class CritiqueScenesTests(unittest.TestCase):
         self.assertFalse(ops["changed"])
 
 
+class NearDuplicatePairsTests(unittest.TestCase):
+    def test_finds_near_duplicates_including_final_scene(self):
+        scenes = [
+            {"id": 1, "narration": "Rome falls in 476 AD as Odoacer takes the city."},
+            {"id": 2, "narration": "Trade flourishes across the Mediterranean sea lanes."},
+            {"id": 3, "narration": "Rome falls in 476 AD as Odoacer seizes the city."},
+        ]
+        pairs = story.near_duplicate_pairs(scenes)
+        self.assertEqual([(p[0], p[1]) for p in pairs], [(1, 3)])
+        self.assertGreaterEqual(pairs[0][2], 0.8)
+
+    def test_distinct_narrations_produce_no_pairs(self):
+        scenes = [
+            {"id": 1, "narration": "The aqueducts carried water across the mountains of Hispania."},
+            {"id": 2, "narration": "Legions marched north through dense Germanic forests at dawn."},
+        ]
+        self.assertEqual(story.near_duplicate_pairs(scenes), [])
+
+    def test_empty_narrations_ignored(self):
+        scenes = [{"id": 1, "narration": ""}, {"id": 2, "narration": ""}]
+        self.assertEqual(story.near_duplicate_pairs(scenes), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -25,7 +25,7 @@ script_claude_initial:
 
     "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
-    "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the video keeps returning to across scenes (e.g. a historical figure the documentary follows). Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
+    "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the video keeps returning to across scenes (e.g. a historical figure the documentary follows). NEVER list the narrator or the storytelling voice as a character. Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
       - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
       - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
@@ -38,7 +38,7 @@ script_claude_initial:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
       - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration. Keep it a SINGLE CONTINUOUS SHOT that animates the still: same location and the same subjects as the image_prompt — no cuts, no scene changes, and no new people, objects, or settings appearing. Only the camera and elements already visible in the still may move; the video model animates that one frame, so anything not in it warps and breaks apart.
-      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story.${dialogue_schema}
+      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story. Never refer to "the narrator" — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).${dialogue_schema}
 
     STRUCTURE RULES — critical for YouTube retention:
     - Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
@@ -63,11 +63,12 @@ script_claude_continuation:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors. Keep it ONE continuous shot that animates the still — same single location and the same subjects, no cuts, no scene changes, and nothing new appearing (the model animates only the first frame, so anything not already in it distorts).
-      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context.${dialogue_schema}
+      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context. Never refer to "the narrator" — the voice tells the story directly.${dialogue_schema}
 
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |
     Continue the ${n_scenes}-scene video script for: ${topic_ref}
+    Topic/Direction (narration AND visuals must stay within these constraints): ${topic_full}
     Generate scenes ${batch_start} to ${batch_end} (scene IDs ${batch_start}–${batch_end}).
 
     Previous scenes for narrative continuity:
@@ -116,6 +117,7 @@ script_local_story:
     - FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
     - Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
     - If you listed CHARACTER_* above, refer to those characters BY NAME in the narrations of the scenes where they appear, so the visuals can depict them consistently.
+    - NEVER mention "the narrator" in any narration — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).
     - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
     - Every value must fit on a single line (no line breaks within a value).
     - No blank lines between entries.
@@ -177,7 +179,7 @@ story_outline:
 
     "music": A 20-40 word description of the background music for the ENTIRE video. Reflect the emotional arc — tense moments need suspenseful music, triumphant moments need bold brass. Include: mood adjectives, tempo, key instruments, genre.
 
-    "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the story keeps returning to (e.g. a historical figure the documentary follows). Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
+    "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the story keeps returning to (e.g. a historical figure the documentary follows). NEVER list the narrator or the storytelling voice as a character — the narrator is not part of the story. Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
       - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
       - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
@@ -193,6 +195,7 @@ story_outline:
     - Chapter 1 opens with a compelling hook: tease the most surprising or emotionally resonant moment from later in the story — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld.
     - Middle chapters build progressively, each raising the stakes or deepening understanding. NO repeated beats: each chapter must cover NEW ground — never restate what an earlier chapter already established.
     - The final chapter lands a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying.
+    - The narrator is NOT part of the story: never reference "the narrator" in any summary. (Only exception: the topic/direction explicitly asks the narrator to introduce or refer to themselves.)
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
@@ -214,6 +217,7 @@ story_chapter:
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
     - Write as one continuous narrative with an implicit pull forward — the listener should never want to stop.
+    - You ARE the voice speaking: NEVER mention or describe "the narrator" — no "the narrator explains", no "our narrator", no third-person references to the storytelling voice. Tell the story directly. (Only exception: the video topic/direction explicitly asks the narrator to introduce or refer to themselves.)
   user: |
     Video topic: ${title_context}
 
@@ -231,7 +235,7 @@ story_critique:
     repetition, and pacing, flagging chapters that need a rewrite.
   system: |
     You are a ruthless story editor reviewing the full draft of a narrated YouTube documentary. Judge ONLY these three things:
-    - COHERENCE: does the story hold together as one continuous narrative, with no contradictions or broken references?
+    - COHERENCE: does the story hold together as one continuous narrative, with no contradictions or broken references? Prose that refers to "the narrator" in the third person is a defect — the voice must tell the story directly, never describe itself.
     - REPETITION: is any information, phrase, or beat told more than once?
     - PACING: does every chapter advance the story, with a strong hook early and a real payoff at the end?
 
@@ -262,6 +266,7 @@ story_revise_chapter:
     - Fix the flagged issues; do not introduce new story beats that belong to other chapters.
     - Continue seamlessly from the previous chapter's closing words and hand off cleanly to the next chapter's opening words.
     - Every sentence must be speakable aloud at a calm documentary pace.
+    - Never mention or describe "the narrator" — tell the story directly.
   user: |
     Chapter "${chapter_title}" of the story "${title_context}".
 
@@ -286,13 +291,18 @@ story_divide:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors. Keep it ONE continuous shot that animates the still — same single location and the same subjects, no cuts, no scene changes, and nothing new appearing (the model animates only the first frame, so anything not already in it distorts).
-      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). The narration MUST be drawn from the STORY TEXT below — condense it faithfully across the scenes, preserving its order, wording and voice as much as possible. Invent nothing that is not in the story text.
+      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). The narration MUST be drawn from the STORY TEXT below — condense it faithfully across the scenes, preserving its order, wording and voice as much as possible. Invent nothing that is not in the story text. Never refer to "the narrator" — the voice tells the story directly.
 
     Together the scenes' narrations must cover the ENTIRE story text in order — nothing skipped, nothing repeated, nothing added.
+
+    Every "image_prompt" and "video_prompt" must obey the world rules and constraints in the TOPIC/DIRECTION below — who and what exists in this world, how it looks — in EVERY scene, not just where the story text mentions them.
 
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |
     Video: ${topic_ref} (${n_scenes} scenes total; this chapter covers scenes ${batch_start} to ${batch_end}).
+
+    TOPIC/DIRECTION (visuals must stay within these constraints):
+    ${topic_full}
 
     STORY TEXT for scenes ${batch_start}–${batch_end}:
     ${chapter_text}
@@ -310,8 +320,8 @@ script_critic:
     deleting, or reordering scenes. Run repeatedly until it converges.
   system: |
     You are a ruthless script editor doing quality control on a narrated video script, scene by scene. Judge ONLY these three things:
-    - CONSISTENCY: contradictions, broken references, scenes that assume something never established.
-    - REPETITION: information, phrases, or beats told more than once across scenes — cut or rewrite the later occurrence.
+    - CONSISTENCY: contradictions, broken references, scenes that assume something never established. Narration that refers to "the narrator" in the third person is a defect — rewrite it to tell the story directly (exception: the TOPIC/DIRECTION explicitly asks the narrator to introduce themselves).
+    - REPETITION: information, phrases, or beats told more than once across scenes — cut or rewrite the later occurrence. This check INCLUDES the first and final scenes: an ending that near-duplicates an earlier scene is a defect even though the final scene itself must not be deleted — delete or rewrite the earlier copy, or rewrite the final scene so the payoff lands without repeating.
     - ENGAGEMENT: scene 1 must hook; every scene must advance the story and pull toward the next; the final scene must land a payoff. Flag dead scenes that add nothing.
 
     You may REWRITE narrations, DELETE scenes, ADD scenes, and REORDER scenes. Output ONLY a JSON object:
@@ -326,14 +336,14 @@ script_critic:
     - You are also the judge of DONE. An edit is justified ONLY by a real defect in the three categories above — never by taste, wording preference, or marginal polish. A professional script that would ship as-is gets {"changed": false}. Returning no changes is a success, not a failure.
     - Rewrite ONLY scenes that genuinely need it. A rewritten narration keeps the format: exactly 2 sentences, ~18-22 words, ~9 seconds spoken at a calm documentary pace, flowing naturally from the previous scene into the next. Write it in the same language as the existing narrations.
     - Do NOT invent new facts or events — rewrites and inserts work only with what the script already contains.
-    - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene.
+    - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene — when one of them duplicates another scene, act on the OTHER scene, or rewrite scene 1 / the final scene instead.
     - ADD a scene ONLY to bridge a genuinely broken transition or restore a beat the script clearly needs but lacks (e.g. a payoff set up but never delivered). Inserts are rare — most passes have none.
     - Include "order" ONLY when rearranging genuinely improves the flow; it must list every surviving id exactly once. Omit it when the order is fine.
     - When the script is already consistent, non-repetitive, and engaging, return exactly {"changed": false, "notes": [...], "rewrites": [], "deletes": [], "inserts": []} — do not manufacture busywork edits.
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    Video: ${topic_ref} — ${n_scenes} scenes.${pass_note}
+    Video: ${topic_ref} — ${n_scenes} scenes.${direction_note}${pass_note}${dup_note}
 
     ${scene_list}${avoid_note}
 
