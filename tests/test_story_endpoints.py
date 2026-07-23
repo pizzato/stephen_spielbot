@@ -328,6 +328,60 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(len(res["scenes"]), 3)
         self.assertEqual(res["passes"][0]["deleted"], [])
 
+    # ── automation auto-critic ───────────────────────────────────────────────
+
+    def test_auto_critic_runs_before_result_when_flagged(self):
+        body = backend.GenerateScriptBody(video_title="Auto QC", topic="t", n_scenes=3,
+                                          style_name="Plain", auto_critic=True)
+        ops = {"changed": True, "notes": [], "order": None, "inserts": [],
+               "deletes": [3],
+               "rewrites": [{"id": 1, "narration": "Critiqued."}]}
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(_fake_scenes(3), "m", "st", [])), \
+             mock.patch.object(backend.story_mode, "critique_scenes",
+                               side_effect=[ops, {"changed": False, "notes": [],
+                                                  "rewrites": [], "deletes": [],
+                                                  "inserts": [], "order": None}]) as crit:
+            res = backend._do_script_generate(body)
+        self.assertGreaterEqual(crit.call_count, 1)
+        # the returned payload reflects the critic's edits (rewrite + delete)
+        self.assertEqual(len(res["scenes"]), 2)
+        self.assertEqual(res["scenes"][0]["narration"], "Critiqued.")
+
+    def test_auto_critic_off_by_default_and_failure_is_non_fatal(self):
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(_fake_scenes(2), "m", "st", [])), \
+             mock.patch.object(backend.story_mode, "critique_scenes") as crit:
+            res = backend._do_script_generate(backend.GenerateScriptBody(
+                video_title="No QC", topic="t", n_scenes=2, style_name="Plain"))
+        crit.assert_not_called()
+        self.assertEqual(len(res["scenes"]), 2)
+        # and a critic crash never fails script creation
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(_fake_scenes(2), "m", "st", [])), \
+             mock.patch.object(backend.story_mode, "critique_scenes",
+                               side_effect=RuntimeError("boom")):
+            res = backend._do_script_generate(backend.GenerateScriptBody(
+                video_title="QC crash", topic="t", n_scenes=2,
+                style_name="Plain", auto_critic=True))
+        self.assertEqual(len(res["scenes"]), 2)
+
+    def test_auto_critic_covers_headless_story_mode(self):
+        body = backend.GenerateScriptBody(video_title="Story QC", topic="t", n_scenes=4,
+                                          style_name="Hero", auto_critic=True)
+        ops = {"changed": True, "notes": [], "order": None, "inserts": [],
+               "deletes": [], "rewrites": [{"id": 2, "narration": "Story critiqued."}]}
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(4)), \
+             mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])), \
+             mock.patch.object(backend.story_mode, "critique_scenes",
+                               side_effect=[ops, {"changed": False, "notes": [],
+                                                  "rewrites": [], "deletes": [],
+                                                  "inserts": [], "order": None}]):
+            res = backend._do_script_generate(body)
+        self.assertEqual(res["scenes"][1]["narration"], "Story critiqued.")
+
     # ── story fetch endpoint ─────────────────────────────────────────────────
 
     def test_get_job_story_roundtrip_and_404_for_classic(self):
