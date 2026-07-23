@@ -64,7 +64,7 @@ from pipeline import image_history
 from pipeline import engines
 from pipeline import tts_engines
 
-MAX_SCENES    = 100
+MAX_SCENES    = 200
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)

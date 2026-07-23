@@ -1,0 +1,192 @@
+"""Story-mode backend flow (webapp/backend/main.py).
+
+Phase 1 (_do_story_generate) persists story.json + brief with phase
+"story_review"; phase 2 (_do_story_divide) merges review edits and persists the
+scenes into the SAME work dir through the classic path. _do_script_generate
+chains both headless for automation callers, and dialogue formats fall back to
+classic generation.
+"""
+import json
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))
+
+import webapp.backend.main as backend  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+from pipeline.llm import Scene  # noqa: E402
+from pipeline.orchestrator import DurableStore  # noqa: E402
+from test_styles import TempConfigCase, _style  # noqa: E402
+
+
+def _fake_story(n_scenes=4):
+    return {
+        "version": 1, "topic": "Test topic", "video_title": "", "n_scenes": n_scenes,
+        "outline": [{"chapter": 1, "title": "Ch 1", "summary": "s", "scenes": n_scenes}],
+        "chapters": [{"chapter": 1, "title": "Ch 1", "summary": "s",
+                      "scenes": n_scenes, "text": "Original chapter prose."}],
+        "critique": {"verdict": "pass", "notes": [], "chapters": []},
+        "style": "story style", "music": "story music", "characters": [],
+        "status": "draft", "created_at": 1.0, "updated_at": 1.0,
+    }
+
+
+def _fake_scenes(n):
+    return [Scene(id=i, title=f"S{i}", image_prompt="img", video_prompt="vid",
+                  narration=f"Narration {i}.") for i in range(1, n + 1)]
+
+
+class StoryEndpointTests(TempConfigCase):
+    def setUp(self):
+        super().setUp()
+        self.write_config({
+            "styles": [_style("Hero", script_mode="story"),
+                       _style("Plain", script_mode="classic")],
+            "default_style": "Plain",
+            "characters": [],
+            "characters_migrated_v2": True,
+        })
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        mock.patch.object(backend, "_describe_in_background").start()
+        self.addCleanup(mock.patch.stopall)
+
+    # ── mode resolution ──────────────────────────────────────────────────────
+
+    def test_effective_mode_style_default_and_override(self):
+        cfg = backend.gapp.load_config()
+        hero = backend.gapp.style_settings(cfg, "Hero")
+        plain = backend.gapp.style_settings(cfg, "Plain")
+        body = backend.GenerateScriptBody(topic="t")
+        self.assertEqual(backend._effective_script_mode(body, hero), "story")
+        self.assertEqual(backend._effective_script_mode(body, plain), "classic")
+        body = backend.GenerateScriptBody(topic="t", script_mode="story")
+        self.assertEqual(backend._effective_script_mode(body, plain), "story")
+        body = backend.GenerateScriptBody(topic="t", script_mode="classic")
+        self.assertEqual(backend._effective_script_mode(body, hero), "classic")
+
+    def test_dialogue_format_falls_back_to_classic(self):
+        cfg = backend.gapp.load_config()
+        hero = backend.gapp.style_settings(cfg, "Hero")
+        body = backend.GenerateScriptBody(topic="t", format="dialogue")
+        self.assertEqual(backend._effective_script_mode(body, hero), "classic")
+
+    # ── phase 1: story generate ──────────────────────────────────────────────
+
+    def test_story_generate_persists_draft(self):
+        body = backend.GenerateScriptBody(video_title="My Story", topic="A topic",
+                                          n_scenes=4, style_name="Hero")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(4)) as gen:
+            res = backend._do_story_generate(body)
+        self.assertEqual(gen.call_count, 1)
+        wd = Path(res["work_dir"])
+        story = json.loads((wd / "story.json").read_text())
+        self.assertEqual(story["status"], "draft")
+        brief = json.loads((wd / "create_brief.json").read_text())
+        self.assertEqual(brief["script_mode"], "story")
+        self.assertEqual(brief["n_scenes"], 4)
+        self.assertEqual(res["story"]["chapters"][0]["text"], "Original chapter prose.")
+        store = DurableStore.default()
+        try:
+            job = store.get_job(res["job_id"])
+            self.assertEqual(json.loads(job["config_json"])["phase"], "story_review")
+        finally:
+            store.close()
+        # no scenes yet — the divide step writes script.json
+        self.assertFalse((wd / "script.json").exists())
+
+    # ── phase 2: divide ──────────────────────────────────────────────────────
+
+    def _draft(self, n_scenes=4):
+        body = backend.GenerateScriptBody(video_title="My Story", topic="A topic",
+                                          n_scenes=n_scenes, style_name="Hero")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(n_scenes)):
+            return backend._do_story_generate(body)
+
+    def test_divide_merges_edits_and_persists_same_work_dir(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        divide_body = backend.DivideStoryBody(
+            work_dir=str(wd),
+            chapters=[backend.StoryChapterEdit(chapter=1, text="EDITED prose.")])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])) as div:
+            res = backend._do_story_divide(divide_body)
+        # edited text reached divide_story and was persisted
+        story_arg = div.call_args.args[0]
+        self.assertEqual(story_arg["chapters"][0]["text"], "EDITED prose.")
+        story = json.loads((wd / "story.json").read_text())
+        self.assertEqual(story["chapters"][0]["text"], "EDITED prose.")
+        self.assertEqual(story["status"], "divided")
+        # classic payload shape, same work dir and job id
+        self.assertEqual(res["work_dir"], str(wd))
+        self.assertEqual(res["job_id"], draft["job_id"])
+        self.assertEqual(len(res["scenes"]), 4)
+        self.assertTrue((wd / "script.json").exists())
+        self.assertEqual(res["create_brief"]["script_mode"], "story")
+
+    def test_divide_without_draft_404s(self):
+        wd = self.output_dir / "no-story-here"
+        wd.mkdir()
+        with self.assertRaises(HTTPException) as ctx:
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_divide_rejects_path_outside_output_dir(self):
+        with self.assertRaises(HTTPException) as ctx:
+            backend._do_story_divide(backend.DivideStoryBody(work_dir="/etc"))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    # ── headless chain + classic fallback ────────────────────────────────────
+
+    def test_do_script_generate_chains_story_mode_headless(self):
+        body = backend.GenerateScriptBody(video_title="Auto Story", topic="A topic",
+                                          n_scenes=4, style_name="Hero")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(4)) as gen, \
+             mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])) as div, \
+             mock.patch.object(backend, "generate_script") as classic:
+            res = backend._do_script_generate(body)
+        self.assertEqual(gen.call_count, 1)
+        self.assertEqual(div.call_count, 1)
+        classic.assert_not_called()
+        wd = Path(res["work_dir"])
+        self.assertTrue((wd / "story.json").exists())
+        self.assertTrue((wd / "script.json").exists())
+        self.assertEqual(len(res["scenes"]), 4)
+
+    def test_do_script_generate_dialogue_format_uses_classic(self):
+        body = backend.GenerateScriptBody(video_title="Dlg", topic="A topic",
+                                          n_scenes=2, style_name="Hero", format="dialogue")
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(_fake_scenes(2), "m", "st", [])) as classic, \
+             mock.patch.object(backend.story_mode, "generate_story") as gen:
+            res = backend._do_script_generate(body)
+        classic.assert_called_once()
+        gen.assert_not_called()
+        self.assertFalse((Path(res["work_dir"]) / "story.json").exists())
+
+    # ── story fetch endpoint ─────────────────────────────────────────────────
+
+    def test_get_job_story_roundtrip_and_404_for_classic(self):
+        draft = self._draft(4)
+        story = backend.get_job_story(draft["job_id"])
+        self.assertEqual(story["status"], "draft")
+        # a classic script has no story.json
+        body = backend.GenerateScriptBody(video_title="Classic One", topic="t",
+                                          n_scenes=2, style_name="Plain")
+        with mock.patch.object(backend, "generate_script",
+                               return_value=(_fake_scenes(2), "m", "st", [])):
+            res = backend._do_script_generate(body)
+        with self.assertRaises(HTTPException) as ctx:
+            backend.get_job_story(res["job_id"])
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+if __name__ == "__main__":
+    unittest.main()
