@@ -2258,10 +2258,22 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
         store.close()
 
     deletes = [i for i in (ops.get("deletes") or []) if i in by_id]
+    order = ops.get("order")
+    # An `order` that is a valid subset of the current ids (unique, all real,
+    # but missing some) expresses deletions by omission — the critic dropped a
+    # scene from the new ordering instead of listing it in `deletes`. Honour
+    # that intent so the removal isn't silently lost (which looked like "the
+    # critic said it deleted a scene but the count didn't change").
+    if (isinstance(order, list) and order and len(set(order)) == len(order)
+            and all(i in by_id for i in order) and set(order) != set(ids)):
+        deletes = list(dict.fromkeys(deletes + [i for i in ids if i not in set(order)]))
+    # Guard: never delete the first or final scene (protect the hook + payoff),
+    # matching the critic contract — even if the model asks to.
+    protected = {ids[0], ids[-1]}
+    deletes = [i for i in deletes if i not in protected]
     surviving = [i for i in ids if i not in set(deletes)]
     if not surviving:  # never let the critic delete the entire script
         deletes, surviving = [], ids
-    order = ops.get("order")
     sequence = order if (order and sorted(order) == sorted(surviving)) else surviving
     reordered = sequence != surviving
     # Weave inserts in as placeholder entries; _restructure_job_scenes turns a
