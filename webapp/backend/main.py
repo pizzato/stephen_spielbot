@@ -2319,6 +2319,11 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     title = (brief.get("topic") or brief.get("video_title") or wd.name).strip()
     video_title = (brief.get("video_title") or "").strip() or None
+    # Topic + style extra instructions: lets the critic judge theme adherence
+    # and honour direction-level exceptions (e.g. "the narrator introduces
+    # themselves").
+    extra = (ss.get("extra_instructions") or "").strip()
+    direction = f"{title}\n{extra}" if extra else title
     max_passes = (_CRITIC_MAX_PASSES if body.until_converged
                   else min(max(1, int(body.passes or 1)), _CRITIC_MAX_PASSES))
     # Cumulative pass count across runs: five separate single-pass clicks should
@@ -2338,18 +2343,36 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
         if len(rows) < 2:
             converged = True
             break
+        scene_rows_min = [{"id": int(r["id"]), "title": r.get("title") or "",
+                           "narration": r.get("narration") or ""} for r in rows]
+        # Deterministic backstop: hand the critic any mechanically-detected
+        # near-duplicate narrations so it cannot overlook them (e.g. a pair
+        # involving the protected final scene).
+        dups = story_mode.near_duplicate_pairs(scene_rows_min)
+        dup_note = ""
+        if dups:
+            listed = "; ".join(f"scenes {a} and {b} ({int(r * 100)}% similar)"
+                               for a, b, r in dups)
+            dup_note = (f"\nDETECTED NEAR-DUPLICATE NARRATIONS — these MUST be resolved "
+                        f"this pass (delete or rewrite one of each pair; scene 1 and the "
+                        f"final scene may be rewritten but not deleted): {listed}.")
         try:
             with _track_op(f"Critic pass {i}", video_title or title):
                 ops = story_mode.critique_scenes(
-                    [{"id": int(r["id"]), "title": r.get("title") or "",
-                      "narration": r.get("narration") or ""} for r in rows],
+                    scene_rows_min,
                     title, video_title=video_title, avoid_hint=avoid_hint,
-                    pass_num=prior_passes + i)
+                    pass_num=prior_passes + i, direction=direction,
+                    dup_note=dup_note)
         except Exception as e:
             raise HTTPException(500, f"Critic pass failed: {str(e).splitlines()[0][:300]}")
         if not ops["changed"]:
+            notes = ops["notes"]
+            if dups:
+                listed = "; ".join(f"scenes {a}/{b}" for a, b, _ in dups)
+                notes = notes + [f"duplicate detector still flags {listed} — "
+                                 "the critic judged them acceptable"]
             report.append({"pass": i, "rewrites": 0, "deleted": [], "added": 0,
-                           "reordered": False, "notes": ops["notes"]})
+                           "reordered": False, "notes": notes})
             converged = True
             break
         # Snapshot the pre-edit script so this pass can be rolled back.

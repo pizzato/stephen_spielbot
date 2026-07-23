@@ -344,6 +344,7 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
         raw = call(
             _prompts.system("story_divide"),
             _prompts.user("story_divide", n_scenes=n_scenes, topic_ref=topic_ref,
+                          topic_full=title,
                           batch_start=start, batch_end=end, chapter_text=text,
                           ctx_str=ctx_str, video_style_note=video_style_note,
                           avoid_note=avoid_note, character_note=character_note,
@@ -385,10 +386,35 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
 
 # ── Script critic (post-generation QC over the assembled scene list) ─────────
 
+def near_duplicate_pairs(scenes: list[dict], threshold: float = 0.8,
+                         cap: int = 5) -> list[tuple[int, int, float]]:
+    """Mechanical near-duplicate detection over scene narrations: (id_a, id_b,
+    similarity) for every pair whose text similarity ≥ threshold, strongest
+    first. A deterministic backstop for the critic — the LLM judge can miss an
+    obvious duplicate (notably one involving the protected final scene), so
+    detected pairs are fed into its prompt explicitly."""
+    from difflib import SequenceMatcher
+    rows = [(int(s["id"]), " ".join(str(s.get("narration") or "").lower().split()))
+            for s in scenes]
+    pairs = []
+    for i in range(len(rows)):
+        if not rows[i][1]:
+            continue
+        for j in range(i + 1, len(rows)):
+            if not rows[j][1]:
+                continue
+            ratio = SequenceMatcher(None, rows[i][1], rows[j][1]).ratio()
+            if ratio >= threshold:
+                pairs.append((rows[i][0], rows[j][0], round(ratio, 2)))
+    return sorted(pairs, key=lambda p: -p[2])[:cap]
+
+
 def critique_scenes(scenes: list[dict], title: str,
                     video_title: str | None = None,
                     avoid_hint: str | None = None,
-                    pass_num: int = 1) -> dict:
+                    pass_num: int = 1,
+                    direction: str = "",
+                    dup_note: str = "") -> dict:
     """One critic pass over an assembled script (classic or story-first): judge
     consistency, repetition, and engagement, and propose edits. Returns
     validated ops — {"changed", "notes", "rewrites", "deletes", "inserts",
@@ -409,12 +435,17 @@ def critique_scenes(scenes: list[dict], title: str,
         'acceptable, return {"changed": false}.'
         if pass_num > 1 else ""
     )
+    direction_note = (
+        f"\nTOPIC/DIRECTION (the script must follow this): {direction.strip()}"
+        if direction and direction.strip() else ""
+    )
     raw = _chat_complete(
         cfg,
         _prompts.system("script_critic"),
         _prompts.user("script_critic", topic_ref=topic_ref, n_scenes=n,
                       scene_list=scene_list, avoid_note=_avoid_note(avoid_hint),
-                      pass_note=pass_note),
+                      pass_note=pass_note, direction_note=direction_note,
+                      dup_note=dup_note),
         min(n * 100 + 800, 16000), "script critic", retries=2,
     )
     data = _parse_claude_response(raw, "script critic")
