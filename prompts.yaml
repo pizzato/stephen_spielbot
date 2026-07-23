@@ -381,6 +381,30 @@ recurring_characters:
     ${scene_list}
 
 
+retag_character_scenes:
+  description: |
+    Follow-up to the recurring-characters pass: characters that pass ADDS were
+    discovered after every scene was written, so their visual prompts may
+    describe them without the name. Render-time consistency (canonical
+    appearance injection + reference images) fires only on the NAME appearing
+    in the image prompt, so this pass rewrites those prompts to use the name.
+  system: |
+    You are fixing the visual prompts of a video script. The script has RECURRING CHARACTERS that were identified AFTER the scenes were written, so some scene prompts describe one of these characters without naming them. The render pipeline appends each named character's canonical appearance to every prompt that contains their name — a depicted character must therefore be referred to BY NAME.
+
+    For each scene given, decide whether its IMAGE prompt visually depicts one of the listed characters — as a figure in the scene, or in a photograph, portrait, statue, or reflection — described WITHOUT their name. If so, rewrite the prompt so the character is referred to by NAME, replacing the anonymous appearance description. Keep everything else — composition, setting, lighting, other subjects, and any leading visual-style sentence — exactly as written. Apply the same to the VIDEO prompt when it references that character. Do NOT restate the character's appearance; the name replaces the description. Keep only appearance details that DIFFER from the canonical description (a change of clothes, an injury).
+
+    NEVER add a character to a scene that does not already depict them, and never alter anything unrelated to the renaming.
+
+    Output ONLY a JSON object: {"rewrites": [{"id": <scene id>, "image_prompt": "<full rewritten image prompt>", "video_prompt": "<full rewritten video prompt — include ONLY if it also needed renaming>"}]}
+    Include ONLY scenes you actually changed; omit scenes that do not depict any listed character or that already name them. If nothing needs changing output {"rewrites": []}. No markdown, no code fences, no explanation.
+  user: |
+    RECURRING CHARACTERS (canonical appearance):
+    ${character_list}
+
+    Scenes to check:
+    ${scene_list}
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # Self-heal (resume_generation.py)
 # Fills empty narration/image_prompt right before TTS so videos are never silent.

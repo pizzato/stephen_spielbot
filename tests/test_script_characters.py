@@ -192,6 +192,86 @@ class RecurringCharacterPassTests(unittest.TestCase):
             lambda *a, **k: "not json at all", scenes, identified)
         self.assertEqual(out, identified)  # best-effort: batch-1 list preserved
 
+    def test_detect_retags_unnamed_scenes_of_new_characters(self):
+        # Scenes 1 and 3 depict Washington but never name him; the retag pass
+        # must rewrite those visual prompts to use the name.
+        scenes = [
+            _scene(1, "Washington takes command."),
+            _scene(2, "Redcoats march."),
+            _scene(3, "Washington crosses the river."),
+        ]
+        scenes[0].image_prompt = "a tall man in a powdered wig surveys the camp"
+        scenes[2].image_prompt = "a tall man in a powdered wig stands in a rowboat"
+        calls = []
+
+        def fake_call(system, user_msg, max_tokens, label, retries=2):
+            calls.append(label)
+            if label == "recurring characters":
+                return json.dumps([{"name": "Washington", "aliases": ["the General"],
+                                    "description": "tall man, powdered wig",
+                                    "scenes": [1, 3]}])
+            self.assertEqual(label, "character retag")
+            self.assertIn("Washington: tall man, powdered wig", user_msg)
+            self.assertIn("Scene 1:", user_msg)
+            self.assertIn("Scene 3:", user_msg)
+            return json.dumps({"rewrites": [
+                {"id": 1, "image_prompt": "Washington surveys the camp",
+                 "video_prompt": "Washington turns slowly"},
+                {"id": 3, "image_prompt": "Washington stands in a rowboat"},
+            ]})
+
+        out = llm._detect_recurring_characters(fake_call, scenes, [])
+        self.assertEqual([c["name"] for c in out], ["Washington"])
+        self.assertEqual(calls, ["recurring characters", "character retag"])
+        self.assertEqual(scenes[0].image_prompt, "Washington surveys the camp")
+        self.assertEqual(scenes[0].video_prompt, "Washington turns slowly")
+        self.assertEqual(scenes[2].image_prompt, "Washington stands in a rowboat")
+        self.assertEqual(scenes[1].image_prompt, "I")  # untargeted scene untouched
+
+    def test_retag_skips_scenes_already_naming_the_character(self):
+        scenes = [_scene(1, "n"), _scene(2, "n")]
+        scenes[0].image_prompt = "the General rides ahead"   # alias present → named
+        scenes[1].image_prompt = "a tall man in a powdered wig"
+        seen = {}
+
+        def fake_call(system, user_msg, max_tokens, label, retries=2):
+            seen["msg"] = user_msg
+            return json.dumps({"rewrites": []})
+
+        llm._retag_unnamed_character_scenes(
+            fake_call, scenes,
+            [{"name": "Washington", "aliases": ["the General"],
+              "description": "tall man, powdered wig"}],
+            {"washington": {1, 2}},
+        )
+        self.assertNotIn("Scene 1:", seen["msg"])
+        self.assertIn("Scene 2:", seen["msg"])
+
+    def test_retag_no_candidates_makes_no_call(self):
+        scenes = [_scene(1, "n")]
+        scenes[0].image_prompt = "Washington at dawn"
+        llm._retag_unnamed_character_scenes(
+            lambda *a, **k: self.fail("must not call the LLM"),
+            scenes,
+            [{"name": "Washington", "aliases": [], "description": "d"}],
+            {"washington": {1}},
+        )
+
+    def test_retag_rejects_rewrites_that_drop_the_name_and_survives_bad_json(self):
+        scenes = [_scene(1, "n"), _scene(2, "n")]
+        char = {"name": "Washington", "aliases": [], "description": "d"}
+        # Rewrite without the name → rejected; original prompt kept.
+        llm._retag_unnamed_character_scenes(
+            lambda *a, **k: json.dumps(
+                {"rewrites": [{"id": 1, "image_prompt": "a nameless man"}]}),
+            scenes, [char], {"washington": {1}},
+        )
+        self.assertEqual(scenes[0].image_prompt, "I")
+        # Bad JSON → prompts untouched, no exception.
+        llm._retag_unnamed_character_scenes(
+            lambda *a, **k: "not json", scenes, [char], {"washington": {1}})
+        self.assertEqual(scenes[0].image_prompt, "I")
+
     def test_claude_generate_picks_up_recurring_character_batch1_missed(self):
         # Batch-1 returns NO characters (the miss the user reported); the recurring
         # pass over all 11 scenes surfaces Washington.
