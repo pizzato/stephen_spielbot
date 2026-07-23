@@ -309,7 +309,7 @@ class StoryEndpointTests(TempConfigCase):
     def test_critic_pass_number_accumulates_across_runs(self):
         job = self._divided_job(3)
         seen = []
-        def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1):
+        def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1, **kw):
             seen.append(pass_num)
             return {"changed": True, "notes": [], "order": None, "inserts": [],
                     "deletes": [],
@@ -318,6 +318,35 @@ class StoryEndpointTests(TempConfigCase):
             backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
             backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
         self.assertEqual(seen, [1, 2])
+
+    def test_critic_receives_detected_duplicates_and_direction(self):
+        job = self._divided_job(3)
+        # plant an unmistakable near-duplicate pair involving the final scene
+        store = backend.DurableStore.default()
+        try:
+            for sid in (1, 3):
+                cur = store.get_scene(job["job_id"], sid)
+                store.upsert_scene(job["job_id"], sid,
+                                   title=cur.get("title") or "",
+                                   image_prompt=cur.get("image_prompt") or "",
+                                   video_prompt=cur.get("video_prompt") or "",
+                                   narration="The empire endures for a thousand more years of light.",
+                                   metadata=cur.get("metadata") or {})
+        finally:
+            store.close()
+        captured = {}
+        def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1,
+                 direction="", dup_note=""):
+            captured.update(direction=direction, dup_note=dup_note)
+            return {"changed": False, "notes": [], "rewrites": [], "deletes": [],
+                    "inserts": [], "order": None}
+        with mock.patch.object(backend.story_mode, "critique_scenes", side_effect=fake):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertIn("scenes 1 and 3", captured["dup_note"])
+        self.assertTrue(captured["direction"])
+        # critic declined despite the hint → surfaced in the report notes
+        self.assertTrue(any("duplicate detector still flags" in n_
+                            for n_ in res["passes"][0]["notes"]))
 
     def test_critic_refuses_to_delete_every_scene(self):
         job = self._divided_job(3)
