@@ -372,6 +372,28 @@ class StoryEndpointTests(TempConfigCase):
         self.assertTrue(any("duplicate detector still flags" in n_
                             for n_ in res["passes"][0]["notes"]))
 
+    def test_critic_json_keeps_a_run_history(self):
+        job = self._divided_job(4)
+        run1 = {"changed": True, "notes": ["tightened scene 2"], "order": None,
+                "inserts": [], "deletes": [],
+                "rewrites": [{"id": 2, "narration": "Rewritten by run one."}]}
+        run2 = {"changed": False, "notes": ["clean"], "rewrites": [],
+                "deletes": [], "inserts": [], "order": None}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=run1):
+            backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=run2):
+            backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        crit = json.loads((Path(job["work_dir"]) / "critic.json").read_text())
+        # the earlier, non-converged run survives the later one
+        self.assertEqual(len(crit["runs"]), 2)
+        self.assertFalse(crit["runs"][0]["converged"])
+        self.assertEqual(crit["runs"][0]["passes"][0]["rewrites"], 1)
+        self.assertEqual(crit["runs"][0]["passes"][0]["notes"], ["tightened scene 2"])
+        self.assertTrue(crit["runs"][1]["converged"])
+        # top-level still describes the latest run
+        self.assertTrue(crit["converged"])
+        self.assertEqual(crit["total_passes"], 2)
+
     def test_critic_order_omission_is_treated_as_deletion(self):
         # The critic drops scene 3 by omitting it from `order` (no explicit
         # `deletes`). The omission must take effect, not be silently ignored.

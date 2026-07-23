@@ -2139,6 +2139,7 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
 # ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
 
 _CRITIC_MAX_PASSES = 5
+_CRITIC_RUN_HISTORY = 20   # critic.json keeps this many runs' reports
 _SCRIPT_VERSION_KEEP = 20
 _VERSION_FILE_RE = re.compile(r"^\d+\.json$")
 
@@ -2412,10 +2413,26 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     result = {"passes": report, "converged": converged,
               "scenes": [_scene_to_json(r, wd) for r in rows],
               "versions": _list_script_versions(wd)}
-    try:  # best-effort record of the last run, next to the script
+    # Best-effort record next to the script. The top-level fields describe the
+    # LATEST run (and feed the cumulative pass counter above); "runs" keeps the
+    # history — overwriting it lost what earlier runs reported, which made a
+    # "the critic said it removed a scene" report impossible to check after a
+    # later run.
+    try:
+        try:
+            prev = json.loads((wd / "critic.json").read_text())
+            prev = prev if isinstance(prev, dict) else {}
+        except Exception:
+            prev = {}
+        runs = prev.get("runs") if isinstance(prev.get("runs"), list) else []
+        if not runs and prev.get("passes"):  # migrate a pre-history file
+            runs = [{"ran_at": prev.get("ran_at", 0), "passes": prev["passes"],
+                     "converged": prev.get("converged")}]
+        runs.append({"ran_at": time.time(), "passes": report, "converged": converged})
         (wd / "critic.json").write_text(json.dumps(
             {"ran_at": time.time(), "passes": report, "converged": converged,
-             "total_passes": prior_passes + len(report)}, indent=2))
+             "total_passes": prior_passes + len(report),
+             "runs": runs[-_CRITIC_RUN_HISTORY:]}, indent=2))
     except Exception:
         pass
     return result
