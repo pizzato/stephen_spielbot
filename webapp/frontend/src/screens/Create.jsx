@@ -52,11 +52,13 @@ export default function Create({ seed, meta, onGenerated }) {
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
-  // Script mode: '' = style default, 'classic' | 'story' override. Story-first
-  // drafts + judges a prose story, then hands off to the Script screen's Story
-  // view for review and scene division. Dialogue/mixed formats always run
-  // classic (story mode is v1 narration-only — the backend enforces the same).
-  const [scriptMode, setScriptMode] = useState('')
+  // Script mode ('classic' | 'story'): owned by the style, like the narrator
+  // voice and visual style — locked while a style is active, editable under
+  // "No style". Story-first drafts + judges a prose story, then hands off to
+  // the Script screen's Story view for review and scene division. Dialogue/
+  // mixed formats always run classic (story mode is v1 narration-only — the
+  // backend enforces the same).
+  const [scriptMode, setScriptMode] = useState(seed?.scriptMode || 'classic')
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
@@ -70,6 +72,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
     setRobotic(!!profile.voice_robotic)
     setStyle(profile.visual_style || '')
+    setScriptMode(profile.script_mode === 'story' ? 'story' : 'classic')
   }, [profile, voiceChoices])
 
   // In No-style mode, keep a manually chosen voice valid if the voice list changes.
@@ -88,6 +91,7 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed.voice) setVoice(seed.voice)
     if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
     if (seed.visualStyle) setStyle(seed.visualStyle)
+    if (seed.scriptMode) setScriptMode(seed.scriptMode)
     if (seed.autoApprove != null) setAutoApprove(!!seed.autoApprove)
   }, [seed])
 
@@ -98,6 +102,7 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed.voice) setVoice(seed.voice)
     if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
     if (seed.visualStyle) setStyle(seed.visualStyle)
+    if (seed.scriptMode) setScriptMode(seed.scriptMode)
   }, [seed, profile])
 
   useEffect(() => {
@@ -130,6 +135,7 @@ export default function Create({ seed, meta, onGenerated }) {
       setStyle('')
       setVoice(voiceChoices[0] || 'Default (F5-TTS)')
       setRobotic(false)
+      setScriptMode('classic')
     }
   }
 
@@ -143,9 +149,9 @@ export default function Create({ seed, meta, onGenerated }) {
     } catch (e) { setError(e.message) } finally { setImproving('') }
   }
 
-  // The mode this Create run uses: explicit override wins, else the style's
-  // setting; non-narration formats force classic (mirrors the backend rule).
-  const effMode = format !== 'narration' ? 'classic' : (scriptMode || profile?.script_mode || 'classic')
+  // The mode this Create run uses: the (style-synced) selection, except that
+  // non-narration formats force classic (mirrors the backend rule).
+  const effMode = format !== 'narration' ? 'classic' : (scriptMode || 'classic')
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -265,10 +271,12 @@ export default function Create({ seed, meta, onGenerated }) {
             <Field label="Script mode"
               hint={format !== 'narration'
                 ? 'Dialogue and Mixed formats always use Classic (story-first is narration-only for now).'
-                : 'Story-first writes and judges the whole story as prose, shows it here for review, then divides it into scenes — keeps long videos coherent.'}>
-              <select className="select" value={scriptMode} disabled={format !== 'narration'}
+                : locked
+                  ? 'Set by the style — pick “No style” to experiment.'
+                  : 'Story-first writes and judges the whole story as prose, shows it for review, then divides it into scenes — keeps long videos coherent.'}>
+              <select className="select" value={scriptMode}
+                disabled={locked || format !== 'narration'}
                 onChange={(e) => setScriptMode(e.target.value)} style={{ maxWidth: 380 }}>
-                <option value="">Style default ({(profile?.script_mode || 'classic') === 'story' ? 'Story-first' : 'Classic'})</option>
                 <option value="classic">Classic — scenes directly</option>
                 <option value="story">Story-first — draft, review, then divide</option>
               </select>

@@ -715,6 +715,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   voice: b.voice || job.voice || '',
                   voice_robotic: b.voice_robotic ?? job.voice_robotic,
                   visualStyle: b.visual_style || '',
+                  scriptMode: b.script_mode || '',
                   autoApprove: b.auto_approve,
                   queueItemId: job.queue_item_id || null,
                 })
