@@ -214,6 +214,12 @@ def _detect_recurring_characters(call_fn, scenes: list[Scene],
     scene's narration and asks for each named figure appearing in 2+ scenes, then
     merges the result into the batch-1 list (which wins on conflicts).
 
+    Characters this pass ADDS were discovered after every scene was already
+    written, so their visual prompts may describe them without the name — which
+    render-time injection (app._inject_characters) can't match. A follow-up
+    retag pass rewrites those prompts to use the name (see
+    _retag_unnamed_character_scenes).
+
     *call_fn(system, user_msg, max_tokens, label, retries=...)* → str (the active
     backend's caller). Best-effort: any failure leaves the batch-1 list untouched
     so a hiccup here never fails script generation."""
@@ -243,7 +249,100 @@ def _detect_recurring_characters(call_fn, scenes: list[Scene],
     merged = _merge_recurring(identified, found)
     logger.info("Recurring-character pass: %d identified + %d detected → %d total",
                 len(identified), len(found), len(merged))
+    # _merge_recurring appends survivors after the batch-1 entries, so the tail
+    # is exactly the NEW characters — the ones whose scenes were written before
+    # they existed and may depict them namelessly.
+    new_chars = merged[len(identified):]
+    if new_chars:
+        scene_map = {(r.get("name") or "").strip().lower(): _row_scene_ids(r)
+                     for r in multi}
+        _retag_unnamed_character_scenes(call_fn, scenes, new_chars, scene_map)
     return merged
+
+
+def _row_scene_ids(row: dict) -> set[int]:
+    """Scene ids from a recurring-pass row's "scenes" list, tolerating strings
+    like "Scene 3"."""
+    ids: set[int] = set()
+    for x in row.get("scenes", []) or []:
+        m = re.search(r"\d+", str(x))
+        if m:
+            ids.add(int(m.group()))
+    return ids
+
+
+def _character_named_in(text: str, char: dict) -> bool:
+    """True when the character's name or an alias appears in *text*."""
+    low = (text or "").lower()
+    return any(t.strip() and t.strip().lower() in low
+               for t in [char.get("name") or "", *(char.get("aliases") or [])])
+
+
+def _retag_unnamed_character_scenes(call_fn, scenes: list[Scene],
+                                    new_chars: list[dict],
+                                    scene_map: dict[str, set[int]]) -> None:
+    """Rewrite visual prompts that depict a newly-detected recurring character
+    without naming them, so render-time injection/reference matching fires.
+
+    Only the scenes the recurring pass placed each NEW character in are
+    candidates, and only when the character's name/alias is absent from the
+    scene's image prompt — a scene that already names them is left alone, and
+    the model is instructed never to add a character to a scene that doesn't
+    depict them. Mutates the Scene objects in place. Best-effort: any failure
+    leaves every prompt as written."""
+    by_id = {s.id: s for s in scenes}
+    targets: dict[int, list[dict]] = {}
+    for c in new_chars:
+        if not (c.get("name") and c.get("description")):
+            continue
+        for sid in scene_map.get((c["name"] or "").strip().lower(), set()):
+            s = by_id.get(sid)
+            if s is None or _character_named_in(s.image_prompt, c):
+                continue
+            targets.setdefault(sid, []).append(c)
+    if not targets:
+        return
+    chars = {id(c): c for cl in targets.values() for c in cl}.values()
+    character_list = "\n".join(f"- {c['name']}: {c['description']}" for c in chars)
+    scene_list = "\n".join(
+        f"Scene {sid}:\nIMAGE: {by_id[sid].image_prompt}\nVIDEO: {by_id[sid].video_prompt}"
+        for sid in sorted(targets)
+    )
+    try:
+        raw = call_fn(
+            _prompts.system("retag_character_scenes"),
+            _prompts.user("retag_character_scenes",
+                          character_list=character_list, scene_list=scene_list),
+            len(targets) * 400 + 300,
+            "character retag",
+            retries=2,
+        )
+        data = _parse_claude_response(raw, "character retag")
+    except Exception as exc:  # noqa: BLE001 — best-effort, keep prompts as written
+        logger.warning("Character retag pass failed (%s) — prompts left as written", exc)
+        return
+    rows = data.get("rewrites") if isinstance(data, dict) else None
+    renamed = 0
+    for r in (rows if isinstance(rows, list) else []):
+        if not isinstance(r, dict):
+            continue
+        try:
+            sid = int(r.get("id"))
+        except (TypeError, ValueError):
+            continue
+        s = by_id.get(sid)
+        if s is None or sid not in targets:
+            continue
+        img = str(r.get("image_prompt") or "").strip()
+        vid = str(r.get("video_prompt") or "").strip()
+        # Accept a rewrite only if it actually names one of the scene's characters.
+        if img and any(_character_named_in(img, c) for c in targets[sid]):
+            s.image_prompt = img
+            if vid:
+                s.video_prompt = vid
+            renamed += 1
+    logger.info("Character retag: renamed %d of %d candidate scenes",
+                renamed, len(targets))
 
 
 def _parse_claude_response(content: str, label: str):
