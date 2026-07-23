@@ -340,6 +340,7 @@ script_critic:
     - Do NOT invent new facts or events — rewrites and inserts work only with what the script already contains.
     - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene — when one of them duplicates another scene, act on the OTHER scene, or rewrite scene 1 / the final scene instead.
     - ADD a scene ONLY to bridge a genuinely broken transition or restore a beat the script clearly needs but lacks (e.g. a payoff set up but never delivered). Inserts are rare — most passes have none.
+    - To DELETE a scene, list its id in "deletes" — never express a deletion only by dropping the id from "order". Only describe deletions you actually put in "deletes"; do not claim in your notes to have removed a scene you merely rewrote or merged.
     - Include "order" ONLY when rearranging genuinely improves the flow; it must list every surviving id exactly once. Omit it when the order is fine.
     - When the script is already consistent, non-repetitive, engaging, and within its instructions, return exactly {"changed": false, "notes": [...], "rewrites": [], "deletes": [], "inserts": []} — do not manufacture busywork edits.
 

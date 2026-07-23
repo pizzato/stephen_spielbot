@@ -2139,6 +2139,7 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
 # ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
 
 _CRITIC_MAX_PASSES = 5
+_CRITIC_RUN_HISTORY = 20   # critic.json keeps this many runs' reports
 _SCRIPT_VERSION_KEEP = 20
 _VERSION_FILE_RE = re.compile(r"^\d+\.json$")
 
@@ -2258,10 +2259,22 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
         store.close()
 
     deletes = [i for i in (ops.get("deletes") or []) if i in by_id]
+    order = ops.get("order")
+    # An `order` that is a valid subset of the current ids (unique, all real,
+    # but missing some) expresses deletions by omission — the critic dropped a
+    # scene from the new ordering instead of listing it in `deletes`. Honour
+    # that intent so the removal isn't silently lost (which looked like "the
+    # critic said it deleted a scene but the count didn't change").
+    if (isinstance(order, list) and order and len(set(order)) == len(order)
+            and all(i in by_id for i in order) and set(order) != set(ids)):
+        deletes = list(dict.fromkeys(deletes + [i for i in ids if i not in set(order)]))
+    # Guard: never delete the first or final scene (protect the hook + payoff),
+    # matching the critic contract — even if the model asks to.
+    protected = {ids[0], ids[-1]}
+    deletes = [i for i in deletes if i not in protected]
     surviving = [i for i in ids if i not in set(deletes)]
     if not surviving:  # never let the critic delete the entire script
         deletes, surviving = [], ids
-    order = ops.get("order")
     sequence = order if (order and sorted(order) == sorted(surviving)) else surviving
     reordered = sequence != surviving
     # Weave inserts in as placeholder entries; _restructure_job_scenes turns a
@@ -2400,10 +2413,26 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     result = {"passes": report, "converged": converged,
               "scenes": [_scene_to_json(r, wd) for r in rows],
               "versions": _list_script_versions(wd)}
-    try:  # best-effort record of the last run, next to the script
+    # Best-effort record next to the script. The top-level fields describe the
+    # LATEST run (and feed the cumulative pass counter above); "runs" keeps the
+    # history — overwriting it lost what earlier runs reported, which made a
+    # "the critic said it removed a scene" report impossible to check after a
+    # later run.
+    try:
+        try:
+            prev = json.loads((wd / "critic.json").read_text())
+            prev = prev if isinstance(prev, dict) else {}
+        except Exception:
+            prev = {}
+        runs = prev.get("runs") if isinstance(prev.get("runs"), list) else []
+        if not runs and prev.get("passes"):  # migrate a pre-history file
+            runs = [{"ran_at": prev.get("ran_at", 0), "passes": prev["passes"],
+                     "converged": prev.get("converged")}]
+        runs.append({"ran_at": time.time(), "passes": report, "converged": converged})
         (wd / "critic.json").write_text(json.dumps(
             {"ran_at": time.time(), "passes": report, "converged": converged,
-             "total_passes": prior_passes + len(report)}, indent=2))
+             "total_passes": prior_passes + len(report),
+             "runs": runs[-_CRITIC_RUN_HISTORY:]}, indent=2))
     except Exception:
         pass
     return result
