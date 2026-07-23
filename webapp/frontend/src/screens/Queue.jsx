@@ -158,7 +158,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
             labels (the old `center` row left Scenes/Style misaligned). */}
         <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
           <Field label="Scenes">
-            <input className="input" type="number" min={6} max={50} style={{ width: 110 }} value={draft.suggested_scene_count}
+            <input className="input" type="number" min={6} max={200} style={{ width: 110 }} value={draft.suggested_scene_count}
               onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
           </Field>
           {styleList.length > 0 && (

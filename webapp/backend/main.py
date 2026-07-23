@@ -47,6 +47,7 @@ import pipeline.engagement as eng  # noqa: E402
 import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
+import pipeline.story as story_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
@@ -1512,6 +1513,13 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
     # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
     format: str = "narration"
+    # "" (style default) | "classic" | "story" — story-first mode drafts and
+    # judges a prose story before dividing it into scenes (pipeline/story.py).
+    script_mode: str = ""
+    # Automation only: run the script critic right after generation, before the
+    # script can queue/render (config: youtube_auto_critic/_passes). The
+    # interactive Create flow leaves this False — the user runs it by hand.
+    auto_critic: bool = False
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1675,6 +1683,18 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # Style profile (issue #66): drives extra instructions + visual style here,
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
+
+    # Story-first mode (per-style script_mode, or a body override): draft and
+    # judge the prose story, then divide it into scenes — chained inline so
+    # automation callers run the whole thing headless with no review pause.
+    if _effective_script_mode(body, ss) == "story":
+        sg = _do_story_generate(body)
+        return _do_story_divide(DivideStoryBody(
+            work_dir=sg["work_dir"], voice=body.voice,
+            voice_robotic=body.voice_robotic, resolution=body.resolution,
+            auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
+            style_name=body.style_name, auto_critic=body.auto_critic))
+
     extra = (ss.get("extra_instructions") or "").strip()
     llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
 
@@ -1698,8 +1718,21 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
 
+    return _persist_generated_script(body, cfg, ss, user_topic,
+                                     scenes, music_desc, style, characters)
+
+
+def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
+                              user_topic: str, scenes, music_desc: str, style: str,
+                              characters: list[dict],
+                              work_dir: Path | None = None) -> dict:
+    """Persist a freshly generated scene list and return the client payload
+    (extracted from _do_script_generate so the story-mode divide step reuses the
+    exact same persistence). work_dir targets an existing folder (story mode);
+    None creates a fresh one from the title."""
     display_title = (body.video_title or "").strip() or user_topic
-    work_dir = gapp._script_work_dir(display_title)
+    if work_dir is None:
+        work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
     # Bake the visual style prefix into each image_prompt so it's visible in the
     # scene editor and consistent even if the style profile is later renamed/edited.
@@ -1746,6 +1779,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
+        "script_mode": _effective_script_mode(body, ss),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -1761,6 +1795,22 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         store.upsert_scenes(job_id, scenes_list)
     finally:
         store.close()
+
+    # Automation QC (youtube_auto_critic): run the critic now, BEFORE the queue
+    # attach below can auto-start a render — its edits must land while nothing
+    # is rendering. Best-effort: a critic failure never fails script creation.
+    if body.auto_critic:
+        p = int(cfg.get("youtube_auto_critic_passes") or 0)
+        try:
+            _do_critic_run(job_id, CriticRunBody(passes=p or 1, until_converged=(p == 0)))
+            store = DurableStore.default()
+            try:
+                scenes_list = store.scene_rows(job_id)
+            finally:
+                store.close()
+        except Exception:
+            gapp.logger.warning("Auto-critic failed for %s — keeping the uncritiqued script",
+                                job_id, exc_info=True)
 
     # Write the YouTube description alongside the fresh script (issue #66
     # follow-up): a daemon thread caches description.txt so the Cover and
@@ -1816,6 +1866,535 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
             "started": queued.get("started"),
         })
     return result
+
+
+# ── Story-first mode (per-style script_mode = "story") ───────────────────────
+
+class StoryChapterEdit(BaseModel):
+    chapter: int
+    text: str = ""
+
+
+class DivideStoryBody(BaseModel):
+    work_dir: str
+    # Edited chapter texts from the Create review panel; [] keeps the draft as-is.
+    chapters: list[StoryChapterEdit] = []
+    voice: str = ""
+    voice_robotic: bool = False
+    resolution: str = ""
+    auto_approve: bool = False
+    queue_item_id: str = ""
+    style_name: str = ""
+    # Automation only — see GenerateScriptBody.auto_critic.
+    auto_critic: bool = False
+
+
+def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
+    """The mode this generation runs with: an explicit body override wins, else
+    the style's script_mode. Dialogue/mixed formats always run classic — story
+    mode writes narration-only prose (v1)."""
+    mode = (body.script_mode or "").strip().lower()
+    if mode not in ("classic", "story"):
+        mode = ss.get("script_mode") or "classic"
+    if mode == "story" and (body.format or "narration").strip().lower() != "narration":
+        gapp.logger.warning("Story mode requested with format=%r — falling back to classic",
+                            body.format)
+        mode = "classic"
+    return mode
+
+
+def _story_path(wd: Path) -> Path:
+    return Path(wd) / "story.json"
+
+
+def _read_story(wd: Path) -> dict:
+    p = _story_path(wd)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
+    """Fold edited chapter texts into the story dict in place (blank edits are
+    ignored so a partial payload can't wipe a chapter)."""
+    by_id = {c.get("chapter"): c for c in (story.get("chapters") or [])
+             if isinstance(c, dict)}
+    for edit in edits or []:
+        target = by_id.get(edit.chapter)
+        if target is not None and (edit.text or "").strip():
+            target["text"] = edit.text.strip()
+
+
+def _do_story_generate(body: GenerateScriptBody) -> dict:
+    """Story-mode phase 1: draft, judge, and revise the prose story, persist it
+    as story.json (phase "story_review"), and return it for the Create review
+    panel. _do_story_divide turns it into scenes."""
+    user_topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not user_topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name)
+    extra = (ss.get("extra_instructions") or "").strip()
+    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
+    style_hint = body.visual_style or ss.get("visual_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    try:
+        with _track_op("Drafting story", display_topic):
+            story = story_mode.generate_story(
+                llm_topic, int(body.n_scenes), style_hint=style_hint,
+                video_title=(body.video_title or "").strip() or None,
+                character_sheet=character_sheet, avoid_hint=avoid_hint,
+            )
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
+
+    display_title = (body.video_title or "").strip() or user_topic
+    work_dir = gapp._script_work_dir(display_title)
+    job_id = job_id_from_work_dir(work_dir)
+    _story_path(work_dir).write_text(json.dumps(story, indent=2))
+    create_brief = {
+        "video_title": (body.video_title or "").strip(),
+        "topic": user_topic,
+        "n_scenes": int(body.n_scenes),
+        "visual_style": (body.visual_style or "").strip(),
+        "voice": (body.voice or "").strip(),
+        "voice_robotic": bool(body.voice_robotic),
+        "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
+        "style_name": body.style_name or ss["name"],
+        "auto_approve": bool(body.auto_approve),
+        "format": "narration",
+        "script_mode": "story",
+    }
+    _write_create_brief(work_dir, create_brief)
+    store = DurableStore.default()
+    try:
+        store.create_or_update_job(
+            job_id, work_dir, display_title,
+            config={"title": display_title, "video_title": (body.video_title or "").strip(),
+                    "topic": user_topic, "phase": "story_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
+            metadata={"scene_count": 0, "music_desc": story.get("music", ""),
+                      "style": story.get("style", "")},
+        )
+    finally:
+        store.close()
+    # Shaped like the classic generate payload (scenes empty until division) so
+    # the Create screen can hand straight off to the Script screen's Story view.
+    return {"job_id": job_id, "work_dir": str(work_dir), "title": display_title,
+            "video_title": (body.video_title or "").strip(), "topic": user_topic,
+            "style": story.get("style", ""), "style_name": ss["name"],
+            "music_desc": story.get("music", ""),
+            "voice": create_brief["voice"] or ss.get("voice", ""),
+            "voice_robotic": create_brief["voice_robotic"],
+            "resolution": create_brief["resolution"],
+            "n_scenes": int(body.n_scenes),
+            "story": story, "create_brief": create_brief,
+            "scenes": [], "characters": []}
+
+
+def _do_story_divide(body: DivideStoryBody) -> dict:
+    """Story-mode phase 2: divide the (possibly user-edited) story into scenes
+    and persist the script through the exact classic path, into the same work
+    dir the draft lives in."""
+    if not (body.work_dir or "").strip():
+        raise HTTPException(400, "Choose a story draft to divide.")
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Story path is outside the output folder.")
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "No story draft found in the selected folder.")
+    _merge_story_edits(story, body.chapters)
+
+    brief = _read_create_brief(wd)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name or brief.get("style_name", ""))
+    user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
+    video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
+
+    # Dividing a story that ALREADY has scenes forks into a fresh work dir, so
+    # the existing script — its scene edits, previews and history — is kept
+    # intact and the edited story becomes a new script alongside it.
+    if (wd / "script.json").exists():
+        src = wd
+        wd = gapp._script_work_dir(video_title or user_topic)
+        gapp.logger.info("Story divide: %s already has scenes — forking to %s", src, wd)
+    style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
+    video_style_hint = ss.get("video_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
+    language = gapp._norm_tts_language(ss.get("tts_language"))
+    display_topic = video_title or user_topic.splitlines()[0][:80]
+    try:
+        with _track_op("Dividing story into scenes", display_topic):
+            scenes, music_desc, style, characters = story_mode.divide_story(
+                story, style_hint=style_hint, video_title=video_title or None,
+                video_style_hint=video_style_hint, character_sheet=character_sheet,
+                avoid_hint=avoid_hint, language=language,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Story division failed: {str(e).splitlines()[0][:300]}")
+
+    story["status"] = "divided"
+    story["updated_at"] = time.time()
+    _story_path(wd).write_text(json.dumps(story, indent=2))
+    gen_body = GenerateScriptBody(
+        video_title=video_title,
+        topic=user_topic,
+        n_scenes=int(story.get("n_scenes") or len(scenes)),
+        visual_style=(brief.get("visual_style") or "").strip(),
+        auto_approve=bool(body.auto_approve),
+        voice=(body.voice or brief.get("voice") or "").strip(),
+        voice_robotic=bool(body.voice_robotic or brief.get("voice_robotic")),
+        resolution=(body.resolution or brief.get("resolution") or "").strip(),
+        queue_item_id=body.queue_item_id,
+        style_name=ss["name"],
+        format="narration",
+        script_mode="story",
+        auto_critic=body.auto_critic,
+    )
+    return _persist_generated_script(gen_body, cfg, ss, user_topic,
+                                     scenes, music_desc, style, characters,
+                                     work_dir=wd)
+
+
+def _run_story_generate_task(task_id: str, body: "GenerateScriptBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_story_generate(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+def _run_story_divide_task(task_id: str, body: "DivideStoryBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_story_divide(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/script/story/generate")
+def story_generate(body: GenerateScriptBody) -> dict:
+    """Kick off the story draft (story-mode phase 1) in the background; poll
+    /api/script/generate/status with the returned task id."""
+    topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_story_generate_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.post("/api/script/story/divide")
+def story_divide(body: DivideStoryBody) -> dict:
+    """Divide a reviewed story draft into scenes (story-mode phase 2) in the
+    background; poll /api/script/generate/status with the returned task id."""
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_story_divide_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.get("/api/jobs/{job_id}/story")
+def get_job_story(job_id: str) -> dict:
+    """The story.json behind a story-mode script (404 for classic scripts)."""
+    wd = _job_wd_or_404(job_id)
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "This script has no story draft.")
+    return story
+
+
+class StorySaveBody(BaseModel):
+    chapters: list[StoryChapterEdit] = []
+
+
+@api.put("/api/jobs/{job_id}/story")
+def save_job_story(job_id: str, body: StorySaveBody) -> dict:
+    """Persist edited chapter texts into story.json, so a review can be resumed
+    later (dividing also saves — this is for leaving mid-review)."""
+    wd = _job_wd_or_404(job_id)
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "This script has no story draft.")
+    _merge_story_edits(story, body.chapters)
+    story["updated_at"] = time.time()
+    _story_path(wd).write_text(json.dumps(story, indent=2))
+    return story
+
+
+# ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
+
+_CRITIC_MAX_PASSES = 5
+_SCRIPT_VERSION_KEEP = 20
+_VERSION_FILE_RE = re.compile(r"^\d+\.json$")
+
+
+class CriticRunBody(BaseModel):
+    passes: int = 1                # how many passes to run this time
+    until_converged: bool = False  # keep passing until no edits (≤ _CRITIC_MAX_PASSES)
+
+
+def _versions_dir(wd: Path) -> Path:
+    return Path(wd) / "script_versions"
+
+
+def _snapshot_script_version(job_id: str, wd: Path, label: str) -> None:
+    """Snapshot the job's current scenes into script_versions/ so a critic pass
+    (or a restore) can be undone. Content-level: titles, prompts, narrations,
+    metadata; previews come back only where their files still exist."""
+    store = DurableStore.default()
+    try:
+        rows = [dict(r) for r in store.scene_rows(job_id)]
+    finally:
+        store.close()
+    if not rows:
+        return
+    d = _versions_dir(wd)
+    d.mkdir(exist_ok=True)
+    (d / f"{int(time.time() * 1000)}.json").write_text(json.dumps(
+        {"saved_at": time.time(), "label": label,
+         "scene_count": len(rows), "scenes": rows}, indent=2))
+    for f in sorted(d.glob("*.json"))[:-_SCRIPT_VERSION_KEEP]:
+        f.unlink(missing_ok=True)
+
+
+def _list_script_versions(wd: Path) -> list[dict]:
+    d = _versions_dir(wd)
+    out = []
+    if d.is_dir():
+        for f in sorted(d.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(f.read_text())
+            except Exception:
+                continue
+            out.append({"file": f.name, "label": data.get("label", ""),
+                        "saved_at": data.get("saved_at", 0),
+                        "scene_count": data.get("scene_count",
+                                                len(data.get("scenes") or []))})
+    return out
+
+
+@api.get("/api/jobs/{job_id}/script-versions")
+def list_job_script_versions(job_id: str) -> dict:
+    return {"versions": _list_script_versions(_job_wd_or_404(job_id))}
+
+
+class RestoreVersionBody(BaseModel):
+    file: str
+
+
+@api.post("/api/jobs/{job_id}/script-versions/restore")
+def restore_job_script_version(job_id: str, body: RestoreVersionBody) -> dict:
+    """Roll the script back to a saved version. The current state is snapshotted
+    first ("before restore"), so a restore is itself undoable."""
+    wd = _job_wd_or_404(job_id)
+    if not _VERSION_FILE_RE.match(body.file or ""):
+        raise HTTPException(400, "Unknown version.")
+    p = _versions_dir(wd) / body.file
+    if not p.exists():
+        raise HTTPException(404, "That version no longer exists.")
+    try:
+        rows = json.loads(p.read_text()).get("scenes") or []
+    except Exception:
+        raise HTTPException(500, "Could not read that version.")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "That version is empty.")
+    _snapshot_script_version(job_id, wd, "before restore")
+    for r in rows:
+        pv = r.get("preview_path") or ""
+        if pv and not Path(pv).exists():  # artifact renamed/deleted since the snapshot
+            r["preview_path"] = ""
+    store = DurableStore.default()
+    try:
+        store.replace_scenes(job_id, rows)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    gapp._persist_script_snapshot(wd, rows)
+    return {"restored": body.file,
+            "scenes": [_scene_to_json(r, wd) for r in rows],
+            "versions": _list_script_versions(wd)}
+
+
+def _apply_critic_ops(job_id: str, ops: dict) -> dict:
+    """Apply one critic pass's validated ops. Rewrites merge into the existing
+    rows (upsert_scene replaces every field, so unspecified ones are carried
+    over); deletes and reorders go through _restructure_job_scenes so
+    renumbering, artifact renames and history remaps all follow."""
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+        by_id = {int(r["id"]): r for r in rows}
+        ids = [int(r["id"]) for r in rows]
+        applied_rewrites = 0
+        for rw in ops.get("rewrites") or []:
+            cur = by_id.get(rw["id"])
+            if not cur:
+                continue
+            store.upsert_scene(
+                job_id, rw["id"],
+                title=rw.get("title") or cur.get("title") or "",
+                image_prompt=cur.get("image_prompt") or "",
+                video_prompt=cur.get("video_prompt") or "",
+                narration=rw["narration"],
+                metadata=cur.get("metadata") or {},
+            )
+            applied_rewrites += 1
+    finally:
+        store.close()
+
+    deletes = [i for i in (ops.get("deletes") or []) if i in by_id]
+    surviving = [i for i in ids if i not in set(deletes)]
+    if not surviving:  # never let the critic delete the entire script
+        deletes, surviving = [], ids
+    order = ops.get("order")
+    sequence = order if (order and sorted(order) == sorted(surviving)) else surviving
+    reordered = sequence != surviving
+    # Weave inserts in as placeholder entries; _restructure_job_scenes turns a
+    # None into a fresh blank scene at that position, which we then fill.
+    items: list = list(sequence)
+    inserts = ops.get("inserts") or []
+    for ins in inserts:
+        if ins["after"] == 0:
+            idx = 0
+        else:
+            idx = next((k + 1 for k, v in enumerate(items)
+                        if isinstance(v, int) and v == ins["after"]), len(items))
+        items.insert(idx, dict(ins))
+    structural = bool(inserts) or sequence != ids
+    if structural:
+        rows = _restructure_job_scenes(
+            job_id, [i if isinstance(i, int) else None for i in items])
+        if inserts:
+            store = DurableStore.default()
+            try:
+                for pos, item in enumerate(items, start=1):
+                    if isinstance(item, dict):
+                        store.upsert_scene(
+                            job_id, pos, title=item["title"],
+                            image_prompt=item["image_prompt"],
+                            video_prompt=item["video_prompt"],
+                            narration=item["narration"], metadata={})
+                rows = store.scene_rows(job_id)
+            finally:
+                store.close()
+            wd = gapp._job_work_dir(job_id)
+            if wd:
+                gapp._persist_script_snapshot(Path(wd), rows)
+    elif applied_rewrites:
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        wd = gapp._job_work_dir(job_id)
+        if wd:
+            gapp._persist_script_snapshot(Path(wd), rows)
+    return {"rewrites": applied_rewrites, "deleted": deletes, "added": len(inserts),
+            "reordered": reordered, "scene_count": len(rows)}
+
+
+def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
+    """Run up to N critic passes over the job's scenes, stopping early when a
+    pass proposes no edits (converged). Synchronous — the endpoint wraps it in
+    a background task."""
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, brief = _script_source_meta(job_id, wd.name)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, style_name)
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    title = (brief.get("topic") or brief.get("video_title") or wd.name).strip()
+    video_title = (brief.get("video_title") or "").strip() or None
+    max_passes = (_CRITIC_MAX_PASSES if body.until_converged
+                  else min(max(1, int(body.passes or 1)), _CRITIC_MAX_PASSES))
+    # Cumulative pass count across runs: five separate single-pass clicks should
+    # bias toward convergence exactly like one five-pass run.
+    prior_passes = 0
+    try:
+        prior_passes = int(json.loads((wd / "critic.json").read_text()).get("total_passes") or 0)
+    except Exception:
+        pass
+    report, converged = [], False
+    for i in range(1, max_passes + 1):
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        if len(rows) < 2:
+            converged = True
+            break
+        try:
+            with _track_op(f"Critic pass {i}", video_title or title):
+                ops = story_mode.critique_scenes(
+                    [{"id": int(r["id"]), "title": r.get("title") or "",
+                      "narration": r.get("narration") or ""} for r in rows],
+                    title, video_title=video_title, avoid_hint=avoid_hint,
+                    pass_num=prior_passes + i)
+        except Exception as e:
+            raise HTTPException(500, f"Critic pass failed: {str(e).splitlines()[0][:300]}")
+        if not ops["changed"]:
+            report.append({"pass": i, "rewrites": 0, "deleted": [], "added": 0,
+                           "reordered": False, "notes": ops["notes"]})
+            converged = True
+            break
+        # Snapshot the pre-edit script so this pass can be rolled back.
+        _snapshot_script_version(job_id, wd, f"before critic pass {i}")
+        summary = _apply_critic_ops(job_id, ops)
+        report.append({"pass": i, **summary, "notes": ops["notes"]})
+        if not (summary["rewrites"] or summary["deleted"] or summary["added"]
+                or summary["reordered"]):
+            converged = True
+            break
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    result = {"passes": report, "converged": converged,
+              "scenes": [_scene_to_json(r, wd) for r in rows],
+              "versions": _list_script_versions(wd)}
+    try:  # best-effort record of the last run, next to the script
+        (wd / "critic.json").write_text(json.dumps(
+            {"ran_at": time.time(), "passes": report, "converged": converged,
+             "total_passes": prior_passes + len(report)}, indent=2))
+    except Exception:
+        pass
+    return result
+
+
+def _run_critic_task(task_id: str, job_id: str, body: "CriticRunBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_critic_run(job_id, body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/jobs/{job_id}/critic")
+def run_script_critic(job_id: str, body: CriticRunBody) -> dict:
+    """Kick off a critic run in the background; poll
+    /api/script/generate/status with the returned task id."""
+    _job_wd_or_404(job_id)
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_critic_task, args=(task_id, job_id, body), daemon=True).start()
+    return {"task_id": task_id}
 
 
 def _read_script_scenes(wd: Path) -> list:
@@ -1945,7 +2524,12 @@ def load_script(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Script path is outside the output folder.")
-    scenes_list = _read_script_scenes(wd)
+    # A story-first draft has no script.json yet — load with zero scenes so the
+    # Script screen opens the Story view for review/division.
+    if not (wd / "script.json").exists() and _read_story(wd):
+        scenes_list = []
+    else:
+        scenes_list = _read_script_scenes(wd)
     fallback_title = wd.name.replace("-", " ").title()
     video_title, style, music_desc, style_name, create_brief = _script_source_meta(
         job_id_from_work_dir(wd), fallback_title)
@@ -3276,7 +3860,11 @@ def list_jobs() -> dict:
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
                          "seen": bool(meta.get("viewed_at")),
                          **_film_publish_status(Path(d), meta, cfg)})
-    scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
+    scripts = [{"label": l, "work_dir": d,
+                # story drafted but not yet divided into scenes — the Script
+                # screen opens these straight into the Story view
+                "story_draft": not (Path(d) / "script.json").exists()}
+               for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
     active_key = _work_dir_title_key(active_wd) if active_wd else ""
@@ -8050,7 +8638,7 @@ def queue_add(body: QueueAddBody) -> dict:
     if not title:
         raise HTTPException(400, "Title is required.")
     cfg = gapp.load_config()
-    n = max(6, min(50, body.n_scenes
+    n = max(6, min(200, body.n_scenes
                    or gapp.style_settings(cfg, body.style_name).get("n_scenes") or 6))
     comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
                "suggested_scene_count": n}
@@ -8097,7 +8685,7 @@ def queue_update(body: QueueUpdateBody) -> dict:
     if body.video_prompt is not None:
         updates["video_prompt"] = body.video_prompt.strip()
     if body.suggested_scene_count is not None:
-        updates["suggested_scene_count"] = max(6, min(50, int(body.suggested_scene_count)))
+        updates["suggested_scene_count"] = max(6, min(200, int(body.suggested_scene_count)))
     if body.gen_resolution is not None:
         updates["gen_resolution"] = body.gen_resolution.strip()
     if body.gen_style_name is not None:
@@ -8205,7 +8793,7 @@ def _start_queue_item(item: dict) -> dict:
         # wrapper around this same call.
         gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-            style_name=style_name))
+            style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=n, voice=ss.get("voice", ""),
@@ -9774,7 +10362,7 @@ def _auto_write_scripts(cfg: dict) -> int:
         try:
             gen = _do_script_generate(GenerateScriptBody(
                 video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-                style_name=style_name))
+                style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         except Exception:
             continue
         # Re-check the slot is still pending before attaching: script generation
