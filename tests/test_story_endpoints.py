@@ -319,6 +319,30 @@ class StoryEndpointTests(TempConfigCase):
             backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
         self.assertEqual(seen, [1, 2])
 
+    def test_critic_guardrail_rewrites_visual_prompt_only(self):
+        job = self._divided_job(3)
+        ops = {"changed": True, "notes": ["human in a robots-only world"],
+               "order": None, "inserts": [], "deletes": [],
+               "rewrites": [{"id": 2, "image_prompt": "Chrome robot workers on the line."}]}
+        captured = {}
+        def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1,
+                 direction="", dup_note=""):
+            captured["scenes"] = scenes
+            if captured.get("done"):
+                return {"changed": False, "notes": [], "rewrites": [],
+                        "deletes": [], "inserts": [], "order": None}
+            captured["done"] = True
+            return ops
+        with mock.patch.object(backend.story_mode, "critique_scenes", side_effect=fake):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        # the critic sees the visual prompts (guardrail input) — including the
+        # baked-in visual-style prefix it is told to preserve
+        self.assertTrue(captured["scenes"][0]["image_prompt"].endswith("img"))
+        self.assertEqual(captured["scenes"][0]["video_prompt"], "vid")
+        # ...and a visual-only rewrite lands without touching the narration
+        self.assertEqual(res["scenes"][1]["image_prompt"], "Chrome robot workers on the line.")
+        self.assertEqual(res["scenes"][1]["narration"], "Narration 2.")
+
     def test_critic_receives_detected_duplicates_and_direction(self):
         job = self._divided_job(3)
         # plant an unmistakable near-duplicate pair involving the final scene
