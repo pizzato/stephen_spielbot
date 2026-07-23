@@ -207,5 +207,35 @@ class DivideStoryTests(unittest.TestCase):
         self.assertEqual(len(divides), 20)
 
 
+class CritiqueScenesTests(unittest.TestCase):
+    def _run(self, response):
+        def fake(cfg, system, user_msg, max_tokens, label, retries=3):
+            assert label == "script critic"
+            return json.dumps(response) if isinstance(response, dict) else response
+        rows = [{"id": i, "title": f"S{i}", "narration": f"N{i}."} for i in range(1, 5)]
+        with mock.patch.object(story, "_chat_complete", fake):
+            return story.critique_scenes(rows, "Topic")
+
+    def test_clean_script_returns_unchanged(self):
+        ops = self._run({"changed": False, "notes": ["all good"], "rewrites": [], "deletes": []})
+        self.assertFalse(ops["changed"])
+        self.assertEqual(ops["notes"], ["all good"])
+
+    def test_ops_validated_and_coerced(self):
+        ops = self._run({"changed": True,
+                         "rewrites": [{"id": "2", "narration": "Better.", "title": " T "},
+                                      {"id": 3, "narration": "   "},          # blank → dropped
+                                      {"narration": "no id"}, "junk"],
+                         "deletes": ["4", "x"],
+                         "order": [1, "2", 3]})
+        self.assertEqual(ops["rewrites"], [{"id": 2, "narration": "Better.", "title": "T"}])
+        self.assertEqual(ops["deletes"], [4])
+        self.assertEqual(ops["order"], [1, 2, 3])
+
+    def test_changed_without_any_ops_becomes_false(self):
+        ops = self._run({"changed": True, "rewrites": [], "deletes": []})
+        self.assertFalse(ops["changed"])
+
+
 if __name__ == "__main__":
     unittest.main()

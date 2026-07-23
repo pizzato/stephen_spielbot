@@ -2113,6 +2113,142 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
     return story
 
 
+# ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
+
+_CRITIC_MAX_PASSES = 5
+
+
+class CriticRunBody(BaseModel):
+    passes: int = 1                # how many passes to run this time
+    until_converged: bool = False  # keep passing until no edits (≤ _CRITIC_MAX_PASSES)
+
+
+def _apply_critic_ops(job_id: str, ops: dict) -> dict:
+    """Apply one critic pass's validated ops. Rewrites merge into the existing
+    rows (upsert_scene replaces every field, so unspecified ones are carried
+    over); deletes and reorders go through _restructure_job_scenes so
+    renumbering, artifact renames and history remaps all follow."""
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+        by_id = {int(r["id"]): r for r in rows}
+        ids = [int(r["id"]) for r in rows]
+        applied_rewrites = 0
+        for rw in ops.get("rewrites") or []:
+            cur = by_id.get(rw["id"])
+            if not cur:
+                continue
+            store.upsert_scene(
+                job_id, rw["id"],
+                title=rw.get("title") or cur.get("title") or "",
+                image_prompt=cur.get("image_prompt") or "",
+                video_prompt=cur.get("video_prompt") or "",
+                narration=rw["narration"],
+                metadata=cur.get("metadata") or {},
+            )
+            applied_rewrites += 1
+    finally:
+        store.close()
+
+    deletes = [i for i in (ops.get("deletes") or []) if i in by_id]
+    surviving = [i for i in ids if i not in set(deletes)]
+    if not surviving:  # never let the critic delete the entire script
+        deletes, surviving = [], ids
+    order = ops.get("order")
+    sequence = order if (order and sorted(order) == sorted(surviving)) else surviving
+    reordered = sequence != surviving
+    structural = sequence != ids
+    if structural:
+        rows = _restructure_job_scenes(job_id, sequence)
+    elif applied_rewrites:
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        wd = gapp._job_work_dir(job_id)
+        if wd:
+            gapp._persist_script_snapshot(Path(wd), rows)
+    return {"rewrites": applied_rewrites, "deleted": deletes,
+            "reordered": reordered, "scene_count": len(rows)}
+
+
+def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
+    """Run up to N critic passes over the job's scenes, stopping early when a
+    pass proposes no edits (converged). Synchronous — the endpoint wraps it in
+    a background task."""
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, brief = _script_source_meta(job_id, wd.name)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, style_name)
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    title = (brief.get("topic") or brief.get("video_title") or wd.name).strip()
+    video_title = (brief.get("video_title") or "").strip() or None
+    max_passes = (_CRITIC_MAX_PASSES if body.until_converged
+                  else min(max(1, int(body.passes or 1)), _CRITIC_MAX_PASSES))
+    report, converged = [], False
+    for i in range(1, max_passes + 1):
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id)
+        finally:
+            store.close()
+        if len(rows) < 2:
+            converged = True
+            break
+        try:
+            with _track_op(f"Critic pass {i}", video_title or title):
+                ops = story_mode.critique_scenes(
+                    [{"id": int(r["id"]), "title": r.get("title") or "",
+                      "narration": r.get("narration") or ""} for r in rows],
+                    title, video_title=video_title, avoid_hint=avoid_hint)
+        except Exception as e:
+            raise HTTPException(500, f"Critic pass failed: {str(e).splitlines()[0][:300]}")
+        if not ops["changed"]:
+            report.append({"pass": i, "rewrites": 0, "deleted": [],
+                           "reordered": False, "notes": ops["notes"]})
+            converged = True
+            break
+        summary = _apply_critic_ops(job_id, ops)
+        report.append({"pass": i, **summary, "notes": ops["notes"]})
+        if not (summary["rewrites"] or summary["deleted"] or summary["reordered"]):
+            converged = True
+            break
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    result = {"passes": report, "converged": converged,
+              "scenes": [_scene_to_json(r, wd) for r in rows]}
+    try:  # best-effort record of the last run, next to the script
+        (wd / "critic.json").write_text(json.dumps(
+            {"ran_at": time.time(), "passes": report, "converged": converged}, indent=2))
+    except Exception:
+        pass
+    return result
+
+
+def _run_critic_task(task_id: str, job_id: str, body: "CriticRunBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_critic_run(job_id, body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/jobs/{job_id}/critic")
+def run_script_critic(job_id: str, body: CriticRunBody) -> dict:
+    """Kick off a critic run in the background; poll
+    /api/script/generate/status with the returned task id."""
+    _job_wd_or_404(job_id)
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_critic_task, args=(task_id, job_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
 def _read_script_scenes(wd: Path) -> list:
     """Read and validate the saved script.json from `wd`, or raise HTTPException."""
     script_path = wd / "script.json"

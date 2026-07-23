@@ -228,6 +228,59 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(fork_story["status"], "divided")
         self.assertNotEqual(second["job_id"], first["job_id"])
 
+    # ── script critic ────────────────────────────────────────────────────────
+
+    def _divided_job(self, n=4):
+        draft = self._draft(n)
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(n), "m", "st", [])):
+            return backend._do_story_divide(backend.DivideStoryBody(work_dir=draft["work_dir"]))
+
+    def test_critic_applies_rewrite_delete_reorder_then_converges(self):
+        job = self._divided_job(4)
+        ops_per_pass = [
+            {"changed": True, "notes": ["scene 3 repeats scene 2"],
+             "rewrites": [{"id": 2, "narration": "Sharper narration."}],
+             "deletes": [3], "order": [1, 4, 2]},
+            {"changed": False, "notes": ["clean now"], "rewrites": [], "deletes": [], "order": None},
+        ]
+        with mock.patch.object(backend.story_mode, "critique_scenes",
+                               side_effect=ops_per_pass) as crit:
+            res = backend._do_critic_run(job["job_id"],
+                                         backend.CriticRunBody(until_converged=True))
+        self.assertEqual(crit.call_count, 2)
+        self.assertTrue(res["converged"])
+        self.assertEqual(len(res["passes"]), 2)
+        self.assertEqual(res["passes"][0]["deleted"], [3])
+        self.assertTrue(res["passes"][0]["reordered"])
+        # scenes renumbered 1..3 in the critic's order: old 1, old 4, old 2 (rewritten)
+        self.assertEqual([s["id"] for s in res["scenes"]], [1, 2, 3])
+        self.assertEqual([s["narration"] for s in res["scenes"]],
+                         ["Narration 1.", "Narration 4.", "Sharper narration."])
+        script = json.loads((Path(job["work_dir"]) / "script.json").read_text())
+        self.assertEqual(len(script), 3)
+        self.assertTrue((Path(job["work_dir"]) / "critic.json").exists())
+
+    def test_critic_single_pass_stops_after_one(self):
+        job = self._divided_job(4)
+        ops = {"changed": True, "notes": [],
+               "rewrites": [{"id": 1, "narration": "Pass one."}], "deletes": [], "order": None}
+        with mock.patch.object(backend.story_mode, "critique_scenes",
+                               return_value=ops) as crit:
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(crit.call_count, 1)
+        self.assertFalse(res["converged"])
+        self.assertEqual(res["scenes"][0]["narration"], "Pass one.")
+
+    def test_critic_refuses_to_delete_every_scene(self):
+        job = self._divided_job(3)
+        ops = {"changed": True, "notes": [], "rewrites": [],
+               "deletes": [1, 2, 3], "order": None}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(len(res["scenes"]), 3)
+        self.assertEqual(res["passes"][0]["deleted"], [])
+
     # ── story fetch endpoint ─────────────────────────────────────────────────
 
     def test_get_job_story_roundtrip_and_404_for_classic(self):

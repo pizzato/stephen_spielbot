@@ -125,6 +125,32 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  // Script critic (post-generation QC): rewrites weak narrations, deletes
+  // redundant scenes, reorders for flow. One pass per click, or loop until the
+  // critic proposes nothing (converged, capped server-side).
+  const [criticBusy, setCriticBusy] = useState(false)
+  const [criticMsg, setCriticMsg] = useState('')
+  const runCritic = async (untilConverged) => {
+    setCriticBusy(true); setError(''); setCriticMsg('')
+    try {
+      const r = await api.runCritic(job.job_id, { untilConverged })
+      setScenes(r.scenes || [])
+      setCur((c) => Math.max(0, Math.min(c, (r.scenes || []).length - 1)))
+      const rewrites = r.passes.reduce((n, p) => n + (p.rewrites || 0), 0)
+      const deleted = r.passes.reduce((n, p) => n + ((p.deleted || []).length), 0)
+      const reordered = r.passes.some((p) => p.reordered)
+      const parts = []
+      if (rewrites) parts.push(`${rewrites} narration${rewrites === 1 ? '' : 's'} rewritten`)
+      if (deleted) parts.push(`${deleted} scene${deleted === 1 ? '' : 's'} deleted`)
+      if (reordered) parts.push('scenes reordered')
+      if (!parts.length) parts.push('no changes needed')
+      const notes = r.passes[r.passes.length - 1]?.notes || []
+      setCriticMsg(`Critic — ${r.passes.length} pass${r.passes.length === 1 ? '' : 'es'}`
+        + `${r.converged ? ', converged' : ''}: ${parts.join(', ')}.`
+        + (notes.length ? ` “${notes[0]}”` : ''))
+    } catch (e) { setError(e.message) } finally { setCriticBusy(false) }
+  }
+
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
   const [cur, setCur] = useState(0)
@@ -681,8 +707,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </>
           )}
           {view === 'scenes' && job && (
-            <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
-              onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
+            <>
+              <Button variant="ghost" icon="gavel" disabled={criticBusy || busy === 'generate'}
+                onClick={() => runCritic(false)}>{criticBusy ? 'Critiquing…' : 'Critic pass'}</Button>
+              <Button variant="ghost" icon="arrows-rotate" disabled={criticBusy || busy === 'generate'}
+                onClick={() => runCritic(true)}>Critic until stable</Button>
+              <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
+                onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
+            </>
           )}
           {view === 'characters' && job && (
             <Button variant="primary" icon="user-plus" disabled={!!charBusy} onClick={addCharacter}>
@@ -697,6 +729,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
       {view === 'cover' && coverMsg && <Banner tone="ok">{coverMsg}</Banner>}
+      {view === 'scenes' && criticMsg && <Banner tone="ok">{criticMsg}</Banner>}
+      {view === 'scenes' && criticBusy && <Banner tone="info">The critic is reading the whole script — checking consistency, repetition, and engagement…</Banner>}
       {view === 'characters' && charMsg && <Banner tone="ok">{charMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
