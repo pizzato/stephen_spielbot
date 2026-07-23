@@ -1588,6 +1588,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="Default scenes">
                 <input className="input" type="number" value={st.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} style={{ maxWidth: 160 }} />
               </Field>
+              <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
+                <select className="select" value={st.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="classic">Classic — scenes directly</option>
+                  <option value="story">Story-first — draft, judge, then divide</option>
+                </select>
+              </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={st.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
               </Field>

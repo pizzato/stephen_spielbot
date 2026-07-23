@@ -52,6 +52,15 @@ export default function Create({ seed, meta, onGenerated }) {
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
+  // Script mode: '' = style default, 'classic' | 'story' override. Story-first
+  // drafts + judges a prose story, pauses here for review, then divides it into
+  // scenes. Dialogue/mixed formats always run classic (story mode is v1
+  // narration-only — the backend enforces the same rule).
+  const [scriptMode, setScriptMode] = useState('')
+  // Phase-1 result awaiting review: { work_dir, job_id, story, ... }. While set,
+  // the brief form is replaced by the story review panel.
+  const [storyDraft, setStoryDraft] = useState(null)
+  const [chapterTexts, setChapterTexts] = useState({})
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
@@ -138,10 +147,14 @@ export default function Create({ seed, meta, onGenerated }) {
     } catch (e) { setError(e.message) } finally { setImproving('') }
   }
 
+  // The mode this Create run uses: explicit override wins, else the style's
+  // setting; non-narration formats force classic (mirrors the backend rule).
+  const effMode = format !== 'narration' ? 'classic' : (scriptMode || profile?.script_mode || 'classic')
+
   const generate = async () => {
     setBusy(true); setError('')
     try {
-      const data = await api.generateScript({
+      const body = {
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         n_scenes: Number(scenes),
@@ -153,7 +166,42 @@ export default function Create({ seed, meta, onGenerated }) {
         format,
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
+        script_mode: effMode,
+      }
+      if (effMode === 'story') {
+        // Phase 1 only: draft the story, then pause here for review.
+        const data = await api.generateStory(body)
+        setStoryDraft(data)
+        setChapterTexts(Object.fromEntries((data.story?.chapters || []).map((c) => [c.chapter, c.text])))
+      } else {
+        const data = await api.generateScript(body)
+        onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
+      }
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  // Phase 2: divide the reviewed (possibly edited) story into scenes, then hand
+  // off to the Script screen exactly like a classic generate.
+  const divide = async () => {
+    setBusy(true); setError('')
+    try {
+      const data = await api.divideStory({
+        work_dir: storyDraft.work_dir,
+        chapters: (storyDraft.story?.chapters || []).map((c) => ({
+          chapter: c.chapter, text: chapterTexts[c.chapter] ?? c.text,
+        })),
+        voice,
+        voice_robotic: robotic,
+        resolution,
+        auto_approve: autoApprove,
+        queue_item_id: seed?.queueItemId || '',
+        style_name: profile ? (profile.name || '') : NO_STYLE,
       })
+      setStoryDraft(null)
       onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
     } catch (e) {
       setError(e.message)
@@ -178,6 +226,7 @@ export default function Create({ seed, meta, onGenerated }) {
       )}
 
       <div className="bento">
+        {!storyDraft && (
         <Card span={8} padLg className="reveal reveal-d1">
           <div className="stack gap-22">
             {styleList.length > 0 && (
@@ -208,7 +257,7 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Scenes — ${scenes}`} hint="Roughly 20 seconds each.">
-                  <input className="slider" type="range" min={1} max={40} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
+                  <input className="slider" type="range" min={1} max={200} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
                 </Field>
               </div>
               <div className="grow">
@@ -244,14 +293,70 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </Field>
 
+            <Field label="Script mode"
+              hint={format !== 'narration'
+                ? 'Dialogue and Mixed formats always use Classic (story-first is narration-only for now).'
+                : 'Story-first writes and judges the whole story as prose, shows it here for review, then divides it into scenes — keeps long videos coherent.'}>
+              <select className="select" value={scriptMode} disabled={format !== 'narration'}
+                onChange={(e) => setScriptMode(e.target.value)} style={{ maxWidth: 380 }}>
+                <option value="">Style default ({(profile?.script_mode || 'classic') === 'story' ? 'Story-first' : 'Classic'})</option>
+                <option value="classic">Classic — scenes directly</option>
+                <option value="story">Story-first — draft, review, then divide</option>
+              </select>
+            </Field>
+
             <div className="row center between mt-8 row--wrap gap-16">
               <Check checked={autoApprove} onChange={setAutoApprove} label="Auto-approve the script → send straight to the queue" />
               <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                 disabled={!videoTitle.trim() || busy}
-                onClick={generate}>{busy ? 'Drafting the script…' : '1. Generate script →'}</Button>
+                onClick={generate}>
+                {busy ? (effMode === 'story' ? 'Drafting the story…' : 'Drafting the script…')
+                  : effMode === 'story' ? '1. Draft the story →' : '1. Generate script →'}
+              </Button>
             </div>
           </div>
         </Card>
+        )}
+
+        {/* ── Story review (story-first mode, phase 1 done) ─────────────────── */}
+        {storyDraft && (
+        <Card span={8} padLg className="reveal reveal-d1">
+          <div className="stack gap-22">
+            <div>
+              <span className="label-sm">Story draft — {storyDraft.title}</span>
+              <p className="muted mt-8" style={{ fontSize: 13 }}>
+                Read the story, edit anything, then divide it into scenes. Narration will be
+                condensed faithfully from this text.
+              </p>
+            </div>
+            {storyDraft.story?.critique?.verdict === 'revise' && (
+              <Banner tone="info">
+                The AI editor flagged issues and revised the draft
+                {storyDraft.story.critique.notes?.length
+                  ? <>: {storyDraft.story.critique.notes.join(' · ')}</> : '.'}
+              </Banner>
+            )}
+            {storyDraft.story?.critique?.verdict === 'pass' && (
+              <Banner tone="ok">The AI editor reviewed the draft: coherent, no repetition flagged.</Banner>
+            )}
+            {(storyDraft.story?.chapters || []).map((c) => (
+              <Field key={c.chapter}
+                label={(storyDraft.story.chapters.length > 1 ? `Chapter ${c.chapter} — ` : '') + (c.title || '') + ` (${c.scenes} scene${c.scenes === 1 ? '' : 's'})`}>
+                <textarea className="textarea" rows={Math.min(10, Math.max(4, Math.ceil((chapterTexts[c.chapter] ?? c.text ?? '').length / 90)))}
+                  value={chapterTexts[c.chapter] ?? c.text ?? ''}
+                  onChange={(e) => setChapterTexts((m) => ({ ...m, [c.chapter]: e.target.value }))} />
+              </Field>
+            ))}
+            <div className="row center between mt-8 row--wrap gap-16">
+              <Button variant="ghost" icon="arrow-left" disabled={busy}
+                onClick={() => { setStoryDraft(null); setChapterTexts({}) }}>Back to the brief</Button>
+              <Button variant="primary" size="lg" iconRight="scissors" disabled={busy} onClick={divide}>
+                {busy ? 'Dividing into scenes…' : `2. Divide into ${storyDraft.n_scenes} scenes →`}
+              </Button>
+            </div>
+          </div>
+        </Card>
+        )}
 
         <div className="col-4 stack gap-16">
           {reach?.available && (

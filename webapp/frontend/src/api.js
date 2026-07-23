@@ -105,6 +105,28 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Script generation failed.')
     }
   },
+  // Story-first mode: phase 1 drafts + judges the prose story (shown for review
+  // in Create), phase 2 divides the (possibly edited) story into scenes. Both
+  // long-running, so same kick-off + poll pattern as generateScript.
+  generateStory: async (body) => {
+    const { task_id } = await req('POST', '/script/story/generate', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Story generation failed.')
+    }
+  },
+  divideStory: async (body) => {
+    const { task_id } = await req('POST', '/script/story/divide', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Story division failed.')
+    }
+  },
+  getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
   // Improve the Create brief's title or direction in place (issue #88).
   improveBrief: (field, title, direction, styleName, instruction) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '', instruction: instruction || '' }),

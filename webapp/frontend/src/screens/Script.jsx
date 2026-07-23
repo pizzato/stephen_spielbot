@@ -78,6 +78,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     }).catch(() => {})
   }, [])
 
+  // Story tab (story-first scripts only) — the prose draft the scenes were
+  // divided from; null hides the tab (classic scripts 404 here).
+  const [story, setStory] = useState(null)
+  useEffect(() => {
+    setStory(null)
+    if (job?.job_id) api.getStory(job.job_id).then(setStory).catch(() => setStory(null))
+  }, [job?.job_id])
+
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
   const [cur, setCur] = useState(0)
@@ -656,8 +664,51 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           { value: 'cover', label: 'Cover' },
           { value: 'characters', label: 'Characters' },
           { value: 'scenes', label: 'Scenes' },
+          ...(story ? [{ value: 'story', label: 'Story' }] : []),
         ]} />
       </div>
+
+      {/* ── Story tab (story-first scripts): the prose the scenes came from ──── */}
+      {view === 'story' && story && (
+        <div className="bento">
+          <Card span={8} padLg className="reveal reveal-d1">
+            <div className="stack gap-22">
+              {(story.chapters || []).map((c) => (
+                <div key={c.chapter}>
+                  <span className="label-sm">
+                    {(story.chapters.length > 1 ? `Chapter ${c.chapter} — ` : '') + (c.title || '')}
+                  </span>
+                  <p style={{ fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', marginTop: 8 }}>{c.text}</p>
+                </div>
+              ))}
+            </div>
+          </Card>
+          <div className="col-4 stack gap-16">
+            <Card well className="reveal reveal-d2">
+              <span className="label-sm">AI editor verdict</span>
+              <p className="muted mt-8" style={{ fontSize: 12.5 }}>
+                {story.critique?.verdict === 'pass' && 'Reviewed: coherent, no repetition flagged.'}
+                {story.critique?.verdict === 'revise' && 'Issues were flagged and the draft revised before scene division.'}
+                {story.critique?.verdict === 'skipped' && 'The critique step was skipped (it failed or was unavailable).'}
+              </p>
+              {(story.critique?.notes || []).length > 0 && (
+                <ul className="muted" style={{ fontSize: 12.5, paddingLeft: 18, marginTop: 8 }}>
+                  {story.critique.notes.map((n, i) => <li key={i}>{n}</li>)}
+                </ul>
+              )}
+            </Card>
+            <Card well className="reveal reveal-d3">
+              <div className="row center gap-10">
+                <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  This is the reviewed story the scenes were divided from — read-only.
+                  Edit individual scenes in the Scenes tab.
+                </span>
+              </div>
+            </Card>
+          </div>
+        </div>
+      )}
 
       {/* ── Scripts tab ─────────────────────────────────────────────────────── */}
       {view === 'scripts' && (
