@@ -2785,7 +2785,9 @@ def _list_script_jobs() -> list[tuple[str, str]]:
             reverse=True,
         )
         for d in dirs:
-            if (d / "script.json").exists():
+            # story.json without script.json = a story-first draft awaiting
+            # scene division — listed so it can be reopened and divided later.
+            if (d / "script.json").exists() or (d / "story.json").exists():
                 results.append((_job_folder_label(d), str(d)))
     except Exception:
         pass

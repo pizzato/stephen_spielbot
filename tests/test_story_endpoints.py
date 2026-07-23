@@ -171,6 +171,63 @@ class StoryEndpointTests(TempConfigCase):
         gen.assert_not_called()
         self.assertFalse((Path(res["work_dir"]) / "story.json").exists())
 
+    # ── draft persistence: resume, listing, loading, forking ─────────────────
+
+    def test_save_story_persists_edits_and_ignores_blank(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        res = backend.save_job_story(draft["job_id"], backend.StorySaveBody(
+            chapters=[backend.StoryChapterEdit(chapter=1, text="Kept for later."),
+                      backend.StoryChapterEdit(chapter=99, text="no such chapter")]))
+        self.assertEqual(res["chapters"][0]["text"], "Kept for later.")
+        on_disk = json.loads((wd / "story.json").read_text())
+        self.assertEqual(on_disk["chapters"][0]["text"], "Kept for later.")
+        # a blank edit must not wipe the saved text
+        backend.save_job_story(draft["job_id"], backend.StorySaveBody(
+            chapters=[backend.StoryChapterEdit(chapter=1, text="  ")]))
+        on_disk = json.loads((wd / "story.json").read_text())
+        self.assertEqual(on_disk["chapters"][0]["text"], "Kept for later.")
+
+    def test_list_jobs_marks_story_drafts(self):
+        draft = self._draft(4)
+        rows = backend.list_jobs()["scripts"]
+        by_wd = {r["work_dir"]: r for r in rows}
+        self.assertTrue(by_wd[draft["work_dir"]]["story_draft"])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=draft["work_dir"]))
+        rows = backend.list_jobs()["scripts"]
+        by_wd = {r["work_dir"]: r for r in rows}
+        self.assertFalse(by_wd[draft["work_dir"]]["story_draft"])
+
+    def test_load_script_opens_a_draft_with_zero_scenes(self):
+        draft = self._draft(4)
+        res = backend.load_script(work_dir=draft["work_dir"])
+        self.assertEqual(res["scenes"], [])
+        self.assertEqual(res["work_dir"], draft["work_dir"])
+
+    def test_divide_forks_when_scenes_already_exist(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            first = backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+            original_script = (wd / "script.json").read_text()
+            second = backend._do_story_divide(backend.DivideStoryBody(
+                work_dir=str(wd),
+                chapters=[backend.StoryChapterEdit(chapter=1, text="FORKED prose.")]))
+        # the re-divide landed in a fresh work dir; the original is untouched
+        self.assertNotEqual(second["work_dir"], first["work_dir"])
+        self.assertEqual((wd / "script.json").read_text(), original_script)
+        self.assertEqual(json.loads((wd / "story.json").read_text())["chapters"][0]["text"],
+                         "Original chapter prose.")
+        fork_wd = Path(second["work_dir"])
+        self.assertTrue((fork_wd / "script.json").exists())
+        fork_story = json.loads((fork_wd / "story.json").read_text())
+        self.assertEqual(fork_story["chapters"][0]["text"], "FORKED prose.")
+        self.assertEqual(fork_story["status"], "divided")
+        self.assertNotEqual(second["job_id"], first["job_id"])
+
     # ── story fetch endpoint ─────────────────────────────────────────────────
 
     def test_get_job_story_roundtrip_and_404_for_classic(self):
