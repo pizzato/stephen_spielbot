@@ -221,6 +221,16 @@ class CritiqueScenesTests(unittest.TestCase):
         self.assertFalse(ops["changed"])
         self.assertEqual(ops["notes"], ["all good"])
 
+    def test_field_only_rewrites_survive_validation(self):
+        # guardrail rewrites may touch only a visual prompt — no narration
+        ops = self._run({"changed": True, "deletes": [],
+                         "rewrites": [{"id": 2, "image_prompt": "Robot city street."},
+                                      {"id": 3, "video_prompt": "Slow dolly forward."},
+                                      {"id": 4}]})                             # no fields → dropped
+        self.assertEqual(ops["rewrites"],
+                         [{"id": 2, "image_prompt": "Robot city street."},
+                          {"id": 3, "video_prompt": "Slow dolly forward."}])
+
     def test_ops_validated_and_coerced(self):
         ops = self._run({"changed": True,
                          "rewrites": [{"id": "2", "narration": "Better.", "title": " T "},

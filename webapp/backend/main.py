@@ -2248,9 +2248,9 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
             store.upsert_scene(
                 job_id, rw["id"],
                 title=rw.get("title") or cur.get("title") or "",
-                image_prompt=cur.get("image_prompt") or "",
-                video_prompt=cur.get("video_prompt") or "",
-                narration=rw["narration"],
+                image_prompt=rw.get("image_prompt") or cur.get("image_prompt") or "",
+                video_prompt=rw.get("video_prompt") or cur.get("video_prompt") or "",
+                narration=rw.get("narration") or cur.get("narration") or "",
                 metadata=cur.get("metadata") or {},
             )
             applied_rewrites += 1
@@ -2319,11 +2319,18 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     title = (brief.get("topic") or brief.get("video_title") or wd.name).strip()
     video_title = (brief.get("video_title") or "").strip() or None
-    # Topic + style extra instructions: lets the critic judge theme adherence
-    # and honour direction-level exceptions (e.g. "the narrator introduces
-    # themselves").
-    extra = (ss.get("extra_instructions") or "").strip()
-    direction = f"{title}\n{extra}" if extra else title
+    # Topic + the style's instructions: lets the critic run the INSTRUCTIONS
+    # guardrail (world rules over narration AND visual prompts) and honour
+    # direction-level exceptions (e.g. "the narrator introduces themselves").
+    parts = [title]
+    if (ss.get("extra_instructions") or "").strip():
+        parts.append(ss["extra_instructions"].strip())
+    if (ss.get("visual_style") or "").strip():
+        parts.append(f"Visual style (baked into every image prompt as its leading "
+                     f"prefix — intentional): {ss['visual_style'].strip()}")
+    if (ss.get("video_style") or "").strip():
+        parts.append(f"Motion/video direction: {ss['video_style'].strip()}")
+    direction = "\n".join(parts)
     max_passes = (_CRITIC_MAX_PASSES if body.until_converged
                   else min(max(1, int(body.passes or 1)), _CRITIC_MAX_PASSES))
     # Cumulative pass count across runs: five separate single-pass clicks should
@@ -2344,7 +2351,9 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
             converged = True
             break
         scene_rows_min = [{"id": int(r["id"]), "title": r.get("title") or "",
-                           "narration": r.get("narration") or ""} for r in rows]
+                           "narration": r.get("narration") or "",
+                           "image_prompt": r.get("image_prompt") or "",
+                           "video_prompt": r.get("video_prompt") or ""} for r in rows]
         # Deterministic backstop: hand the critic any mechanically-detected
         # near-duplicate narrations so it cannot overlook them (e.g. a pair
         # involving the protected final scene).
