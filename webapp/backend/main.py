@@ -2116,11 +2116,95 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
 # ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
 
 _CRITIC_MAX_PASSES = 5
+_SCRIPT_VERSION_KEEP = 20
+_VERSION_FILE_RE = re.compile(r"^\d+\.json$")
 
 
 class CriticRunBody(BaseModel):
     passes: int = 1                # how many passes to run this time
     until_converged: bool = False  # keep passing until no edits (≤ _CRITIC_MAX_PASSES)
+
+
+def _versions_dir(wd: Path) -> Path:
+    return Path(wd) / "script_versions"
+
+
+def _snapshot_script_version(job_id: str, wd: Path, label: str) -> None:
+    """Snapshot the job's current scenes into script_versions/ so a critic pass
+    (or a restore) can be undone. Content-level: titles, prompts, narrations,
+    metadata; previews come back only where their files still exist."""
+    store = DurableStore.default()
+    try:
+        rows = [dict(r) for r in store.scene_rows(job_id)]
+    finally:
+        store.close()
+    if not rows:
+        return
+    d = _versions_dir(wd)
+    d.mkdir(exist_ok=True)
+    (d / f"{int(time.time() * 1000)}.json").write_text(json.dumps(
+        {"saved_at": time.time(), "label": label,
+         "scene_count": len(rows), "scenes": rows}, indent=2))
+    for f in sorted(d.glob("*.json"))[:-_SCRIPT_VERSION_KEEP]:
+        f.unlink(missing_ok=True)
+
+
+def _list_script_versions(wd: Path) -> list[dict]:
+    d = _versions_dir(wd)
+    out = []
+    if d.is_dir():
+        for f in sorted(d.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(f.read_text())
+            except Exception:
+                continue
+            out.append({"file": f.name, "label": data.get("label", ""),
+                        "saved_at": data.get("saved_at", 0),
+                        "scene_count": data.get("scene_count",
+                                                len(data.get("scenes") or []))})
+    return out
+
+
+@api.get("/api/jobs/{job_id}/script-versions")
+def list_job_script_versions(job_id: str) -> dict:
+    return {"versions": _list_script_versions(_job_wd_or_404(job_id))}
+
+
+class RestoreVersionBody(BaseModel):
+    file: str
+
+
+@api.post("/api/jobs/{job_id}/script-versions/restore")
+def restore_job_script_version(job_id: str, body: RestoreVersionBody) -> dict:
+    """Roll the script back to a saved version. The current state is snapshotted
+    first ("before restore"), so a restore is itself undoable."""
+    wd = _job_wd_or_404(job_id)
+    if not _VERSION_FILE_RE.match(body.file or ""):
+        raise HTTPException(400, "Unknown version.")
+    p = _versions_dir(wd) / body.file
+    if not p.exists():
+        raise HTTPException(404, "That version no longer exists.")
+    try:
+        rows = json.loads(p.read_text()).get("scenes") or []
+    except Exception:
+        raise HTTPException(500, "Could not read that version.")
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(400, "That version is empty.")
+    _snapshot_script_version(job_id, wd, "before restore")
+    for r in rows:
+        pv = r.get("preview_path") or ""
+        if pv and not Path(pv).exists():  # artifact renamed/deleted since the snapshot
+            r["preview_path"] = ""
+    store = DurableStore.default()
+    try:
+        store.replace_scenes(job_id, rows)
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    gapp._persist_script_snapshot(wd, rows)
+    return {"restored": body.file,
+            "scenes": [_scene_to_json(r, wd) for r in rows],
+            "versions": _list_script_versions(wd)}
 
 
 def _apply_critic_ops(job_id: str, ops: dict) -> dict:
@@ -2157,9 +2241,37 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
     order = ops.get("order")
     sequence = order if (order and sorted(order) == sorted(surviving)) else surviving
     reordered = sequence != surviving
-    structural = sequence != ids
+    # Weave inserts in as placeholder entries; _restructure_job_scenes turns a
+    # None into a fresh blank scene at that position, which we then fill.
+    items: list = list(sequence)
+    inserts = ops.get("inserts") or []
+    for ins in inserts:
+        if ins["after"] == 0:
+            idx = 0
+        else:
+            idx = next((k + 1 for k, v in enumerate(items)
+                        if isinstance(v, int) and v == ins["after"]), len(items))
+        items.insert(idx, dict(ins))
+    structural = bool(inserts) or sequence != ids
     if structural:
-        rows = _restructure_job_scenes(job_id, sequence)
+        rows = _restructure_job_scenes(
+            job_id, [i if isinstance(i, int) else None for i in items])
+        if inserts:
+            store = DurableStore.default()
+            try:
+                for pos, item in enumerate(items, start=1):
+                    if isinstance(item, dict):
+                        store.upsert_scene(
+                            job_id, pos, title=item["title"],
+                            image_prompt=item["image_prompt"],
+                            video_prompt=item["video_prompt"],
+                            narration=item["narration"], metadata={})
+                rows = store.scene_rows(job_id)
+            finally:
+                store.close()
+            wd = gapp._job_work_dir(job_id)
+            if wd:
+                gapp._persist_script_snapshot(Path(wd), rows)
     elif applied_rewrites:
         store = DurableStore.default()
         try:
@@ -2169,7 +2281,7 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
         wd = gapp._job_work_dir(job_id)
         if wd:
             gapp._persist_script_snapshot(Path(wd), rows)
-    return {"rewrites": applied_rewrites, "deleted": deletes,
+    return {"rewrites": applied_rewrites, "deleted": deletes, "added": len(inserts),
             "reordered": reordered, "scene_count": len(rows)}
 
 
@@ -2186,6 +2298,13 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     video_title = (brief.get("video_title") or "").strip() or None
     max_passes = (_CRITIC_MAX_PASSES if body.until_converged
                   else min(max(1, int(body.passes or 1)), _CRITIC_MAX_PASSES))
+    # Cumulative pass count across runs: five separate single-pass clicks should
+    # bias toward convergence exactly like one five-pass run.
+    prior_passes = 0
+    try:
+        prior_passes = int(json.loads((wd / "critic.json").read_text()).get("total_passes") or 0)
+    except Exception:
+        pass
     report, converged = [], False
     for i in range(1, max_passes + 1):
         store = DurableStore.default()
@@ -2201,17 +2320,21 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
                 ops = story_mode.critique_scenes(
                     [{"id": int(r["id"]), "title": r.get("title") or "",
                       "narration": r.get("narration") or ""} for r in rows],
-                    title, video_title=video_title, avoid_hint=avoid_hint)
+                    title, video_title=video_title, avoid_hint=avoid_hint,
+                    pass_num=prior_passes + i)
         except Exception as e:
             raise HTTPException(500, f"Critic pass failed: {str(e).splitlines()[0][:300]}")
         if not ops["changed"]:
-            report.append({"pass": i, "rewrites": 0, "deleted": [],
+            report.append({"pass": i, "rewrites": 0, "deleted": [], "added": 0,
                            "reordered": False, "notes": ops["notes"]})
             converged = True
             break
+        # Snapshot the pre-edit script so this pass can be rolled back.
+        _snapshot_script_version(job_id, wd, f"before critic pass {i}")
         summary = _apply_critic_ops(job_id, ops)
         report.append({"pass": i, **summary, "notes": ops["notes"]})
-        if not (summary["rewrites"] or summary["deleted"] or summary["reordered"]):
+        if not (summary["rewrites"] or summary["deleted"] or summary["added"]
+                or summary["reordered"]):
             converged = True
             break
     store = DurableStore.default()
@@ -2220,10 +2343,12 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     finally:
         store.close()
     result = {"passes": report, "converged": converged,
-              "scenes": [_scene_to_json(r, wd) for r in rows]}
+              "scenes": [_scene_to_json(r, wd) for r in rows],
+              "versions": _list_script_versions(wd)}
     try:  # best-effort record of the last run, next to the script
         (wd / "critic.json").write_text(json.dumps(
-            {"ran_at": time.time(), "passes": report, "converged": converged}, indent=2))
+            {"ran_at": time.time(), "passes": report, "converged": converged,
+             "total_passes": prior_passes + len(report)}, indent=2))
     except Exception:
         pass
     return result

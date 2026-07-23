@@ -314,23 +314,26 @@ script_critic:
     - REPETITION: information, phrases, or beats told more than once across scenes — cut or rewrite the later occurrence.
     - ENGAGEMENT: scene 1 must hook; every scene must advance the story and pull toward the next; the final scene must land a payoff. Flag dead scenes that add nothing.
 
-    You may REWRITE narrations, DELETE scenes, and REORDER scenes. Output ONLY a JSON object:
+    You may REWRITE narrations, DELETE scenes, ADD scenes, and REORDER scenes. Output ONLY a JSON object:
     {"changed": true | false,
      "notes": ["up to 5 short observations about what you fixed or why nothing needed fixing"],
      "rewrites": [{"id": <scene id>, "narration": "<replacement narration>", "title": "<optional replacement title>"}],
      "deletes": [<scene ids to remove>],
+     "inserts": [{"after": <scene id to insert after, 0 for the very start>, "title": "<5-10 word title>", "narration": "<2-sentence narration>", "image_prompt": "<60-100 word static image description>", "video_prompt": "<30-50 word motion description>"}],
      "order": [<EVERY surviving scene id exactly once, in the new order>]}
 
     Rules:
+    - You are also the judge of DONE. An edit is justified ONLY by a real defect in the three categories above — never by taste, wording preference, or marginal polish. A professional script that would ship as-is gets {"changed": false}. Returning no changes is a success, not a failure.
     - Rewrite ONLY scenes that genuinely need it. A rewritten narration keeps the format: exactly 2 sentences, ~18-22 words, ~9 seconds spoken at a calm documentary pace, flowing naturally from the previous scene into the next. Write it in the same language as the existing narrations.
-    - Do NOT invent new facts, events, or scenes — work only with what the script already contains.
+    - Do NOT invent new facts or events — rewrites and inserts work only with what the script already contains.
     - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene.
+    - ADD a scene ONLY to bridge a genuinely broken transition or restore a beat the script clearly needs but lacks (e.g. a payoff set up but never delivered). Inserts are rare — most passes have none.
     - Include "order" ONLY when rearranging genuinely improves the flow; it must list every surviving id exactly once. Omit it when the order is fine.
-    - When the script is already consistent, non-repetitive, and engaging, return exactly {"changed": false, "notes": [...], "rewrites": [], "deletes": []} — do not manufacture busywork edits.
+    - When the script is already consistent, non-repetitive, and engaging, return exactly {"changed": false, "notes": [...], "rewrites": [], "deletes": [], "inserts": []} — do not manufacture busywork edits.
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    Video: ${topic_ref} — ${n_scenes} scenes.
+    Video: ${topic_ref} — ${n_scenes} scenes.${pass_note}
 
     ${scene_list}${avoid_note}
 

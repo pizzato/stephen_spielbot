@@ -126,28 +126,53 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   }
 
   // Script critic (post-generation QC): rewrites weak narrations, deletes
-  // redundant scenes, reorders for flow. One pass per click, or loop until the
-  // critic proposes nothing (converged, capped server-side).
+  // redundant scenes, adds bridging scenes, reorders for flow. Run 1..5 passes
+  // or until the critic proposes nothing (converged, capped server-side). The
+  // script is snapshotted before every applied pass — restorable below.
   const [criticBusy, setCriticBusy] = useState(false)
   const [criticMsg, setCriticMsg] = useState('')
-  const runCritic = async (untilConverged) => {
+  const [criticPasses, setCriticPasses] = useState('1')   // '1'..'5' | 'auto'
+  const [versions, setVersions] = useState([])
+  const [versionSel, setVersionSel] = useState('')
+  const refreshVersions = (jobId) => api.listScriptVersions(jobId)
+    .then((d) => { setVersions(d.versions || []); setVersionSel((d.versions || [])[0]?.file || '') })
+    .catch(() => setVersions([]))
+  useEffect(() => { if (job?.job_id) refreshVersions(job.job_id); else setVersions([]) }, [job?.job_id])
+  const runCritic = async () => {
     setCriticBusy(true); setError(''); setCriticMsg('')
     try {
-      const r = await api.runCritic(job.job_id, { untilConverged })
+      const r = await api.runCritic(job.job_id, {
+        passes: criticPasses === 'auto' ? 1 : Number(criticPasses),
+        untilConverged: criticPasses === 'auto',
+      })
       setScenes(r.scenes || [])
       setCur((c) => Math.max(0, Math.min(c, (r.scenes || []).length - 1)))
-      const rewrites = r.passes.reduce((n, p) => n + (p.rewrites || 0), 0)
-      const deleted = r.passes.reduce((n, p) => n + ((p.deleted || []).length), 0)
+      setVersions(r.versions || []); setVersionSel((r.versions || [])[0]?.file || '')
+      const sum = (k) => r.passes.reduce((n, p) => n + (Array.isArray(p[k]) ? p[k].length : (p[k] || 0)), 0)
+      const rewrites = sum('rewrites'), deleted = sum('deleted'), added = sum('added')
       const reordered = r.passes.some((p) => p.reordered)
       const parts = []
       if (rewrites) parts.push(`${rewrites} narration${rewrites === 1 ? '' : 's'} rewritten`)
       if (deleted) parts.push(`${deleted} scene${deleted === 1 ? '' : 's'} deleted`)
+      if (added) parts.push(`${added} scene${added === 1 ? '' : 's'} added`)
       if (reordered) parts.push('scenes reordered')
       if (!parts.length) parts.push('no changes needed')
       const notes = r.passes[r.passes.length - 1]?.notes || []
       setCriticMsg(`Critic — ${r.passes.length} pass${r.passes.length === 1 ? '' : 'es'}`
         + `${r.converged ? ', converged' : ''}: ${parts.join(', ')}.`
         + (notes.length ? ` “${notes[0]}”` : ''))
+    } catch (e) { setError(e.message) } finally { setCriticBusy(false) }
+  }
+  const restoreVersion = async () => {
+    if (!versionSel) return
+    setCriticBusy(true); setError(''); setCriticMsg('')
+    try {
+      const r = await api.restoreScriptVersion(job.job_id, versionSel)
+      setScenes(r.scenes || [])
+      setCur(0)
+      setVersions(r.versions || [])
+      setVersionSel((r.versions || [])[0]?.file || '')
+      setCriticMsg('Script restored to the selected version (the pre-restore state was saved too).')
     } catch (e) { setError(e.message) } finally { setCriticBusy(false) }
   }
 
@@ -708,10 +733,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           )}
           {view === 'scenes' && job && (
             <>
+              <select className="select" value={criticPasses} disabled={criticBusy}
+                onChange={(e) => setCriticPasses(e.target.value)}
+                style={{ width: 130 }} title="How many critic passes to run">
+                <option value="1">1 pass</option>
+                <option value="2">2 passes</option>
+                <option value="3">3 passes</option>
+                <option value="5">5 passes</option>
+                <option value="auto">Until stable</option>
+              </select>
               <Button variant="ghost" icon="gavel" disabled={criticBusy || busy === 'generate'}
-                onClick={() => runCritic(false)}>{criticBusy ? 'Critiquing…' : 'Critic pass'}</Button>
-              <Button variant="ghost" icon="arrows-rotate" disabled={criticBusy || busy === 'generate'}
-                onClick={() => runCritic(true)}>Critic until stable</Button>
+                onClick={runCritic}>{criticBusy ? 'Critiquing…' : 'Run critic'}</Button>
               <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
@@ -731,6 +763,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'cover' && coverMsg && <Banner tone="ok">{coverMsg}</Banner>}
       {view === 'scenes' && criticMsg && <Banner tone="ok">{criticMsg}</Banner>}
       {view === 'scenes' && criticBusy && <Banner tone="info">The critic is reading the whole script — checking consistency, repetition, and engagement…</Banner>}
+      {view === 'scenes' && job && versions.length > 0 && (
+        <div className="row center gap-10 reveal" style={{ marginBottom: 16 }}>
+          <span className="label-sm">Script history</span>
+          <select className="select" value={versionSel} disabled={criticBusy}
+            onChange={(e) => setVersionSel(e.target.value)} style={{ maxWidth: 340 }}>
+            {versions.map((v) => (
+              <option key={v.file} value={v.file}>
+                {(v.label || 'snapshot')} — {new Date((v.saved_at || 0) * 1000).toLocaleString()} ({v.scene_count} scenes)
+              </option>
+            ))}
+          </select>
+          <Button variant="ghost" icon="clock-rotate-left" disabled={criticBusy || !versionSel}
+            onClick={restoreVersion}>Restore</Button>
+        </div>
+      )}
       {view === 'characters' && charMsg && <Banner tone="ok">{charMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>

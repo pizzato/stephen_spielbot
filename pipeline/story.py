@@ -387,12 +387,15 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
 
 def critique_scenes(scenes: list[dict], title: str,
                     video_title: str | None = None,
-                    avoid_hint: str | None = None) -> dict:
+                    avoid_hint: str | None = None,
+                    pass_num: int = 1) -> dict:
     """One critic pass over an assembled script (classic or story-first): judge
     consistency, repetition, and engagement, and propose edits. Returns
-    validated ops — {"changed", "notes", "rewrites", "deletes", "order"} —
-    which the caller applies; run repeatedly until "changed" is false to
-    converge. *scenes* rows need id/title/narration."""
+    validated ops — {"changed", "notes", "rewrites", "deletes", "inserts",
+    "order"} — which the caller applies; run repeatedly until "changed" is
+    false to converge. *scenes* rows need id/title/narration. *pass_num* tells
+    the critic it is re-reviewing its own output, biasing later passes toward
+    convergence instead of endless polishing."""
     cfg = _load_cfg()
     n = len(scenes)
     scene_list = "\n".join(
@@ -400,18 +403,42 @@ def critique_scenes(scenes: list[dict], title: str,
         for s in scenes
     )
     topic_ref = f'"{video_title}"' if video_title and video_title.strip() else f'"{title}"'
+    pass_note = (
+        f"\nThis is critic pass {pass_num} on this script — earlier passes already applied "
+        "their edits. Only flag defects that GENUINELY remain; if the script is now "
+        'acceptable, return {"changed": false}.'
+        if pass_num > 1 else ""
+    )
     raw = _chat_complete(
         cfg,
         _prompts.system("script_critic"),
         _prompts.user("script_critic", topic_ref=topic_ref, n_scenes=n,
-                      scene_list=scene_list, avoid_note=_avoid_note(avoid_hint)),
+                      scene_list=scene_list, avoid_note=_avoid_note(avoid_hint),
+                      pass_note=pass_note),
         min(n * 100 + 800, 16000), "script critic", retries=2,
     )
     data = _parse_claude_response(raw, "script critic")
 
     ops = {"changed": bool(data.get("changed")),
            "notes": [str(x) for x in (data.get("notes") or []) if str(x).strip()][:5],
-           "rewrites": [], "deletes": [], "order": None}
+           "rewrites": [], "deletes": [], "inserts": [], "order": None}
+    for ins in (data.get("inserts") or []):
+        if not isinstance(ins, dict):
+            continue
+        try:
+            after = int(ins.get("after"))
+        except (TypeError, ValueError):
+            continue
+        narration = str(ins.get("narration") or "").strip()
+        if after < 0 or not narration:
+            continue
+        ops["inserts"].append({
+            "after": after,
+            "title": str(ins.get("title") or "").strip() or "New scene",
+            "narration": narration,
+            "image_prompt": str(ins.get("image_prompt") or "").strip(),
+            "video_prompt": str(ins.get("video_prompt") or "").strip(),
+        })
     for r in (data.get("rewrites") or []):
         if not isinstance(r, dict):
             continue
@@ -437,7 +464,7 @@ def critique_scenes(scenes: list[dict], title: str,
             ops["order"] = [int(i) for i in order]
         except (TypeError, ValueError):
             ops["order"] = None
-    if not (ops["rewrites"] or ops["deletes"] or ops["order"]):
+    if not (ops["rewrites"] or ops["deletes"] or ops["inserts"] or ops["order"]):
         ops["changed"] = False
     return ops
 
