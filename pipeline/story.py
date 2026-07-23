@@ -416,16 +416,20 @@ def critique_scenes(scenes: list[dict], title: str,
                     direction: str = "",
                     dup_note: str = "") -> dict:
     """One critic pass over an assembled script (classic or story-first): judge
-    consistency, repetition, and engagement, and propose edits. Returns
-    validated ops — {"changed", "notes", "rewrites", "deletes", "inserts",
-    "order"} — which the caller applies; run repeatedly until "changed" is
-    false to converge. *scenes* rows need id/title/narration. *pass_num* tells
-    the critic it is re-reviewing its own output, biasing later passes toward
-    convergence instead of endless polishing."""
+    consistency, repetition, engagement, and instruction adherence (the
+    guardrail — narration AND visual prompts must obey the commissioned
+    direction), and propose edits. Returns validated ops — {"changed", "notes",
+    "rewrites", "deletes", "inserts", "order"} — which the caller applies; run
+    repeatedly until "changed" is false to converge. *scenes* rows need
+    id/title/narration (+ image_prompt/video_prompt for the guardrail check).
+    *pass_num* tells the critic it is re-reviewing its own output, biasing
+    later passes toward convergence instead of endless polishing."""
     cfg = _load_cfg()
     n = len(scenes)
     scene_list = "\n".join(
-        f'Scene {s["id"]}: "{s.get("title") or ""}" — {s.get("narration") or ""}'
+        f'Scene {s["id"]}: "{s.get("title") or ""}" — {s.get("narration") or ""}\n'
+        f'  IMAGE: {s.get("image_prompt") or ""}\n'
+        f'  VIDEO: {s.get("video_prompt") or ""}'
         for s in scenes
     )
     topic_ref = f'"{video_title}"' if video_title and video_title.strip() else f'"{title}"'
@@ -446,7 +450,7 @@ def critique_scenes(scenes: list[dict], title: str,
                       scene_list=scene_list, avoid_note=_avoid_note(avoid_hint),
                       pass_note=pass_note, direction_note=direction_note,
                       dup_note=dup_note),
-        min(n * 100 + 800, 16000), "script critic", retries=2,
+        min(n * 150 + 800, 16000), "script critic", retries=2,
     )
     data = _parse_claude_response(raw, "script critic")
 
@@ -477,13 +481,15 @@ def critique_scenes(scenes: list[dict], title: str,
             sid = int(r.get("id"))
         except (TypeError, ValueError):
             continue
-        narration = str(r.get("narration") or "").strip()
-        if not narration:
-            continue
-        row = {"id": sid, "narration": narration}
-        if str(r.get("title") or "").strip():
-            row["title"] = str(r["title"]).strip()
-        ops["rewrites"].append(row)
+        # Per-field rewrite: any of narration/title/image_prompt/video_prompt;
+        # rows carrying none of them are dropped.
+        row = {"id": sid}
+        for field in ("narration", "title", "image_prompt", "video_prompt"):
+            value = str(r.get(field) or "").strip()
+            if value:
+                row[field] = value
+        if len(row) > 1:
+            ops["rewrites"].append(row)
     for d in (data.get("deletes") or []):
         try:
             ops["deletes"].append(int(d))
