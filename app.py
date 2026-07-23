@@ -267,6 +267,12 @@ DEFAULT_CFG = {
     "youtube_auto_approve_script": False,      # let auto-start also WRITE missing scripts and render them without review
     "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
     "youtube_auto_post": False,               # auto-publish when video generation completes
+    # Run the script critic (QC: consistency, repetition, engagement — may
+    # rewrite/delete/add/reorder scenes) on every automation-written script,
+    # after generation and BEFORE it can queue/render.
+    "youtube_auto_critic": False,
+    # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
+    "youtube_auto_critic_passes": 0,
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     # Queue page sort — persisted so it survives page reloads, and authoritative:
     # automation/"Start next render" consume pending items in this order.

@@ -1516,6 +1516,10 @@ class GenerateScriptBody(BaseModel):
     # "" (style default) | "classic" | "story" — story-first mode drafts and
     # judges a prose story before dividing it into scenes (pipeline/story.py).
     script_mode: str = ""
+    # Automation only: run the script critic right after generation, before the
+    # script can queue/render (config: youtube_auto_critic/_passes). The
+    # interactive Create flow leaves this False — the user runs it by hand.
+    auto_critic: bool = False
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1689,7 +1693,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
             work_dir=sg["work_dir"], voice=body.voice,
             voice_robotic=body.voice_robotic, resolution=body.resolution,
             auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
-            style_name=body.style_name))
+            style_name=body.style_name, auto_critic=body.auto_critic))
 
     extra = (ss.get("extra_instructions") or "").strip()
     llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
@@ -1792,6 +1796,22 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     finally:
         store.close()
 
+    # Automation QC (youtube_auto_critic): run the critic now, BEFORE the queue
+    # attach below can auto-start a render — its edits must land while nothing
+    # is rendering. Best-effort: a critic failure never fails script creation.
+    if body.auto_critic:
+        p = int(cfg.get("youtube_auto_critic_passes") or 0)
+        try:
+            _do_critic_run(job_id, CriticRunBody(passes=p or 1, until_converged=(p == 0)))
+            store = DurableStore.default()
+            try:
+                scenes_list = store.scene_rows(job_id)
+            finally:
+                store.close()
+        except Exception:
+            gapp.logger.warning("Auto-critic failed for %s — keeping the uncritiqued script",
+                                job_id, exc_info=True)
+
     # Write the YouTube description alongside the fresh script (issue #66
     # follow-up): a daemon thread caches description.txt so the Cover and
     # Publish screens find it ready — no manual "Generate" click needed.
@@ -1865,6 +1885,8 @@ class DivideStoryBody(BaseModel):
     auto_approve: bool = False
     queue_item_id: str = ""
     style_name: str = ""
+    # Automation only — see GenerateScriptBody.auto_critic.
+    auto_critic: bool = False
 
 
 def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
@@ -2038,6 +2060,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         style_name=ss["name"],
         format="narration",
         script_mode="story",
+        auto_critic=body.auto_critic,
     )
     return _persist_generated_script(gen_body, cfg, ss, user_topic,
                                      scenes, music_desc, style, characters,
@@ -8770,7 +8793,7 @@ def _start_queue_item(item: dict) -> dict:
         # wrapper around this same call.
         gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-            style_name=style_name))
+            style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=n, voice=ss.get("voice", ""),
@@ -10339,7 +10362,7 @@ def _auto_write_scripts(cfg: dict) -> int:
         try:
             gen = _do_script_generate(GenerateScriptBody(
                 video_title=title, topic=topic, n_scenes=n, resolution=resolution,
-                style_name=style_name))
+                style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         except Exception:
             continue
         # Re-check the slot is still pending before attaching: script generation
