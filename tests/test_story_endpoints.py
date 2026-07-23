@@ -372,14 +372,49 @@ class StoryEndpointTests(TempConfigCase):
         self.assertTrue(any("duplicate detector still flags" in n_
                             for n_ in res["passes"][0]["notes"]))
 
-    def test_critic_refuses_to_delete_every_scene(self):
+    def test_critic_order_omission_is_treated_as_deletion(self):
+        # The critic drops scene 3 by omitting it from `order` (no explicit
+        # `deletes`). The omission must take effect, not be silently ignored.
+        job = self._divided_job(4)
+        ops = {"changed": True, "notes": ["removed the redundant scene 3"],
+               "rewrites": [], "deletes": [], "inserts": [], "order": [1, 2, 4]}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(res["passes"][0]["deleted"], [3])
+        self.assertEqual([s["id"] for s in res["scenes"]], [1, 2, 3])
+        self.assertEqual([s["narration"] for s in res["scenes"]],
+                         ["Narration 1.", "Narration 2.", "Narration 4."])
+
+    def test_critic_order_omission_cannot_drop_first_or_final_scene(self):
+        job = self._divided_job(4)
+        # order omits scene 1 (hook) and scene 4 (payoff) — both protected
+        ops = {"changed": True, "notes": [], "rewrites": [], "deletes": [],
+               "inserts": [], "order": [2, 3]}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(len(res["scenes"]), 4)
+        self.assertEqual(res["passes"][0]["deleted"], [])
+
+    def test_critic_explicit_delete_of_final_scene_is_refused(self):
         job = self._divided_job(3)
-        ops = {"changed": True, "notes": [], "rewrites": [],
-               "deletes": [1, 2, 3], "order": None}
+        ops = {"changed": True, "notes": [], "rewrites": [], "inserts": [],
+               "order": None, "deletes": [3]}
         with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
             res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
         self.assertEqual(len(res["scenes"]), 3)
         self.assertEqual(res["passes"][0]["deleted"], [])
+
+    def test_critic_cannot_wipe_the_script_hook_and_payoff_survive(self):
+        # A degenerate "delete everything" response: the first and final scenes
+        # are protected, so the script can never be emptied.
+        job = self._divided_job(4)
+        ops = {"changed": True, "notes": [], "rewrites": [], "inserts": [],
+               "deletes": [1, 2, 3, 4], "order": None}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(res["passes"][0]["deleted"], [2, 3])
+        self.assertEqual([s["narration"] for s in res["scenes"]],
+                         ["Narration 1.", "Narration 4."])
 
     # ── automation auto-critic ───────────────────────────────────────────────
 
@@ -387,7 +422,7 @@ class StoryEndpointTests(TempConfigCase):
         body = backend.GenerateScriptBody(video_title="Auto QC", topic="t", n_scenes=3,
                                           style_name="Plain", auto_critic=True)
         ops = {"changed": True, "notes": [], "order": None, "inserts": [],
-               "deletes": [3],
+               "deletes": [2],   # a middle scene: first/final are protected
                "rewrites": [{"id": 1, "narration": "Critiqued."}]}
         with mock.patch.object(backend, "generate_script",
                                return_value=(_fake_scenes(3), "m", "st", [])), \
