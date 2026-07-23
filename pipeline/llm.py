@@ -148,17 +148,23 @@ def _norm_identified_characters(raw_list, cap: int = _MAX_MAIN_CHARACTERS) -> li
 
 def _identified_sheet(chars: list[dict]) -> str:
     """A RECURRING CHARACTERS block for characters just established for this video,
-    appended to the later batches / visual prompts so the same figure is drawn
-    consistently after the batch that introduced them. "" when none have a
-    description."""
+    appended to the later batches / visual prompts. The render pipeline injects
+    each named character's canonical appearance and reference image into any
+    image prompt that contains their name (app._inject_characters), so visual
+    prompts must use the NAME — a paraphrased appearance without the name breaks
+    that match and the character drifts. "" when none have a description."""
     rows = [c for c in chars if c.get("name") and c.get("description")]
     if not rows:
         return ""
     lines = "\n".join(f"- {c['name']}: {c['description']}" for c in rows)
     return (
-        "RECURRING CHARACTERS — refer to each BY NAME when a scene features them and "
-        "describe their appearance EXACTLY as written here every time, so they look "
-        "identical across scenes:\n"
+        "RECURRING CHARACTERS — when a scene features one of these characters, refer "
+        "to them BY NAME in the narration AND in that scene's image/video prompts. "
+        "In the visual prompts write the NAME ONLY — never restate or paraphrase "
+        "their appearance (the canonical appearance below is appended automatically "
+        "to every prompt that names them; an unnamed description breaks consistency). "
+        "Only describe what DIFFERS from their canonical look in that scene, such as "
+        "a change of clothes or an injury:\n"
         f"{lines}"
     )
 

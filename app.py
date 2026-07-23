@@ -1771,16 +1771,22 @@ def _compose_visual_style(style: str, cfg: dict, style_name: str = "") -> str:
 def _character_sheet(characters: list[dict]) -> str:
     """Format a style's enabled, described characters into a prompt block for the
     script LLM, or "" when there are none. Passed to generate_script so scenes
-    describe recurring characters with a fixed appearance."""
+    reference recurring characters BY NAME in their visual prompts —
+    _inject_characters appends the canonical appearance (and reference image)
+    to any prompt that names them, so a paraphrased description without the
+    name breaks that match."""
     rows = [c for c in (characters or [])
             if c.get("enabled", True) and c.get("name") and c.get("description")]
     if not rows:
         return ""
     lines = "\n".join(f"- {c['name']}: {c['description']}" for c in rows)
     return (
-        "RECURRING CHARACTERS — when a scene features one of these, describe their "
-        "appearance EXACTLY as written here, every time, so they look identical "
-        "across scenes:\n"
+        "RECURRING CHARACTERS — when a scene features one of these, refer to them "
+        "BY NAME in that scene's image/video prompts. Write the NAME ONLY — never "
+        "restate or paraphrase their appearance (the canonical appearance below is "
+        "appended automatically to every prompt that names them). Only describe "
+        "what DIFFERS from their canonical look in that scene, such as a change "
+        "of clothes or an injury:\n"
         f"{lines}\n"
         "Only mention a character when the narration involves them; leave other "
         "scenes unaffected."
