@@ -383,6 +383,65 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
     return out
 
 
+# ── Script critic (post-generation QC over the assembled scene list) ─────────
+
+def critique_scenes(scenes: list[dict], title: str,
+                    video_title: str | None = None,
+                    avoid_hint: str | None = None) -> dict:
+    """One critic pass over an assembled script (classic or story-first): judge
+    consistency, repetition, and engagement, and propose edits. Returns
+    validated ops — {"changed", "notes", "rewrites", "deletes", "order"} —
+    which the caller applies; run repeatedly until "changed" is false to
+    converge. *scenes* rows need id/title/narration."""
+    cfg = _load_cfg()
+    n = len(scenes)
+    scene_list = "\n".join(
+        f'Scene {s["id"]}: "{s.get("title") or ""}" — {s.get("narration") or ""}'
+        for s in scenes
+    )
+    topic_ref = f'"{video_title}"' if video_title and video_title.strip() else f'"{title}"'
+    raw = _chat_complete(
+        cfg,
+        _prompts.system("script_critic"),
+        _prompts.user("script_critic", topic_ref=topic_ref, n_scenes=n,
+                      scene_list=scene_list, avoid_note=_avoid_note(avoid_hint)),
+        min(n * 100 + 800, 16000), "script critic", retries=2,
+    )
+    data = _parse_claude_response(raw, "script critic")
+
+    ops = {"changed": bool(data.get("changed")),
+           "notes": [str(x) for x in (data.get("notes") or []) if str(x).strip()][:5],
+           "rewrites": [], "deletes": [], "order": None}
+    for r in (data.get("rewrites") or []):
+        if not isinstance(r, dict):
+            continue
+        try:
+            sid = int(r.get("id"))
+        except (TypeError, ValueError):
+            continue
+        narration = str(r.get("narration") or "").strip()
+        if not narration:
+            continue
+        row = {"id": sid, "narration": narration}
+        if str(r.get("title") or "").strip():
+            row["title"] = str(r["title"]).strip()
+        ops["rewrites"].append(row)
+    for d in (data.get("deletes") or []):
+        try:
+            ops["deletes"].append(int(d))
+        except (TypeError, ValueError):
+            continue
+    order = data.get("order")
+    if isinstance(order, list) and order:
+        try:
+            ops["order"] = [int(i) for i in order]
+        except (TypeError, ValueError):
+            ops["order"] = None
+    if not (ops["rewrites"] or ops["deletes"] or ops["order"]):
+        ops["changed"] = False
+    return ops
+
+
 def _split_text(text: str) -> tuple[str, str]:
     """Split prose roughly in half at a sentence boundary (for halve-and-retry)."""
     sentences = re.split(r"(?<=[.!?])\s+", (text or "").strip())
