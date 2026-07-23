@@ -64,7 +64,7 @@ from pipeline import image_history
 from pipeline import engines
 from pipeline import tts_engines
 
-MAX_SCENES    = 100
+MAX_SCENES    = 200
 MAX_CLIP_SECS = 0.0  # 0 means request one clip for the full scene duration.
 OUTPUT_DIR   = Path.home() / "videos"
 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -217,6 +217,11 @@ DEFAULT_CFG = {
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 6,
+    # How scripts are written: "classic" generates scenes directly in batches;
+    # "story" drafts a full prose story first (outline → chapters → critique),
+    # then divides it into scenes (see pipeline/story.py). Mirrors the default
+    # style like every other STYLE_FIELD_TO_FLAT entry.
+    "default_script_mode": "classic",
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -262,6 +267,12 @@ DEFAULT_CFG = {
     "youtube_auto_approve_script": False,      # let auto-start also WRITE missing scripts and render them without review
     "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
     "youtube_auto_post": False,               # auto-publish when video generation completes
+    # Run the script critic (QC: consistency, repetition, engagement — may
+    # rewrite/delete/add/reorder scenes) on every automation-written script,
+    # after generation and BEFORE it can queue/render.
+    "youtube_auto_critic": False,
+    # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
+    "youtube_auto_critic_passes": 0,
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     # Queue page sort — persisted so it survives page reloads, and authoritative:
     # automation/"Start next render" consume pending items in this order.
@@ -366,6 +377,8 @@ STYLE_FIELD_TO_FLAT = {
     "voice_robotic_amount": "default_voice_robotic_amount",
     "voice_speed":          "default_voice_speed",
     "n_scenes":             "default_n_scenes",
+    # Script generation mode: "classic" (direct scenes) or "story" (story-first)
+    "script_mode":          "default_script_mode",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -621,6 +634,11 @@ def _norm_tts_language(value) -> str:
     return norm_language(value if isinstance(value, str) else "")
 
 
+def _norm_script_mode(value) -> str:
+    """Coerce a script-generation mode to "classic" or "story"."""
+    return "story" if value == "story" else "classic"
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -675,6 +693,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
         row["tts_language"] = _norm_tts_language(row.get("tts_language"))
+        row["script_mode"] = _norm_script_mode(row.get("script_mode"))
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved.
@@ -2772,7 +2791,9 @@ def _list_script_jobs() -> list[tuple[str, str]]:
             reverse=True,
         )
         for d in dirs:
-            if (d / "script.json").exists():
+            # story.json without script.json = a story-first draft awaiting
+            # scene division — listed so it can be reopened and divided later.
+            if (d / "script.json").exists() or (d / "story.json").exists():
                 results.append((_job_folder_label(d), str(d)))
     except Exception:
         pass

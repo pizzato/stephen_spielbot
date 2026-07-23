@@ -13,6 +13,7 @@ const AUTO_FLAGS = [
   'youtube_auto_approve_comments',
   'youtube_auto_start_job',
   'youtube_auto_approve_script',
+  'youtube_auto_critic',
   'youtube_auto_ai_ideas',
   'youtube_auto_post',
 ]
@@ -1588,6 +1589,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="Default scenes">
                 <input className="input" type="number" value={st.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} style={{ maxWidth: 160 }} />
               </Field>
+              <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
+                <select className="select" value={st.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="classic">Classic — scenes directly</option>
+                  <option value="story">Story-first — draft, judge, then divide</option>
+                </select>
+              </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={st.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
               </Field>
@@ -1920,6 +1927,20 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
               <Check checked={!!cfg.youtube_auto_write_scripts} onChange={(v) => set('youtube_auto_write_scripts', v)} label="Auto-write scripts for queued items but don't render — they wait unapproved for you to review, edit and approve" />
               <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
+              <Check checked={!!cfg.youtube_auto_critic} onChange={(v) => set('youtube_auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
+              {!!cfg.youtube_auto_critic && (
+                <div className="row center gap-10" style={{ paddingLeft: 26 }}>
+                  <span className="muted" style={{ fontSize: 12.5 }}>Critic passes</span>
+                  <select className="select" value={String(cfg.youtube_auto_critic_passes ?? 0)}
+                    onChange={(e) => set('youtube_auto_critic_passes', Number(e.target.value))} style={{ maxWidth: 180 }}>
+                    <option value="0">Until stable (≤5)</option>
+                    <option value="1">1 pass</option>
+                    <option value="2">2 passes</option>
+                    <option value="3">3 passes</option>
+                    <option value="5">5 passes</option>
+                  </select>
+                </div>
+              )}
               <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
               <div className="row center between row--wrap gap-10" style={{ paddingLeft: 26 }}>
                 <span className="muted" style={{ fontSize: 12.5 }}>Declined ideas are kept out of new AI suggestions. Clear the list to let those topics resurface — ignored ideas stay hidden.</span>
