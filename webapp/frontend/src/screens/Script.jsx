@@ -78,13 +78,52 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     }).catch(() => {})
   }, [])
 
-  // Story tab (story-first scripts only) — the prose draft the scenes were
-  // divided from; null hides the tab (classic scripts 404 here).
+  // Story tab (story-first scripts only) — the prose draft the scenes come
+  // from; null hides the tab (classic scripts 404 here). Chapters are editable:
+  // Save persists edits into story.json (resume later); Divide turns the story
+  // into scenes — in place for a fresh draft, or FORKING into a new script when
+  // scenes already exist (so scene edits/previews are never clobbered).
   const [story, setStory] = useState(null)
+  const [storyDrafts, setStoryDrafts] = useState({})   // chapter -> edited text
+  const [storyMsg, setStoryMsg] = useState('')
   useEffect(() => {
-    setStory(null)
+    setStory(null); setStoryDrafts({}); setStoryMsg('')
     if (job?.job_id) api.getStory(job.job_id).then(setStory).catch(() => setStory(null))
   }, [job?.job_id])
+  const storyChapters = () => (story?.chapters || []).map((c) => ({
+    chapter: c.chapter, text: storyDrafts[c.chapter] ?? c.text,
+  }))
+  const saveStory = async () => {
+    setBusy('story-save'); setError(''); setStoryMsg('')
+    try {
+      const s = await api.saveStory(job.job_id, storyChapters())
+      setStory(s); setStoryDrafts({})
+      setStoryMsg('Story saved — you can come back to it any time.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const divideStory = async () => {
+    setBusy('story-divide'); setError(''); setStoryMsg('')
+    try {
+      const data = await api.divideStory({
+        work_dir: job.work_dir,
+        chapters: storyChapters(),
+        voice: job.voice || '',
+        voice_robotic: !!job.voice_robotic,
+        resolution: job.resolution || '',
+        style_name: job.style_name || '',
+        queue_item_id: job.queue_item_id || '',
+      })
+      const forked = data.job_id !== job.job_id
+      setJob({ ...job, ...data })
+      if (!forked) {
+        // same job: the job-load effect won't re-run, sync by hand
+        setScenes(data.scenes || [])
+        api.getStory(data.job_id).then(setStory).catch(() => {})
+        setView('scenes')
+      }
+      refreshScripts()
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
@@ -112,7 +151,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setDescription('')
     setCoverUrl('')
     setCoverMsg('')
-    if (job?.job_id) setView('cover')
+    // A story draft (no scenes yet) opens straight into the Story view for
+    // review + division; anything with scenes lands on Cover as before.
+    if (job?.job_id) setView((job.scenes || []).length ? 'cover' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -664,23 +705,40 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           { value: 'cover', label: 'Cover' },
           { value: 'characters', label: 'Characters' },
           { value: 'scenes', label: 'Scenes' },
-          ...(story ? [{ value: 'story', label: 'Story' }] : []),
+          ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
         ]} />
       </div>
 
-      {/* ── Story tab (story-first scripts): the prose the scenes came from ──── */}
+      {/* ── Story tab (story-first scripts): the prose behind the scenes ─────── */}
+      {view === 'story' && !story && (
+        <Card span={12} well><p className="muted" style={{ fontSize: 13, margin: 0 }}>Loading the story draft…</p></Card>
+      )}
       {view === 'story' && story && (
         <div className="bento">
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
+              {storyMsg && <Banner tone="ok">{storyMsg}</Banner>}
               {(story.chapters || []).map((c) => (
-                <div key={c.chapter}>
-                  <span className="label-sm">
-                    {(story.chapters.length > 1 ? `Chapter ${c.chapter} — ` : '') + (c.title || '')}
-                  </span>
-                  <p style={{ fontSize: 13.5, lineHeight: 1.65, whiteSpace: 'pre-wrap', marginTop: 8 }}>{c.text}</p>
-                </div>
+                <Field key={c.chapter}
+                  label={(story.chapters.length > 1 ? `Chapter ${c.chapter} — ` : '') + (c.title || '') + ` (${c.scenes} scene${c.scenes === 1 ? '' : 's'})`}>
+                  <textarea className="textarea"
+                    rows={Math.min(12, Math.max(4, Math.ceil(((storyDrafts[c.chapter] ?? c.text) || '').length / 90)))}
+                    value={storyDrafts[c.chapter] ?? c.text ?? ''}
+                    onChange={(e) => setStoryDrafts((m) => ({ ...m, [c.chapter]: e.target.value }))} />
+                </Field>
               ))}
+              <div className="row center between mt-8 row--wrap gap-16">
+                <Button variant="ghost" icon="floppy-disk" disabled={!!busy} onClick={saveStory}>
+                  {busy === 'story-save' ? 'Saving…' : 'Save story'}
+                </Button>
+                <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
+                  {busy === 'story-divide'
+                    ? 'Dividing into scenes…'
+                    : (scenes.length
+                      ? 'Divide again → new script'
+                      : `Divide into ${story.n_scenes || '?'} scenes →`)}
+                </Button>
+              </div>
             </div>
           </Card>
           <div className="col-4 stack gap-16">
@@ -701,8 +759,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row center gap-10">
                 <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
                 <span className="muted" style={{ fontSize: 12.5 }}>
-                  This is the reviewed story the scenes were divided from — read-only.
-                  Edit individual scenes in the Scenes tab.
+                  {scenes.length
+                    ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched.'
+                    : 'Edit freely and Save to come back later — the draft is kept until you divide it into scenes.'}
                 </span>
               </div>
             </Card>
@@ -722,15 +781,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Card key={s.work_dir} span={4} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700 }}>{s.label}</span>
-                {job?.work_dir === s.work_dir && <Chip tone="ok" dot>Loaded</Chip>}
+                <span className="row center gap-8">
+                  {s.story_draft && <Chip dot>Story draft</Chip>}
+                  {job?.work_dir === s.work_dir && <Chip tone="ok" dot>Loaded</Chip>}
+                </span>
               </div>
               <div className="row gap-10 mt-16 row--wrap">
                 <Button variant="primary" icon="folder-open" disabled={!!busy} onClick={() => loadScript(s.work_dir)}>
                   {busy === 'load:' + s.work_dir ? 'Loading…' : job?.work_dir === s.work_dir ? 'Reload' : 'Load'}
                 </Button>
-                <Button variant="ghost" icon="copy" disabled={!!busy} onClick={() => duplicateScript(s.work_dir)}>
-                  {busy === 'dup:' + s.work_dir ? 'Duplicating…' : 'Duplicate'}
-                </Button>
+                {!s.story_draft && (
+                  <Button variant="ghost" icon="copy" disabled={!!busy} onClick={() => duplicateScript(s.work_dir)}>
+                    {busy === 'dup:' + s.work_dir ? 'Duplicating…' : 'Duplicate'}
+                  </Button>
+                )}
                 {confirmDel === s.work_dir ? (
                   <>
                     <Button variant="danger" icon="trash-can" disabled={busy === 'del:' + s.work_dir} onClick={() => deleteScript(s.work_dir)}>

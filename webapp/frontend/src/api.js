@@ -127,6 +127,8 @@ export const api = {
     }
   },
   getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
+  // Persist edited chapter texts so a story review can be resumed later.
+  saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),
   // Improve the Create brief's title or direction in place (issue #88).
   improveBrief: (field, title, direction, styleName, instruction) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '', instruction: instruction || '' }),

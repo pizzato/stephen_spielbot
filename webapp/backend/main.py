@@ -1896,6 +1896,17 @@ def _read_story(wd: Path) -> dict:
         return {}
 
 
+def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
+    """Fold edited chapter texts into the story dict in place (blank edits are
+    ignored so a partial payload can't wipe a chapter)."""
+    by_id = {c.get("chapter"): c for c in (story.get("chapters") or [])
+             if isinstance(c, dict)}
+    for edit in edits or []:
+        target = by_id.get(edit.chapter)
+        if target is not None and (edit.text or "").strip():
+            target["text"] = edit.text.strip()
+
+
 def _do_story_generate(body: GenerateScriptBody) -> dict:
     """Story-mode phase 1: draft, judge, and revise the prose story, persist it
     as story.json (phase "story_review"), and return it for the Create review
@@ -1952,10 +1963,18 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         )
     finally:
         store.close()
+    # Shaped like the classic generate payload (scenes empty until division) so
+    # the Create screen can hand straight off to the Script screen's Story view.
     return {"job_id": job_id, "work_dir": str(work_dir), "title": display_title,
             "video_title": (body.video_title or "").strip(), "topic": user_topic,
-            "style_name": ss["name"], "n_scenes": int(body.n_scenes),
-            "story": story, "create_brief": create_brief}
+            "style": story.get("style", ""), "style_name": ss["name"],
+            "music_desc": story.get("music", ""),
+            "voice": create_brief["voice"] or ss.get("voice", ""),
+            "voice_robotic": create_brief["voice_robotic"],
+            "resolution": create_brief["resolution"],
+            "n_scenes": int(body.n_scenes),
+            "story": story, "create_brief": create_brief,
+            "scenes": [], "characters": []}
 
 
 def _do_story_divide(body: DivideStoryBody) -> dict:
@@ -1970,20 +1989,21 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     story = _read_story(wd)
     if not story:
         raise HTTPException(404, "No story draft found in the selected folder.")
-    # Fold the review panel's edited chapter texts into the draft.
-    if body.chapters:
-        by_id = {c.get("chapter"): c for c in (story.get("chapters") or [])
-                 if isinstance(c, dict)}
-        for edit in body.chapters:
-            target = by_id.get(edit.chapter)
-            if target is not None and (edit.text or "").strip():
-                target["text"] = edit.text.strip()
+    _merge_story_edits(story, body.chapters)
 
     brief = _read_create_brief(wd)
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, body.style_name or brief.get("style_name", ""))
     user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
     video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
+
+    # Dividing a story that ALREADY has scenes forks into a fresh work dir, so
+    # the existing script — its scene edits, previews and history — is kept
+    # intact and the edited story becomes a new script alongside it.
+    if (wd / "script.json").exists():
+        src = wd
+        wd = gapp._script_work_dir(video_title or user_topic)
+        gapp.logger.info("Story divide: %s already has scenes — forking to %s", src, wd)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -2072,6 +2092,24 @@ def get_job_story(job_id: str) -> dict:
     story = _read_story(wd)
     if not story:
         raise HTTPException(404, "This script has no story draft.")
+    return story
+
+
+class StorySaveBody(BaseModel):
+    chapters: list[StoryChapterEdit] = []
+
+
+@api.put("/api/jobs/{job_id}/story")
+def save_job_story(job_id: str, body: StorySaveBody) -> dict:
+    """Persist edited chapter texts into story.json, so a review can be resumed
+    later (dividing also saves — this is for leaving mid-review)."""
+    wd = _job_wd_or_404(job_id)
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "This script has no story draft.")
+    _merge_story_edits(story, body.chapters)
+    story["updated_at"] = time.time()
+    _story_path(wd).write_text(json.dumps(story, indent=2))
     return story
 
 
@@ -2202,7 +2240,12 @@ def load_script(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Script path is outside the output folder.")
-    scenes_list = _read_script_scenes(wd)
+    # A story-first draft has no script.json yet — load with zero scenes so the
+    # Script screen opens the Story view for review/division.
+    if not (wd / "script.json").exists() and _read_story(wd):
+        scenes_list = []
+    else:
+        scenes_list = _read_script_scenes(wd)
     fallback_title = wd.name.replace("-", " ").title()
     video_title, style, music_desc, style_name, create_brief = _script_source_meta(
         job_id_from_work_dir(wd), fallback_title)
@@ -3533,7 +3576,11 @@ def list_jobs() -> dict:
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
                          "seen": bool(meta.get("viewed_at")),
                          **_film_publish_status(Path(d), meta, cfg)})
-    scripts = [{"label": l, "work_dir": d} for l, d in gapp._list_script_jobs()]
+    scripts = [{"label": l, "work_dir": d,
+                # story drafted but not yet divided into scenes — the Script
+                # screen opens these straight into the Story view
+                "story_draft": not (Path(d) / "script.json").exists()}
+               for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
     active_key = _work_dir_title_key(active_wd) if active_wd else ""
