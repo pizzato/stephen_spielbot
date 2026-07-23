@@ -217,6 +217,11 @@ DEFAULT_CFG = {
     "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 6,
+    # How scripts are written: "classic" generates scenes directly in batches;
+    # "story" drafts a full prose story first (outline → chapters → critique),
+    # then divides it into scenes (see pipeline/story.py). Mirrors the default
+    # style like every other STYLE_FIELD_TO_FLAT entry.
+    "default_script_mode": "classic",
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -366,6 +371,8 @@ STYLE_FIELD_TO_FLAT = {
     "voice_robotic_amount": "default_voice_robotic_amount",
     "voice_speed":          "default_voice_speed",
     "n_scenes":             "default_n_scenes",
+    # Script generation mode: "classic" (direct scenes) or "story" (story-first)
+    "script_mode":          "default_script_mode",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -621,6 +628,11 @@ def _norm_tts_language(value) -> str:
     return norm_language(value if isinstance(value, str) else "")
 
 
+def _norm_script_mode(value) -> str:
+    """Coerce a script-generation mode to "classic" or "story"."""
+    return "story" if value == "story" else "classic"
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -675,6 +687,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
         row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
         row["tts_language"] = _norm_tts_language(row.get("tts_language"))
+        row["script_mode"] = _norm_script_mode(row.get("script_mode"))
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved.

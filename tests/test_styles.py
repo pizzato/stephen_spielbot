@@ -106,6 +106,20 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(cfg["default_video_negative_prompt"], "")
         self.assertEqual(cfg["script_avoid"], "")
 
+    def test_script_mode_normalizes_and_mirrors(self):
+        self.write_config({
+            "styles": [_style("A"), _style("B", script_mode="story"),
+                       _style("C", script_mode="bogus")],
+            "default_style": "B",
+        })
+        cfg = app.load_config()
+        by_name = {s["name"]: s for s in cfg["styles"]}
+        self.assertEqual(by_name["A"]["script_mode"], "classic")   # absent → default
+        self.assertEqual(by_name["B"]["script_mode"], "story")     # preserved
+        self.assertEqual(by_name["C"]["script_mode"], "classic")   # invalid → classic
+        # flat key mirrors the default style (B)
+        self.assertEqual(cfg["default_script_mode"], "story")
+
     def test_install_seeded_worker_lists_still_count_as_fresh(self):
         self.write_config({"comfy_workers": ["http://s1:8188"], "tts_workers": ["s1"]})
         cfg = app.load_config()
