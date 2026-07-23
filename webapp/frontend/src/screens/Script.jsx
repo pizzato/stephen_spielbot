@@ -702,10 +702,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
+          ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
           { value: 'characters', label: 'Characters' },
           { value: 'scenes', label: 'Scenes' },
-          ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
         ]} />
       </div>
 
