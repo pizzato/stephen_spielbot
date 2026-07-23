@@ -1698,8 +1698,21 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
 
+    return _persist_generated_script(body, cfg, ss, user_topic,
+                                     scenes, music_desc, style, characters)
+
+
+def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
+                              user_topic: str, scenes, music_desc: str, style: str,
+                              characters: list[dict],
+                              work_dir: Path | None = None) -> dict:
+    """Persist a freshly generated scene list and return the client payload
+    (extracted from _do_script_generate so the story-mode divide step reuses the
+    exact same persistence). work_dir targets an existing folder (story mode);
+    None creates a fresh one from the title."""
     display_title = (body.video_title or "").strip() or user_topic
-    work_dir = gapp._script_work_dir(display_title)
+    if work_dir is None:
+        work_dir = gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
     # Bake the visual style prefix into each image_prompt so it's visible in the
     # scene editor and consistent even if the style profile is later renamed/edited.
