@@ -131,6 +131,8 @@ export const api = {
   saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),
   // Script critic: post-generation QC that can rewrite, delete, and reorder
   // scenes. One pass, or loop until it proposes no more edits (converged).
+  listScriptVersions: (jobId) => req('GET', `/jobs/${jobId}/script-versions`),
+  restoreScriptVersion: (jobId, file) => req('POST', `/jobs/${jobId}/script-versions/restore`, { file }),
   runCritic: async (jobId, opts = {}) => {
     const { task_id } = await req('POST', `/jobs/${jobId}/critic`,
       { passes: opts.passes || 1, until_converged: !!opts.untilConverged })

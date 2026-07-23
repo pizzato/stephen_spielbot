@@ -272,6 +272,53 @@ class StoryEndpointTests(TempConfigCase):
         self.assertFalse(res["converged"])
         self.assertEqual(res["scenes"][0]["narration"], "Pass one.")
 
+    def test_critic_insert_adds_scene_in_place(self):
+        job = self._divided_job(3)
+        ops = {"changed": True, "notes": [], "rewrites": [], "deletes": [], "order": None,
+               "inserts": [{"after": 2, "title": "Bridge", "narration": "Bridge narration.",
+                            "image_prompt": "bridge img", "video_prompt": "bridge vid"}]}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            res = backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(res["passes"][0]["added"], 1)
+        self.assertEqual([s["id"] for s in res["scenes"]], [1, 2, 3, 4])
+        self.assertEqual(res["scenes"][2]["title"], "Bridge")
+        self.assertEqual(res["scenes"][2]["narration"], "Bridge narration.")
+        self.assertEqual(res["scenes"][3]["narration"], "Narration 3.")
+
+    def test_critic_snapshots_versions_and_restore_rolls_back(self):
+        job = self._divided_job(3)
+        wd = Path(job["work_dir"])
+        ops = {"changed": True, "notes": [], "order": None, "inserts": [],
+               "rewrites": [{"id": 1, "narration": "Critic changed this."}], "deletes": [2]}
+        with mock.patch.object(backend.story_mode, "critique_scenes", return_value=ops):
+            backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        versions = backend.list_job_script_versions(job["job_id"])["versions"]
+        self.assertEqual(len(versions), 1)
+        self.assertEqual(versions[0]["label"], "before critic pass 1")
+        self.assertEqual(versions[0]["scene_count"], 3)
+        res = backend.restore_job_script_version(
+            job["job_id"], backend.RestoreVersionBody(file=versions[0]["file"]))
+        self.assertEqual([s["narration"] for s in res["scenes"]],
+                         ["Narration 1.", "Narration 2.", "Narration 3."])
+        # the pre-restore state was snapshotted too, so the restore is undoable
+        labels = [v["label"] for v in res["versions"]]
+        self.assertIn("before restore", labels)
+        script = json.loads((wd / "script.json").read_text())
+        self.assertEqual(len(script), 3)
+
+    def test_critic_pass_number_accumulates_across_runs(self):
+        job = self._divided_job(3)
+        seen = []
+        def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1):
+            seen.append(pass_num)
+            return {"changed": True, "notes": [], "order": None, "inserts": [],
+                    "deletes": [],
+                    "rewrites": [{"id": 1, "narration": f"Pass {pass_num}."}]}
+        with mock.patch.object(backend.story_mode, "critique_scenes", side_effect=fake):
+            backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+            backend._do_critic_run(job["job_id"], backend.CriticRunBody(passes=1))
+        self.assertEqual(seen, [1, 2])
+
     def test_critic_refuses_to_delete_every_scene(self):
         job = self._divided_job(3)
         ops = {"changed": True, "notes": [], "rewrites": [],

@@ -227,9 +227,15 @@ class CritiqueScenesTests(unittest.TestCase):
                                       {"id": 3, "narration": "   "},          # blank → dropped
                                       {"narration": "no id"}, "junk"],
                          "deletes": ["4", "x"],
+                         "inserts": [{"after": "1", "narration": "Bridge.", "title": ""},
+                                     {"after": 2, "narration": ""},           # blank → dropped
+                                     {"narration": "no after"}],
                          "order": [1, "2", 3]})
         self.assertEqual(ops["rewrites"], [{"id": 2, "narration": "Better.", "title": "T"}])
         self.assertEqual(ops["deletes"], [4])
+        self.assertEqual(ops["inserts"], [{"after": 1, "title": "New scene",
+                                          "narration": "Bridge.",
+                                          "image_prompt": "", "video_prompt": ""}])
         self.assertEqual(ops["order"], [1, 2, 3])
 
     def test_changed_without_any_ops_becomes_false(self):
