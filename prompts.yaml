@@ -31,7 +31,7 @@ script_claude_initial:
       - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
       - "gender": "male" | "female" — how the character would sound if voiced.
       - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
-    When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and keep their appearance consistent with the "description" above, so they look identical across every scene.
+    When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and "video_prompt" — write the name, NOT their appearance. The canonical "description" is appended automatically to every prompt that names them, so restating it (or describing the character without the name) breaks consistency. Only add appearance details that DIFFER from the canonical description in that scene, such as a change of clothes or an injury.
 
     "scenes": Array of scene objects, each with:
       - "id": integer starting from 1
@@ -297,6 +297,8 @@ story_divide:
 
     Every "image_prompt" and "video_prompt" must obey the world rules and constraints in the TOPIC/DIRECTION below — who and what exists in this world, how it looks — in EVERY scene, not just where the story text mentions them.
 
+    When the request lists RECURRING CHARACTERS, any scene featuring one of them must refer to them BY NAME in its "image_prompt" and "video_prompt" — the name only, never a re-description of their appearance (each named character's canonical appearance is appended to the prompt automatically; describing them without the name breaks consistency).
+
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |
     Video: ${topic_ref} (${n_scenes} scenes total; this chapter covers scenes ${batch_start} to ${batch_end}).
@@ -336,7 +338,7 @@ script_critic:
     Rules:
     - You are also the judge of DONE. An edit is justified ONLY by a real defect in the four categories above — never by taste, wording preference, or marginal polish. A professional script that would ship as-is gets {"changed": false}. Returning no changes is a success, not a failure.
     - Rewrite ONLY scenes that genuinely need it, and in a rewrite include ONLY the fields you are changing — omit the rest. A rewritten narration keeps the format: exactly 2 sentences, ~18-22 words, ~9 seconds spoken at a calm documentary pace, flowing naturally from the previous scene into the next. Write it in the same language as the existing narrations.
-    - A rewritten image_prompt stays a 60-100 word STATIC description (no motion words) and KEEPS the scene's leading visual-style prefix sentence intact — change only what must change. A rewritten video_prompt stays a 30-50 word single-continuous-shot motion description of the same subjects.
+    - A rewritten image_prompt stays a 60-100 word STATIC description (no motion words) and KEEPS the scene's leading visual-style prefix sentence intact — change only what must change. A rewritten video_prompt stays a 30-50 word single-continuous-shot motion description of the same subjects. Keep any character NAMES the original prompt mentions — named characters drive appearance consistency downstream — and never replace a name with a description of the character.
     - Do NOT invent new facts or events — rewrites and inserts work only with what the script already contains.
     - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene — when one of them duplicates another scene, act on the OTHER scene, or rewrite scene 1 / the final scene instead.
     - ADD a scene ONLY to bridge a genuinely broken transition or restore a beat the script clearly needs but lacks (e.g. a payoff set up but never delivered). Inserts are rare — most passes have none.
