@@ -47,6 +47,7 @@ import pipeline.engagement as eng  # noqa: E402
 import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
+import pipeline.story as story_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
@@ -1512,6 +1513,9 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
     # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
     format: str = "narration"
+    # "" (style default) | "classic" | "story" — story-first mode drafts and
+    # judges a prose story before dividing it into scenes (pipeline/story.py).
+    script_mode: str = ""
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1675,6 +1679,18 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # Style profile (issue #66): drives extra instructions + visual style here,
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
+
+    # Story-first mode (per-style script_mode, or a body override): draft and
+    # judge the prose story, then divide it into scenes — chained inline so
+    # automation callers run the whole thing headless with no review pause.
+    if _effective_script_mode(body, ss) == "story":
+        sg = _do_story_generate(body)
+        return _do_story_divide(DivideStoryBody(
+            work_dir=sg["work_dir"], voice=body.voice,
+            voice_robotic=body.voice_robotic, resolution=body.resolution,
+            auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
+            style_name=body.style_name))
+
     extra = (ss.get("extra_instructions") or "").strip()
     llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
 
@@ -1759,6 +1775,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
+        "script_mode": _effective_script_mode(body, ss),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -1829,6 +1846,233 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
             "started": queued.get("started"),
         })
     return result
+
+
+# ── Story-first mode (per-style script_mode = "story") ───────────────────────
+
+class StoryChapterEdit(BaseModel):
+    chapter: int
+    text: str = ""
+
+
+class DivideStoryBody(BaseModel):
+    work_dir: str
+    # Edited chapter texts from the Create review panel; [] keeps the draft as-is.
+    chapters: list[StoryChapterEdit] = []
+    voice: str = ""
+    voice_robotic: bool = False
+    resolution: str = ""
+    auto_approve: bool = False
+    queue_item_id: str = ""
+    style_name: str = ""
+
+
+def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
+    """The mode this generation runs with: an explicit body override wins, else
+    the style's script_mode. Dialogue/mixed formats always run classic — story
+    mode writes narration-only prose (v1)."""
+    mode = (body.script_mode or "").strip().lower()
+    if mode not in ("classic", "story"):
+        mode = ss.get("script_mode") or "classic"
+    if mode == "story" and (body.format or "narration").strip().lower() != "narration":
+        gapp.logger.warning("Story mode requested with format=%r — falling back to classic",
+                            body.format)
+        mode = "classic"
+    return mode
+
+
+def _story_path(wd: Path) -> Path:
+    return Path(wd) / "story.json"
+
+
+def _read_story(wd: Path) -> dict:
+    p = _story_path(wd)
+    if not p.exists():
+        return {}
+    try:
+        data = json.loads(p.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _do_story_generate(body: GenerateScriptBody) -> dict:
+    """Story-mode phase 1: draft, judge, and revise the prose story, persist it
+    as story.json (phase "story_review"), and return it for the Create review
+    panel. _do_story_divide turns it into scenes."""
+    user_topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not user_topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name)
+    extra = (ss.get("extra_instructions") or "").strip()
+    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
+    style_hint = body.visual_style or ss.get("visual_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    try:
+        with _track_op("Drafting story", display_topic):
+            story = story_mode.generate_story(
+                llm_topic, int(body.n_scenes), style_hint=style_hint,
+                video_title=(body.video_title or "").strip() or None,
+                character_sheet=character_sheet, avoid_hint=avoid_hint,
+            )
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
+
+    display_title = (body.video_title or "").strip() or user_topic
+    work_dir = gapp._script_work_dir(display_title)
+    job_id = job_id_from_work_dir(work_dir)
+    _story_path(work_dir).write_text(json.dumps(story, indent=2))
+    create_brief = {
+        "video_title": (body.video_title or "").strip(),
+        "topic": user_topic,
+        "n_scenes": int(body.n_scenes),
+        "visual_style": (body.visual_style or "").strip(),
+        "voice": (body.voice or "").strip(),
+        "voice_robotic": bool(body.voice_robotic),
+        "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
+        "style_name": body.style_name or ss["name"],
+        "auto_approve": bool(body.auto_approve),
+        "format": "narration",
+        "script_mode": "story",
+    }
+    _write_create_brief(work_dir, create_brief)
+    store = DurableStore.default()
+    try:
+        store.create_or_update_job(
+            job_id, work_dir, display_title,
+            config={"title": display_title, "video_title": (body.video_title or "").strip(),
+                    "topic": user_topic, "phase": "story_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
+            metadata={"scene_count": 0, "music_desc": story.get("music", ""),
+                      "style": story.get("style", "")},
+        )
+    finally:
+        store.close()
+    return {"job_id": job_id, "work_dir": str(work_dir), "title": display_title,
+            "video_title": (body.video_title or "").strip(), "topic": user_topic,
+            "style_name": ss["name"], "n_scenes": int(body.n_scenes),
+            "story": story, "create_brief": create_brief}
+
+
+def _do_story_divide(body: DivideStoryBody) -> dict:
+    """Story-mode phase 2: divide the (possibly user-edited) story into scenes
+    and persist the script through the exact classic path, into the same work
+    dir the draft lives in."""
+    if not (body.work_dir or "").strip():
+        raise HTTPException(400, "Choose a story draft to divide.")
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Story path is outside the output folder.")
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "No story draft found in the selected folder.")
+    # Fold the review panel's edited chapter texts into the draft.
+    if body.chapters:
+        by_id = {c.get("chapter"): c for c in (story.get("chapters") or [])
+                 if isinstance(c, dict)}
+        for edit in body.chapters:
+            target = by_id.get(edit.chapter)
+            if target is not None and (edit.text or "").strip():
+                target["text"] = edit.text.strip()
+
+    brief = _read_create_brief(wd)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name or brief.get("style_name", ""))
+    user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
+    video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
+    style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
+    video_style_hint = ss.get("video_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
+    language = gapp._norm_tts_language(ss.get("tts_language"))
+    display_topic = video_title or user_topic.splitlines()[0][:80]
+    try:
+        with _track_op("Dividing story into scenes", display_topic):
+            scenes, music_desc, style, characters = story_mode.divide_story(
+                story, style_hint=style_hint, video_title=video_title or None,
+                video_style_hint=video_style_hint, character_sheet=character_sheet,
+                avoid_hint=avoid_hint, language=language,
+            )
+    except HTTPException:
+        raise
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Story division failed: {str(e).splitlines()[0][:300]}")
+
+    story["status"] = "divided"
+    story["updated_at"] = time.time()
+    _story_path(wd).write_text(json.dumps(story, indent=2))
+    gen_body = GenerateScriptBody(
+        video_title=video_title,
+        topic=user_topic,
+        n_scenes=int(story.get("n_scenes") or len(scenes)),
+        visual_style=(brief.get("visual_style") or "").strip(),
+        auto_approve=bool(body.auto_approve),
+        voice=(body.voice or brief.get("voice") or "").strip(),
+        voice_robotic=bool(body.voice_robotic or brief.get("voice_robotic")),
+        resolution=(body.resolution or brief.get("resolution") or "").strip(),
+        queue_item_id=body.queue_item_id,
+        style_name=ss["name"],
+        format="narration",
+        script_mode="story",
+    )
+    return _persist_generated_script(gen_body, cfg, ss, user_topic,
+                                     scenes, music_desc, style, characters,
+                                     work_dir=wd)
+
+
+def _run_story_generate_task(task_id: str, body: "GenerateScriptBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_story_generate(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+def _run_story_divide_task(task_id: str, body: "DivideStoryBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_story_divide(body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/script/story/generate")
+def story_generate(body: GenerateScriptBody) -> dict:
+    """Kick off the story draft (story-mode phase 1) in the background; poll
+    /api/script/generate/status with the returned task id."""
+    topic = (body.topic or "").strip() or (body.video_title or "").strip()
+    if not topic:
+        raise HTTPException(400, "Enter a video title or describe what you want to create.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_story_generate_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.post("/api/script/story/divide")
+def story_divide(body: DivideStoryBody) -> dict:
+    """Divide a reviewed story draft into scenes (story-mode phase 2) in the
+    background; poll /api/script/generate/status with the returned task id."""
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_story_divide_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.get("/api/jobs/{job_id}/story")
+def get_job_story(job_id: str) -> dict:
+    """The story.json behind a story-mode script (404 for classic scripts)."""
+    wd = _job_wd_or_404(job_id)
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "This script has no story draft.")
+    return story
 
 
 def _read_script_scenes(wd: Path) -> list:
@@ -8063,7 +8307,7 @@ def queue_add(body: QueueAddBody) -> dict:
     if not title:
         raise HTTPException(400, "Title is required.")
     cfg = gapp.load_config()
-    n = max(6, min(50, body.n_scenes
+    n = max(6, min(200, body.n_scenes
                    or gapp.style_settings(cfg, body.style_name).get("n_scenes") or 6))
     comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
                "suggested_scene_count": n}
@@ -8110,7 +8354,7 @@ def queue_update(body: QueueUpdateBody) -> dict:
     if body.video_prompt is not None:
         updates["video_prompt"] = body.video_prompt.strip()
     if body.suggested_scene_count is not None:
-        updates["suggested_scene_count"] = max(6, min(50, int(body.suggested_scene_count)))
+        updates["suggested_scene_count"] = max(6, min(200, int(body.suggested_scene_count)))
     if body.gen_resolution is not None:
         updates["gen_resolution"] = body.gen_resolution.strip()
     if body.gen_style_name is not None:
