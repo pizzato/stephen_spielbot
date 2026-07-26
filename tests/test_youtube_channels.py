@@ -225,6 +225,34 @@ class UploadRoutingTests(unittest.TestCase):
         self.assertEqual(kw.get("default_audio_language"), "fr")
         self.assertIsNone(kw.get("captions_path"))
 
+    def test_upload_task_uses_the_published_cuts_language_for_metadata(self):
+        # Publishing a localized cut (selected in final-video history) must set
+        # BOTH the title/description language and the audio language to the
+        # localization's language, not the film's original narration language.
+        import json as _json
+        from pipeline import final_video_history
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-test-film-"))
+        final = wd / "final.mp4"
+        final.write_bytes(b"\0" * 20_000)
+        (wd / "job_config.json").write_text(_json.dumps({"tts_language": "en"}))
+        final_video_history.record(wd, final, label="Original", lang=None)
+        final_video_history.record(wd, final, label="Portuguese", lang="pt")
+        cfg = {"youtube_channels": [
+            {"id": "UC9", "language": "en", "upload_captions": False}]}
+        with mock.patch.object(backend.gapp, "load_config", return_value=cfg), \
+             mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"), \
+             mock.patch.object(backend.yt, "upload_video",
+                               return_value={"video_id": "v1", "url": "u", "error": ""}) as up, \
+             mock.patch.object(backend.gapp, "_write_job_meta"), \
+             mock.patch.object(backend, "_post_completion_reply",
+                               return_value={"attempted": False}):
+            backend._run_upload_task(
+                "t3", {"title": "T", "description": "", "category": "22",
+                       "privacy": "private", "channel": "UC9"}, wd, final, None)
+        kw = up.call_args.kwargs
+        self.assertEqual(kw.get("default_language"), "pt")
+        self.assertEqual(kw.get("default_audio_language"), "pt")
+
     def test_completion_reply_uses_the_comments_channel(self):
         item = {"id": "q1", "comment_id": "c1", "channel": "UC2"}
         with mock.patch.object(backend, "_client_secrets_path", return_value="/tmp/s.json"), \

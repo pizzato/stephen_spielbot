@@ -7338,6 +7338,17 @@ def _resolve_upload_playlist(cfg: dict, wd: Path, channel: str) -> str:
     return choice
 
 
+def _published_cut_language(wd: Path, fallback: str) -> str:
+    """Language of the currently selected final cut: a localized cut carries its
+    localization's language; the original cut (or no history) falls back."""
+    try:
+        hist = final_video_history.history(wd)
+        sel = next((v for v in hist["versions"] if v["id"] == hist.get("selected")), None)
+        return (sel or {}).get("lang") or fallback
+    except Exception:
+        return fallback
+
+
 def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, str, str, list[dict]]:
     """Caption tracks for publishing the currently selected final cut.
 
@@ -7353,9 +7364,7 @@ def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, s
     jc = _film_job_config(wd)
     raw = jc.get("tts_language")
     orig = gapp._norm_tts_language(raw) if raw else (fallback_lang or "en")
-    hist = final_video_history.history(wd)
-    sel = next((v for v in hist["versions"] if v["id"] == hist.get("selected")), None)
-    cut_lang = (sel or {}).get("lang") or orig
+    cut_lang = _published_cut_language(wd, orig)
     timing = None if cut_lang == orig else cut_lang
 
     def _srt(code: str) -> Path | None:
@@ -7388,6 +7397,10 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
         # so a Portuguese-style film is labelled pt on YouTube (metadata +
         # audio language + caption track) even on a mostly-English channel.
         language = _video_language_for_work_dir(wd, language)
+        # A localized cut ships with translated title/description, so the
+        # metadata language (YouTube's "Title and description language") must
+        # follow the published cut too, not just the audio language.
+        language = _published_cut_language(wd, language)
         # Per-style playlist the finished video is added to (resolved here so the
         # "__auto__" find-or-create can hit the API off the render path).
         playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
