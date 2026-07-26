@@ -189,24 +189,33 @@ def worker_alive(host: str, timeout: int = 3) -> bool:
     return False
 
 
-def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
+def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
                              window_secs: float = 0.1, pad_secs: float = 0.4,
-                             max_gap_secs: float = 2.0) -> None:
+                             min_gap_secs: float = 1.2,
+                             max_babble_secs: float = 3.5) -> None:
     """Cut Chatterbox's post-speech junk off the end of a narration WAV.
 
-    Chatterbox Multilingual often appends seconds of near-silence carrying
-    quiet babble and clicks after the last word (measured ~20 dB below speech
-    but well above the noise floor). Scene videos are stretched to narration
-    length, so that junk becomes an audible noisy freeze at the end of every
-    localized scene. Speech RMS sits far above *threshold_db* and the
-    artifacts sit below it, so: find the last window whose RMS clears the
-    threshold and cut *pad_secs* after it (keeping the natural decay).
+    Chatterbox Multilingual often appends junk after the last word: quiet
+    babble and clicks, or a babble swell nearly as loud as the speech itself
+    after a second-plus of near-silence. Scene videos are stretched to
+    narration length, so the junk becomes an audible noise at the end of
+    every localized scene.
 
-    Some takes hallucinate babble as LOUD as speech, separated from the real
-    narration by seconds of dead silence — those windows clear the threshold,
-    so loudness alone can't spot them. Narration never goes silent for
-    *max_gap_secs*, though, so everything after the first that-long gap
-    between loud windows is junk too, however loud it is.
+    Loudness is judged RELATIVE to the take's own speech level (the 90th-
+    percentile window RMS): voices land anywhere from -17 dB to -29 dB speech
+    RMS, so a fixed absolute threshold reads a quiet voice's speech as
+    silence and shreds it. A window within *rel_loud_db* of the speech level
+    counts as loud.
+
+    Two junk shapes are cut:
+      * a tail with no loud window in it (quiet babble/clicks) — cut
+        *pad_secs* after the last loud window, keeping the natural decay;
+      * a babble swell separated from the narration by a quiet stretch of
+        *min_gap_secs* or more (a lone one-window click doesn't split the
+        stretch). Real pauses can run past 2 s, but they resume with several
+        seconds of actual narration, while trailing babble is short — so a
+        stretch only counts as the junk boundary when less than
+        *max_babble_secs* of loud audio remains after it.
     Best-effort — on anything unexpected the file is left untouched.
     """
     import array
@@ -225,22 +234,40 @@ def _trim_trailing_artifacts(wav_path: Path, threshold_db: float = -32.0,
         if not samples or not rate:
             return
         win = max(1, int(rate * window_secs)) * channels
-        threshold = (10 ** (threshold_db / 20.0)) * 32768.0
-        loud_ends = []
+        rms_db = []
         for start in range(0, len(samples), win):
             chunk = samples[start:start + win]
             rms = math.sqrt(sum(x * x for x in chunk) / len(chunk))
-            if rms >= threshold:
-                loud_ends.append(start + len(chunk))
-        if not loud_ends:
+            rms_db.append(20 * math.log10(rms / 32768.0) if rms else -120.0)
+        speech_db = sorted(rms_db)[int(len(rms_db) * 0.9)]
+        loud = [db >= speech_db - rel_loud_db for db in rms_db]
+        if not any(loud):
             return  # no speech found at all — don't guess
-        last_loud_end = loud_ends[-1]
-        gap = int(rate * max_gap_secs) * channels
-        for a, b in zip(loud_ends, loud_ends[1:]):
-            if b - a > gap + win:  # dead air longer than any real pause
-                last_loud_end = a
+        # Quiet stretches, merged across single-window clicks.
+        stretches = []
+        i, n = 0, len(loud)
+        while i < n:
+            if loud[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and not loud[j]:
+                j += 1
+            if stretches and i - stretches[-1][1] == 1:
+                stretches[-1] = (stretches[-1][0], j)
+            else:
+                stretches.append((i, j))
+            i = j
+        cut_win = max(k for k in range(n) if loud[k])  # default: quiet-tail cut
+        gap_wins = max(1, int(min_gap_secs / window_secs))
+        for a, b in stretches:
+            if a == 0 or b - a < gap_wins:
+                continue
+            loud_after = sum(1 for k in range(a, n) if loud[k])
+            if loud_after * window_secs < max_babble_secs:
+                cut_win = max(k for k in range(a) if loud[k])
                 break
-        keep = min(len(samples), last_loud_end + int(rate * pad_secs) * channels)
+        keep = min(len(samples), (cut_win + 1) * win + int(rate * pad_secs) * channels)
         if len(samples) - keep < int(rate * 0.25) * channels:
             return  # tail already tight — nothing worth rewriting
         trimmed = samples[:keep]
