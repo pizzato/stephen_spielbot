@@ -126,6 +126,19 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Story division failed.')
     }
   },
+  // Retell the prose story at a new scene count (rewrites every chapter).
+  // Long-running (one LLM call per chapter), so same kick-off + poll pattern.
+  redraftStory: async (jobId, body) => {
+    const { task_id } = await req('POST', `/jobs/${jobId}/story/redraft`, body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 1500))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      // the endpoint spreads the story into the response; its own "status"
+      // field is clobbered by the task status, so drop it
+      if (s.status === 'done') { delete s.status; return s }
+      if (s.status === 'error') throw new Error(s.error || 'Story redraft failed.')
+    }
+  },
   getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
   // Persist edited chapter texts so a story review can be resumed later.
   saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),

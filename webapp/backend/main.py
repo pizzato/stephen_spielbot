@@ -2136,6 +2136,69 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
     return story
 
 
+class StoryRedraftBody(BaseModel):
+    n_scenes: int
+    # Edited chapter texts folded in before redrafting; [] keeps the draft as-is.
+    chapters: list[StoryChapterEdit] = []
+
+
+def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
+    """Retell the prose story at a new scene count (pipeline.story.redraft_story)
+    and persist it back to story.json — the normal review + divide flow then
+    runs with the new count."""
+    wd = _job_wd_or_404(job_id)
+    story = _read_story(wd)
+    if not story:
+        raise HTTPException(404, "This script has no story draft.")
+    n = int(body.n_scenes or 0)
+    if not (1 <= n <= 200):
+        raise HTTPException(400, "Scene count must be between 1 and 200.")
+    _merge_story_edits(story, body.chapters)
+
+    brief = _read_create_brief(wd)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, brief.get("style_name", ""))
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
+    user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
+    video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
+    display_topic = video_title or user_topic.splitlines()[0][:80]
+    try:
+        with _track_op(f"Redrafting story to {n} scenes", display_topic):
+            story = story_mode.redraft_story(story, n, character_sheet=character_sheet,
+                                             avoid_hint=avoid_hint)
+    except HTTPException:
+        raise
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Story redraft failed: {str(e).splitlines()[0][:300]}")
+    _story_path(wd).write_text(json.dumps(story, indent=2))
+    if brief:
+        brief["n_scenes"] = n
+        _write_create_brief(wd, brief)
+    return story
+
+
+def _run_story_redraft_task(task_id: str, job_id: str, body: "StoryRedraftBody") -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_story_redraft(job_id, body)}
+    except HTTPException as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e.detail)[:300]}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/jobs/{job_id}/story/redraft")
+def story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
+    """Redraft the story for a new scene count in the background; poll
+    /api/script/generate/status with the returned task id."""
+    _job_wd_or_404(job_id)
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_story_redraft_task, args=(task_id, job_id, body),
+                     daemon=True).start()
+    return {"task_id": task_id}
+
+
 # ── Script critic: post-generation QC (rewrite / delete / reorder scenes) ────
 
 _CRITIC_MAX_PASSES = 5
