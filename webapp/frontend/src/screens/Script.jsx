@@ -86,10 +86,19 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [story, setStory] = useState(null)
   const [storyDrafts, setStoryDrafts] = useState({})   // chapter -> edited text
   const [storyMsg, setStoryMsg] = useState('')
+  // Scene-count control: editing it away from story.n_scenes swaps Divide for
+  // "Redraft in N scenes" — a full prose retell at the new length.
+  const [sceneTarget, setSceneTarget] = useState('')
+  const [confirmRedraft, setConfirmRedraft] = useState(false)
   useEffect(() => {
-    setStory(null); setStoryDrafts({}); setStoryMsg('')
-    if (job?.job_id) api.getStory(job.job_id).then(setStory).catch(() => setStory(null))
+    setStory(null); setStoryDrafts({}); setStoryMsg(''); setSceneTarget(''); setConfirmRedraft(false)
+    if (job?.job_id) api.getStory(job.job_id)
+      .then((s) => { setStory(s); setSceneTarget(String(s.n_scenes || '')) })
+      .catch(() => setStory(null))
   }, [job?.job_id])
+  const sceneTargetN = Number(sceneTarget)
+  const sceneTargetOk = Number.isInteger(sceneTargetN) && sceneTargetN >= 1 && sceneTargetN <= 200
+  const sceneTargetChanged = !!story && sceneTargetOk && sceneTargetN !== Number(story.n_scenes)
   const storyChapters = () => (story?.chapters || []).map((c) => ({
     chapter: c.chapter, text: storyDrafts[c.chapter] ?? c.text,
   }))
@@ -99,6 +108,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const s = await api.saveStory(job.job_id, storyChapters())
       setStory(s); setStoryDrafts({})
       setStoryMsg('Story saved — you can come back to it any time.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const redraftStory = async () => {
+    setBusy('story-redraft'); setError(''); setStoryMsg(''); setConfirmRedraft(false)
+    try {
+      const s = await api.redraftStory(job.job_id, {
+        n_scenes: sceneTargetN,
+        chapters: storyChapters(),
+      })
+      setStory(s); setStoryDrafts({}); setSceneTarget(String(s.n_scenes || ''))
+      setStoryMsg(`Story redrafted for ${s.n_scenes} scenes — review it, then divide into scenes.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const divideStory = async () => {
@@ -800,6 +820,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
               {storyMsg && <Banner tone="ok">{storyMsg}</Banner>}
+              {busy === 'story-redraft' && (
+                <Banner tone="info">Redrafting the story for {sceneTargetN} scenes — every chapter is being rewritten, this takes a while…</Banner>
+              )}
               {(story.chapters || []).map((c) => (
                 <Field key={c.chapter}
                   label={(story.chapters.length > 1 ? `Chapter ${c.chapter} — ` : '') + (c.title || '') + ` (${c.scenes} scene${c.scenes === 1 ? '' : 's'})`}>
@@ -813,13 +836,33 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Button variant="ghost" icon="floppy-disk" disabled={!!busy} onClick={saveStory}>
                   {busy === 'story-save' ? 'Saving…' : 'Save story'}
                 </Button>
-                <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
-                  {busy === 'story-divide'
-                    ? 'Dividing into scenes…'
-                    : (scenes.length
-                      ? 'Divide again → new script'
-                      : `Divide into ${story.n_scenes || '?'} scenes →`)}
-                </Button>
+                <div className="row center gap-10 row--wrap">
+                  <span className="label-sm">Scenes</span>
+                  <input className="input" type="number" min={1} max={200} style={{ width: 76 }}
+                    value={sceneTarget} disabled={!!busy}
+                    onChange={(e) => { setSceneTarget(e.target.value); setConfirmRedraft(false) }} />
+                  {!sceneTargetChanged ? (
+                    <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
+                      {busy === 'story-divide'
+                        ? 'Dividing into scenes…'
+                        : (scenes.length
+                          ? 'Divide again → new script'
+                          : `Divide into ${story.n_scenes || '?'} scenes →`)}
+                    </Button>
+                  ) : confirmRedraft ? (
+                    <>
+                      <Button variant="danger" icon="wand-magic-sparkles" disabled={!!busy} onClick={redraftStory}>
+                        {busy === 'story-redraft' ? 'Redrafting…' : `Confirm — rewrite for ${sceneTargetN} scenes`}
+                      </Button>
+                      <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmRedraft(false)}>Cancel</Button>
+                    </>
+                  ) : (
+                    <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
+                      disabled={!!busy} onClick={() => setConfirmRedraft(true)}>
+                      {`Redraft in ${sceneTargetN} scenes…`}
+                    </Button>
+                  )}
+                </div>
               </div>
             </div>
           </Card>
@@ -841,9 +884,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row center gap-10">
                 <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
                 <span className="muted" style={{ fontSize: 12.5 }}>
-                  {scenes.length
-                    ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched.'
-                    : 'Edit freely and Save to come back later — the draft is kept until you divide it into scenes.'}
+                  {sceneTargetChanged
+                    ? `Redrafting rewrites the WHOLE prose story to fit ${sceneTargetN} scenes — the current draft is replaced and you'll review + divide again afterwards.`
+                      + (scenes.length ? ' Existing scenes stay untouched; dividing later forks into a new script.' : '')
+                    : scenes.length
+                      ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched. Change the scene count to redraft the story longer or shorter first.'
+                      : 'Edit freely and Save to come back later — the draft is kept until you divide it into scenes. Change the scene count to redraft the story longer or shorter.'}
                 </span>
               </div>
             </Card>
