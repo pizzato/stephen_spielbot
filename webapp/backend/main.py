@@ -2641,7 +2641,10 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
             sp = src / suffix
             if sp.exists():
                 shutil.copy2(sp, new_wd / suffix)
-    for extra in ("description.txt", "cover.png", "characters.json", "create_brief.json"):
+    # story.json keeps a story-mode source's prose draft, so the duplicate still
+    # shows the Story tab and can redraft/re-divide.
+    for extra in ("description.txt", "cover.png", "characters.json", "create_brief.json",
+                  "story.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)

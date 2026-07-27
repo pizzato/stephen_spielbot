@@ -228,6 +228,21 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(fork_story["status"], "divided")
         self.assertNotEqual(second["job_id"], first["job_id"])
 
+    def test_duplicate_carries_story_draft_across(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+        dup = backend.duplicate_script(backend.DuplicateScriptBody(work_dir=str(wd)))
+        new_wd = Path(dup["work_dir"])
+        self.assertNotEqual(new_wd, wd)
+        # the prose draft travels with the copy (status "divided" is fine — the
+        # Story tab shows for any story.json)
+        story = json.loads((new_wd / "story.json").read_text())
+        self.assertEqual(story["chapters"][0]["text"], "Original chapter prose.")
+        self.assertEqual(story["status"], "divided")
+
     # ── script critic ────────────────────────────────────────────────────────
 
     def _divided_job(self, n=4):
