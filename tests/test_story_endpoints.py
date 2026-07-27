@@ -141,6 +141,47 @@ class StoryEndpointTests(TempConfigCase):
             backend._do_story_divide(backend.DivideStoryBody(work_dir="/etc"))
         self.assertEqual(ctx.exception.status_code, 400)
 
+    # ── redraft: retell the story at a new scene count ───────────────────────
+
+    def test_redraft_merges_edits_persists_story_and_brief(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        body = backend.StoryRedraftBody(
+            n_scenes=10,
+            chapters=[backend.StoryChapterEdit(chapter=1, text="EDITED before redraft.")])
+        with mock.patch.object(backend.story_mode, "redraft_story",
+                               return_value=_fake_story(10)) as rd:
+            res = backend._do_story_redraft(draft["job_id"], body)
+        # the (edited) story and the new count reached redraft_story
+        story_arg, n_arg = rd.call_args.args
+        self.assertEqual(story_arg["chapters"][0]["text"], "EDITED before redraft.")
+        self.assertEqual(n_arg, 10)
+        # redrafted story persisted; the brief follows the new count
+        on_disk = json.loads((wd / "story.json").read_text())
+        self.assertEqual(on_disk["n_scenes"], 10)
+        brief = json.loads((wd / "create_brief.json").read_text())
+        self.assertEqual(brief["n_scenes"], 10)
+        self.assertEqual(res["n_scenes"], 10)
+
+    def test_redraft_rejects_bad_count_and_missing_draft(self):
+        draft = self._draft(4)
+        with self.assertRaises(HTTPException) as ctx:
+            backend._do_story_redraft(draft["job_id"],
+                                      backend.StoryRedraftBody(n_scenes=0))
+        self.assertEqual(ctx.exception.status_code, 400)
+        with self.assertRaises(HTTPException) as ctx:
+            backend._do_story_redraft(draft["job_id"],
+                                      backend.StoryRedraftBody(n_scenes=201))
+        self.assertEqual(ctx.exception.status_code, 400)
+        # a classic script (no story.json) 404s
+        wd = self.output_dir / "classic-script"
+        wd.mkdir()
+        (wd / "script.json").write_text("[]")
+        job_id = backend.job_id_from_work_dir(wd)
+        with self.assertRaises(HTTPException) as ctx:
+            backend._do_story_redraft(job_id, backend.StoryRedraftBody(n_scenes=10))
+        self.assertEqual(ctx.exception.status_code, 404)
+
     # ── headless chain + classic fallback ────────────────────────────────────
 
     def test_do_script_generate_chains_story_mode_headless(self):
