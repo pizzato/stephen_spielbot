@@ -268,6 +268,86 @@ def _critique_and_revise(call, title_context: str, chapters: list[dict],
     return {"verdict": verdict, "notes": notes, "chapters": flagged}
 
 
+# ── Story redraft: retell an existing story at a new scene count ─────────────
+
+def redraft_story(story: dict, n_scenes: int,
+                  character_sheet: str | None = None,
+                  avoid_hint: str | None = None) -> dict:
+    """Re-plan and rewrite an existing prose story for a new scene count —
+    expanding (more depth around the same beats) or contracting (keep the
+    strongest beats). Returns an updated story dict (status back to "draft");
+    style/music/characters are kept from the original."""
+    cfg = _load_cfg()
+    call = _call_fn(cfg)
+    n_scenes = int(n_scenes)
+    old_chapters = [c for c in (story.get("chapters") or [])
+                    if isinstance(c, dict) and str(c.get("text") or "").strip()]
+    if not old_chapters or n_scenes < 1:
+        raise RuntimeError("Story has no chapters to redraft")
+    title = str(story.get("topic") or "")
+    video_title = (story.get("video_title") or "").strip() or None
+    old_n_scenes = int(story.get("n_scenes") or 0) or sum(
+        int(c.get("scenes") or 1) for c in old_chapters)
+    n_chapters = max(1, math.ceil(n_scenes / _SCENES_PER_CHAPTER))
+    avoid_note = _avoid_note(avoid_hint)
+    identified = _norm_identified_characters(story.get("characters"))
+    character_note = _merge_character_note(_character_note(character_sheet), identified)
+    story_str = "\n\n".join(
+        f'Chapter {c["chapter"]} — "{c.get("title") or ""}":\n{c["text"]}'
+        for c in old_chapters
+    )
+
+    # ── New outline: retell the same story across the new chapter budget ──────
+    raw = call(
+        _prompts.system("story_redraft_outline", n_chapters=n_chapters, n_scenes=n_scenes),
+        _prompts.user("story_redraft_outline", title_line=_title_line(title, video_title),
+                      n_scenes=n_scenes, n_chapters=n_chapters, old_n_scenes=old_n_scenes,
+                      avoid_note=avoid_note, character_note=character_note,
+                      story_str=story_str),
+        600 + 120 * n_chapters, "story redraft outline",
+    )
+    outer = _parse_claude_response(raw, "story redraft outline")
+    raw_chapters = [c for c in (outer.get("chapters") or []) if isinstance(c, dict)]
+    if not raw_chapters:
+        raise RuntimeError("Story redraft outline returned no chapters")
+    budgets = _pro_rate_budgets([c.get("scenes") for c in raw_chapters], n_scenes)
+    outline = [{"chapter": i + 1,
+                "title": str(c.get("title") or f"Chapter {i + 1}").strip(),
+                "summary": str(c.get("summary") or "").strip(),
+                "scenes": budgets[i]}
+               for i, c in enumerate(raw_chapters[:len(budgets)])]
+
+    # ── Rewrite each chapter at its new length, from the source story ─────────
+    title_context = f'"{video_title}"' if video_title else f'"{title}"'
+    outline_str = "\n".join(
+        f'Chapter {o["chapter"]} — "{o["title"]}" ({o["scenes"]} scenes): {o["summary"]}'
+        for o in outline
+    )
+    chapters: list[dict] = []
+    for o in outline:
+        target_words = o["scenes"] * _WORDS_PER_SCENE
+        prev_tail = (
+            f'The previous chapter ends with: "…{_tail_words(chapters[-1]["text"])}"\n'
+            if chapters else ""
+        )
+        text = call(
+            _prompts.system("story_redraft_chapter", target_words=target_words),
+            _prompts.user("story_redraft_chapter", title_context=title_context,
+                          outline_str=outline_str, chapter_title=o["title"],
+                          chapter_summary=o["summary"], target_words=target_words,
+                          prev_tail=prev_tail, avoid_note=avoid_note,
+                          character_note=character_note, story_str=story_str),
+            o["scenes"] * 80 + 300, f'story redraft chapter {o["chapter"]}',
+        ).strip()
+        if not text:
+            raise RuntimeError(f'Story redraft chapter {o["chapter"]} came back empty')
+        chapters.append({**o, "text": text})
+
+    critique = _critique_and_revise(call, title_context, chapters, avoid_note, character_note)
+    return {**story, "n_scenes": n_scenes, "outline": outline, "chapters": chapters,
+            "critique": critique, "status": "draft", "updated_at": time.time()}
+
+
 # ── Scene division ────────────────────────────────────────────────────────────
 
 def divide_story(story: dict, n_scenes: int | None = None,

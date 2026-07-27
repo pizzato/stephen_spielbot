@@ -55,7 +55,9 @@ def make_fake(critique=None, divide_fail_over=None, divide_short_chunk=None):
         calls.append(label)
         if label == "story outline":
             return fake.outline_json
-        m = re.match(r"story chapter (\d+)$", label)
+        if label == "story redraft outline":
+            return fake.redraft_outline_json
+        m = re.match(r"story (?:redraft )?chapter (\d+)$", label)
         if m:
             return f"Prose for chapter {m.group(1)}. " * 5
         if label == "story critique":
@@ -82,6 +84,7 @@ def make_fake(critique=None, divide_fail_over=None, divide_short_chunk=None):
 
     fake.calls = calls
     fake.outline_json = None
+    fake.redraft_outline_json = None
     return fake
 
 
@@ -205,6 +208,44 @@ class DivideStoryTests(unittest.TestCase):
         # exactly one divide call per chapter, none failed
         divides = [c for c in fake.calls if c.startswith("divide scenes")]
         self.assertEqual(len(divides), 20)
+
+
+class RedraftStoryTests(unittest.TestCase):
+    def _generate_then_redraft(self, n_from, n_to, fake=None):
+        fake = fake or make_fake()
+        fake.outline_json = _outline_json(
+            max(1, math.ceil(n_from / story._SCENES_PER_CHAPTER)), n_from)
+        fake.redraft_outline_json = _outline_json(
+            max(1, math.ceil(n_to / story._SCENES_PER_CHAPTER)), n_to)
+        with mock.patch.object(story, "_chat_complete", fake):
+            s = story.generate_story("Test topic", n_from)
+            return s, story.redraft_story(s, n_to), fake
+
+    def test_expand_replans_and_rewrites_every_chapter(self):
+        s, s2, fake = self._generate_then_redraft(6, 25)
+        self.assertEqual(s2["n_scenes"], 25)
+        self.assertEqual(len(s2["chapters"]), 3)
+        self.assertEqual(sum(c["scenes"] for c in s2["chapters"]), 25)
+        self.assertTrue(all(c["text"].strip() for c in s2["chapters"]))
+        self.assertEqual(s2["status"], "draft")
+        # style/music/characters carry over untouched
+        self.assertEqual(s2["style"], s["style"])
+        self.assertEqual(s2["music"], s["music"])
+        self.assertEqual(s2["characters"], s["characters"])
+        self.assertEqual(len([c for c in fake.calls
+                              if c.startswith("story redraft chapter")]), 3)
+
+    def test_contract_and_divide_uses_new_count(self):
+        _, s2, fake = self._generate_then_redraft(20, 6)
+        self.assertEqual(s2["n_scenes"], 6)
+        self.assertEqual(sum(c["scenes"] for c in s2["chapters"]), 6)
+        with mock.patch.object(story, "_chat_complete", fake):
+            scenes, *_ = story.divide_story(s2)
+        self.assertEqual([sc.id for sc in scenes], list(range(1, 7)))
+
+    def test_empty_story_raises(self):
+        with self.assertRaises(RuntimeError):
+            story.redraft_story({"chapters": []}, 10)
 
 
 class CritiqueScenesTests(unittest.TestCase):
