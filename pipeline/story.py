@@ -405,8 +405,9 @@ def divide_story(story: dict, n_scenes: int | None = None,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after divide fill — used title", s.id)
-    identified = _detect_recurring_characters(call, final_scenes, identified)
     style = style_hint.strip() if style_hint and style_hint.strip() else str(story.get("style") or "")
+    identified = _detect_recurring_characters(call, final_scenes, identified,
+                                              style_hint=style)
     music = str(story.get("music") or "cinematic orchestral background music, atmospheric, instrumental")
     return final_scenes, music, style, identified
 
