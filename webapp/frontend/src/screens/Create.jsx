@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api } from '../api.js'
-import { resolveStyle } from '../styleUtils.js'
+import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
 function fmtNum(n) {
   if (n == null) return '—'
@@ -214,9 +214,9 @@ export default function Create({ seed, meta, onGenerated }) {
                   ? (profile.description || 'Sets the narrator and visuals below, plus render quality and audio mix — manage styles in Settings.')
                   : 'Experiment freely — narrator and visuals are yours; render quality and audio mix come from the default style.'}>
                 <select className="select" value={profile ? profile.name : NO_STYLE} onChange={(e) => onStyleChange(e.target.value)} style={{ maxWidth: 320 }}>
-                  {styleList.map((s) => (
+                  {styleTreeOrder(styleList).map(({ style: s, depth }) => (
                     <option key={s.name} value={s.name}>
-                      {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
+                      {'  '.repeat(depth)}{depth ? '↳ ' : ''}{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
                     </option>
                   ))}
                   <option value={NO_STYLE}>No style — experiment</option>

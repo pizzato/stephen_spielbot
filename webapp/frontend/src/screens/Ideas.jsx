@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Chip, Button, Segmented, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
-import { resolveStyle } from '../styleUtils.js'
+import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
 function Stars({ value }) {
   if (value == null) return null
@@ -364,9 +364,9 @@ export default function Ideas({ go, meta = {} }) {
               <select className="select" value={isAll ? ALL_STYLES : effectiveStyle} onChange={(e) => pickStyle(e.target.value)}
                 disabled={loadingIdeas} style={{ maxWidth: 220 }} title="Ideas are generated for this style">
                 {styleList.length > 1 && <option value={ALL_STYLES}>All styles (mix)</option>}
-                {styleList.map((s) => (
+                {styleTreeOrder(styleList).map(({ style: s, depth }) => (
                   <option key={s.name} value={s.name}>
-                    {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
+                    {'  '.repeat(depth)}{depth ? '↳ ' : ''}{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
                   </option>
                 ))}
               </select>
