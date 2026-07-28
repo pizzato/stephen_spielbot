@@ -19,48 +19,6 @@ const AUTO_FLAGS = [
   'youtube_auto_post',
 ]
 
-// Human labels for per-style fields — shown on the override chips of a child
-// style (style hierarchy). Unknown keys fall back to the raw key.
-const STYLE_FIELD_LABELS = {
-  description: 'Description',
-  channel: 'YouTube channel',
-  youtube_playlist_id: 'YouTube playlist',
-  x_account: 'X account',
-  auto_pick_exclude: 'Exclude from auto-picked ideas',
-  n_scenes: 'Default scenes',
-  script_mode: 'Script mode',
-  visual_style: 'Visual style',
-  video_style: 'Video / motion style',
-  video_negative_prompt: 'Video negative prompt',
-  title_style: 'Title style',
-  extra_instructions: 'Extra script instructions',
-  script_avoid: 'Script — avoid',
-  description_suffix: 'YouTube description suffix',
-  attribution_description: 'Attribution footer',
-  attribution_hashtags: 'Attribution X hashtags',
-  attribution_youtube_tags: 'Attribution YouTube tags',
-  tts_engine: 'Voice model',
-  tts_language: 'Narration language',
-  voice: 'Narrator voice',
-  voice_robotic: 'Robotic voice',
-  voice_speed: 'Voice speed',
-  voice_robotic_amount: 'Robotic level',
-  auto_accept_characters: 'Accept all characters',
-  character_ids: 'Characters',
-  resolution: 'Resolution',
-  first_pass_steps: 'First-pass steps',
-  second_pass_steps: 'Second-pass steps',
-  first_pass_cfg: 'First-pass CFG',
-  second_pass_cfg: 'Second-pass CFG',
-  lora_strength: 'LoRA strength',
-  image_engine: 'Image model — generation',
-  edit_engine: 'Image model — edit',
-  voice_vol: 'Voice volume',
-  music_vol: 'Music volume',
-  ambient_vol: 'Ambient volume',
-  size_presets: 'Size presets',
-}
-
 // Live hint for the "Videos per day" cadence input: shows the even spacing it
 // implies (2/day → "≈ one every 12h"). 0 = no throttle.
 function cadenceHint(perDay) {
@@ -1081,12 +1039,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     }
     return kids
   }, [styles, st.name])
-  // Non-text fields the selected style explicitly overrides. Text fields are
-  // NOT listed as chips — their boxes literally show what's used ("{parent}"
-  // stands for the parent's text), so they carry no hidden state to surface.
-  const overriddenFields = st.parent
-    ? Object.keys(st).filter((k) => k !== 'name' && k !== 'parent' && !STYLE_TEXT_FIELDS.has(k))
-    : []
   // The parent's own resolved settings — what "{parent}" expands to.
   const parentEff = useMemo(() => (st.parent ? resolveStyle(styles, st.parent) : null),
     [styles, st.parent])
@@ -1124,6 +1076,59 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       </div>
     )
   }
+  // Human-readable rendering of a parent's value for the per-field hints below.
+  const fmtParentVal = (k, v) => {
+    switch (k) {
+      case 'channel': {
+        const c = (cfg.youtube_channels || []).find((x) => x.id === v)
+        return c ? (c.name || c.id) : (v || '(first connected channel)')
+      }
+      case 'x_account': {
+        const a = (cfg.x_accounts || []).find((x) => x.id === v)
+        return a ? (a.name ? `@${a.name}` : a.id) : (v || '(don’t post to X)')
+      }
+      case 'youtube_playlist_id':
+        return v === '__auto__' ? 'auto-create playlist' : (v || '(no playlist)')
+      case 'image_engine':
+      case 'edit_engine':
+        return (engineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'tts_engine':
+        return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'script_mode':
+        return v === 'story' ? 'Story-first' : 'Classic'
+      case 'voice':
+        return v || '(F5-TTS default)'
+      case 'character_ids': {
+        const names = (v || []).map((id) => (cfg.characters || []).find((c) => c.id === id)?.name || id)
+        return names.length ? names.join(', ') : '(none)'
+      }
+      case 'size_presets':
+        return ['small', 'medium', 'large'].map((b) => {
+          const p = (v || {})[b] || {}
+          return `${b}: ${p.scenes ?? '?'} scenes · ${p.resolution || '?'}`
+        }).join('  ·  ')
+      default:
+        if (typeof v === 'boolean') return v ? 'on' : 'off'
+        return v === '' || v == null ? '(blank)' : String(v)
+    }
+  }
+  // Per-field inheritance hint for non-text settings on a child style: shows
+  // the parent's value. While in sync nothing is recorded (the field follows
+  // the parent live); once diverged, the recorded value wins — clicking the
+  // parent's value drops it and follows the parent again.
+  const ParentVal = ({ k }) => {
+    if (!st.parent || parentMissing) return null
+    if (st[k] === undefined) {
+      return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Follows “{st.parent}”.</div>
+    }
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+        “{st.parent}”: <a role="button" tabIndex={0} title={`Use “${st.parent}”’s value again`}
+          style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+          onClick={() => clearStyleField(k)}><em>{fmtParentVal(k, parentEff?.[k])}</em></a> — click to use it.
+      </div>
+    )
+  }
 
   // Playlists for the active style's channel (per-style playlist picker below).
   // Effective channel mirrors the backend's channel_for_style fallback (own
@@ -1142,9 +1147,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     const list = c.styles || []
     const cur = list[styleIdx]
     if (!cur) return c
-    // A child text field that is exactly "{parent}" means plain inheritance —
-    // store nothing, so the field keeps following the parent live.
-    const drop = cur.parent && STYLE_TEXT_FIELDS.has(k) && v === '{parent}'
+    // Inheritance is equality: a child text field that is exactly "{parent}",
+    // or any other field set to the parent's current effective value, stores
+    // nothing — the field keeps following the parent live. Only real
+    // differences are recorded, and they win until changed back.
+    const drop = cur.parent && k !== 'name' && (
+      STYLE_TEXT_FIELDS.has(k)
+        ? v === '{parent}'
+        : JSON.stringify(v ?? null) === JSON.stringify((resolveStyle(list, cur.parent) || {})[k] ?? null))
     const next = {
       ...c,
       styles: list.map((s, i) => {
@@ -1769,28 +1779,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {parentMissing && (
                 <Banner tone="warn">Parent style “{st.parent}” doesn’t exist — this style behaves like a standalone one until the parent is restored or re-picked.</Banner>
               )}
-              {st.parent && !parentMissing && (
-                <div className="stack gap-6">
-                  <span className="label-sm">Setting overrides</span>
-                  {overriddenFields.length === 0 ? (
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      No setting overrides — dropdowns, numbers and toggles all follow “{st.parent}”. Text fields show their content directly: <code>{'{parent}'}</code> stands for “{st.parent}”’s text.
-                    </div>
-                  ) : (<>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      These settings are set on this style; other dropdowns, numbers and toggles follow “{st.parent}”. Click ✕ to drop one and inherit again. Text fields aren’t listed — their boxes show exactly what’s used (<code>{'{parent}'}</code> = the parent’s text).
-                    </div>
-                    <div className="row gap-6 row--wrap">
-                      {overriddenFields.map((k) => (
-                        <Button key={k} variant="ghost" onClick={() => clearStyleField(k)}
-                          title={`Drop the override and inherit “${STYLE_FIELD_LABELS[k] || k}” from “${st.parent}”`}>
-                          {`${STYLE_FIELD_LABELS[k] || k} ✕`}
-                        </Button>
-                      ))}
-                    </div>
-                  </>)}
-                </div>
-              )}
               <Field label="Description" hint="What this style is for — shown when choosing a style for a video.">
                 <textarea className="textarea" rows={2} value={fieldVal('description')} onChange={(e) => setStyleField('description', e.target.value)} />
                 <ParentPreview k="description" />
@@ -1800,6 +1788,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <option value="">(first connected channel)</option>
                   {(cfg.youtube_channels || []).map((c) => <option key={c.id} value={c.id}>{c.name || c.id}</option>)}
                 </select>
+                <ParentVal k="channel" />
               </Field>
               <Field label="YouTube playlist" hint="Add every upload in this style to a playlist on its channel. “Auto-create” makes (or reuses) one named after the style.">
                 <select className="select" value={eff.youtube_playlist_id || ''} onChange={(e) => setStyleField('youtube_playlist_id', e.target.value)} style={{ maxWidth: 320 }}>
@@ -1810,6 +1799,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     && !stPlaylists.items.some((p) => p.id === eff.youtube_playlist_id)
                     && <option value={eff.youtube_playlist_id}>{stPlaylists.loading ? 'Loading…' : `${eff.youtube_playlist_id} (not on this channel)`}</option>}
                 </select>
+                <ParentVal k="youtube_playlist_id" />
                 {stPlaylists.error
                   ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Couldn’t load playlists: {stPlaylists.error}</div>
                   : stPlaylists.loading
@@ -1821,9 +1811,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <option value="">(none — don’t post to X)</option>
                   {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
                 </select>
+                <ParentVal k="x_account" />
               </Field>
               <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
                 label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
+              <ParentVal k="auto_pick_exclude" />
             </div>
           </Card>
 
@@ -1833,12 +1825,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="stack gap-22 mt-16">
               <Field label="Default scenes">
                 <input className="input" type="number" value={eff.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} style={{ maxWidth: 160 }} />
+                <ParentVal k="n_scenes" />
               </Field>
               <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
                 <select className="select" value={eff.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="classic">Classic — scenes directly</option>
                   <option value="story">Story-first — draft, judge, then divide</option>
                 </select>
+                <ParentVal k="script_mode" />
               </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
@@ -1887,6 +1881,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
                   ))}
                 </select>
+                <ParentVal k="tts_engine" />
               </Field>
               {/* Narration language — only multilingual voice models (Chatterbox) speak
                   non-English; the F5 models ignore it, so the picker hides for them. */}
@@ -1900,6 +1895,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                         <option key={code} value={code}>{name}</option>
                       ))}
                     </select>
+                    <ParentVal k="tts_language" />
                   </Field>
                 )
               })()}
@@ -1908,10 +1904,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <div className="grow"><Field label="Narrator voice"><select className="select" value={eff.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
                   <option value="">(F5-TTS default)</option>
                   {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>)}
-                </select></Field></div>
+                </select><ParentVal k="voice" /></Field></div>
                 <div className="grow" style={{ paddingBottom: 12 }}>
                   <Check checked={!!eff.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
                     label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
+                  <ParentVal k="voice_robotic" />
                 </div>
               </div>
               <div className="row gap-22 row--wrap">
@@ -1920,12 +1917,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <input className="slider" type="range" min={0.5} max={1.5} step={0.05}
                     value={eff.voice_speed ?? 1}
                     onChange={(e) => setStyleField('voice_speed', +e.target.value)} />
+                  <ParentVal k="voice_speed" />
                 </Field></div>
                 <div className="grow"><Field label={`Robotic level — ${Math.round((eff.voice_robotic_amount ?? 0.35) * 100)}%`}
                   hint="0% is natural, higher is more synthetic — used when “Robotic voice” is on.">
                   <input className="slider" type="range" min={0} max={1} step={0.05}
                     value={eff.voice_robotic_amount ?? 0.35}
                     onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
+                  <ParentVal k="voice_robotic_amount" />
                 </Field></div>
               </div>
               <VoiceTester voice={eff.voice} roboticAmount={eff.voice_robotic_amount} speed={eff.voice_speed} engine={eff.tts_engine} language={eff.tts_language} onError={setError} />
@@ -1944,6 +1943,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="stack gap-10 mt-16">
               <Check checked={!!eff.auto_accept_characters} onChange={(v) => setStyleField('auto_accept_characters', v)}
                 label="Accept all characters automatically — every character in the library, including ones added later, can appear in this style." />
+              <ParentVal k="auto_accept_characters" />
               {eff.auto_accept_characters ? (
                 <div className="muted" style={{ fontSize: 12 }}>All {chars.filter((c) => c.id && c.enabled !== false).length} character(s) in the library are accepted. Turn this off to pick specific ones.</div>
               ) : (<>
@@ -1954,6 +1954,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 ))}
                 {chars.some((c) => !c.id) && <div className="muted" style={{ fontSize: 12 }}>Save settings to enable newly added characters here.</div>}
               </>)}
+              <ParentVal k="character_ids" />
             </div>
           </Card>
 
@@ -1963,15 +1964,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <div className="stack gap-22 mt-16">
               <Field label="Resolution" hint="Orientation, then quality (higher = slower).">
                 <ResolutionPicker value={eff.resolution || ''} onChange={(r) => setStyleField('resolution', r)} meta={meta} />
+                <ParentVal k="resolution" />
               </Field>
               <div className="row gap-22 row--wrap">
                 <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">
-                  <input className="input" type="number" value={eff.first_pass_steps ?? ''} onChange={(e) => setStyleField('first_pass_steps', +e.target.value)} /></Field></div>
+                  <input className="input" type="number" value={eff.first_pass_steps ?? ''} onChange={(e) => setStyleField('first_pass_steps', +e.target.value)} /><ParentVal k="first_pass_steps" /></Field></div>
                 <div className="grow"><Field label="Second-pass steps">
-                  <input className="input" type="number" value={eff.second_pass_steps ?? ''} onChange={(e) => setStyleField('second_pass_steps', +e.target.value)} /></Field></div>
+                  <input className="input" type="number" value={eff.second_pass_steps ?? ''} onChange={(e) => setStyleField('second_pass_steps', +e.target.value)} /><ParentVal k="second_pass_steps" /></Field></div>
               </div>
               <Field label={`LoRA strength — ${eff.lora_strength ?? 0}`}>
                 <input className="slider" type="range" min={0} max={1} step={0.05} value={eff.lora_strength ?? 0} onChange={(e) => setStyleField('lora_strength', +e.target.value)} />
+                <ParentVal k="lora_strength" />
               </Field>
             </div>
           </Card>
@@ -1989,6 +1992,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
+                  <ParentVal k="image_engine" />
                 </Field>
                 <Field label="Edit (mask + prompt)" hint="Model used for masked 'Edit image' inpaints.">
                   <select className="select" value={eff.edit_engine || 'flux1-schnell'} onChange={(e) => setStyleField('edit_engine', e.target.value)}>
@@ -1996,6 +2000,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
                   </select>
+                  <ParentVal k="edit_engine" />
                 </Field>
               </>)}
             </div>
@@ -2008,6 +2013,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
                 <Field key={k} label={`${label} — ${eff[k] ?? 0}%`}>
                   <input className="slider" type="range" min={0} max={max} value={eff[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />
+                  <ParentVal k={k} />
                 </Field>
               ))}
             </div>
@@ -2037,6 +2043,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
+              <ParentVal k="size_presets" />
             </div>
           </Card>
         </>)}
