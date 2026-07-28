@@ -236,6 +236,9 @@ export const api = {
   dismissSuggestion: (body) => req('POST', '/youtube/suggestions/dismiss', body),
   // Discarded ideas: list them, bring one back, or forget it for good.
   getDiscarded: (styleName) => req('GET', '/youtube/suggestions/discarded' + (styleName ? `?style_name=${encodeURIComponent(styleName)}` : '')),
+  // Accepted ideas: list them and mark one as acted upon (queued/created).
+  getAccepted: (styleName) => req('GET', '/youtube/suggestions/accepted' + (styleName ? `?style_name=${encodeURIComponent(styleName)}` : '')),
+  actSuggestion: (body) => req('POST', '/youtube/suggestions/accepted/act', body),
   reviveSuggestion: (body) => req('POST', '/youtube/suggestions/revive', body),
   forgetSuggestion: (body) => req('POST', '/youtube/suggestions/forget', body),
   // Empty the declined ("not accepted") ideas list (Settings → Automation).
