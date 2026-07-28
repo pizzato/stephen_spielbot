@@ -1,6 +1,7 @@
 import { useState, useEffect, Fragment } from 'react'
 import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker } from '../components.jsx'
 import { api } from '../api.js'
+import { resolveStyle } from '../styleUtils.js'
 
 const STATUS_CHIP = {
   pending: ['accent', 'Queued'], creating: ['info', 'Rendering'], running: ['info', 'Rendering'],
@@ -43,9 +44,10 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [views, setViews] = useState({})
   const styleList = meta.config?.styles || []
 
-  // Resolution the item would render at — its own, else its style's, else the default.
+  // Resolution the item would render at — its own, else its style's (resolved
+  // through the parent chain for sparse child styles), else the default.
   const effectiveResolution = (it) => {
-    const st = styleList.find((s) => s.name === (it.gen_style_name || meta.config?.default_style))
+    const st = resolveStyle(styleList, it.gen_style_name || meta.config?.default_style)
     return it.gen_resolution || st?.resolution || meta.config?.resolution || meta.default_resolution || ''
   }
 
