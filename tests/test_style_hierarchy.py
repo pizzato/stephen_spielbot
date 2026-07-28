@@ -206,6 +206,103 @@ class LineageResolutionTests(TempConfigCase):
         self.assertEqual(ss["music_vol"], 11)  # mix still tracks the default chain
 
 
+class ParentMarkerCompositionTests(TempConfigCase):
+    """"{parent}" in a child's TEXT field splices the parent's resolved text in
+    at that position (start/middle/end), recursing through the chain; fields
+    without the marker keep plain replace semantics, non-text fields always do."""
+
+    def test_marker_position_controls_order(self):
+        self.write_config({
+            "styles": [
+                _style("BHOB", extra_instructions="Focus on the band story arc."),
+                _child("After", "BHOB", extra_instructions="{parent} En español."),
+                _child("Before", "BHOB", extra_instructions="En español. {parent}"),
+                _child("Middle", "BHOB", extra_instructions="AB {parent} CD"),
+            ],
+            "default_style": "BHOB",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "After")["extra_instructions"],
+                         "Focus on the band story arc. En español.")
+        self.assertEqual(app.style_settings(cfg, "Before")["extra_instructions"],
+                         "En español. Focus on the band story arc.")
+        self.assertEqual(app.style_settings(cfg, "Middle")["extra_instructions"],
+                         "AB Focus on the band story arc. CD")
+
+    def test_composition_recurses_through_grandchild(self):
+        self.write_config({
+            "styles": [
+                _style("Root", extra_instructions="base"),
+                _child("Kid", "Root", extra_instructions="{parent} teen"),
+                _child("Grandkid", "Kid", extra_instructions="{parent} kid"),
+            ],
+            "default_style": "Root",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "Grandkid")["extra_instructions"],
+                         "base teen kid")
+
+    def test_marker_stored_raw_and_expanded_only_at_read(self):
+        self.write_config({
+            "styles": [_style("BHOB"),
+                       _child("Kid", "BHOB", visual_style="{parent}, but neon")],
+            "default_style": "BHOB",
+        })
+        cfg = app.load_config()
+        app.save_config(cfg)
+        raw_kid = next(s for s in self.read_config()["styles"] if s["name"] == "Kid")
+        self.assertEqual(raw_kid["visual_style"], "{parent}, but neon")  # marker persists
+        self.assertEqual(app.style_settings(cfg, "Kid")["visual_style"],
+                         "BHOB visual, but neon")
+
+    def test_description_and_multiple_markers(self):
+        self.write_config({
+            "styles": [_style("BHOB"),
+                       _child("Kid", "BHOB", description="{parent} — otra vez: {parent}")],
+            "default_style": "BHOB",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "Kid")["description"],
+                         "BHOB look — otra vez: BHOB look")
+
+    def test_marker_in_root_expands_to_empty_not_flat_seed(self):
+        self.write_config({
+            "styles": [_style("Solo", extra_instructions="{parent} standalone")],
+            "default_style": "Solo",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "Solo")["extra_instructions"],
+                         "standalone")
+
+    def test_non_text_fields_never_expand(self):
+        self.write_config({
+            "styles": [_style("BHOB"), _child("Kid", "BHOB", voice="{parent}")],
+            "default_style": "BHOB",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "Kid")["voice"], "{parent}")
+
+    def test_empty_parent_text_leaves_clean_composition(self):
+        self.write_config({
+            "styles": [_style("BHOB", script_avoid=""),
+                       _child("Kid", "BHOB", script_avoid="{parent} no politics")],
+            "default_style": "BHOB",
+        })
+        cfg = app.load_config()
+        self.assertEqual(app.style_settings(cfg, "Kid")["script_avoid"], "no politics")
+
+    def test_default_style_as_composing_child_mirrors_final_text(self):
+        self.write_config({
+            "styles": [_style("BHOB"),
+                       _child("Kid", "BHOB", visual_style="{parent}, en español")],
+            "default_style": "Kid",
+        })
+        cfg = app.load_config()
+        # resume_generation.py / pipeline/llm.py read the flat mirror raw — it
+        # must carry the composed text, never the marker.
+        self.assertEqual(cfg["default_visual_style"], "BHOB visual, en español")
+
+
 class HierarchyConsumerTests(TempConfigCase):
     def test_auto_pick_exclude_inherits_and_child_can_opt_back_in(self):
         self.write_config({
