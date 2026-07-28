@@ -1085,6 +1085,35 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const overriddenFields = st.parent
     ? Object.keys(st).filter((k) => k !== 'name' && k !== 'parent')
     : []
+  // The parent's own resolved settings — what "{parent}" expands to in a
+  // composed text field, and what an override is replacing.
+  const parentEff = useMemo(() => (st.parent ? resolveStyle(styles, st.parent) : null),
+    [styles, st.parent])
+  // TEXT controls bind to the RAW override when one exists (so a "{parent}"
+  // marker stays visible and editable) and to the resolved value otherwise.
+  // For marker-less overrides the two are identical.
+  const fieldVal = (k) => (st.parent && st[k] !== undefined ? (st[k] ?? '') : (eff[k] ?? ''))
+  // Under an overridden text field of a child style: show what the override
+  // replaces, or — when it embeds "{parent}" — the final composed text.
+  const ParentPreview = ({ k }) => {
+    if (!st.parent || parentMissing || st[k] === undefined) return null
+    const own = String(st[k] ?? '')
+    if (own.includes('{parent}')) {
+      return (
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Final — with “{st.parent}”’s text filled in: <em>{String(eff[k] ?? '') || '(empty)'}</em>
+        </div>
+      )
+    }
+    const pv = String(parentEff?.[k] ?? '')
+    if (!pv) return null
+    return (
+      <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+        Replaces “{st.parent}”’s: <em>{pv.length > 160 ? `${pv.slice(0, 160)}…` : pv}</em>
+        {' '}— write <code>{'{parent}'}</code> where its text should stay (before, after, or in the middle of yours).
+      </div>
+    )
+  }
 
   // Playlists for the active style's channel (per-style playlist picker below).
   // Effective channel mirrors the backend's channel_for_style fallback (own
@@ -1663,7 +1692,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="Name">
                 <input className="input" value={st.name || ''} onChange={(e) => setStyleField('name', e.target.value)} style={{ maxWidth: 320 }} />
               </Field>
-              <Field label="Parent style" hint="Inherit every setting from another style and override only what differs — later edits to the parent flow through to this style automatically. Picking a parent keeps just the fields that differ from it; clearing it freezes the current values.">
+              <Field label="Parent style" hint="Inherit every setting from another style and override only what differs — later edits to the parent flow through to this style automatically. Picking a parent keeps just the fields that differ from it; clearing it freezes the current values. In text fields, write {parent} where the parent’s text should stay — before, after, or in the middle of yours.">
                 <select className="select" value={st.parent || ''} onChange={(e) => setParent(e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="">(none — standalone style)</option>
                   {styles.filter((s) => s.name && s.name !== st.name && !stDescendants.has(s.name))
@@ -1697,7 +1726,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </div>
               )}
               <Field label="Description" hint="What this style is for — shown when choosing a style for a video.">
-                <textarea className="textarea" rows={2} value={eff.description || ''} onChange={(e) => setStyleField('description', e.target.value)} />
+                <textarea className="textarea" rows={2} value={fieldVal('description')} onChange={(e) => setStyleField('description', e.target.value)} />
+                <ParentPreview k="description" />
               </Field>
               <Field label="YouTube channel" hint="Where videos in this style are published — connect channels in the Channels tab.">
                 <select className="select" value={eff.channel || ''} onChange={(e) => setStyleField('channel', e.target.value)} style={{ maxWidth: 320 }}>
@@ -1745,34 +1775,44 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select>
               </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
-                <input className="input" value={eff.visual_style || ''} onChange={(e) => setStyleField('visual_style', e.target.value)} />
+                <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
+                <ParentPreview k="visual_style" />
               </Field>
               <Field label="Video / motion style" hint="Steers how each scene moves — camera and subject motion in every scene's video prompt. e.g. “Favour dynamic action and visible movement over static shots and slow pans.”">
-                <textarea className="textarea" rows={2} value={eff.video_style || ''} onChange={(e) => setStyleField('video_style', e.target.value)} />
+                <textarea className="textarea" rows={2} value={fieldVal('video_style')} onChange={(e) => setStyleField('video_style', e.target.value)} />
+                <ParentPreview k="video_style" />
               </Field>
               <Field label="Video negative prompt" hint="Things to keep OUT of every video render in this style (artifacts, unwanted objects, styles). Leave blank to use the built-in quality default (blur, watermark, distortion, …).">
-                <textarea className="textarea" rows={3} value={eff.video_negative_prompt || ''} onChange={(e) => setStyleField('video_negative_prompt', e.target.value)} />
+                <textarea className="textarea" rows={3} value={fieldVal('video_negative_prompt')} onChange={(e) => setStyleField('video_negative_prompt', e.target.value)} />
+                <ParentPreview k="video_negative_prompt" />
               </Field>
               <Field label="Title style" hint="How AI-suggested video titles are worded — e.g. “short and punchy” or “pose an intriguing question”.">
-                <textarea className="textarea" rows={2} value={eff.title_style || ''} onChange={(e) => setStyleField('title_style', e.target.value)} />
+                <textarea className="textarea" rows={2} value={fieldVal('title_style')} onChange={(e) => setStyleField('title_style', e.target.value)} />
+                <ParentPreview k="title_style" />
               </Field>
               <Field label="Extra script instructions" hint="Appended to every topic.">
-                <textarea className="textarea" rows={8} value={eff.extra_instructions || ''} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
+                <textarea className="textarea" rows={8} value={fieldVal('extra_instructions')} onChange={(e) => setStyleField('extra_instructions', e.target.value)} />
+                <ParentPreview k="extra_instructions" />
               </Field>
               <Field label="Script — avoid" hint="Tell the writer what to keep OUT of the script for this style (topics, words, tropes, tone). e.g. “no politics, avoid the word ‘journey’, don't be preachy.”">
-                <textarea className="textarea" rows={4} value={eff.script_avoid || ''} onChange={(e) => setStyleField('script_avoid', e.target.value)} />
+                <textarea className="textarea" rows={4} value={fieldVal('script_avoid')} onChange={(e) => setStyleField('script_avoid', e.target.value)} />
+                <ParentPreview k="script_avoid" />
               </Field>
               <Field label="YouTube description suffix" hint="Appended to every generated YouTube description for videos in this style.">
-                <textarea className="textarea" rows={3} value={eff.description_suffix || ''} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
+                <textarea className="textarea" rows={3} value={fieldVal('description_suffix')} onChange={(e) => setStyleField('description_suffix', e.target.value)} />
+                <ParentPreview k="description_suffix" />
               </Field>
               <Field label="Attribution footer" hint="Credit line appended to every YouTube description for this style. Cleared = no credit line.">
-                <textarea className="textarea" rows={2} value={eff.attribution_description || ''} onChange={(e) => setStyleField('attribution_description', e.target.value)} />
+                <textarea className="textarea" rows={2} value={fieldVal('attribution_description')} onChange={(e) => setStyleField('attribution_description', e.target.value)} />
+                <ParentPreview k="attribution_description" />
               </Field>
               <Field label="Attribution X hashtags" hint="Extra hashtags appended to X posts for this style — space or comma separated, the “#” is optional. e.g. “stephenspielbot”.">
-                <input className="input" value={eff.attribution_hashtags || ''} onChange={(e) => setStyleField('attribution_hashtags', e.target.value)} />
+                <input className="input" value={fieldVal('attribution_hashtags')} onChange={(e) => setStyleField('attribution_hashtags', e.target.value)} />
+                <ParentPreview k="attribution_hashtags" />
               </Field>
               <Field label="Attribution YouTube tags" hint="Extra keyword tags appended to YouTube uploads for this style — comma separated. e.g. “stephenspielbot”.">
-                <input className="input" value={eff.attribution_youtube_tags || ''} onChange={(e) => setStyleField('attribution_youtube_tags', e.target.value)} />
+                <input className="input" value={fieldVal('attribution_youtube_tags')} onChange={(e) => setStyleField('attribution_youtube_tags', e.target.value)} />
+                <ParentPreview k="attribution_youtube_tags" />
               </Field>
               {/* Voice model (TTS engine) — which narration model synthesises this style */}
               <Field label="Voice model" hint="Which TTS model synthesises this style's narration. OpenF5 is Apache-2.0 (commercial-safe); non-commercial models are flagged. Download models under Infrastructure.">

@@ -409,6 +409,31 @@ STYLE_FIELD_TO_FLAT = {
     "ambient_vol":          "ambient_vol",
 }
 
+# Free-text style fields where a child override may embed the literal marker
+# "{parent}": it is replaced with the parent's RESOLVED text for that field
+# (empty for a root), so a child can extend the parent's instructions — before,
+# after, or around its own — instead of replacing them. Composition recurses:
+# a grandchild's {parent} receives the child's already-composed text. All other
+# fields (names, ids, numbers, booleans, dicts) are plain overrides.
+# Mirrored in webapp/frontend/src/styleUtils.js — keep the two lists in sync.
+STYLE_TEXT_FIELDS = {
+    "description", "visual_style", "video_style", "video_negative_prompt",
+    "title_style", "extra_instructions", "script_avoid", "description_suffix",
+    "attribution_description", "attribution_hashtags", "attribution_youtube_tags",
+}
+
+PARENT_MARKER = "{parent}"
+
+
+def _expand_parent_marker(value, parent_value, field: str):
+    """Compose a text-field override with its parent's effective value: every
+    "{parent}" in *value* becomes *parent_value*. Non-text fields, non-string
+    values and marker-less text pass through untouched."""
+    if field not in STYLE_TEXT_FIELDS or not isinstance(value, str) or PARENT_MARKER not in value:
+        return value
+    return value.replace(PARENT_MARKER, str(parent_value or "")).strip()
+
+
 # A pre-styles config that has been customized gets its settings preserved
 # under this name; a fresh install starts with a blank "Default" style.
 LEGACY_STYLE_NAME = "Stephen Spielbot"
@@ -985,11 +1010,19 @@ def style_settings(cfg: dict, name: str = "") -> dict:
                       styles[0] if styles else None)
     if target:
         # Root-first ancestry walk: each level's explicit fields override its
-        # parent's, so a sparse child inherits everything it doesn't set.
-        for s in _style_lineage(styles, target):
-            out.update({k: s[k] for k in STYLE_FIELD_TO_FLAT if k in s})
+        # parent's, so a sparse child inherits everything it doesn't set. A
+        # text field containing "{parent}" composes with (rather than replaces)
+        # the value accumulated so far — i.e. the parent's effective text. At
+        # the chain root there is no reachable parent, so the marker expands
+        # to empty instead of leaking the flat-key seed.
+        for i, s in enumerate(_style_lineage(styles, target)):
+            for k in STYLE_FIELD_TO_FLAT:
+                if k in s:
+                    out[k] = _expand_parent_marker(s[k], out.get(k) if i else "", k)
             if "description" in s:
-                out["description"] = str(s.get("description") or "")
+                out["description"] = _expand_parent_marker(
+                    str(s.get("description") or ""),
+                    out.get("description") if i else "", "description")
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", video_negative_prompt="",
                    extra_instructions="", script_avoid="", description_suffix="",
