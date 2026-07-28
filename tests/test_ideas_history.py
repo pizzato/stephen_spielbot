@@ -199,6 +199,57 @@ class IdeaHistoryCase(unittest.TestCase):
         self.assertEqual(set(backend._discarded_idea_titles(cfg)),
                          {"Declined One", "Ignored One"})
 
+    # ── accepted list ────────────────────────────────────────────────────────
+    def test_accept_lands_in_accepted_list_not_declined(self):
+        backend.dismiss_suggestion(backend.SuggestionDismissBody(
+            id="a1", title="Take Me", reason="accepted", size="medium"))
+        cfg = {"default_style": "doc"}
+        acc = backend._accepted_records(cfg)
+        self.assertEqual([r["title"] for r in acc], ["Take Me"])
+        self.assertEqual(acc[0]["size"], "medium")
+        self.assertFalse(acc[0]["acted"])
+        # Not in the Declined list, but still steers the LLM away.
+        self.assertEqual(backend._discarded_records(cfg), [])
+        self.assertEqual(backend._discarded_idea_titles(cfg), ["Take Me"])
+
+    def test_act_marks_accepted_idea_but_keeps_it_listed(self):
+        self.write(self.suggestions, [
+            {"id": "a1", "title": "Make Me", "style_name": "doc",
+             "dismissed": True, "dismissed_reason": "accepted"},
+        ])
+        self.write(self.dismissed, {
+            "a1": {"id": "a1", "title": "Make Me", "reason": "accepted"},
+        })
+        with mock.patch.object(app, "load_config", return_value={"default_style": "doc"}):
+            out = backend.act_on_accepted_suggestion(
+                backend.SuggestionActBody(id="a1", title="Make Me", via="queue"))
+        recs = out["accepted"]
+        self.assertEqual([r["title"] for r in recs], ["Make Me"])
+        self.assertTrue(recs[0]["acted"])
+        self.assertEqual(recs[0]["acted_via"], "queue")
+
+    def test_move_accepted_to_declined_resets_acted(self):
+        self.write(self.suggestions, [
+            {"id": "a1", "title": "Move Me", "style_name": "doc", "dismissed": True,
+             "dismissed_reason": "accepted", "acted": True, "acted_via": "queue"},
+        ])
+        self.write(self.dismissed, {
+            "a1": {"id": "a1", "title": "Move Me", "reason": "accepted", "acted": True},
+        })
+        backend.dismiss_suggestion(backend.SuggestionDismissBody(
+            id="a1", title="Move Me", reason="declined"))
+        cfg = {"default_style": "doc"}
+        self.assertEqual(backend._accepted_records(cfg), [])
+        dec = backend._discarded_records(cfg)
+        self.assertEqual([r["title"] for r in dec], ["Move Me"])
+        self.assertFalse(dec[0]["acted"])
+        # Moving back to Accepted starts fresh — no stale acted marker.
+        backend.dismiss_suggestion(backend.SuggestionDismissBody(
+            id="a1", title="Move Me", reason="accepted"))
+        acc = backend._accepted_records(cfg)
+        self.assertEqual([r["title"] for r in acc], ["Move Me"])
+        self.assertFalse(acc[0]["acted"])
+
     # ── reset the declined ("negative") list ─────────────────────────────────
     def test_reset_declined_clears_declined_keeps_ignored(self):
         self.write(self.suggestions, [
@@ -226,6 +277,22 @@ class IdeaHistoryCase(unittest.TestCase):
         cfg = {"default_style": "doc"}
         self.assertEqual(backend._discarded_records(cfg), [])
         self.assertEqual(backend._discarded_idea_titles(cfg), ["Ignored Topic"])
+
+    def test_reset_declined_keeps_accepted(self):
+        self.write(self.suggestions, [
+            {"id": "d1", "title": "Declined One", "dismissed": True, "dismissed_reason": "declined"},
+            {"id": "a1", "title": "Accepted One", "dismissed": True, "dismissed_reason": "accepted"},
+        ])
+        self.write(self.dismissed, {
+            "d1": {"id": "d1", "title": "Declined One", "reason": "declined"},
+            "a1": {"id": "a1", "title": "Accepted One", "reason": "accepted"},
+        })
+        with mock.patch.object(app, "load_config", return_value={"default_style": "doc"}):
+            out = backend.reset_declined_suggestions()
+        self.assertEqual(out["cleared"], 1)
+        cfg = {"default_style": "doc"}
+        self.assertEqual([r["title"] for r in backend._accepted_records(cfg)],
+                         ["Accepted One"])
 
 
 class VideoTitlesCacheCase(unittest.TestCase):
