@@ -409,6 +409,31 @@ STYLE_FIELD_TO_FLAT = {
     "ambient_vol":          "ambient_vol",
 }
 
+# Free-text style fields where a child override may embed the literal marker
+# "{parent}": it is replaced with the parent's RESOLVED text for that field
+# (empty for a root), so a child can extend the parent's instructions — before,
+# after, or around its own — instead of replacing them. Composition recurses:
+# a grandchild's {parent} receives the child's already-composed text. All other
+# fields (names, ids, numbers, booleans, dicts) are plain overrides.
+# Mirrored in webapp/frontend/src/styleUtils.js — keep the two lists in sync.
+STYLE_TEXT_FIELDS = {
+    "description", "visual_style", "video_style", "video_negative_prompt",
+    "title_style", "extra_instructions", "script_avoid", "description_suffix",
+    "attribution_description", "attribution_hashtags", "attribution_youtube_tags",
+}
+
+PARENT_MARKER = "{parent}"
+
+
+def _expand_parent_marker(value, parent_value, field: str):
+    """Compose a text-field override with its parent's effective value: every
+    "{parent}" in *value* becomes *parent_value*. Non-text fields, non-string
+    values and marker-less text pass through untouched."""
+    if field not in STYLE_TEXT_FIELDS or not isinstance(value, str) or PARENT_MARKER not in value:
+        return value
+    return value.replace(PARENT_MARKER, str(parent_value or "")).strip()
+
+
 # A pre-styles config that has been customized gets its settings preserved
 # under this name; a fresh install starts with a blank "Default" style.
 LEGACY_STYLE_NAME = "Stephen Spielbot"
@@ -604,9 +629,12 @@ def _ensure_characters(cfg: dict) -> dict:
                     library.append(c)
                 ids.append(c["id"])
             # Preserve any character_ids already present (idempotent re-runs)
-            # ahead of the migrated ones, deduped.
+            # ahead of the migrated ones, deduped. A sparse child style (has a
+            # parent) with nothing to migrate is left alone — stamping [] would
+            # freeze an empty roster over its inherited one.
             existing = [str(x) for x in (s.get("character_ids") or []) if str(x)]
-            s["character_ids"] = list(dict.fromkeys([*existing, *ids]))
+            if existing or ids or not s.get("parent"):
+                s["character_ids"] = list(dict.fromkeys([*existing, *ids]))
         if library:
             cfg["characters"] = library + _norm_characters(cfg.get("characters"))
         cfg.pop("default_characters", None)  # obsolete flat mirror
@@ -642,7 +670,15 @@ def _norm_script_mode(value) -> str:
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
-    default_style, and mirror the default style onto the flat keys."""
+    default_style, and mirror the default style onto the flat keys.
+
+    A style with a ``parent`` (style hierarchy) is kept SPARSE: only the fields
+    it explicitly overrides are stored, so everything else keeps flowing from
+    the parent chain when the parent is later edited. Root styles (no parent)
+    stay dense exactly as before. Self-parents are dropped and parent cycles
+    are severed (the severed style is densified so it behaves like a root);
+    a parent name that doesn't exist is kept as-is — the style resolves like a
+    root until the parent reappears (e.g. after a config restore)."""
     styles = [s for s in (cfg.get("styles") or [])
               if isinstance(s, dict) and str(s.get("name") or "").strip()]
     if not styles:
@@ -656,16 +692,50 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         while name in seen:
             name, n = f"{base} {n}", n + 1
         seen.add(name)
-        row = {"name": name, "description": str(s.get("description") or "")}
+        parent = str(s.get("parent") or "").strip()
+        if parent == name or parent == NO_STYLE:
+            parent = ""
+        row = {"name": name}
+        if parent:
+            row["parent"] = parent
         absent = set()
-        for field, flat in STYLE_FIELD_TO_FLAT.items():
-            if field in s:
-                row[field] = s[field]
-            else:
-                row[field] = DEFAULT_CFG.get(flat)
-                absent.add(field)
+        if parent:
+            # Sparse child: keep only explicit overrides (description included).
+            # Absent fields resolve through the parent chain in style_settings.
+            if "description" in s:
+                row["description"] = str(s.get("description") or "")
+            for field in STYLE_FIELD_TO_FLAT:
+                if field in s:
+                    row[field] = s[field]
+        else:
+            row["description"] = str(s.get("description") or "")
+            for field, flat in STYLE_FIELD_TO_FLAT.items():
+                if field in s:
+                    row[field] = s[field]
+                else:
+                    row[field] = DEFAULT_CFG.get(flat)
+                    absent.add(field)
         normalized.append(row)
         missing.append(absent)
+
+    # Sever parent cycles (only reachable by hand-editing the YAML — the UI
+    # excludes descendants from the parent picker). The style whose pointer
+    # closes the loop loses it and is densified so it behaves like a root.
+    by_name = {r["name"]: r for r in normalized}
+    for row in normalized:
+        chain_seen, cur = {row["name"]}, row
+        while True:
+            nxt = by_name.get(str(cur.get("parent") or ""))
+            if nxt is None:
+                break
+            if nxt["name"] in chain_seen:
+                cur.pop("parent", None)
+                cur.setdefault("description", "")
+                for field, flat in STYLE_FIELD_TO_FLAT.items():
+                    cur.setdefault(field, DEFAULT_CFG.get(flat))
+                break
+            chain_seen.add(nxt["name"])
+            cur = nxt
 
     cfg["styles"] = normalized
     if cfg.get("default_style") not in {s["name"] for s in normalized}:
@@ -676,27 +746,38 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     # holds its real value and, by the mirror invariant, the flat keys ARE the
     # default style's settings — so the default style inherits it. Other
     # styles keep the built-in blank: leaking e.g. the Spielbot suffix into
-    # every style was exactly the bug being fixed.
-    for field in missing[default_idx]:
-        flat = STYLE_FIELD_TO_FLAT[field]
-        if flat in cfg:
-            normalized[default_idx][field] = cfg[flat]
+    # every style was exactly the bug being fixed. (Root default only: on a
+    # child, an absent field means "inherit from parent", not "adopt flat".)
+    if not normalized[default_idx].get("parent"):
+        for field in missing[default_idx]:
+            flat = STYLE_FIELD_TO_FLAT[field]
+            if flat in cfg:
+                normalized[default_idx][field] = cfg[flat]
     # size_presets is a nested dict, not a scalar: coerce each style's copy into
     # a complete, valid structure (and give every row its own object) before the
-    # mirror below snapshots the default style's onto the flat key.
+    # mirror below snapshots the default style's onto the flat key. On sparse
+    # children only fields they actually override are coerced — writing the
+    # coerced value back for an absent field would freeze it as an override.
     valid_char_ids = {c["id"] for c in (cfg.get("characters") or []) if isinstance(c, dict) and c.get("id")}
+
+    def _coerce(row: dict, field: str, fn) -> None:
+        if field in row or not row.get("parent"):
+            row[field] = fn(row.get(field))
+
     for row in normalized:
-        row["size_presets"] = _norm_size_presets(row.get("size_presets"))
-        row["character_ids"] = _norm_character_ids(row.get("character_ids"), valid_char_ids)
-        row["auto_accept_characters"] = bool(row.get("auto_accept_characters"))
-        row["image_engine"] = _norm_engine(row.get("image_engine"), "generate")
-        row["edit_engine"] = _norm_engine(row.get("edit_engine"), "edit")
-        row["tts_engine"] = _norm_tts_engine(row.get("tts_engine"))
-        row["tts_language"] = _norm_tts_language(row.get("tts_language"))
-        row["script_mode"] = _norm_script_mode(row.get("script_mode"))
+        _coerce(row, "size_presets", _norm_size_presets)
+        _coerce(row, "character_ids", lambda v: _norm_character_ids(v, valid_char_ids))
+        _coerce(row, "auto_accept_characters", bool)
+        _coerce(row, "image_engine", lambda v: _norm_engine(v, "generate"))
+        _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
+        _coerce(row, "tts_engine", _norm_tts_engine)
+        _coerce(row, "tts_language", _norm_tts_language)
+        _coerce(row, "script_mode", _norm_script_mode)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
-    # later flux1-schnell choice is preserved.
+    # later flux1-schnell choice is preserved. (A child without its own
+    # image_engine override is skipped by the None get — its parent's flip flows
+    # through inheritance.)
     if not cfg.get("engines_default_v2"):
         for row in normalized:
             if row.get("image_engine") == "flux1-schnell":
@@ -705,8 +786,16 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
                 row["edit_engine"] = engines.DEFAULT_ENGINE
         cfg["engines_default_v2"] = True
     default = normalized[default_idx]
-    for field, flat in STYLE_FIELD_TO_FLAT.items():
-        cfg[flat] = default[field]
+    if default.get("parent"):
+        # The flat keys must mirror the default style's EFFECTIVE values —
+        # resume_generation.py and pipeline/llm.py read them from raw YAML with
+        # no style resolution of their own.
+        eff = style_settings(cfg, default["name"])
+        for field, flat in STYLE_FIELD_TO_FLAT.items():
+            cfg[flat] = eff[field]
+    else:
+        for field, flat in STYLE_FIELD_TO_FLAT.items():
+            cfg[flat] = default[field]
     return cfg
 
 
@@ -866,6 +955,33 @@ def playlist_for_style(cfg: dict, style_name: str = "") -> str:
     return str(style_settings(cfg, style_name).get("youtube_playlist_id") or "")
 
 
+def _style_lineage(styles: list[dict], target: dict) -> list[dict]:
+    """Ancestry chain ``[root, …, target]`` for a style, following ``parent``
+    names (style hierarchy: a child style stores only its overrides and
+    inherits the rest from its parent chain).
+
+    Tolerates a dangling parent (the walk just stops — the style then resolves
+    against the flat keys like a root) and cycles (the walk never revisits a
+    style). _ensure_styles severs stored cycles; the guard here keeps reads
+    safe on non-normalized dicts too."""
+    by_name = {}
+    for s in styles:
+        if isinstance(s, dict) and str(s.get("name") or ""):
+            by_name.setdefault(str(s.get("name")), s)
+    chain, seen = [], set()
+    cur = target
+    while isinstance(cur, dict):
+        nm = str(cur.get("name") or "")
+        if nm in seen:
+            break
+        seen.add(nm)
+        chain.append(cur)
+        pname = str(cur.get("parent") or "").strip()
+        cur = by_name.get(pname) if pname else None
+    chain.reverse()
+    return chain
+
+
 def style_settings(cfg: dict, name: str = "") -> dict:
     """Resolved settings for the named style profile.
 
@@ -873,12 +989,17 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     the flat keys / built-in defaults for any missing field — so this is safe
     to call with non-normalized dicts too.
 
+    A style with a ``parent`` inherits every field it doesn't set itself from
+    its ancestry chain (nearest ancestor wins), so variant styles can override
+    just a narrator or language while tracking the parent for everything else.
+
     ``name == NO_STYLE`` is the experiment mode: the content-shaped fields
     (visual style, extra instructions, voice, robotic, speed) come back blank so
     nothing is imposed on the video, while render quality and the audio mix
     keep the default style's values."""
     out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
            for field, flat in STYLE_FIELD_TO_FLAT.items()}
+    out["description"] = ""
     requested = (name or "").strip()
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
     target = None
@@ -888,7 +1009,20 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
                       styles[0] if styles else None)
     if target:
-        out.update({k: target[k] for k in STYLE_FIELD_TO_FLAT if k in target})
+        # Root-first ancestry walk: each level's explicit fields override its
+        # parent's, so a sparse child inherits everything it doesn't set. A
+        # text field containing "{parent}" composes with (rather than replaces)
+        # the value accumulated so far — i.e. the parent's effective text. At
+        # the chain root there is no reachable parent, so the marker expands
+        # to empty instead of leaking the flat-key seed.
+        for i, s in enumerate(_style_lineage(styles, target)):
+            for k in STYLE_FIELD_TO_FLAT:
+                if k in s:
+                    out[k] = _expand_parent_marker(s[k], out.get(k) if i else "", k)
+            if "description" in s:
+                out["description"] = _expand_parent_marker(
+                    str(s.get("description") or ""),
+                    out.get("description") if i else "", "description")
     if requested == NO_STYLE:
         out.update(visual_style="", video_style="", video_negative_prompt="",
                    extra_instructions="", script_avoid="", description_suffix="",
@@ -900,7 +1034,6 @@ def style_settings(cfg: dict, name: str = "") -> dict:
         out["description"] = ""
         return out
     out["name"] = (target or {}).get("name", "")
-    out["description"] = (target or {}).get("description", "")
     return out
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
@@ -2240,14 +2373,20 @@ def promote_script_character(work_dir, char_id: str, style_name: str = "") -> di
     library.append(entry)
     # Opt the current style into the new catalogue character so it's used again.
     # Mutate the real style dict in cfg["styles"] (style_settings returns a copy).
+    # A child style without its own character_ids override delegates the roster
+    # to its nearest ancestor that owns one — promote there, so every sibling
+    # variant sees the new character too instead of silently forking the list.
     if style_name:
-        target = next((s for s in cfg.get("styles", [])
-                       if isinstance(s, dict) and s.get("name") == style_name), None)
-        if target is not None and not target.get("auto_accept_characters"):
-            ids = list(target.get("character_ids") or [])
+        styles = [s for s in cfg.get("styles", []) if isinstance(s, dict)]
+        target = next((s for s in styles if s.get("name") == style_name), None)
+        if target is not None and not style_settings(cfg, style_name).get("auto_accept_characters"):
+            lineage = _style_lineage(styles, target)
+            owner = next((s for s in reversed(lineage) if "character_ids" in s),
+                         lineage[0] if lineage else target)
+            ids = list(owner.get("character_ids") or [])
             if new_id not in ids:
                 ids.append(new_id)
-                target["character_ids"] = ids
+                owner["character_ids"] = ids
     save_config(cfg)
     return load_config()
 
@@ -3046,10 +3185,11 @@ def _auto_pick_styles(cfg: dict) -> list[str]:
 
     A style opts out via ``auto_pick_exclude`` (Settings → style), so automation
     only invents ideas for the styles left in the rotation. Manual idea
-    generation ignores this flag — it governs the automatic top-up only."""
+    generation ignores this flag — it governs the automatic top-up only.
+    Resolved via style_settings so a child style inherits its parent's opt-out."""
     return [s["name"] for s in (cfg.get("styles") or [])
             if isinstance(s, dict) and str(s.get("name") or "").strip()
-            and not s.get("auto_pick_exclude")]
+            and not style_settings(cfg, s["name"]).get("auto_pick_exclude")]
 
 
 def _auto_pick_style_of(idea: dict, default_name: str) -> str:

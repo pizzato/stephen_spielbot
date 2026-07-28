@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { Card, Chip, Button, Segmented, Icon, Banner } from '../components.jsx'
 import { api } from '../api.js'
+import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
 function Stars({ value }) {
   if (value == null) return null
@@ -114,8 +115,11 @@ export default function Ideas({ go, meta = {} }) {
   const isAll = styleSel === ALL_STYLES
   const effectiveStyle = styleSel || meta.config?.default_style || ''
   // Styles opted out of auto-picked ideas stay out of the "All styles" mix
-  // (reach them by selecting the style itself), mirroring the backend.
-  const excludedStyles = new Set(styleList.filter((s) => s.auto_pick_exclude).map((s) => s.name))
+  // (reach them by selecting the style itself), mirroring the backend. A child
+  // style inherits its parent's opt-out, so resolve through the chain.
+  const excludedStyles = new Set(styleList
+    .filter((s) => resolveStyle(styleList, s.name)?.auto_pick_exclude)
+    .map((s) => s.name))
   // The style an idea (and its size preset / queue entry) belongs to — its own
   // stamp in the mix, otherwise the selected style.
   const styleOf = (idea) => idea?.style_name || (isAll ? (meta.config?.default_style || '') : effectiveStyle)
@@ -223,7 +227,7 @@ export default function Ideas({ go, meta = {} }) {
   // Scenes + resolution come straight from the idea's style size preset, so each
   // size is exactly what that style configured in Settings.
   const presetFor = (idea, size) => {
-    const styleObj = styleList.find((s) => s.name === styleOf(idea))
+    const styleObj = resolveStyle(styleList, styleOf(idea))
     const presets = styleObj?.size_presets || meta.default_size_presets || {}
     return presets[size] || (meta.default_size_presets || {})[size]
       || { scenes: 6, resolution: meta.default_resolution || '' }
@@ -360,9 +364,9 @@ export default function Ideas({ go, meta = {} }) {
               <select className="select" value={isAll ? ALL_STYLES : effectiveStyle} onChange={(e) => pickStyle(e.target.value)}
                 disabled={loadingIdeas} style={{ maxWidth: 220 }} title="Ideas are generated for this style">
                 {styleList.length > 1 && <option value={ALL_STYLES}>All styles (mix)</option>}
-                {styleList.map((s) => (
+                {styleTreeOrder(styleList).map(({ style: s, depth }) => (
                   <option key={s.name} value={s.name}>
-                    {s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
+                    {'  '.repeat(depth)}{depth ? '↳ ' : ''}{s.name}{meta.config?.default_style === s.name ? ' (default)' : ''}
                   </option>
                 ))}
               </select>
