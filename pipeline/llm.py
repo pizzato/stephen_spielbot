@@ -204,7 +204,8 @@ def _merge_recurring(identified: list[dict], found: list[dict]) -> list[dict]:
 
 
 def _detect_recurring_characters(call_fn, scenes: list[Scene],
-                                 identified: list[dict]) -> list[dict]:
+                                 identified: list[dict],
+                                 style_hint: str | None = None) -> list[dict]:
     """Second-pass recurring-cast detection over the FULL assembled script.
 
     The batch-1 identify only sees the first ~10 scenes and only names the 1-2
@@ -227,10 +228,16 @@ def _detect_recurring_characters(call_fn, scenes: list[Scene],
              for s in scenes if (s.narration or "").strip()]
     if len(lines) < 2:  # nothing can recur across <2 narrated scenes
         return identified
+    # Descriptions must fit the video's world (a robot style means robot
+    # characters), so hand the pass the effective visual style when known.
+    style_note = (f"VISUAL STYLE (all characters must belong to this world): "
+                  f"{style_hint.strip()}\n\n"
+                  if style_hint and style_hint.strip() else "")
     try:
         raw = call_fn(
             _prompts.system("recurring_characters"),
-            _prompts.user("recurring_characters", scene_list="\n".join(lines)),
+            _prompts.user("recurring_characters", style_note=style_note,
+                          scene_list="\n".join(lines)),
             _MAX_RECURRING_CHARACTERS * 120 + 400,
             "recurring characters",
             retries=2,
@@ -801,7 +808,8 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             logger.warning("Scene %d still empty after cloud fill — used title", s.id)
     # Second pass over the whole script: catch recurring supporting characters the
     # first-batch identify (scenes 1–10, 1-2 central subjects) missed.
-    identified = _detect_recurring_characters(call_fn, final_scenes, identified)
+    identified = _detect_recurring_characters(call_fn, final_scenes, identified,
+                                              style_hint=style)
     return final_scenes, music_desc, style, identified
 
 
@@ -1248,7 +1256,8 @@ def _local_generate(title: str, n_scenes: int,
              {"role": "user", "content": user_msg}],
             max_tokens=max_tokens, url=url, model=model, retries=retries,
         )
-    identified = _detect_recurring_characters(_rc_call, scenes, identified)
+    identified = _detect_recurring_characters(_rc_call, scenes, identified,
+                                              style_hint=style)
 
     return scenes, music_desc, style, identified
 

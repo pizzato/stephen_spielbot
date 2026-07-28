@@ -138,6 +138,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       if (!forked) {
         // same job: the job-load effect won't re-run, sync by hand
         setScenes(data.scenes || [])
+        setCharacters(data.characters || [])
         api.getStory(data.job_id).then(setStory).catch(() => {})
         setView('scenes')
       }
@@ -273,6 +274,19 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       .catch((e) => setError(e.message))
       .finally(() => setGenAll(false))
   }, [job?.job_id])
+
+  // The job snapshot's cast can be stale: story division persists the
+  // identified characters server-side WITHOUT changing job_id (so the sync
+  // effect above never re-seeds), and background passes keep adding looks.
+  // Re-pull the list from the server whenever the tab is opened.
+  useEffect(() => {
+    if (view !== 'characters' || !job?.job_id) return
+    let alive = true
+    api.scriptCharacters(job.job_id)
+      .then((r) => { if (alive) setCharacters(r.characters || []) })
+      .catch(() => { /* keep the snapshot */ })
+    return () => { alive = false }
+  }, [view, job?.job_id])
 
   // Character look images are rendered by a background task right after the
   // script is created, so on the Characters tab keep polling briefly while any
