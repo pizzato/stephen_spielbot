@@ -28,7 +28,7 @@ script_claude_initial:
     "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the video keeps returning to across scenes (e.g. a historical figure the documentary follows). NEVER list the narrator or the storytelling voice as a character. Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
       - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
       - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
-      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
+      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. The appearance MUST belong to the video's visual style and world: when the style or topic implies non-human characters (robots, creatures, machines, animated figures), describe that form — never default to a human.
       - "gender": "male" | "female" — how the character would sound if voiced.
       - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
     When a scene features one of these characters, refer to them BY NAME in that scene's "image_prompt" and "video_prompt" — write the name, NOT their appearance. The canonical "description" is appended automatically to every prompt that names them, so restating it (or describing the character without the name) breaks consistency. Only add appearance details that DIFFER from the canonical description in that scene, such as a change of clothes or an injury.
@@ -101,7 +101,7 @@ script_local_story:
     MUSIC: [20-40 word music description: mood, tempo, key instruments, genre, emotional arc]
     CHARACTER_1_NAME: [ONLY if the video follows a recurring MAIN character — their name as used in narration, e.g. Julius Caesar. Omit this and the CHARACTER_* lines entirely for abstract topics with no recurring character.]
     CHARACTER_1_ALIASES: [comma-separated other names/epithets, or leave blank]
-    CHARACTER_1_DESC: [20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — so the figure can be drawn identically in every scene. Only how they LOOK.]
+    CHARACTER_1_DESC: [20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — so the figure can be drawn identically in every scene. Only how they LOOK. Must belong to the STYLE's visual world: a robot/creature style means a robot/creature character, never a default human.]
     CHARACTER_2_NAME: [second main character's name, only if there genuinely is one; otherwise omit the CHARACTER_2_* lines]
     CHARACTER_2_ALIASES: [comma-separated other names, or leave blank]
     CHARACTER_2_DESC: [20-40 word fixed visual appearance for the second character]
@@ -182,7 +182,7 @@ story_outline:
     "characters": Array of 0, 1, or 2 RECURRING MAIN characters — a person, creature, or figure the story keeps returning to (e.g. a historical figure the documentary follows). NEVER list the narrator or the storytelling voice as a character — the narrator is not part of the story. Return [] when there is no recurring character subject (abstract topics, explainers, montages, landscape pieces). Each character object has:
       - "name": the name used in narration and image prompts (e.g. "Julius Caesar")
       - "aliases": array of other names/epithets the narration may use (e.g. ["Caesar"]); [] if none
-      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory.
+      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. The appearance MUST belong to the video's visual style and world: when the style or topic implies non-human characters (robots, creatures, machines, animated figures), describe that form — never default to a human.
       - "gender": "male" | "female" — how the character would sound if voiced.
       - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
 
@@ -417,7 +417,7 @@ recurring_characters:
     scenes and only names the 1-2 central subjects). Drives per-script character
     consistency (characters.json → reference images + prompt injection).
   system: |
-    You are a script analyst. You are given the full narration of a multi-scene video, one scene per line, numbered by scene. Identify the RECURRING CHARACTERS: named people, creatures, or specific individuals who appear in TWO OR MORE distinct scenes.
+    You are a script analyst. You are given the full narration of a multi-scene video, one scene per line, numbered by scene — possibly preceded by the video's VISUAL STYLE. Identify the RECURRING CHARACTERS: named people, creatures, or specific individuals who appear in TWO OR MORE distinct scenes.
 
     Rules:
     - Include only NAMED individuals (e.g. "George Washington", "Cleopatra", a named animal or figure).
@@ -428,14 +428,14 @@ recurring_characters:
     Output ONLY a JSON array (no markdown, no code fences, no prose). Each element is an object with:
       - "name": the character's name as used in the narration
       - "aliases": array of other names/epithets used for them (e.g. ["the General"]); [] if none
-      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. If the narration gives no visual detail, infer a plausible, context-appropriate appearance.
+      - "description": 20-40 word FIXED visual appearance — face, age, build, hair, clothing, distinctive features — written so the same figure can be drawn identically in every scene. Describe only how they LOOK, no backstory. The appearance MUST belong to the video's visual style and world: when the style or topic implies non-human characters (robots, creatures, machines, animated figures), describe that form — never default to a human. If the narration gives no visual detail, infer a plausible, context-appropriate appearance.
       - "gender": "male" | "female" — how the character would sound if voiced.
       - "age": "young" | "adult" | "mature" | "elderly" — the voice age bracket.
       - "scenes": array of the scene numbers (integers) they appear in — must contain at least two
 
     If no character appears in two or more scenes, output exactly [].
   user: |
-    ${scene_list}
+    ${style_note}${scene_list}
 
 
 retag_character_scenes:
