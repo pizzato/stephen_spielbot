@@ -100,8 +100,10 @@ export default function Ideas({ go, meta = {} }) {
   const [busy, setBusy] = useState('')          // action key currently running
   const [sortBy, setSortBy] = useState('newest')
   const [preds, setPreds] = useState({})        // ideaKey -> engagement prediction, for the "Predicted views" sort
-  const [discarded, setDiscarded] = useState([]) // ideas the user closed — kept out of suggestions, revivable
-  const [showDiscarded, setShowDiscarded] = useState(false)
+  const [discarded, setDiscarded] = useState([]) // ideas the user declined — kept out of suggestions, revivable
+  const [accepted, setAccepted] = useState([])   // ideas the user accepted — waiting to be queued/created
+  const [rowSizes, setRowSizes] = useState({})   // accepted-row size overrides (recKey -> size)
+  const [view, setView] = useState('ideas')      // 'ideas' | 'accepted' | 'declined'
 
   // Ideas belong to a style profile (issue #66): generation is steered by the
   // selected style and each idea is stamped with it, so a children-story style
@@ -131,16 +133,23 @@ export default function Ideas({ go, meta = {} }) {
       setIdeas(visibleIdeas(d.suggestions || []))
     } catch (e) { setError(e.message) } finally { setLoadingIdeas(false) }
   }
-  // Discarded ideas for the current style ('' style → its default; All styles → every discard).
+  // Accepted/declined ideas for the current style ('' style → its default;
+  // All styles → every record).
   const discardStyleArg = (sel) => (sel === ALL_STYLES ? '' : (sel || meta.config?.default_style || ''))
   const loadDiscarded = async (sel = styleSel) => {
     try {
       const d = await api.getDiscarded(discardStyleArg(sel))
       setDiscarded(d.discarded || [])
-    } catch { /* non-fatal — the discard list is supplementary */ }
+    } catch { /* non-fatal — the declined list is supplementary */ }
+  }
+  const loadAccepted = async (sel = styleSel) => {
+    try {
+      const d = await api.getAccepted(discardStyleArg(sel))
+      setAccepted(d.accepted || [])
+    } catch { /* non-fatal — the accepted list is supplementary */ }
   }
   // First visit loads the cached set (no LLM call); only regenerates if empty.
-  useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded() }, [])
+  useEffect(() => { if (ideas.length === 0 && !loadingIdeas) loadIdeas('', false); loadDiscarded(); loadAccepted() }, [])
   // Switching style swaps to that style's cached ideas (generates when empty).
   // The guidance box is cleared with it (issue #202): it was steering the style
   // you just left, and carrying it over generates off-theme ideas for the new
@@ -152,6 +161,7 @@ export default function Ideas({ go, meta = {} }) {
     setGuidance('')
     loadIdeas('', false, name)
     loadDiscarded(name)
+    loadAccepted(name)
   }
 
   const ideaKey = (idea) => idea?.id || idea?.title || idea?.final_title || ''
@@ -170,12 +180,13 @@ export default function Ideas({ go, meta = {} }) {
     const key = ideaKey(idea)
     setIdeas((arr) => arr.map((it) => (ideaKey(it) === key ? { ...it, size } : it)))
   }
-  // Remove an idea from the active list. reason: 'declined' → tracked in the
-  // reviewable "Declined" list (the AI steers away from it); 'ignored' → hidden
-  // for good, never shown again, but kept out of the Declined list; 'used' →
-  // queued/created. Decline and Ignore both keep it out of future suggestions.
+  // Remove an idea from the active list. reason: 'accepted' → tracked in the
+  // reviewable "Accepted" list, ready to queue/create; 'declined' → tracked in
+  // the reviewable "Declined" list (the AI steers away from it); 'ignored' →
+  // hidden for good, never shown again, but kept out of the Declined list.
+  // All three keep the topic out of future suggestions.
   const dismissLabel = (reason) =>
-    reason === 'used' ? 'Idea marked as used.'
+    reason === 'accepted' ? 'Idea accepted — find it under Accepted.'
       : reason === 'ignored' ? 'Idea ignored.'
         : 'Idea declined.'
   const closeIdea = async (idea, reason = 'declined') => {
@@ -185,15 +196,29 @@ export default function Ideas({ go, meta = {} }) {
     writeDismissedIdea(idea, reason)
     removeIdeaLocal(idea)
     try {
-      const r = await api.dismissSuggestion({ id: idea.id || '', title, reason })
+      const body = { id: idea.id || '', title, reason }
+      if (reason === 'accepted') body.size = ideaSize(idea)   // keep the card's size choice
+      const r = await api.dismissSuggestion(body)
       if (Array.isArray(r.suggestions)) setIdeas(byStyle(visibleIdeas(r.suggestions)))
       if (reason === 'declined') loadDiscarded()   // surface it under "Declined"
+      if (reason === 'accepted') loadAccepted()    // surface it under "Accepted"
       setStatus(dismissLabel(reason))
     } catch (e) {
       setStatus(dismissLabel(reason))
     } finally {
       setBusy('')
     }
+  }
+  // Move an idea between the Accepted and Declined lists — re-dismiss it with
+  // the other reason (the backend resets any acted-upon marker).
+  const moveIdea = async (rec, reason) => {
+    setError('')
+    writeDismissedIdea(rec, reason)
+    try {
+      await api.dismissSuggestion({ id: rec.id || '', title: rec.title || '', reason })
+      setStatus(reason === 'accepted' ? 'Moved to Accepted.' : 'Moved to Declined.')
+    } catch (e) { setError(e.message) }
+    loadDiscarded(); loadAccepted()
   }
   // Scenes + resolution come straight from the idea's style size preset, so each
   // size is exactly what that style configured in Settings.
@@ -203,23 +228,36 @@ export default function Ideas({ go, meta = {} }) {
     return presets[size] || (meta.default_size_presets || {})[size]
       || { scenes: 6, resolution: meta.default_resolution || '' }
   }
-  const queueIdea = async (idea, title) => {
-    const { scenes, resolution } = presetFor(idea, ideaSize(idea))
-    setError('')
+  // Accepted rows keep their own size choice, seeded from the size chosen on
+  // the card at accept time (falls back to 'small').
+  const recKey = (rec) => rec?.id || rec?.title || ''
+  const recSize = (rec) => {
+    const v = rowSizes[recKey(rec)] || rec?.size || 'small'
+    return LEGACY_SIZE[v] || v
+  }
+  const setRecSize = (rec, size) => setRowSizes((m) => ({ ...m, [recKey(rec)]: size }))
+  // Queue/Create an accepted idea. The idea stays in the Accepted list — it's
+  // only stamped as acted upon, so the list shows what's still waiting.
+  const queueAccepted = async (rec) => {
+    const { scenes, resolution } = presetFor(rec, recSize(rec))
+    setBusy('acc-' + recKey(rec)); setError('')
     try {
-      await api.queueAdd(title, scenes, idea.reason || '', resolution, styleOf(idea))
-      await closeIdea(idea, 'used')
+      await api.queueAdd(rec.title, scenes, rec.reason || '', resolution, styleOf(rec))
+      await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'queue' }).catch(() => {})
+      await loadAccepted()
       setStatus('Added to queue.')
     } catch (e) {
       setError(e.message)
+    } finally {
+      setBusy('')
     }
   }
-  const createIdea = async (idea, title) => {
-    const { scenes, resolution } = presetFor(idea, ideaSize(idea))
-    await closeIdea(idea, 'used')
-    go('create', { title, description: idea.reason || '', scenes, resolution, styleName: styleOf(idea) })
+  const createAccepted = async (rec) => {
+    const { scenes, resolution } = presetFor(rec, recSize(rec))
+    await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'create' }).catch(() => {})
+    go('create', { title: rec.title, description: rec.reason || '', scenes, resolution, styleName: styleOf(rec) })
   }
-  // Bring a discarded idea back into the active list. Clear the local hide too,
+  // Bring a declined idea back into the active list. Clear the local hide too,
   // otherwise visibleIdeas would re-filter it straight back out.
   const reviveIdea = async (rec) => {
     setError('')
@@ -231,20 +269,21 @@ export default function Ideas({ go, meta = {} }) {
       setStatus('Idea revived.')
     } catch (e) { setError(e.message); loadDiscarded() }
   }
-  // Forget a discarded idea for good — drops it from the discard list (it may
-  // resurface organically in a future generation).
+  // Remove an idea from the Accepted/Declined lists for good — it may
+  // resurface organically in a future generation.
   const forgetIdea = async (rec) => {
     setError('')
     setDiscarded((arr) => arr.filter((r) => !sameIdea(r, rec)))
+    setAccepted((arr) => arr.filter((r) => !sameIdea(r, rec)))
     try {
       await api.forgetSuggestion({ id: rec.id || '', title: rec.title || '' })
-      setStatus('Idea forgotten.')
-    } catch (e) { setError(e.message); loadDiscarded() }
+      setStatus('Idea removed.')
+    } catch (e) { setError(e.message); loadDiscarded(); loadAccepted() }
   }
 
   // Sort is view-only — it reorders the cards, it never drops an idea (ideas
-  // leave only on Close/Queue/Create). Predicted views read from the per-card
-  // reach lookups; ideas with no prediction yet fall back to newest.
+  // leave only on Accept/Decline/Ignore). Predicted views read from the
+  // per-card reach lookups; ideas with no prediction yet fall back to newest.
   const sortedIdeas = useMemo(() => {
     const pv = (idea) => preds[ideaKey(idea)]?.predicted_views
     const byNewest = (a, b) => (b.created_at || 0) - (a.created_at || 0)
@@ -256,6 +295,39 @@ export default function Ideas({ go, meta = {} }) {
     }[sortBy] || byNewest
     return [...ideas].sort(cmp)
   }, [ideas, sortBy, preds])
+
+  const acceptedPending = accepted.filter((r) => !r.acted)
+  const acceptedActed = accepted.filter((r) => r.acted)
+
+  // One row in the Accepted list: pick a size, then Queue/Create it (stays
+  // listed, moves to "Acted on"), move it to Declined, or remove it.
+  const acceptedRow = (rec) => {
+    const size = recSize(rec)
+    const { scenes, resolution } = presetFor(rec, size)
+    const k = recKey(rec)
+    return (
+      <div key={k} className="row center between row--wrap gap-10"
+        style={{ padding: '10px 0', borderTop: '1px solid var(--line)' }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600 }}>
+            {rec.title}
+            {isAll && rec.style_name ? <span style={{ marginLeft: 8 }}><Chip>{rec.style_name}</Chip></span> : null}
+            {rec.acted ? <span style={{ marginLeft: 8 }}><Chip tone="accent"><Icon name={rec.acted_via === 'create' ? 'wand-magic-sparkles' : 'layer-group'} style={{ fontSize: 10 }} /> {rec.acted_via === 'create' ? 'Sent to Create' : 'Queued'}</Chip></span> : null}
+          </div>
+          {rec.reason && <div className="muted" style={{ fontSize: 12.5, fontStyle: 'italic' }}>{rec.reason}</div>}
+        </div>
+        <div className="row center gap-10 row--wrap">
+          <Segmented value={size} onChange={(v) => setRecSize(rec, v)}
+            options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
+          <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
+          <Button variant="ghost" icon="ban" disabled={busy === 'acc-' + k} onClick={() => moveIdea(rec, 'declined')} title="Move to the Declined list">Decline</Button>
+          <Button variant="ghost" icon="trash-can" disabled={busy === 'acc-' + k} onClick={() => forgetIdea(rec)} title="Remove from this list — it may resurface later">Remove</Button>
+          <Button variant="ghost" icon="layer-group" disabled={busy === 'acc-' + k} onClick={() => queueAccepted(rec)}>Queue</Button>
+          <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'acc-' + k} onClick={() => createAccepted(rec)}>Create</Button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -271,9 +343,17 @@ export default function Ideas({ go, meta = {} }) {
 
       <div className="bento">
         <Card span={12} well className="reveal reveal-d1">
-          <div className="row center gap-10">
-            <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
-            <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Ideas are generated for a style — pick one, then type a theme to steer the AI or leave it blank for ideas from your channel's gaps.</div></div>
+          <div className="row center between row--wrap gap-10">
+            <div className="row center gap-10">
+              <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="lightbulb" /></span>
+              <div><div style={{ fontWeight: 600 }}>Topic ideas</div><div className="muted" style={{ fontSize: 12.5 }}>Accept the ideas you like, decline the ones you don't — accepted ideas wait under Accepted until you queue or create them.</div></div>
+            </div>
+            <Segmented value={view} onChange={setView}
+              options={[
+                { value: 'ideas', label: 'Ideas' },
+                { value: 'accepted', label: `Accepted (${accepted.length})` },
+                { value: 'declined', label: `Declined (${discarded.length})` },
+              ]} />
           </div>
           <div className="row gap-10 center mt-16" style={{ flexWrap: 'wrap' }}>
             {styleList.length > 0 && (
@@ -287,20 +367,24 @@ export default function Ideas({ go, meta = {} }) {
                 ))}
               </select>
             )}
-            <select className="select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}
-              style={{ maxWidth: 180 }} title="Sort the ideas">
-              {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            </select>
-            <div className="grow">
-              <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
-                value={guidance} onChange={(e) => setGuidance(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance, true) }} />
-            </div>
-            <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
-              {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
+            {view === 'ideas' && (
+              <>
+                <select className="select" value={sortBy} onChange={(e) => setSortBy(e.target.value)}
+                  style={{ maxWidth: 180 }} title="Sort the ideas">
+                  {SORT_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <div className="grow">
+                  <input className="input" placeholder="Guide the ideas — e.g. Rock bands of the 90s"
+                    value={guidance} onChange={(e) => setGuidance(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !loadingIdeas) loadIdeas(guidance, true) }} />
+                </div>
+                <Button variant="primary" icon="wand-magic-sparkles" disabled={loadingIdeas} onClick={() => loadIdeas(guidance, true)}>
+                  {loadingIdeas ? 'Thinking…' : (guidance.trim() ? 'Generate ideas' : 'Generate more')}</Button>
+              </>
+            )}
           </div>
         </Card>
-        {sortedIdeas.map((idea, i) => {
+        {view === 'ideas' && sortedIdeas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
           const size = ideaSize(idea)
           const { scenes, resolution } = presetFor(idea, size)
@@ -320,28 +404,53 @@ export default function Ideas({ go, meta = {} }) {
               <div className="row center between mt-16 row--wrap gap-10">
                 <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
                 <div className="row gap-10 row--wrap">
-                  <Button variant="ghost" icon="ban" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'declined')} title="Add to the not-accepted list so the AI steers away from it">Decline</Button>
+                  <Button variant="ghost" icon="ban" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'declined')} title="Add to the Declined list so the AI steers away from it">Decline</Button>
                   <Button variant="ghost" icon="eye-slash" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'ignored')} title="Hide it for good — you won't see it again">Ignore</Button>
-                  <Button variant="ghost" icon="layer-group" disabled={busy === 'idea-' + key} onClick={() => queueIdea(idea, title)}>Queue</Button>
-                  <Button variant="primary" icon="wand-magic-sparkles" disabled={busy === 'idea-' + key} onClick={() => createIdea(idea, title)}>Create</Button>
+                  <Button variant="primary" icon="check" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'accepted')} title="Keep it under Accepted, ready to queue or create">Accept</Button>
                 </div>
               </div>
             </Card>
           )
         })}
-        {discarded.length > 0 && (
-          <Card span={12} well className="reveal">
-            <div className="row center between" style={{ cursor: 'pointer' }} onClick={() => setShowDiscarded((v) => !v)}>
-              <div className="row center gap-10">
-                <span className="stream-ico" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}><Icon name="trash-can" /></span>
-                <div>
-                  <div style={{ fontWeight: 600 }}>Declined ideas ({discarded.length})</div>
-                  <div className="muted" style={{ fontSize: 12.5 }}>Topics you turned down — kept out of new suggestions. Revive one to bring it back, or forget it for good. (Ignored ideas stay hidden and aren't listed here.)</div>
-                </div>
+        {view === 'accepted' && (
+          <Card span={12} className="reveal">
+            <div className="row center gap-10">
+              <span className="stream-ico" style={{ background: 'var(--accent-soft)', color: 'var(--accent)' }}><Icon name="check" /></span>
+              <div>
+                <div style={{ fontWeight: 600 }}>Accepted ideas ({accepted.length})</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>Topics you accepted. Queue or create one — it stays here, marked as acted on, so you always know which ideas haven't been made yet.</div>
               </div>
-              <Icon name={showDiscarded ? 'chevron-up' : 'chevron-down'} />
             </div>
-            {showDiscarded && (
+            {accepted.length === 0 && (
+              <p className="muted" style={{ fontSize: 13, margin: '16px 0 0' }}>Nothing accepted yet — accept an idea from the Ideas tab and it will wait here.</p>
+            )}
+            {acceptedPending.length > 0 && (
+              <div className="mt-16">
+                <div className="label-sm">Not created yet ({acceptedPending.length})</div>
+                {acceptedPending.map(acceptedRow)}
+              </div>
+            )}
+            {acceptedActed.length > 0 && (
+              <div className="mt-16">
+                <div className="label-sm">Acted on ({acceptedActed.length})</div>
+                {acceptedActed.map(acceptedRow)}
+              </div>
+            )}
+          </Card>
+        )}
+        {view === 'declined' && (
+          <Card span={12} className="reveal">
+            <div className="row center gap-10">
+              <span className="stream-ico" style={{ background: 'var(--surface-2)', color: 'var(--muted)' }}><Icon name="ban" /></span>
+              <div>
+                <div style={{ fontWeight: 600 }}>Declined ideas ({discarded.length})</div>
+                <div className="muted" style={{ fontSize: 12.5 }}>Topics you turned down — kept out of new suggestions. Accept one to move it to the Accepted list, revive it back into the ideas, or remove it for good. (Ignored ideas stay hidden and aren't listed here.)</div>
+              </div>
+            </div>
+            {discarded.length === 0 && (
+              <p className="muted" style={{ fontSize: 13, margin: '16px 0 0' }}>Nothing declined right now.</p>
+            )}
+            {discarded.length > 0 && (
               <div className="mt-16">
                 {discarded.map((rec) => (
                   <div key={rec.id || rec.title} className="row center between row--wrap gap-10"
@@ -351,6 +460,7 @@ export default function Ideas({ go, meta = {} }) {
                       {rec.reason && <div className="muted" style={{ fontSize: 12.5, fontStyle: 'italic' }}>{rec.reason}</div>}
                     </div>
                     <div className="row gap-10">
+                      <Button variant="ghost" icon="check" onClick={() => moveIdea(rec, 'accepted')} title="Move to the Accepted list">Accept</Button>
                       <Button variant="ghost" icon="rotate-left" onClick={() => reviveIdea(rec)}>Revive</Button>
                       <Button variant="ghost" icon="trash-can" onClick={() => forgetIdea(rec)}>Forget</Button>
                     </div>
