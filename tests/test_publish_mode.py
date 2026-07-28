@@ -9,6 +9,7 @@ film manually drops it from the queue.
 """
 import os
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -36,6 +37,9 @@ class TempConfigCase(unittest.TestCase):
             (app, "CONFIG_FILE", self.config_file),
             (app, "VOICES_DIR", self.config_file.parent / "voices"),
             (app, "OUTPUT_DIR", self.output_dir),
+            # Clock resets feed the release governor — keep every test off the
+            # real ~/.config file.
+            (backend.pq, "PUBLISH_CLOCK_PATH", tmp / "publish_clock.json"),
         ]:
             p = mock.patch.object(target, attr, value)
             p.start()
@@ -280,6 +284,104 @@ class ApprovalGateTests(TempConfigCase):
             out = backend._release_scheduled_publishes()
         cp.assert_called_once()
         self.assertEqual(out, {"youtube": ["e1"]})
+
+
+class ClockResetTests(TempConfigCase):
+    """A publishing-clock reset (pq.reset_clock) re-anchors a channel/account's
+    cadence: releases made before the reset stop counting, the next release is
+    allowed at the reset's chosen time, and later ones space from whenever it
+    actually goes out — so X and YouTube can be brought onto the same timing."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                              Path(self._tmp.name) / "publish_queue.json")
+        p.start()
+        self.addCleanup(p.stop)
+        for name, ret in [("_reconcile_publish_queue", None), ("_film_job_config", {}),
+                          ("_youtube_channel_connected", True)]:
+            p = mock.patch.object(backend, name, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+        self.write_config({"youtube_channels": [{"id": "chan", "publish_per_day": 1}],
+                           "x_accounts": [{"id": "acct", "publish_per_day": 0}]})
+
+    def _entry(self, eid, status="pending", released=None, **yt_over):
+        yt = {"enabled": True, "channel": "chan", "status": status}
+        if released is not None:
+            yt["released_at"] = released
+        yt.update(yt_over)
+        return {"id": eid, "work_dir": f"/tmp/wd-{eid}", "title": eid, "source": "manual",
+                "created_at": 1.0, "youtube": yt,
+                "x": {"enabled": False, "account": "", "status": "skipped"}}
+
+    def test_recent_release_blocks_without_reset(self):
+        # Baseline: 1/day and a release a minute ago → the next entry is held.
+        backend.pq.save_queue([
+            self._entry("d1", status="done", released=time.time() - 60, video_id="v"),
+            self._entry("e1")])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_not_called()
+        self.assertEqual(out, {})
+
+    def test_reset_voids_history_and_releases_now(self):
+        backend.pq.save_queue([
+            self._entry("d1", status="done", released=time.time() - 60, video_id="v"),
+            self._entry("e1")])
+        backend.pq.reset_clock("youtube", "chan", next_at=time.time() - 1)
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+    def test_reset_holds_until_its_chosen_time(self):
+        # Even a cadence-eligible key (last release 25h ago on 1/day) must wait
+        # for the reset's chosen time.
+        backend.pq.save_queue([
+            self._entry("d1", status="done", released=time.time() - 90000, video_id="v"),
+            self._entry("e1")])
+        backend.pq.reset_clock("youtube", "chan", next_at=time.time() + 3600)
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_not_called()
+        self.assertEqual(out, {})
+
+    def test_release_after_reset_reanchors_the_cadence(self):
+        # First tick after the reset releases e1; the reset is then inert, so the
+        # second tick gates e2 on the fresh anchor instead of releasing it too.
+        backend.pq.save_queue([self._entry("e1"), self._entry("e2")])
+        backend.pq.reset_clock("youtube", "chan", next_at=time.time() - 1)
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            first = backend._release_scheduled_publishes()
+            second = backend._release_scheduled_publishes()
+        self.assertEqual(first, {"youtube": ["e1"]})
+        self.assertEqual(second, {})
+        cp.assert_called_once()
+
+    def test_cadence_status_reflects_a_pending_reset(self):
+        nxt = time.time() + 7200
+        backend.pq.save_queue([
+            self._entry("d1", status="done", released=time.time() - 60, video_id="v")])
+        backend.pq.reset_clock("youtube", "chan", next_at=nxt)
+        chans, _ = backend._publish_cadence_status(
+            app.load_config(), backend.pq.load_queue(), time.time())
+        info = chans["chan"]
+        self.assertTrue(info["reset_pending"])
+        self.assertIsNone(info["last_released"])       # voided by the reset
+        self.assertAlmostEqual(info["next_eligible"], nxt, delta=2)
+        self.assertEqual(info["count_today"], 1)       # today's tally keeps voided posts
+
+    def test_reset_endpoint_validates_and_writes(self):
+        with self.assertRaises(backend.HTTPException):
+            backend.publish_clock_reset(backend.PublishClockBody(platform="nope", key="chan"))
+        with self.assertRaises(backend.HTTPException):
+            backend.publish_clock_reset(backend.PublishClockBody(platform="youtube", key="ghost"))
+        out = backend.publish_clock_reset(backend.PublishClockBody(platform="youtube", key="chan"))
+        self.assertTrue(out["ok"])
+        rec = backend.pq.load_clock()["youtube:chan"]
+        self.assertGreater(rec["next_at"], 0)          # next_at=0 means "right away"
+        self.assertTrue(out["channels"]["chan"]["reset_pending"])
 
 
 if __name__ == "__main__":

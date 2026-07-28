@@ -280,6 +280,8 @@ export const api = {
   publishNow: (id) => req('POST', '/publish/now', { id }),
   publishMove: (id, direction) => req('POST', '/publish/move', { id, direction }),
   publishApprove: (workDir, approved = true) => req('POST', '/publish/approve', { work_dir: workDir, approved }),
+  publishClock: () => req('GET', '/publish/clock'),
+  publishClockReset: (platform, key, nextAt = 0) => req('POST', '/publish/clock', { platform, key, next_at: nextAt }),
 
   ytAnalytics: (channel, refresh) => {
     const p = new URLSearchParams()

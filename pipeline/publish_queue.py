@@ -18,6 +18,7 @@ from pathlib import Path
 
 _CONFIG_DIR = Path.home() / ".config" / "video-generator"
 PUBLISH_QUEUE_PATH = _CONFIG_DIR / "publish_queue.json"
+PUBLISH_CLOCK_PATH = _CONFIG_DIR / "publish_clock.json"
 
 # Per-platform sub-state status values:
 #   pending     — waiting for its channel/account cadence to allow a release
@@ -120,3 +121,30 @@ def move_item(item_id: str, direction: int) -> bool:
     queue[item_idx], queue[other_idx] = queue[other_idx], queue[item_idx]
     save_queue(queue)
     return True
+
+
+# ── Publishing clock resets ───────────────────────────────────────────────────
+# The cadence has no stored anchor: each channel/account's next-eligible time is
+# derived from its newest release in the queue. A reset re-anchors that clock —
+# releases made at or before ``set_at`` stop counting, and the next release is
+# allowed at ``next_at`` (later ones space from whenever it actually goes out).
+# A record goes inert on its own once a release lands after ``set_at``; setting
+# the same time on a YouTube channel and an X account syncs the two platforms.
+
+def load_clock() -> dict:
+    """``"<platform>:<key>"`` → ``{"set_at", "next_at"}`` reset records."""
+    try:
+        data = json.loads(PUBLISH_CLOCK_PATH.read_text())
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def reset_clock(platform: str, key: str, next_at: float) -> dict:
+    """Record a clock reset for a channel/account. Overwrites any earlier reset
+    for the same key. Returns the full clock map."""
+    clock = load_clock()
+    clock[f"{platform}:{key}"] = {"set_at": time.time(), "next_at": float(next_at)}
+    PUBLISH_CLOCK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    PUBLISH_CLOCK_PATH.write_text(json.dumps(clock, indent=2))
+    return clock
