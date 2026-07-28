@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
-import { resolveStyle, styleLineage, styleTreeOrder } from '../styleUtils.js'
+import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
@@ -1081,36 +1081,46 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     }
     return kids
   }, [styles, st.name])
-  // Fields the selected style explicitly overrides (only meaningful with a parent).
+  // Non-text fields the selected style explicitly overrides. Text fields are
+  // NOT listed as chips — their boxes literally show what's used ("{parent}"
+  // stands for the parent's text), so they carry no hidden state to surface.
   const overriddenFields = st.parent
-    ? Object.keys(st).filter((k) => k !== 'name' && k !== 'parent')
+    ? Object.keys(st).filter((k) => k !== 'name' && k !== 'parent' && !STYLE_TEXT_FIELDS.has(k))
     : []
-  // The parent's own resolved settings — what "{parent}" expands to in a
-  // composed text field, and what an override is replacing.
+  // The parent's own resolved settings — what "{parent}" expands to.
   const parentEff = useMemo(() => (st.parent ? resolveStyle(styles, st.parent) : null),
     [styles, st.parent])
-  // TEXT controls bind to the RAW override when one exists (so a "{parent}"
-  // marker stays visible and editable) and to the resolved value otherwise.
-  // For marker-less overrides the two are identical.
-  const fieldVal = (k) => (st.parent && st[k] !== undefined ? (st[k] ?? '') : (eff[k] ?? ''))
-  // Under an overridden text field of a child style: show what the override
-  // replaces, or — when it embeds "{parent}" — the final composed text.
+  // TEXT controls on a child show the literal stored text; an inherited field
+  // (nothing stored) displays as the bare "{parent}" placeholder. Editing
+  // around the placeholder extends the parent's text, replacing it overrides,
+  // typing "{parent}" again re-inherits (setStyleField drops the key).
+  const fieldVal = (k) => {
+    if (st.parent && !parentMissing) return st[k] !== undefined ? (st[k] ?? '') : '{parent}'
+    return st.parent && st[k] !== undefined ? (st[k] ?? '') : (eff[k] ?? '')
+  }
+  // Under each text field of a child style: what the box's text resolves to.
   const ParentPreview = ({ k }) => {
-    if (!st.parent || parentMissing || st[k] === undefined) return null
-    const own = String(st[k] ?? '')
-    if (own.includes('{parent}')) {
+    if (!st.parent || parentMissing) return null
+    const raw = String(fieldVal(k))
+    const pv = String(parentEff?.[k] ?? '')
+    const short = (t) => (t.length > 160 ? `${t.slice(0, 160)}…` : t)
+    if (raw === '{parent}') {
+      return (
+        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+          Uses “{st.parent}”’s text{pv ? <>: <em>{short(pv)}</em></> : ' (blank)'} — add around the placeholder to extend it, or replace it to override.
+        </div>
+      )
+    }
+    if (raw.includes('{parent}')) {
       return (
         <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
           Final — with “{st.parent}”’s text filled in: <em>{String(eff[k] ?? '') || '(empty)'}</em>
         </div>
       )
     }
-    const pv = String(parentEff?.[k] ?? '')
-    if (!pv) return null
     return (
       <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-        Replaces “{st.parent}”’s: <em>{pv.length > 160 ? `${pv.slice(0, 160)}…` : pv}</em>
-        {' '}— write <code>{'{parent}'}</code> where its text should stay (before, after, or in the middle of yours).
+        Replaces “{st.parent}”’s text{pv ? <> (<em>{short(pv)}</em>)</> : ''} — write <code>{'{parent}'}</code> where its text should stay.
       </div>
     )
   }
@@ -1132,7 +1142,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     const list = c.styles || []
     const cur = list[styleIdx]
     if (!cur) return c
-    const next = { ...c, styles: list.map((s, i) => (i === styleIdx ? { ...s, [k]: v } : s)) }
+    // A child text field that is exactly "{parent}" means plain inheritance —
+    // store nothing, so the field keeps following the parent live.
+    const drop = cur.parent && STYLE_TEXT_FIELDS.has(k) && v === '{parent}'
+    const next = {
+      ...c,
+      styles: list.map((s, i) => {
+        if (i !== styleIdx) return s
+        if (drop) { const { [k]: _x, ...rest } = s; return rest }
+        return { ...s, [k]: v }
+      }),
+    }
     if (k === 'name') {
       // Renaming the default style keeps it the default, and child styles
       // follow their renamed parent.
@@ -1738,7 +1758,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="Name">
                 <input className="input" value={st.name || ''} onChange={(e) => setStyleField('name', e.target.value)} style={{ maxWidth: 320 }} />
               </Field>
-              <Field label="Parent style" hint="Inherit every setting from another style and override only what differs — later edits to the parent flow through to this style automatically. Picking a parent keeps just the fields that differ from it; clearing it freezes the current values. In text fields, write {parent} where the parent’s text should stay — before, after, or in the middle of yours.">
+              <Field label="Parent style" hint="Inherit every setting from another style and override only what differs — later edits to the parent flow through automatically. Text fields literally contain {parent} where the parent’s text goes: a box that is just {parent} follows it entirely; add text around the placeholder to extend it, or replace it to override. Picking a parent keeps just what differs; clearing it freezes the current values.">
                 <select className="select" value={st.parent || ''} onChange={(e) => setParent(e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="">(none — standalone style)</option>
                   {styles.filter((s) => s.name && s.name !== st.name && !stDescendants.has(s.name))
@@ -1751,14 +1771,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               )}
               {st.parent && !parentMissing && (
                 <div className="stack gap-6">
-                  <span className="label-sm">Overrides</span>
+                  <span className="label-sm">Setting overrides</span>
                   {overriddenFields.length === 0 ? (
                     <div className="muted" style={{ fontSize: 12 }}>
-                      No overrides yet — everything comes from “{st.parent}”. Edit any field below to override it here.
+                      No setting overrides — dropdowns, numbers and toggles all follow “{st.parent}”. Text fields show their content directly: <code>{'{parent}'}</code> stands for “{st.parent}”’s text.
                     </div>
                   ) : (<>
                     <div className="muted" style={{ fontSize: 12 }}>
-                      These fields are set on this style; everything else follows “{st.parent}”. Click ✕ to drop an override and inherit again.
+                      These settings are set on this style; other dropdowns, numbers and toggles follow “{st.parent}”. Click ✕ to drop one and inherit again. Text fields aren’t listed — their boxes show exactly what’s used (<code>{'{parent}'}</code> = the parent’s text).
                     </div>
                     <div className="row gap-6 row--wrap">
                       {overriddenFields.map((k) => (
