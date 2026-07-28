@@ -1646,21 +1646,38 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <span className="muted" style={{ fontSize: 11.5 }}>Each style bundles script, render and audio-mix settings — pick one per video.</span>
             </div>
             {styles.some((s) => s.parent) ? (
-              /* Hierarchy present: render the picker as an indented tree —
-                 each root followed by its descendants, depth as indentation. */
-              <div className="stack gap-6 mt-16">
-                {styleTreeOrder(styles).map(({ style: s, depth }) => {
-                  const i = styles.indexOf(s)
-                  return (
-                    <div key={s.name || i} style={{ paddingLeft: depth * 26 }}>
-                      <Button variant={i === styleIdx ? 'primary' : 'ghost'}
-                        icon={cfg.default_style === s.name ? 'star' : undefined}
-                        onClick={() => setStyleIdx(i)}>{`${depth ? '↳ ' : ''}${s.name || '(unnamed)'}`}</Button>
+              /* Hierarchy present: compact tree — an only-child chain stays on
+                 its parent's line (BHOB ↳ BHOB Español); a new line starts only
+                 at a second+ sibling. In the depth-first order that's exactly
+                 the nodes NOT one level deeper than their predecessor. Cells go
+                 into a grid (one column per depth, max-content wide) so
+                 siblings on different lines align under the same column. */
+              (() => {
+                const cells = []
+                let row = -1
+                styleTreeOrder(styles).forEach((o, j, arr) => {
+                  if (j === 0 || o.depth !== arr[j - 1].depth + 1) row++
+                  cells.push({ ...o, row })
+                })
+                const cols = cells.reduce((m, c) => Math.max(m, c.depth), 0) + 1
+                return (<>
+                  <div className="mt-16" style={{ overflowX: 'auto' }}>
+                    <div style={{ display: 'inline-grid', gridTemplateColumns: `repeat(${cols}, max-content)`, gap: 6, alignItems: 'center' }}>
+                      {cells.map(({ style: s, depth, row: r }) => {
+                        const i = styles.indexOf(s)
+                        return (
+                          <div key={s.name || i} style={{ gridRow: r + 1, gridColumn: depth + 1 }}>
+                            <Button variant={i === styleIdx ? 'primary' : 'ghost'}
+                              icon={cfg.default_style === s.name ? 'star' : undefined}
+                              onClick={() => setStyleIdx(i)}>{`${depth ? '↳ ' : ''}${s.name || '(unnamed)'}`}</Button>
+                          </div>
+                        )
+                      })}
                     </div>
-                  )
-                })}
-                <div><Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button></div>
-              </div>
+                  </div>
+                  <div style={{ marginTop: 10 }}><Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button></div>
+                </>)
+              })()
             ) : (
               <div className="row gap-6 row--wrap mt-16">
                 {styles.map((s, i) => (
