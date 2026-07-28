@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
-import { resolveStyle } from '../styleUtils.js'
+import { resolveStyle, styleLineage, styleTreeOrder } from '../styleUtils.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
@@ -1645,14 +1645,32 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <span className="label-sm">Styles</span>
               <span className="muted" style={{ fontSize: 11.5 }}>Each style bundles script, render and audio-mix settings — pick one per video.</span>
             </div>
-            <div className="row gap-6 row--wrap mt-16">
-              {styles.map((s, i) => (
-                <Button key={s.name || i} variant={i === styleIdx ? 'primary' : 'ghost'}
-                  icon={cfg.default_style === s.name ? 'star' : undefined}
-                  onClick={() => setStyleIdx(i)}>{`${s.parent ? '↳ ' : ''}${s.name || '(unnamed)'}`}</Button>
-              ))}
-              <Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button>
-            </div>
+            {styles.some((s) => s.parent) ? (
+              /* Hierarchy present: render the picker as an indented tree —
+                 each root followed by its descendants, depth as indentation. */
+              <div className="stack gap-6 mt-16">
+                {styleTreeOrder(styles).map(({ style: s, depth }) => {
+                  const i = styles.indexOf(s)
+                  return (
+                    <div key={s.name || i} style={{ paddingLeft: depth * 26 }}>
+                      <Button variant={i === styleIdx ? 'primary' : 'ghost'}
+                        icon={cfg.default_style === s.name ? 'star' : undefined}
+                        onClick={() => setStyleIdx(i)}>{`${depth ? '↳ ' : ''}${s.name || '(unnamed)'}`}</Button>
+                    </div>
+                  )
+                })}
+                <div><Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button></div>
+              </div>
+            ) : (
+              <div className="row gap-6 row--wrap mt-16">
+                {styles.map((s, i) => (
+                  <Button key={s.name || i} variant={i === styleIdx ? 'primary' : 'ghost'}
+                    icon={cfg.default_style === s.name ? 'star' : undefined}
+                    onClick={() => setStyleIdx(i)}>{s.name || '(unnamed)'}</Button>
+                ))}
+                <Button variant="ghost" icon="plus" onClick={() => setNewOpen((v) => !v)}>New style</Button>
+              </div>
+            )}
             {newOpen && (
               <div className="stack gap-10 mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
                 <div className="row center gap-10 row--wrap">
@@ -1680,7 +1698,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           {/* ── Identity ── */}
           <Card span={12} className="reveal reveal-d1">
             <div className="row center between">
-              <span className="label-sm">Style — {st.name}</span>
+              <span className="label-sm">
+                Style —{' '}
+                {styleLineage(styles, st.name).slice(0, -1).map((a) => (
+                  <span key={a.name}>
+                    <a role="button" tabIndex={0} title={`Open “${a.name}”`}
+                      style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                      onClick={() => setStyleIdx(styles.indexOf(a))}>{a.name}</a>
+                    {' ▸ '}
+                  </span>
+                ))}
+                {st.name}
+              </span>
               <div className="row gap-10 row--wrap">
                 {cfg.default_style === st.name
                   ? <Chip tone="ok" dot>default style</Chip>
