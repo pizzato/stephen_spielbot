@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel } from '../components.jsx'
 import { api } from '../api.js'
+import { resolveStyle } from '../styleUtils.js'
 
 function fmtNum(n) {
   if (n == null) return '—'
@@ -37,9 +38,12 @@ export default function Create({ seed, meta, onGenerated }) {
   const [styleName, setStyleName] = useState(seed?.styleName || '')
   const profile = useMemo(() => {
     if (styleName === NO_STYLE) return null
-    return styleList.find((s) => s.name === styleName)
+    const raw = styleList.find((s) => s.name === styleName)
       || styleList.find((s) => s.name === meta.config?.default_style)
       || styleList[0] || null
+    // Child styles are stored sparse — resolve through the parent chain so the
+    // prefills below sees the effective voice/scenes/visual style.
+    return raw ? resolveStyle(styleList, raw.name) : null
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
 
