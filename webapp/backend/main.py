@@ -5745,30 +5745,39 @@ def _already_made_titles(cfg: dict, target: str) -> list[str]:
 # left untouched by the declined-list reset — it just disappears for good.
 IGNORED_REASON = "ignored"
 
+# Idea the user accepted: leaves the active cards and lands in the reviewable
+# "Accepted" list, from where it can be queued/created (staying listed, marked
+# acted-upon), moved to Declined, or removed. Kept out of future suggestions —
+# it's committed to, so the LLM must not re-suggest it.
+ACCEPTED_REASON = "accepted"
+
 
 def _is_real_discard(reason: str) -> bool:
-    """A discard the user made on purpose (Decline or Ignore), as opposed to the
-    'used' marker the Queue/Create actions reuse — those become videos and are
-    tracked via the queue, not the discard list."""
+    """A dismissal the user made on purpose (Accept, Decline or Ignore), as
+    opposed to the 'used' marker the legacy Queue/Create actions reused — those
+    become videos and are tracked via the queue, not here."""
     return (reason or "").strip().lower() not in ("used", "queued", "created")
 
 
 def _is_declined_reason(reason: str) -> bool:
     """A deliberately *declined* idea (the Decline action / legacy Close) — the
     'not accepted' list the user can review and reset. Distinct from an
-    'ignored' idea, which is suppressed silently and never surfaces here."""
+    'ignored' idea (suppressed silently, never surfaces here) and an 'accepted'
+    one (lives in its own reviewable list)."""
     r = (reason or "").strip().lower()
-    return _is_real_discard(r) and r != IGNORED_REASON
+    return _is_real_discard(r) and r not in (IGNORED_REASON, ACCEPTED_REASON)
 
 
-def _discarded_records(cfg: dict, target: str = "",
-                       include_ignored: bool = False) -> list[dict]:
-    """Ideas the user deliberately discarded, newest first. Rich data comes from
-    the suggestions store (title/reason/scene count/style); the dismissed-log
-    supplements any discard not represented there. ``target`` filters to a
-    style (legacy/unstamped discards fall under the default style). Ignored
-    ideas stay out of this (reviewable) list unless ``include_ignored`` is set —
-    the LLM 'do not suggest' list sets it so an ignored topic never resurfaces."""
+def _is_accepted_reason(reason: str) -> bool:
+    return (reason or "").strip().lower() == ACCEPTED_REASON
+
+
+def _dismissal_records(cfg: dict, target: str, keep) -> list[dict]:
+    """Dismissed-idea records whose reason passes ``keep``, newest first. Rich
+    data comes from the suggestions store (title/reason/scene count/style); the
+    dismissed-log supplements any dismissal not represented there. ``target``
+    filters to a style (legacy/unstamped records fall under the default
+    style)."""
     default_name = cfg.get("default_style", "")
     by_title: dict[str, dict] = {}
 
@@ -5777,10 +5786,8 @@ def _discarded_records(cfg: dict, target: str = "",
         if not title:
             return
         reason = str(rec.get("dismissed_reason") or rec.get("reason") or "dismissed")
-        if not _is_real_discard(reason):
+        if not keep(reason):
             return
-        if not include_ignored and not _is_declined_reason(reason):
-            return  # an ignored idea — suppressed, but never shown in the list
         key = _suggestion_key(title)
         prev = by_title.get(key)
         if prev is not None and (prev.get("_rich") or not rich):
@@ -5794,6 +5801,10 @@ def _discarded_records(cfg: dict, target: str = "",
             "suggested_scene_count": max(6, min(50, int(sc or 12))),
             "interestingness": float(rec.get("interestingness", 0.7) or 0.7),
             "dismissed_at": float(rec.get("dismissed_at") or rec.get("created_at") or 0),
+            "size": str(rec.get("size") or ""),
+            "acted": bool(rec.get("acted")),
+            "acted_via": str(rec.get("acted_via") or ""),
+            "acted_at": float(rec.get("acted_at") or 0),
             "_rich": rich,
         }
 
@@ -5817,10 +5828,27 @@ def _discarded_records(cfg: dict, target: str = "",
     return out
 
 
+def _discarded_records(cfg: dict, target: str = "",
+                       include_ignored: bool = False) -> list[dict]:
+    """Ideas the user deliberately turned down, newest first. Ignored (and
+    accepted) ideas stay out of this (reviewable) list unless
+    ``include_ignored`` is set — the LLM 'do not suggest' list sets it so no
+    dismissed topic of any kind resurfaces."""
+    keep = _is_real_discard if include_ignored else _is_declined_reason
+    return _dismissal_records(cfg, target, keep)
+
+
+def _accepted_records(cfg: dict, target: str = "") -> list[dict]:
+    """Ideas the user accepted, newest first — the reviewable "Accepted" list.
+    Each record carries acted/acted_via/acted_at so the UI can separate ideas
+    already sent to Queue/Create from those still waiting."""
+    return _dismissal_records(cfg, target, _is_accepted_reason)
+
+
 def _discarded_idea_titles(cfg: dict) -> list[str]:
-    """Titles the user has thrown away — passed to the LLM as a 'do not suggest
-    again' list so neither a declined nor an ignored topic resurfaces. Global (a
-    thrown-away topic stays out of every style) since the discard log isn't
+    """Titles the user has dealt with — passed to the LLM as a 'do not suggest
+    again' list so no declined, ignored, or accepted topic resurfaces. Global (a
+    handled topic stays out of every style) since the discard log isn't
     reliably style-stamped."""
     return [r["title"] for r in _discarded_records(cfg, include_ignored=True)]
 
@@ -5993,10 +6021,14 @@ class SuggestionDismissBody(BaseModel):
     id: str = ""
     title: str = ""
     reason: str = ""
+    size: str = ""   # Small/Medium/Large chosen on the card — kept on acceptance
 
 
 @api.post("/api/youtube/suggestions/dismiss")
 def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
+    """Dismiss an idea (accept / decline / ignore) — also how an idea moves
+    between the Accepted and Declined lists: re-dismissing with the other
+    reason updates the record and resets any acted-upon marker."""
     suggestions = yt.load_suggestions()
     key = (body.id or "").strip()
     title = _suggestion_key(body.title)
@@ -6007,6 +6039,8 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
         "reason": body.reason or "dismissed",
         "dismissed_at": time.time(),
     }
+    if body.size:
+        dismiss_record["size"] = body.size
     dismiss_keys = [k for k in (key, title) if k]
     if dismiss_keys:
         for dismiss_key in dismiss_keys:
@@ -6025,11 +6059,66 @@ def dismiss_suggestion(body: SuggestionDismissBody) -> dict:
             suggestion["dismissed"] = True
             suggestion["dismissed_reason"] = body.reason or "dismissed"
             suggestion["dismissed_at"] = time.time()
+            if body.size:
+                suggestion["size"] = body.size
+            for f in ("acted", "acted_via", "acted_at"):
+                suggestion.pop(f, None)
             changed = True
             break
     if changed:
         yt.save_suggestions(suggestions)
     return {"ok": bool(dismiss_keys), "suggestions": _visible_suggestions(suggestions)}
+
+
+@api.get("/api/youtube/suggestions/accepted")
+def accepted_suggestions(style_name: str = Query("")) -> dict:
+    """Ideas the user accepted, with their acted-upon markers, so the list can
+    show which accepted ideas haven't been sent to Queue/Create yet. Filtered
+    to a style when one is given (the 'All styles' / blank selection returns
+    every accepted idea)."""
+    cfg = gapp.load_config()
+    target = ""
+    if style_name and style_name != ALL_STYLES:
+        ss = gapp.style_settings(cfg, style_name)
+        target = ss["name"] or cfg.get("default_style", "")
+    return {"accepted": _accepted_records(cfg, target)}
+
+
+class SuggestionActBody(BaseModel):
+    id: str = ""
+    title: str = ""
+    via: str = ""   # "queue" or "create"
+
+
+@api.post("/api/youtube/suggestions/accepted/act")
+def act_on_accepted_suggestion(body: SuggestionActBody) -> dict:
+    """Mark an accepted idea as acted upon (sent to Queue or the Create tab).
+    The idea stays in the Accepted list — the marker just moves it into the
+    'acted on' group so the user can see what's still waiting."""
+    key = (body.id or "").strip()
+    title_key = _suggestion_key(body.title)
+    stamp = {"acted": True, "acted_via": body.via or "queue", "acted_at": time.time()}
+
+    dismissed = _load_dismissed_suggestions()
+    changed = False
+    for k, rec in dismissed.items():
+        if isinstance(rec, dict) and _suggestion_matches(
+                {"id": rec.get("id"), "title": rec.get("title") or k}, key, title_key):
+            rec.update(stamp)
+            changed = True
+    if changed:
+        _save_dismissed_suggestions(dismissed)
+
+    suggestions = yt.load_suggestions()
+    changed = False
+    for s in suggestions:
+        if _suggestion_matches(s, key, title_key):
+            s.update(stamp)
+            changed = True
+    if changed:
+        yt.save_suggestions(suggestions)
+    cfg = gapp.load_config()
+    return {"ok": True, "accepted": _accepted_records(cfg)}
 
 
 @api.get("/api/youtube/suggestions/discarded")
@@ -6071,8 +6160,8 @@ def revive_suggestion(body: SuggestionReviveBody) -> dict:
         if _suggestion_matches(s, key, title_key):
             s["used"] = False
             s["dismissed"] = False
-            s.pop("dismissed_reason", None)
-            s.pop("dismissed_at", None)
+            for f in ("dismissed_reason", "dismissed_at", "acted", "acted_via", "acted_at"):
+                s.pop(f, None)
             revived = True
     if revived:
         yt.save_suggestions(suggestions)
