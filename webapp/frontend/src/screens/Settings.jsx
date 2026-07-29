@@ -29,6 +29,57 @@ function cadenceHint(perDay) {
   return `≈ one every ${span}.`
 }
 
+// Publishing-clock row for one channel/account settings panel. The cadence has
+// no fixed time of day — it spaces releases from whenever the last one went out,
+// so YouTube and X drift onto different timings. Resetting re-anchors the clock:
+// releases before the reset stop counting, the next one is allowed at the picked
+// time (empty = right away) and later ones space from it. Setting the same time
+// on a YouTube channel and an X account brings the two platforms in sync.
+function PublishClockControl({ platform, id, onError }) {
+  const [info, setInfo] = useState(null)   // this key's /publish/clock summary
+  const [at, setAt] = useState('')         // datetime-local value; '' = right away
+  const [busy, setBusy] = useState(false)
+  const [note, setNote] = useState('')
+  const refresh = () => api.publishClock()
+    .then((r) => setInfo(((platform === 'youtube' ? r.channels : r.accounts) || {})[id] || {}))
+    .catch(() => setInfo({}))
+  useEffect(() => { refresh() }, [id])
+  const fmt = (ts) => ts ? new Date(ts * 1000).toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }) : '—'
+  const reset = async () => {
+    setBusy(true); setNote(''); onError('')
+    try {
+      const ts = at ? Math.round(new Date(at).getTime() / 1000) : 0
+      if (at && !(ts > 0)) throw new Error('Pick a valid date and time, or leave it empty for “right away”.')
+      await api.publishClockReset(platform, id, ts)
+      await refresh()
+      setAt('')
+      setNote(ts ? 'Clock re-anchored — the next release is allowed at the chosen time.' : 'Clock reset — the next release can go out right away.')
+    } catch (e) { onError(e.message) } finally { setBusy(false) }
+  }
+  const other = platform === 'youtube' ? 'an X account' : 'a YouTube channel'
+  return (
+    <Field label="Publishing clock"
+      hint={`The cadence spaces releases from the last one, so release times drift. Resetting re-anchors the clock: the next release is allowed at the time you pick (leave empty for right away) and later ones space from it. Set the same time here and on ${other} to sync the two platforms.`}>
+      <div className="stack gap-8">
+        <span className="muted" style={{ fontSize: 12.5 }}>
+          {info === null ? 'Checking…' : <>
+            Last release {fmt(info.last_released)}{info.reset_pending ? ' (clock reset)' : ''} · next allowed{' '}
+            <strong>{info.next_eligible && info.next_eligible > Date.now() / 1000 + 30 ? fmt(info.next_eligible) : 'now'}</strong>
+          </>}
+        </span>
+        <div className="row gap-10 row--wrap" style={{ alignItems: 'center' }}>
+          <input className="input" type="datetime-local" style={{ width: 210 }} value={at}
+            onChange={(e) => setAt(e.target.value)} />
+          <Button variant="ghost" icon="clock-rotate-left" disabled={busy} onClick={reset}>
+            {busy ? 'Resetting…' : 'Reset clock'}
+          </Button>
+        </div>
+        {note && <span className="muted" style={{ fontSize: 12 }}>{note}</span>}
+      </div>
+    </Field>
+  )
+}
+
 // Extract a short display name from a worker URL or hostname
 function shortHost(url) {
   try { return new URL(url).hostname } catch { return url }
@@ -591,6 +642,7 @@ function ChannelsCard({ onConfigChanged, onError }) {
                     <span className="muted" style={{ fontSize: 12, paddingBottom: 8 }}>{cadenceHint(eng[ch.id]?.publish_per_day)}</span>
                   </div>
                 </Field>
+                <PublishClockControl platform="youtube" id={ch.id} onError={onError} />
                 <Field label="Community engagement prompt"
                   hint="How this channel replies to non-request comments — its persona and what to do. Leave empty to disable engagement for this channel.">
                   <textarea className="textarea" rows={5} value={eng[ch.id]?.engagement_prompt || ''}
@@ -831,6 +883,7 @@ function XAccountsCard({ onConfigChanged, onError }) {
                     <span className="muted" style={{ fontSize: 12, paddingBottom: 8 }}>{cadenceHint(eng[acc.id]?.publish_per_day)}</span>
                   </div>
                 </Field>
+                <PublishClockControl platform="x" id={acc.id} onError={onError} />
                 <Field label="Community engagement prompt"
                   hint="How this account replies to mentions — its persona and what to do. Leave empty to disable engagement. (Reading mentions needs a paid X API tier.)">
                   <textarea className="textarea" rows={5} value={eng[acc.id]?.engagement_prompt || ''}
