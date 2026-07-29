@@ -8095,21 +8095,41 @@ def x_post_status(task_id: str) -> dict:
 
 # ── Publish scheduler queue API (decoupled publishing) ────────────────────────
 
-def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict, dict]:
-    """Per channel/account cadence summary for the UI: configured videos/day and
-    the derived spacing, last release time, today's release count, and the next
-    time a release is allowed. Derived from the queue so it matches the governor."""
+def _publish_clock() -> dict:
+    """Publishing-clock resets keyed ``(platform, key)`` — see pq.reset_clock."""
+    return {tuple(k.split(":", 1)): v for k, v in pq.load_clock().items() if ":" in k}
+
+
+def _seed_last_releases(q: list[dict], clock: dict, now: float,
+                        count: dict | None = None) -> dict[tuple, float]:
+    """Newest release timestamp per ``(platform, key)`` — the derived publishing
+    clock the cadence spaces from. Releases at or before a key's clock reset are
+    voided (the reset re-anchors the cadence); *count*, when given, still tallies
+    every release made today, voided or not (it's display, not the clock)."""
     last: dict[tuple, float] = {}
-    count: dict[tuple, int] = {}
     for e in q:
         for plat, keyf in (("youtube", "channel"), ("x", "account")):
             sub = e.get(plat) or {}
             ts = sub.get("released_at") or sub.get("published_at")
-            if sub.get("status") in ("publishing", "done") and ts:
-                k = (plat, sub.get(keyf) or "")
-                last[k] = max(last.get(k, 0.0), ts)
-                if _same_local_day(ts, now):
-                    count[k] = count.get(k, 0) + 1
+            if sub.get("status") not in ("publishing", "done") or not ts:
+                continue
+            k = (plat, sub.get(keyf) or "")
+            if count is not None and _same_local_day(ts, now):
+                count[k] = count.get(k, 0) + 1
+            ov = clock.get(k)
+            if ov and ts <= float(ov.get("set_at") or 0):
+                continue
+            last[k] = max(last.get(k, 0.0), ts)
+    return last
+
+
+def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict, dict]:
+    """Per channel/account cadence summary for the UI: configured videos/day and
+    the derived spacing, last release time, today's release count, and the next
+    time a release is allowed. Derived from the queue so it matches the governor."""
+    clock = _publish_clock()
+    count: dict[tuple, int] = {}
+    last = _seed_last_releases(q, clock, now, count)
 
     def _summary(listed: str, plat: str) -> dict:
         out: dict = {}
@@ -8119,9 +8139,14 @@ def _publish_cadence_status(cfg: dict, q: list[dict], now: float) -> tuple[dict,
             interval = round(1440 / per_day) if per_day > 0 else 0
             k = (plat, key)
             l, cnt = last.get(k, 0.0), count.get(k, 0)
-            nxt = max(now, l + interval * 60) if (interval and l) else now
+            ov = clock.get(k)
+            if ov and not l:    # reset pending — the clock starts at its chosen time
+                nxt = max(now, float(ov.get("next_at") or 0))
+            else:
+                nxt = max(now, l + interval * 60) if (interval and l) else now
             out[key] = {"per_day": c.get("publish_per_day") or 0, "interval_minutes": interval,
-                        "last_released": l or None, "count_today": cnt, "next_eligible": nxt}
+                        "last_released": l or None, "count_today": cnt, "next_eligible": nxt,
+                        "reset_pending": bool(ov and not l)}
         return out
 
     return _summary("youtube_channels", "youtube"), _summary("x_accounts", "x")
@@ -8232,6 +8257,40 @@ def publish_queue_list() -> dict:
             "skip_comment": skip_comment,
             "sort": cfg.get("publish_sort_order") or "queue",
             "now": now}
+
+
+@api.get("/api/publish/clock")
+def publish_clock_status() -> dict:
+    """Lightweight per-channel/account cadence clocks for the Settings cards —
+    the /api/publish/queue summaries without reconciling or scoring the queue."""
+    cfg = gapp.load_config()
+    now = time.time()
+    chans, accts = _publish_cadence_status(cfg, pq.load_queue(), now)
+    return {"channels": chans, "accounts": accts, "now": now}
+
+
+class PublishClockBody(BaseModel):
+    platform: str    # "youtube" | "x"
+    key: str         # channel/account id
+    next_at: float = 0   # epoch seconds the next release is allowed; 0 = right away
+
+
+@api.post("/api/publish/clock")
+def publish_clock_reset(body: PublishClockBody) -> dict:
+    """Re-anchor a channel/account's publishing clock. Releases made before the
+    reset stop counting against the cadence; the next one is allowed at *next_at*
+    (or immediately) and later ones space from whenever it actually goes out.
+    Setting the same time on a YouTube channel and an X account syncs them."""
+    listed = {"youtube": "youtube_channels", "x": "x_accounts"}.get(body.platform)
+    if not listed:
+        raise HTTPException(400, "platform must be 'youtube' or 'x'.")
+    cfg = gapp.load_config()
+    if not any(c.get("id") == body.key for c in (cfg.get(listed) or [])):
+        raise HTTPException(404, "Channel/account not found.")
+    now = time.time()
+    pq.reset_clock(body.platform, body.key, next_at=float(body.next_at) or now)
+    chans, accts = _publish_cadence_status(cfg, pq.load_queue(), now)
+    return {"ok": True, "channels": chans, "accounts": accts, "now": now}
 
 
 @api.post("/api/publish/scan")
@@ -11031,17 +11090,15 @@ def _release_scheduled_publishes(force_id: str = "") -> dict:
     auto_pub_unapproved = bool(cfg.get("publish_auto_publish_unapproved"))
 
     # Seed each key's last release time from entries already released, so the
-    # spacing survives restarts.
-    last: dict[tuple, float] = {}
-    for e in q:
-        for plat, keyf in (("youtube", "channel"), ("x", "account")):
-            sub = e.get(plat) or {}
-            ts = sub.get("released_at") or sub.get("published_at")
-            if sub.get("status") in ("publishing", "done") and ts:
-                k = (plat, sub.get(keyf) or "")
-                last[k] = max(last.get(k, 0.0), ts)
+    # spacing survives restarts. A clock reset voids older releases (and holds
+    # the key until its chosen next_at) — same rules the status endpoint shows.
+    clock = _publish_clock()
+    last = _seed_last_releases(q, clock, now)
 
     def _eligible(k: tuple, interval_min: int) -> bool:
+        ov = clock.get(k)
+        if ov and not last.get(k):  # reset pending — wait for its chosen time
+            return now >= float(ov.get("next_at") or 0)
         return not (interval_min and last.get(k, 0.0) and (now - last[k]) < interval_min * 60)
 
     released = {"youtube": [], "x": []}
