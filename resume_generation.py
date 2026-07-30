@@ -1194,6 +1194,12 @@ def main(work_dir: Path) -> None:
                 _burn_first_frame(
                     final_path, ff_cover,
                     cover_path=cover_path, title=video_title, work_dir=work_dir,
+                    text_font=str(cfg.get("first_frame_text_font",
+                                          cfg.get("default_first_frame_text_font", "")) or ""),
+                    text_size=cfg.get("first_frame_text_size",
+                                      cfg.get("default_first_frame_text_size")),
+                    text_color=str(cfg.get("first_frame_text_color",
+                                           cfg.get("default_first_frame_text_color", "")) or ""),
                 )
             except Exception as ff_err:
                 logger.warning("First-frame cover failed (non-fatal): %s", ff_err)

@@ -930,6 +930,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [clearingDeclined, setClearingDeclined] = useState(false)  // declined-ideas reset in flight
   const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
   const [ttsEngineInfo, setTtsEngineInfo] = useState(null)  // {engines, availability, default_engine}
+  const [fontInfo, setFontInfo] = useState(null)  // [{path, name}] — host fonts for cover text
   const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
@@ -972,6 +973,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       setEngInstall((m) => ({ ...m, [key]: { status: 'error', error: e.message } }))
     }
   }
+
+  // Fonts installed on this machine, for the per-style cover-text font picker.
+  useEffect(() => { api.listFonts().then((r) => setFontInfo(r.fonts || [])).catch(() => {}) }, [])
 
   // TTS narration models: registry + per-worker availability + download buttons.
   // Mirrors the image-engine flow; reuses the shared engInstall status map (keys
@@ -1151,6 +1155,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return v === 'story' ? 'Story-first' : 'Classic'
       case 'first_frame_cover':
         return v === 'image' ? 'Cover image' : v === 'text' ? 'Cover text' : 'off'
+      case 'first_frame_text_font':
+        return (fontInfo || []).find((f) => f.path === v)?.name
+          || (v ? v.split('/').pop() : '(automatic)')
+      case 'first_frame_text_size':
+        return `${v ?? 11}% of width`
+      case 'first_frame_text_color':
+        return String(v || '#FFFFFF')
       case 'voice':
         return v || '(F5-TTS default)'
       case 'character_ids': {
@@ -1876,6 +1887,28 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select>
                 <ParentVal k="first_frame_cover" />
               </Field>
+              <Field label="Cover text font" hint="Look of the “Cover text” mode (automatic and manual burns). Any font installed on this machine; “Automatic” picks a bold system font.">
+                <select className="select" value={eff.first_frame_text_font || ''} onChange={(e) => setStyleField('first_frame_text_font', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="">Automatic — bold system font</option>
+                  {(fontInfo || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
+                  {eff.first_frame_text_font && !(fontInfo || []).some((f) => f.path === eff.first_frame_text_font)
+                    && <option value={eff.first_frame_text_font}>{fontInfo ? `${eff.first_frame_text_font} (not found)` : 'Loading fonts…'}</option>}
+                </select>
+                <ParentVal k="first_frame_text_font" />
+              </Field>
+              <div className="row gap-22 row--wrap">
+                <Field label="Cover text size" hint="% of the video width — 11% is the default big title.">
+                  <input className="input" type="number" min={4} max={30} value={eff.first_frame_text_size ?? 11}
+                    onChange={(e) => setStyleField('first_frame_text_size', +e.target.value)} style={{ maxWidth: 120 }} />
+                  <ParentVal k="first_frame_text_size" />
+                </Field>
+                <Field label="Cover text colour" hint="An outline keeps it readable on any frame.">
+                  <input className="input" type="color" value={eff.first_frame_text_color || '#FFFFFF'}
+                    onChange={(e) => setStyleField('first_frame_text_color', e.target.value)}
+                    style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
+                  <ParentVal k="first_frame_text_color" />
+                </Field>
+              </div>
               <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
                 label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
               <ParentVal k="auto_pick_exclude" />

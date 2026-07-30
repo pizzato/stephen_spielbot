@@ -32,6 +32,38 @@ class NormModeTests(unittest.TestCase):
         for bad in ("", None, "bogus", "IMAGE", 3, True):
             self.assertEqual(cover.norm_first_frame_cover(bad), "none")
 
+    def test_text_size_clamps_to_sane_percentages(self):
+        self.assertEqual(cover.norm_first_frame_text_size(18), 18)
+        self.assertEqual(cover.norm_first_frame_text_size("18"), 18)
+        self.assertEqual(cover.norm_first_frame_text_size(1), 4)
+        self.assertEqual(cover.norm_first_frame_text_size(90), 30)
+        for bad in (None, "", "big"):
+            self.assertEqual(cover.norm_first_frame_text_size(bad), 11)
+
+    def test_text_color_normalizes_to_rrggbb(self):
+        self.assertEqual(cover.norm_first_frame_text_color("#ffd700"), "#FFD700")
+        self.assertEqual(cover.norm_first_frame_text_color("#abc"), "#AABBCC")
+        for bad in (None, "", "gold", "#12345", "123456"):
+            self.assertEqual(cover.norm_first_frame_text_color(bad), "#FFFFFF")
+
+
+class AvailableFontsTests(unittest.TestCase):
+    def test_scans_dirs_skips_hidden_and_caches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "MyFont.ttf").write_bytes(b"not a real font")
+            (Path(tmp) / ".Hidden.ttf").write_bytes(b"x")
+            (Path(tmp) / "notes.txt").write_bytes(b"x")
+            with mock.patch.object(cover, "_FONT_DIRS", (tmp,)), \
+                 mock.patch.object(cover, "_FONTS_CACHE", None):
+                fonts = cover.available_fonts()
+                # Unparseable file falls back to the filename stem.
+                self.assertEqual(fonts, [{"path": str(Path(tmp) / "MyFont.ttf"),
+                                          "name": "MyFont"}])
+                # Cached: a second call doesn't rescan the (now empty) dir.
+                (Path(tmp) / "MyFont.ttf").unlink()
+                self.assertEqual(cover.available_fonts(), fonts)
+                self.assertEqual(cover.available_fonts(refresh=True), [])
+
 
 class ReplaceFirstFrameCommandTests(unittest.TestCase):
     def test_overlays_only_frame_zero_and_copies_audio(self):
@@ -80,6 +112,46 @@ class OverlayCoverTextTests(unittest.TestCase):
             bottom_px = img.getpixel((180, 620))
             self.assertEqual(bottom_px, (40, 90, 40))
 
+    def test_honours_style_font_size_and_colour(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "frame.png"
+            out = Path(tmp) / "texted.png"
+            Image.new("RGB", (400, 700), (40, 90, 40)).save(base)
+
+            sizes = []
+            real_load = cover._load_font
+
+            def spy_load(font_size, font_path=""):
+                sizes.append((font_size, font_path))
+                return real_load(font_size)
+
+            with mock.patch.object(cover, "_load_font", side_effect=spy_load):
+                cover.overlay_cover_text(base, out, "Gold",
+                                         font_path="/tmp/F.ttf", size_pct=20, color="#ff0000")
+
+            # 20% of a 400px frame = 80px type, from the requested font file.
+            self.assertEqual(sizes, [(80, "/tmp/F.ttf")])
+            img = Image.open(out)
+            data = img.crop((0, 0, 400, 250)).convert("RGB").tobytes()
+            reds = sum(1 for i in range(0, len(data), 3)
+                       if data[i] > 180 and data[i + 1] < 90 and data[i + 2] < 90)
+            self.assertGreater(reds, 50, "expected red text pixels near the top")
+
+    def test_dark_text_gets_a_light_stroke(self):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / "frame.png"
+            out = Path(tmp) / "texted.png"
+            Image.new("RGB", (400, 700), (40, 90, 40)).save(base)
+            cover.overlay_cover_text(base, out, "Ink", size_pct=20, color="#000000")
+            data = Image.open(out).crop((0, 0, 400, 250)).convert("RGB").tobytes()
+            whites = sum(1 for i in range(0, len(data), 3)
+                         if data[i] > 200 and data[i + 1] > 200 and data[i + 2] > 200)
+            self.assertGreater(whites, 50, "expected a light outline around dark text")
+
 
 class BurnCoverTests(unittest.TestCase):
     def test_rejects_unknown_mode(self):
@@ -121,14 +193,15 @@ class BurnCoverTests(unittest.TestCase):
             video = Path(tmp) / "final.mp4"
             video.write_bytes(b"original")
 
-            texts = []
+            texts, looks = [], []
 
             def fake_extract(src, out):
                 out.write_bytes(b"frame")
                 return out
 
-            def fake_overlay(base, out, text):
+            def fake_overlay(base, out, text, **kw):
                 texts.append(text)
+                looks.append(kw)
                 out.write_bytes(b"texted")
 
             def fake_replace(src, frame, out):
@@ -141,10 +214,14 @@ class BurnCoverTests(unittest.TestCase):
                  mock.patch("pipeline.assembler.replace_first_frame", side_effect=fake_replace):
                 cover.burn_cover_into_first_frame(
                     video, "text",
-                    title="The Silent City: A Story of Machines", work_dir=wd)
+                    title="The Silent City: A Story of Machines", work_dir=wd,
+                    text_font="/tmp/MyFont.ttf", text_size=18, text_color="#FFD700")
 
             # The subtitle after ":" is dropped — same phrase the cover uses.
             self.assertEqual(texts, ["The Silent City"])
+            # The style's cover-text look flows through to the overlay.
+            self.assertEqual(looks, [{"font_path": "/tmp/MyFont.ttf",
+                                      "size_pct": 18, "color": "#FFD700"}])
             self.assertEqual(video.read_bytes(), b"stamped")
             self.assertTrue((wd / "first_frame_text_base.png").exists())
 
@@ -162,6 +239,21 @@ class StylePlumbingTests(unittest.TestCase):
         cfg = {"styles": [{"name": "Shorts", "first_frame_cover": "sideways"}]}
         app._ensure_styles(cfg)
         self.assertEqual(cfg["styles"][0]["first_frame_cover"], "none")
+
+    def test_text_look_fields_are_kept_and_mirrored(self):
+        cfg = {"styles": [{"name": "Shorts",
+                           "first_frame_text_font": "/tmp/F.ttf",
+                           "first_frame_text_size": 99,
+                           "first_frame_text_color": "#abc"}]}
+        app._ensure_styles(cfg)
+        row = cfg["styles"][0]
+        self.assertEqual(row["first_frame_text_font"], "/tmp/F.ttf")
+        self.assertEqual(row["first_frame_text_size"], 30)          # clamped
+        self.assertEqual(row["first_frame_text_color"], "#AABBCC")  # normalized
+        self.assertEqual(cfg["default_first_frame_text_font"], "/tmp/F.ttf")
+        ss = app.style_settings(cfg, "Shorts")
+        self.assertEqual(ss["first_frame_text_size"], 30)
+        self.assertEqual(ss["first_frame_text_color"], "#AABBCC")
 
     def test_sparse_child_inherits_parent_mode(self):
         cfg = {
@@ -238,6 +330,32 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(labels, ["Original", "Cover on first frame"])
         self.assertEqual(hist["selected"], hist["versions"][-1]["id"])
         self.assertEqual(final.read_bytes(), b"stamped" * 3000)
+
+
+class TextOptsResolutionTests(unittest.TestCase):
+    """Manual burns and rebuild re-applies resolve the cover-text look LIVE from
+    the film's style, so a Settings tweak applies to the very next burn."""
+
+    def test_resolves_live_style_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = Path(tmp)
+            (wd / "job_config.json").write_text('{"style_name": "Shorts"}')
+            cfg = {"styles": [{"name": "Shorts",
+                               "first_frame_text_font": "/tmp/F.ttf",
+                               "first_frame_text_size": 18,
+                               "first_frame_text_color": "#FFD700"}]}
+            app._ensure_styles(cfg)
+            with mock.patch.object(backend.gapp, "load_config", return_value=cfg):
+                opts = backend._first_frame_text_opts(wd)
+            self.assertEqual(opts, {"text_font": "/tmp/F.ttf",
+                                    "text_size": 18, "text_color": "#FFD700"})
+
+    def test_defaults_when_style_is_gone(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(backend.gapp, "load_config", return_value={}):
+                opts = backend._first_frame_text_opts(Path(tmp))
+            self.assertEqual(opts, {"text_font": "",
+                                    "text_size": 11, "text_color": "#FFFFFF"})
 
 
 class RebuildReapplyTests(unittest.TestCase):

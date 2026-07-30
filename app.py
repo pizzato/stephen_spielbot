@@ -226,6 +226,11 @@ DEFAULT_CFG = {
     # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
     # and show frame 1 in the feed. Mirrors the default style.
     "default_first_frame_cover": "none",
+    # Look of the "text" first-frame cover: font file ("" = bold system font),
+    # size as % of the video width, and text colour. Mirror the default style.
+    "default_first_frame_text_font": "",
+    "default_first_frame_text_size": 11,
+    "default_first_frame_text_color": "#FFFFFF",
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -386,6 +391,10 @@ STYLE_FIELD_TO_FLAT = {
     # Burn the cover into the final video's first frame after each render
     # ("none" | "image" | "text") — Shorts show frame 1, not the thumbnail
     "first_frame_cover":    "default_first_frame_cover",
+    # Cover-text look for the "text" mode: font file, % of width, colour
+    "first_frame_text_font":  "default_first_frame_text_font",
+    "first_frame_text_size":  "default_first_frame_text_size",
+    "first_frame_text_color": "default_first_frame_text_color",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -680,6 +689,18 @@ def _norm_first_frame_cover(value) -> str:
     return norm_first_frame_cover(value)
 
 
+def _norm_first_frame_text_size(value) -> int:
+    """Coerce the cover-text size (% of frame width) to a sane int."""
+    from pipeline.cover import norm_first_frame_text_size
+    return norm_first_frame_text_size(value)
+
+
+def _norm_first_frame_text_color(value) -> str:
+    """Coerce the cover-text colour to "#RRGGBB"."""
+    from pipeline.cover import norm_first_frame_text_color
+    return norm_first_frame_text_color(value)
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -787,6 +808,9 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
+        _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
+        _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
+        _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved. (A child without its own
