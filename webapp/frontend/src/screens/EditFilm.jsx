@@ -505,6 +505,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
   const [upscaleMode, setUpscaleMode] = useState('fast')
+  const [ffCoverMode, setFfCoverMode] = useState('image')
+  const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -725,6 +727,31 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
   }
 
+  const burnFirstFrameCover = async () => {
+    setFfCoverBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.firstFrameCover({ work_dir: data.work_dir, mode: ffCoverMode })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setStatus('Burned the cover into the first frame — the previous cut is kept as a version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `First-frame cover ${t.status}.`))
+            } else {
+              setStatus('Burning the cover into the first frame…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setFfCoverBusy(false) }
+  }
+
   const selectVideoVersion = async (versionId) => {
     setUpscaleBusy(true); setError(''); setStatus('')
     try {
@@ -879,7 +906,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || localizeBusy || locSaveBusy || !!locAudioBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || localizeBusy || locSaveBusy || !!locAudioBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1144,6 +1171,37 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               {upscaleBusy ? 'Upscaling…' : 'Upscale film'}
             </Button>
           </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="image" style={{ color: 'var(--ink-3)', width: 16 }} /> First-frame cover</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            YouTube Shorts ignore uploaded thumbnails and show the video&apos;s first
+            frame in the feed. Burn the cover into that frame so it works as the
+            thumbnail — one frame only, so timing and captions are unchanged. The
+            previous cut is kept as a selectable version.
+          </p>
+          <div className="mt-24">
+            <Field label="Add to first frame">
+              <select className="select" value={ffCoverMode} disabled={anyBusy}
+                onChange={(e) => setFfCoverMode(e.target.value)}>
+                <option value="image">Cover image</option>
+                <option value="text">Cover text — big title on the frame</option>
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="image"
+              disabled={anyBusy || (ffCoverMode === 'image' && !coverUrl)}
+              onClick={burnFirstFrameCover}>
+              {ffCoverBusy ? 'Burning…' : 'Burn into first frame'}
+            </Button>
+          </div>
+          {ffCoverMode === 'image' && !coverUrl && (
+            <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+              Generate a cover image first (Cover image card above).
+            </p>
+          )}
         </Card>
 
         <Card span={8} padLg className="reveal reveal-d2">

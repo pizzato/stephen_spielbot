@@ -1149,6 +1149,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'script_mode':
         return v === 'story' ? 'Story-first' : 'Classic'
+      case 'first_frame_cover':
+        return v === 'image' ? 'Cover image' : v === 'text' ? 'Cover text' : 'off'
       case 'voice':
         return v || '(F5-TTS default)'
       case 'character_ids': {
@@ -1865,6 +1867,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   {(cfg.x_accounts || []).map((a) => <option key={a.id} value={a.id}>{a.name ? `@${a.name}` : a.id}</option>)}
                 </select>
                 <ParentVal k="x_account" />
+              </Field>
+              <Field label="First-frame cover" hint="After each render, burn the cover into the video’s first frame — YouTube Shorts ignore uploaded thumbnails and show frame 1 in the feed. Replaces a single frame, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
+                <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="none">Off — leave the first frame as rendered</option>
+                  <option value="image">Cover image</option>
+                  <option value="text">Cover text — big title on the frame</option>
+                </select>
+                <ParentVal k="first_frame_cover" />
               </Field>
               <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
                 label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />

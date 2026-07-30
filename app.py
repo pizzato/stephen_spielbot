@@ -222,6 +222,10 @@ DEFAULT_CFG = {
     # then divides it into scenes (see pipeline/story.py). Mirrors the default
     # style like every other STYLE_FIELD_TO_FLAT entry.
     "default_script_mode": "classic",
+    # Burn the cover into the final video's first frame when a render finishes
+    # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
+    # and show frame 1 in the feed. Mirrors the default style.
+    "default_first_frame_cover": "none",
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -379,6 +383,9 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Script generation mode: "classic" (direct scenes) or "story" (story-first)
     "script_mode":          "default_script_mode",
+    # Burn the cover into the final video's first frame after each render
+    # ("none" | "image" | "text") — Shorts show frame 1, not the thumbnail
+    "first_frame_cover":    "default_first_frame_cover",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -667,6 +674,12 @@ def _norm_script_mode(value) -> str:
     return "story" if value == "story" else "classic"
 
 
+def _norm_first_frame_cover(value) -> str:
+    """Coerce a first-frame cover mode to "none" | "image" | "text"."""
+    from pipeline.cover import norm_first_frame_cover
+    return norm_first_frame_cover(value)
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -773,6 +786,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "script_mode", _norm_script_mode)
+        _coerce(row, "first_frame_cover", _norm_first_frame_cover)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved. (A child without its own

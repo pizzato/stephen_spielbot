@@ -136,9 +136,26 @@ def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: st
     return prompt
 
 
+def _load_font(font_size: int):
+    """Best available bold-ish system font at *font_size* (PIL default as fallback)."""
+    from PIL import ImageFont
+
+    for font_path in (
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/HelveticaNeue.ttc",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ):
+        try:
+            return ImageFont.truetype(font_path, font_size)
+        except (OSError, IOError):
+            pass
+    return ImageFont.load_default()
+
+
 def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:
     """Overlay video title text on a cover image using PIL."""
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
     import textwrap
 
     img = Image.open(base_path).convert("RGBA")
@@ -154,20 +171,7 @@ def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> No
 
     draw = ImageDraw.Draw(img)
     font_size = max(52, width // 18)
-    font = None
-    for font_path in (
-        "/System/Library/Fonts/Helvetica.ttc",
-        "/System/Library/Fonts/HelveticaNeue.ttc",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-    ):
-        try:
-            font = ImageFont.truetype(font_path, font_size)
-            break
-        except (OSError, IOError):
-            pass
-    if font is None:
-        font = ImageFont.load_default()
+    font = _load_font(font_size)
 
     max_chars = max(10, int(width / (font_size * 0.55)))
     lines = textwrap.wrap(title, width=max_chars)
@@ -186,3 +190,101 @@ def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> No
         y += line_height
 
     img.convert("RGB").save(str(output_path), "PNG")
+
+
+def overlay_cover_text(base_path: Path, output_path: Path, text: str) -> None:
+    """Draw the cover phrase in large type across the top of a video frame.
+
+    Used by the "text" first-frame cover mode: the shortened title is drawn
+    top-center in big letters (with a dark scrim from the top edge) so the
+    frame reads as a thumbnail in the Shorts feed.
+    """
+    from PIL import Image, ImageDraw
+    import textwrap
+
+    img = Image.open(base_path).convert("RGBA")
+    width, height = img.size
+
+    font_size = max(56, width // 9)
+    font = _load_font(font_size)
+    max_chars = max(8, int(width / (font_size * 0.55)))
+    lines = textwrap.wrap(text, width=max_chars)
+    line_height = int(font_size * 1.18)
+    top = int(height * 0.08)
+    total_h = len(lines) * line_height
+
+    # Dark gradient scrim fading down from the top edge, sized to the text
+    # block, so white text stays readable over any first frame.
+    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+    draw_ov = ImageDraw.Draw(overlay)
+    scrim_h = min(height, top + total_h + int(height * 0.06))
+    for y in range(scrim_h):
+        alpha = int(190 * (1 - y / scrim_h))
+        draw_ov.rectangle([0, y, width, y + 1], fill=(0, 0, 0, alpha))
+    img = Image.alpha_composite(img, overlay)
+
+    draw = ImageDraw.Draw(img)
+    stroke = max(2, font_size // 16)
+    y = top
+    for line in lines:
+        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
+        tw = bbox[2] - bbox[0]
+        x = (width - tw) // 2
+        draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 200),
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
+        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255),
+                  stroke_width=stroke, stroke_fill=(0, 0, 0, 255))
+        y += line_height
+
+    img.convert("RGB").save(str(output_path), "PNG")
+
+
+FIRST_FRAME_COVER_MODES = ("none", "image", "text")
+
+
+def norm_first_frame_cover(value) -> str:
+    """Coerce a first-frame cover mode to "none" | "image" | "text"."""
+    return value if value in ("image", "text") else "none"
+
+
+def burn_cover_into_first_frame(
+    video_path: Path,
+    mode: str,
+    *,
+    cover_path: Path | None = None,
+    title: str = "",
+    work_dir: Path | None = None,
+) -> Path:
+    """Burn a cover into the final video's first frame, in place.
+
+    YouTube Shorts ignore uploaded thumbnails and show the video's first frame
+    in the feed, so the cover is stamped onto frame 0 itself. mode "image"
+    uses the job's cover image; mode "text" overlays the shortened title in
+    large type on the video's own first frame. Exactly one frame is replaced
+    (nothing is prepended), so duration, audio, and caption timing all stay
+    valid. Working PNGs land in *work_dir* (defaults to the video's folder).
+    """
+    from pipeline.assembler import extract_first_frame, replace_first_frame
+
+    mode = (mode or "").strip().lower()
+    if mode not in ("image", "text"):
+        raise ValueError(f"Unknown first-frame cover mode: {mode!r}")
+    wd = Path(work_dir) if work_dir else video_path.parent
+    if mode == "image":
+        if not (cover_path and cover_path.exists() and cover_path.stat().st_size > 1000):
+            raise FileNotFoundError("No cover image for this film — generate the cover first.")
+        frame_src = cover_path
+    else:
+        text = shorten_title_for_cover((title or "").strip() or video_path.stem)
+        base = wd / "first_frame_text_base.png"
+        extract_first_frame(video_path, base)
+        frame_src = wd / "first_frame_text.png"
+        overlay_cover_text(base, frame_src, text)
+
+    staged = video_path.with_name(f"{video_path.stem}.firstframe.tmp{video_path.suffix}")
+    try:
+        replace_first_frame(video_path, frame_src, staged)
+        staged.replace(video_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return video_path
