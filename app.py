@@ -2137,17 +2137,17 @@ def _inject_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str
     return f"{base_prompt.rstrip()}{sep}{tail}"
 
 
-def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name: str,
-                            work_dir: Path | None = None) -> list[Path]:
-    """Existing reference images for the characters featured in this scene, capped
-    at _MAX_SCENE_REFERENCES. A character contributes its image when it's enabled,
-    has a stored ref_image, and its name/alias appears in the scene's image
-    prompt — not the narration, which names off-screen people (Phase 2 —
+def _scene_reference_characters(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                                work_dir: Path | None = None) -> list[tuple[dict, Path]]:
+    """(character, image_path) pairs for the characters featured in this scene,
+    capped at _MAX_SCENE_REFERENCES. A character contributes its image when it's
+    enabled, has a stored ref_image, and its name/alias appears in the scene's
+    image prompt — not the narration, which names off-screen people (Phase 2 —
     FLUX.2 reference conditioning). Includes the script's own characters when a
     work_dir is given. Empty list when nothing matches."""
     chars = _job_characters(cfg, style_name, work_dir)
     scene_text = f"{base_prompt} {scene.get('image_prompt') or ''}"
-    paths = []
+    pairs = []
     for c in chars:
         if not c.get("enabled", True) or not c.get("ref_image"):
             continue
@@ -2155,12 +2155,51 @@ def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name
             continue
         p = c.get("_ref_path") or _character_image_path(c.get("ref_image"))
         if p and p.exists():
-            paths.append(p)
-    if len(paths) > _MAX_SCENE_REFERENCES:
+            pairs.append((c, p))
+    if len(pairs) > _MAX_SCENE_REFERENCES:
         logger.info("Scene matched %d character reference images; using first %d.",
-                    len(paths), _MAX_SCENE_REFERENCES)
-        paths = paths[:_MAX_SCENE_REFERENCES]
-    return paths
+                    len(pairs), _MAX_SCENE_REFERENCES)
+        pairs = pairs[:_MAX_SCENE_REFERENCES]
+    return pairs
+
+
+def _scene_reference_images(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                            work_dir: Path | None = None) -> list[Path]:
+    """Just the image paths of :func:`_scene_reference_characters`."""
+    return [p for _c, p in _scene_reference_characters(base_prompt, scene, cfg,
+                                                       style_name, work_dir)]
+
+
+# Binds a character NAME to its attached reference image. Validated on FLUX.2
+# Klein (same seed, same reference): without a named binding the text prior —
+# famous names especially — routinely overrides the ReferenceLatent and the
+# look drifts; with it the render follows the uploaded look. A generic,
+# nameless version of this note ("any character depicted…") does NOT work.
+_REF_MATCH_NOTE = ("{name} appears EXACTLY as the character in their provided reference "
+                   "image — identical face, head, materials and colours; only the pose "
+                   "and setting differ.")
+
+
+def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_name: str,
+                                work_dir: Path | None = None,
+                                engine: dict | None = None) -> tuple[str, list[Path]]:
+    """Character-consistent prompt + reference images for one scene image render.
+
+    Injects each featured character's canonical appearance (_inject_characters),
+    gathers their reference images, and — only when the engine actually
+    conditions on references (it has a t2i_ref_workflow, i.e. FLUX.2) — appends
+    a per-character _REF_MATCH_NOTE tying the name to its attached image.
+    Engines without reference support get the plain injected prompt."""
+    prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
+    pairs = _scene_reference_characters(prompt, scene, cfg, style_name, work_dir)
+    refs = [p for _c, p in pairs]
+    if pairs and engine is not None and engine.get("t2i_ref_workflow"):
+        notes = " ".join(_REF_MATCH_NOTE.format(name=c.get("name", "").strip())
+                         for c, _p in pairs if (c.get("name") or "").strip())
+        if notes:
+            sep = " " if prompt.rstrip().endswith((".", "!", "?")) else ". "
+            prompt = f"{prompt.rstrip()}{sep}{notes}"
+    return prompt, refs
 
 
 def _find_character(cfg: dict, char_id: str) -> dict:
@@ -2741,9 +2780,9 @@ def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
             continue
         if ln.get("silent"):
             # Silent (motion) shot — no lip-sync, so multiple people are fine.
-            base_prompt = _inject_characters(shot, row, cfg, style_name, work_dir)
+            base_prompt, reference_images = _characters_prompt_and_refs(
+                shot, row, cfg, style_name, work_dir, engine=engine)
             prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-            reference_images = _scene_reference_images(base_prompt, row, cfg, style_name, work_dir)
         else:
             # Speaking shot — force a SOLO close-up of just the speaker (only their
             # description + reference face) so EchoMimic can't animate a second
@@ -2848,16 +2887,15 @@ def _generate_active_scene_preview(
     combined_style = _compose_visual_style(style, cfg, style_name)
     base_prompt = image_prompt or scene.get("image_prompt") or title
     # Re-inject any recurring character's canonical appearance so the same named
-    # subject looks consistent across scenes even when the LLM paraphrased it.
+    # subject looks consistent across scenes even when the LLM paraphrased it,
+    # and anchor featured characters to their reference image (FLUX.2 only).
     # work_dir folds in the script's own (per-script) characters, not just the
     # global catalogue ones the style opted into.
-    base_prompt = _inject_characters(base_prompt, scene, cfg, style_name, work_dir)
+    base_prompt, reference_images = _characters_prompt_and_refs(
+        base_prompt, scene, cfg, style_name, work_dir, engine=engine)
     prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
     # One-off user steering from the Re-generate popover (not persisted).
     prompt = _apply_prompt_instruction(prompt, instruction)
-    # Anchor featured characters to their reference image (FLUX.2 only; the engine
-    # ignores these otherwise).
-    reference_images = _scene_reference_images(base_prompt, scene, cfg, style_name, work_dir)
 
     url = worker_pool.acquire()
     try:
