@@ -14,6 +14,7 @@ Run it from the repo root:
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -59,6 +60,14 @@ from pipeline import final_video_history  # noqa: E402
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
+    # SPIELBOT_NO_BACKGROUND=1 runs a UI/API-only instance: no automation tick,
+    # no publish scheduler, no re-render requeue. For test/preview servers run
+    # NEXT TO the real service — two automation engines over the same queue
+    # caused duplicate renders and double uploads.
+    if os.environ.get("SPIELBOT_NO_BACKGROUND"):
+        gapp.logger.warning("SPIELBOT_NO_BACKGROUND set — background loops disabled")
+        yield
+        return
     # Startup: launch the opt-in background automation loop (defined near the
     # bottom of this module; the name resolves at startup, not import). Replaces
     # the deprecated @app.on_event("startup") handler.
