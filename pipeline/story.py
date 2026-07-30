@@ -383,7 +383,10 @@ def divide_story(story: dict, n_scenes: int | None = None,
     for chapter, budget in zip(chapters, budgets):
         batch_end = batch_start + budget - 1
         conclusion_note = (
-            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — deliver a satisfying payoff."
+            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — end the video with a "
+            f"clear, simple conclusion: wrap up the story in plain language, resolve the "
+            f"hook, and make it unmistakable that the story is complete. No cliffhangers, "
+            f"no new questions, no cryptic closing lines."
             if batch_end == n else ""
         )
         ctx_str = "\n".join(
