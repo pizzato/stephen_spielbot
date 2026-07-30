@@ -57,6 +57,12 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline.cover import (  # noqa: E402
+    COVER_PHRASE_FILE,
+    COVER_PHRASE_MAX_CHARS,
+    cover_phrase_for,
+    shorten_title_for_cover,
+)
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
@@ -2716,8 +2722,8 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
                 shutil.copy2(sp, new_wd / suffix)
     # story.json keeps a story-mode source's prose draft, so the duplicate still
     # shows the Story tab and can redraft/re-divide.
-    for extra in ("description.txt", "cover.png", "characters.json", "create_brief.json",
-                  "story.json"):
+    for extra in ("description.txt", "cover.png", "cover_phrase.txt", "characters.json",
+                  "create_brief.json", "story.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
@@ -4086,6 +4092,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         meta = json.loads((wd / "job.json").read_text())
     except Exception:
         meta = {}
+    _title = _video_title_for(wd)
     return {
         "work_dir": str(wd),
         "final_url": f"/api/file?path={final_vid}",
@@ -4097,6 +4104,10 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "video_history": final_video_history.history(wd),
+        # Short text on the cover image + first-frame burn: saved override,
+        # else derived from the title (edit it from the cover card).
+        "cover_phrase": cover_phrase_for(wd, _title),
+        "cover_phrase_default": shorten_title_for_cover(_title),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
@@ -6901,11 +6912,15 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         video_history = final_video_history.history(wd)
     except Exception:
         video_history = {"versions": [], "selected": None}
+    _title = _video_title_for(wd)
     return {
         "work_dir": str(wd),
-        "title": _video_title_for(wd),
+        "title": _title,
         "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+        # Short text on the cover image + first-frame burn (editable per film).
+        "cover_phrase": cover_phrase_for(wd, _title),
+        "cover_phrase_default": shorten_title_for_cover(_title),
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
@@ -7499,6 +7514,35 @@ def delete_cover_version(body: CoverSelectBody) -> dict:
 @api.get("/api/youtube/cover/history")
 def cover_history(work_dir: str = Query(...)) -> dict:
     return {"history": image_history.cover_history(Path(work_dir))}
+
+
+class CoverPhraseBody(BaseModel):
+    work_dir: str
+    phrase: str = ""
+
+
+@api.post("/api/films/cover-phrase")
+def save_cover_phrase(body: CoverPhraseBody) -> dict:
+    """Save the film's cover phrase — the short text the cover image prints and
+    the first-frame burn stamps. Blank (or exactly the title-derived default)
+    clears the override, so the phrase follows the title again."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    title = _video_title_for(wd)
+    phrase = " ".join((body.phrase or "").split()).strip()[:COVER_PHRASE_MAX_CHARS]
+    path = wd / COVER_PHRASE_FILE
+    if not phrase or phrase == shorten_title_for_cover(title):
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(phrase, encoding="utf-8")
+    return {
+        "ok": True,
+        "cover_phrase": cover_phrase_for(wd, title),
+        "cover_phrase_default": shorten_title_for_cover(title),
+    }
 
 
 class ThumbnailBody(BaseModel):

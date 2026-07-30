@@ -63,7 +63,7 @@ from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
     burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
-    shorten_title_for_cover as _shorten_title,
+    cover_phrase_for as _cover_phrase_for,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -852,7 +852,7 @@ def main(work_dir: Path) -> None:
             # UI re-generation; resolve() keeps the flat flux_* overrides.
             generate_with_engine(
                 _engines.resolve(cfg, _engines.COVER_ENGINE),
-                _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
+                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
                 height=cover_h,

@@ -45,6 +45,26 @@ def shorten_title_for_cover(title: str, max_chars: int = 40) -> str:
     return truncated
 
 
+# Per-film override for the phrase printed on the cover image and burned into
+# the first frame. Written from the edit/publish screens; absent or blank, the
+# phrase stays derived from the title (deterministic — the LLM cover-phrase
+# feature was deliberately reverted, see #86).
+COVER_PHRASE_FILE = "cover_phrase.txt"
+COVER_PHRASE_MAX_CHARS = 80
+
+
+def cover_phrase_for(work_dir: Path | str, title: str = "") -> str:
+    """The short text shown on the cover image and the first-frame burn:
+    the film's saved override (cover_phrase.txt), else shortened from *title*."""
+    try:
+        text = (Path(work_dir) / COVER_PHRASE_FILE).read_text(encoding="utf-8").strip()
+        if text:
+            return text[:COVER_PHRASE_MAX_CHARS]
+    except Exception:
+        pass
+    return shorten_title_for_cover(title)
+
+
 _STYLE_KEYWORDS = (
     "cinematic", "film grain", "depth of field", "color grade", "photorealistic",
     "documentary texture", "lighting quality", "16mm", "35mm", "8mm", "film stock",
@@ -375,7 +395,7 @@ def burn_cover_into_first_frame(
             raise FileNotFoundError("No cover image for this film — generate the cover first.")
         frame_src = cover_path
     else:
-        text = shorten_title_for_cover((title or "").strip() or video_path.stem)
+        text = cover_phrase_for(wd, (title or "").strip() or video_path.stem)
         base = wd / "first_frame_text_base.png"
         extract_first_frame(video_path, base)
         frame_src = wd / "first_frame_text.png"
