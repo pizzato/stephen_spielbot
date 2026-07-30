@@ -31,7 +31,7 @@ from pipeline import image_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
     cover_dimensions,
-    shorten_title_for_cover,
+    cover_phrase_for,
 )
 from pipeline.llm import Scene  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
@@ -254,7 +254,9 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
             except Exception:
                 rows = []
 
-    prompt = build_cover_prompt(shorten_title_for_cover(title), p.get("style") or "", scenes=rows,
+    # The film's saved cover phrase (edit/publish screens) wins over the
+    # title-derived default, so the regenerated cover prints the edited text.
+    prompt = build_cover_prompt(cover_phrase_for(work_dir, title), p.get("style") or "", scenes=rows,
                                 instruction=p.get("instruction") or "")
 
     cover_path = work_dir / "cover.png"

@@ -61,8 +61,9 @@ from pipeline import ui_activity
 from app import _RESOLUTIONS, _DEFAULT_RESOLUTION, _dialogue_resolvers
 from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
+    burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
-    shorten_title_for_cover as _shorten_title,
+    cover_phrase_for as _cover_phrase_for,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -851,7 +852,7 @@ def main(work_dir: Path) -> None:
             # UI re-generation; resolve() keeps the flat flux_* overrides.
             generate_with_engine(
                 _engines.resolve(cfg, _engines.COVER_ENGINE),
-                _cover_prompt(_shorten_title(video_title), style_clean, scenes=scenes),
+                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
                 height=cover_h,
@@ -1181,6 +1182,27 @@ def main(work_dir: Path) -> None:
             ambient_path=ambient_path, ambient_volume=ambient_vol,
         )
         ensure_video_resolution(final_path, vid_width, vid_height)
+        # Per-style automation: burn the cover into the first frame — YouTube
+        # Shorts ignore uploaded thumbnails and show frame 1 in the feed. The
+        # frame is replaced (not prepended) so caption timing stays valid.
+        # Non-fatal: a finished film without the stamp beats a failed render.
+        ff_cover = str(cfg.get("first_frame_cover")
+                       or cfg.get("default_first_frame_cover") or "none").strip().lower()
+        if ff_cover in ("image", "text"):
+            write_progress(status_file, 97, "Burning cover into the first frame…")
+            try:
+                _burn_first_frame(
+                    final_path, ff_cover,
+                    cover_path=cover_path, title=video_title, work_dir=work_dir,
+                    text_font=str(cfg.get("first_frame_text_font",
+                                          cfg.get("default_first_frame_text_font", "")) or ""),
+                    text_size=cfg.get("first_frame_text_size",
+                                      cfg.get("default_first_frame_text_size")),
+                    text_color=str(cfg.get("first_frame_text_color",
+                                           cfg.get("default_first_frame_text_color", "")) or ""),
+                )
+            except Exception as ff_err:
+                logger.warning("First-frame cover failed (non-fatal): %s", ff_err)
         store.record_artifact(
             durable_job_id,
             final_task,

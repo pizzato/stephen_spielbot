@@ -14,6 +14,7 @@ Run it from the repo root:
 import base64
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -56,9 +57,23 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline.cover import (  # noqa: E402
+    COVER_PHRASE_FILE,
+    COVER_PHRASE_MAX_CHARS,
+    cover_phrase_for,
+    shorten_title_for_cover,
+)
 
 @asynccontextmanager
 async def _lifespan(_app: "FastAPI"):
+    # SPIELBOT_NO_BACKGROUND=1 runs a UI/API-only instance: no automation tick,
+    # no publish scheduler, no re-render requeue. For test/preview servers run
+    # NEXT TO the real service — two automation engines over the same queue
+    # caused duplicate renders and double uploads.
+    if os.environ.get("SPIELBOT_NO_BACKGROUND"):
+        gapp.logger.warning("SPIELBOT_NO_BACKGROUND set — background loops disabled")
+        yield
+        return
     # Startup: launch the opt-in background automation loop (defined near the
     # bottom of this module; the name resolves at startup, not import). Replaces
     # the deprecated @app.on_event("startup") handler.
@@ -235,6 +250,7 @@ _RERENDER_STEP_LABELS = {
     "image": "painting first frame",
     "video": "rendering video",
     "final_upscale": "upscaling final video",
+    "first_frame_cover": "burning cover into first frame",
     "music": "composing music",
     "finalize": "assembling film",
     "mux": "muxing audio",
@@ -2706,8 +2722,8 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
                 shutil.copy2(sp, new_wd / suffix)
     # story.json keeps a story-mode source's prose draft, so the duplicate still
     # shows the Story tab and can redraft/re-divide.
-    for extra in ("description.txt", "cover.png", "characters.json", "create_brief.json",
-                  "story.json"):
+    for extra in ("description.txt", "cover.png", "cover_phrase.txt", "characters.json",
+                  "create_brief.json", "story.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
@@ -3673,6 +3689,13 @@ def start_generation(body: GenerateBody) -> dict:
         # in resume_generation.py (previously those fell back to FLUX.1 via the
         # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
         "image_engine": ss.get("image_engine"),
+        # Burn the cover into the final video's first frame at the end of the
+        # render ("none" | "image" | "text") — Shorts show frame 1 in the feed.
+        "first_frame_cover": gapp._norm_first_frame_cover(ss.get("first_frame_cover")),
+        # Cover-text look (the "text" mode): font file, % of width, colour.
+        "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
+        "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
+        "first_frame_text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
@@ -4069,6 +4092,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
         meta = json.loads((wd / "job.json").read_text())
     except Exception:
         meta = {}
+    _title = _video_title_for(wd)
     return {
         "work_dir": str(wd),
         "final_url": f"/api/file?path={final_vid}",
@@ -4080,6 +4104,10 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "video_history": final_video_history.history(wd),
+        # Short text on the cover image + first-frame burn: saved override,
+        # else derived from the title (edit it from the cover card).
+        "cover_phrase": cover_phrase_for(wd, _title),
+        "cover_phrase_default": shorten_title_for_cover(_title),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
@@ -4101,6 +4129,8 @@ def remix_apply(body: RemixBody) -> dict:
             str(ambient) if ambient.exists() else "",
             voice_vol=body.voice_vol, music_vol=body.music_vol, ambient_vol=body.ambient_vol,
         )
+        if final_path:
+            _maybe_burn_first_frame_cover(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": f"/api/file?path={final_path}"}
@@ -4186,6 +4216,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
             ambient_path=ambient if ambient.exists() else None,
             ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
         )
+        _maybe_burn_first_frame_cover(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -4871,6 +4902,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         )
         if not final_path:
             raise RuntimeError(message or "Re-mux failed after regenerating music.")
+        _maybe_burn_first_frame_cover(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -4963,6 +4995,8 @@ def select_music(body: MusicSelectBody) -> dict:
             music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
             ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
         )
+        if final_path:
+            _maybe_burn_first_frame_cover(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Re-mux failed.")
     return {
@@ -5235,6 +5269,137 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     threading.Thread(
         target=_run_final_video_upscale,
         args=(tid, wd, target_name, mode),
+        daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid}
+
+
+@api.get("/api/fonts")
+def list_fonts(refresh: bool = Query(False)) -> dict:
+    """Fonts installed on this machine, for the per-style cover-text picker."""
+    from pipeline.cover import available_fonts
+    return {"fonts": available_fonts(refresh=refresh)}
+
+
+def _first_frame_text_opts(wd: Path) -> dict:
+    """Cover-text font/size/colour for this film's burns.
+
+    Resolved LIVE from the film's style (so a Settings tweak applies to the
+    very next burn, no re-render needed); style_settings falls back to the
+    default style when the film's style is gone."""
+    jc = _film_job_config(wd)
+    ss = gapp.style_settings(gapp.load_config(), jc.get("style_name") or "")
+    return {
+        "text_font": str(ss.get("first_frame_text_font") or ""),
+        "text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
+        "text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
+    }
+
+
+def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
+    """Re-apply the job's standing first-frame cover after a final rebuild.
+
+    The burned frame lives only in the published final — any flow that
+    regenerates it from combined.mp4 (remix, narrator/music change,
+    reassemble) would silently drop the cover of a style that auto-stamps
+    every render (job_config "first_frame_cover"). One-off manual stamps
+    (the edit-screen button) set no config key, so rebuilds stay pristine.
+    Best-effort: a rebuilt film without the stamp beats a failed rebuild."""
+    try:
+        mode = str(_film_job_config(wd).get("first_frame_cover") or "none").strip().lower()
+        if mode not in ("image", "text"):
+            return
+        from pipeline.cover import burn_cover_into_first_frame
+        burn_cover_into_first_frame(
+            Path(final_path), mode,
+            cover_path=wd / "cover.png",
+            title=_video_title_for(wd),
+            work_dir=wd,
+            **_first_frame_text_opts(wd),
+        )
+    except Exception as e:
+        gapp.logger.warning("First-frame cover re-apply failed (non-fatal): %s", e)
+
+
+class FirstFrameCoverBody(BaseModel):
+    work_dir: str
+    mode: str  # "image" (stamp cover.png) | "text" (big title on the frame)
+
+
+def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
+    """Background thread: burn the cover (image or big title text) into the
+    final video's first frame — YouTube Shorts ignore uploaded thumbnails and
+    show frame 1 in the feed. Keeps the previous cut as a selectable version."""
+    from pipeline.cover import burn_cover_into_first_frame
+
+    started = _film_task_started_at(task_id) or time.time()
+    final_path = gapp._final_path_for_work_dir(wd)
+    try:
+        _film_checkpoint(task_id)
+        if not final_path.exists() or final_path.stat().st_size <= 0:
+            raise RuntimeError("Final video not found; render the film first.")
+        final_video_history.seed_if_empty(wd, final_path, "Original")
+        # Keep the current cut's language tag on the stamped version (same as
+        # upscale) so stamping a localized cut doesn't lose its language.
+        _hist = final_video_history.history(wd)
+        cur_lang = next(
+            (v.get("lang") for v in _hist["versions"] if v["id"] == _hist["selected"]),
+            None,
+        )
+        _film_tasks[task_id] = {"status": "running", "step": "first_frame_cover"}
+        burn_cover_into_first_frame(
+            final_path, mode,
+            cover_path=wd / "cover.png",
+            title=_video_title_for(wd),
+            work_dir=wd,
+            **_first_frame_text_opts(wd),
+        )
+        label = "Cover on first frame" if mode == "image" else "Title on first frame"
+        final_video_history.record(wd, final_path, label=label, lang=cur_lang)
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "video_history": final_video_history.history(wd),
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Burned cover into film's first frame",
+            failed_name="First-frame cover failed",
+            cancelled_name="First-frame cover cancelled",
+            detail=wd.name,
+        )
+
+
+@api.post("/api/remix/first-frame-cover")
+def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
+    """Stamp the cover image — or the title in large type — onto the final
+    video's first frame (Shorts show frame 1, not the uploaded thumbnail)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    mode = (body.mode or "").strip().lower()
+    if mode not in ("image", "text"):
+        raise HTTPException(400, "Choose what to add: the cover image or the cover text.")
+    if mode == "image":
+        cover = wd / "cover.png"
+        if not (cover.exists() and cover.stat().st_size > 1000):
+            raise HTTPException(400, "No cover image found — generate the cover first.")
+    if not gapp._final_path_for_work_dir(wd).exists():
+        raise HTTPException(404, f"Final video not found for {wd.name}.")
+
+    tid = f"first_frame_cover_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "first_frame_cover"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "first_frame_cover",
+        "started_at": time.time(),
+    }
+    threading.Thread(
+        target=_run_first_frame_cover,
+        args=(tid, wd, mode),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
@@ -6747,11 +6912,15 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         video_history = final_video_history.history(wd)
     except Exception:
         video_history = {"versions": [], "selected": None}
+    _title = _video_title_for(wd)
     return {
         "work_dir": str(wd),
-        "title": _video_title_for(wd),
+        "title": _title,
         "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+        # Short text on the cover image + first-frame burn (editable per film).
+        "cover_phrase": cover_phrase_for(wd, _title),
+        "cover_phrase_default": shorten_title_for_cover(_title),
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
@@ -7345,6 +7514,35 @@ def delete_cover_version(body: CoverSelectBody) -> dict:
 @api.get("/api/youtube/cover/history")
 def cover_history(work_dir: str = Query(...)) -> dict:
     return {"history": image_history.cover_history(Path(work_dir))}
+
+
+class CoverPhraseBody(BaseModel):
+    work_dir: str
+    phrase: str = ""
+
+
+@api.post("/api/films/cover-phrase")
+def save_cover_phrase(body: CoverPhraseBody) -> dict:
+    """Save the film's cover phrase — the short text the cover image prints and
+    the first-frame burn stamps. Blank (or exactly the title-derived default)
+    clears the override, so the phrase follows the title again."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+    title = _video_title_for(wd)
+    phrase = " ".join((body.phrase or "").split()).strip()[:COVER_PHRASE_MAX_CHARS]
+    path = wd / COVER_PHRASE_FILE
+    if not phrase or phrase == shorten_title_for_cover(title):
+        path.unlink(missing_ok=True)
+    else:
+        path.write_text(phrase, encoding="utf-8")
+    return {
+        "ok": True,
+        "cover_phrase": cover_phrase_for(wd, title),
+        "cover_phrase_default": shorten_title_for_cover(title),
+    }
 
 
 class ThumbnailBody(BaseModel):
@@ -9667,6 +9865,7 @@ def reassemble_film(body: ReassembleBody) -> dict:
                 ambient_path=ambient if ambient.exists() else None,
                 ambient_volume=ambient_vol,
             )
+            _maybe_burn_first_frame_cover(wd, final_path)
     except Exception as e:
         raise HTTPException(500, f"Reassembly failed: {str(e).splitlines()[0][:200]}")
 
