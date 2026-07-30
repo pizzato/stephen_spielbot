@@ -505,6 +505,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
   const [upscaleMode, setUpscaleMode] = useState('fast')
+  const [ffCoverMode, setFfCoverMode] = useState('image')
+  const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -526,6 +528,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [coverHist, setCoverHist] = useState(null)
   const [coverEdit, setCoverEdit] = useState(false)
   const [coverEditErr, setCoverEditErr] = useState('')
+  // Cover phrase: the short text on the cover + first-frame burn (per film).
+  const [coverPhrase, setCoverPhrase] = useState('')
+  const [coverPhraseSaved, setCoverPhraseSaved] = useState('')
+  const [coverPhraseDefault, setCoverPhraseDefault] = useState('')
 
   const onVideoMeta = (e) => {
     const w = e.target.videoWidth, h = e.target.videoHeight
@@ -557,6 +563,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       }
       if (p.description) setDescription(p.description)
       setCoverUrl(p.cover_url || '')
+      setCoverPhrase(p.cover_phrase || '')
+      setCoverPhraseSaved(p.cover_phrase || '')
+      setCoverPhraseDefault(p.cover_phrase_default || '')
     }).catch(() => {})
     api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
     api.listLocalizeLanguages().then(setLocalizeLangs).catch(() => {})
@@ -657,6 +666,17 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setCoverEditErr(e.message) } finally { setYtBusy('') }
   }
 
+  const savePhrase = async () => {
+    setYtBusy('phrase'); setError('')
+    try {
+      const r = await api.saveCoverPhrase(workDir, coverPhrase)
+      setCoverPhrase(r.cover_phrase || '')
+      setCoverPhraseSaved(r.cover_phrase || '')
+      setCoverPhraseDefault(r.cover_phrase_default || '')
+      setStatus('Saved the cover phrase — regenerate the cover or burn the first frame to use it.')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
   const regenMusic = async () => {
     setMusicBusy(true); setError(''); setStatus('')
     try {
@@ -723,6 +743,31 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         }, 3000)
       })
     } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
+  }
+
+  const burnFirstFrameCover = async () => {
+    setFfCoverBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.firstFrameCover({ work_dir: data.work_dir, mode: ffCoverMode })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setStatus('Burned the cover into the first frame — the previous cut is kept as a version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `First-frame cover ${t.status}.`))
+            } else {
+              setStatus('Burning the cover into the first frame…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setFfCoverBusy(false) }
   }
 
   const selectVideoVersion = async (versionId) => {
@@ -879,7 +924,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || localizeBusy || locSaveBusy || !!locAudioBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || localizeBusy || locSaveBusy || !!locAudioBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -973,6 +1018,28 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               ? <img src={coverUrl} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
+          <div className="mt-16">
+            <Field label="Cover phrase" hint="The short text painted on the cover and burned into the first frame — follows the title until you edit it.">
+              <input className="input" value={coverPhrase} maxLength={80} disabled={!!ytBusy}
+                onChange={(e) => { setCoverPhrase(e.target.value); setStatus('') }} />
+            </Field>
+            {coverPhrase !== coverPhraseSaved && (
+              <div className="row center gap-8 mt-8">
+                <Button variant="primary" icon="floppy-disk" disabled={ytBusy === 'phrase' || !coverPhrase.trim()}
+                  onClick={savePhrase}>{ytBusy === 'phrase' ? 'Saving…' : 'Save phrase'}</Button>
+                <Button variant="ghost" disabled={ytBusy === 'phrase'}
+                  onClick={() => setCoverPhrase(coverPhraseSaved)}>Cancel</Button>
+              </div>
+            )}
+            {coverPhrase === coverPhraseSaved && coverPhraseSaved !== coverPhraseDefault && (
+              <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
+                Custom phrase — <a role="button" tabIndex={0}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  onClick={() => setCoverPhrase(coverPhraseDefault)}>use the title again</a>
+                {' '}(“{coverPhraseDefault}”), then Save.
+              </div>
+            )}
+          </div>
           <GuidedRegenButton block variant="ghost" icon="rotate-right"
             label={coverUrl ? 'Regenerate cover' : 'Generate cover'} busyLabel="Generating…"
             busy={ytBusy === 'cover'} disabled={!!ytBusy}
@@ -981,6 +1048,37 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
           <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
             onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
+          {/* First-frame burn lives with the cover it stamps (Shorts show frame 1,
+              not the uploaded thumbnail). */}
+          <div className="mt-24" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+            <span className="label-sm">First frame</span>
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 6 }}>
+              Shorts ignore thumbnails and show the video&apos;s first frame — burn the
+              cover (or the phrase in big type) into that frame. One frame only;
+              the previous cut is kept as a version.
+            </p>
+            <div className="mt-16">
+              <Field label="Add to first frame" hint="Text font, size and colour come from the style’s settings.">
+                <select className="select" value={ffCoverMode} disabled={anyBusy}
+                  onChange={(e) => setFfCoverMode(e.target.value)}>
+                  <option value="image">Cover image</option>
+                  <option value="text">Cover text — the phrase in big type</option>
+                </select>
+              </Field>
+            </div>
+            <div className="mt-16">
+              <Button variant="primary" block icon="image"
+                disabled={anyBusy || (ffCoverMode === 'image' && !coverUrl)}
+                onClick={burnFirstFrameCover}>
+                {ffCoverBusy ? 'Burning…' : 'Burn into first frame'}
+              </Button>
+            </div>
+            {ffCoverMode === 'image' && !coverUrl && (
+              <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
+                Generate a cover image first.
+              </p>
+            )}
+          </div>
         </Card>
 
         <Card span={4} padLg className="reveal reveal-d2">

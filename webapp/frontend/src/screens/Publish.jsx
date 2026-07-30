@@ -60,6 +60,13 @@ export default function Publish({ initialWorkDir, go }) {
   const [privacy, setPrivacy] = useState('private')
   const [coverUrl, setCoverUrl] = useState('')
   const [coverHist, setCoverHist] = useState(null)
+  // Cover phrase: the short text on the cover + first-frame burn (per film).
+  const [coverPhrase, setCoverPhrase] = useState('')
+  const [coverPhraseSaved, setCoverPhraseSaved] = useState('')
+  const [coverPhraseDefault, setCoverPhraseDefault] = useState('')
+  // First-frame burn (Shorts show frame 1, not the uploaded thumbnail).
+  const [ffCoverMode, setFfCoverMode] = useState('image')
+  const [ffStatus, setFfStatus] = useState('')
   const [finalUrl, setFinalUrl] = useState('')
   const [aspect, setAspect] = useState('16/9')
   const [includeThumbnail, setIncludeThumbnail] = useState(true)
@@ -127,6 +134,10 @@ export default function Publish({ initialWorkDir, go }) {
       setOriginalLang(p.original_lang || 'en')
       setLangNames(p.lang_names || {})
       setCoverUrl(p.cover_url || '')
+      setCoverPhrase(p.cover_phrase || '')
+      setCoverPhraseSaved(p.cover_phrase || '')
+      setCoverPhraseDefault(p.cover_phrase_default || '')
+      setFfStatus('')
       setCoverHist(null)
       api.coverHistory(wd).then((r) => setCoverHist(r.history)).catch(() => {})
       setFinalUrl(p.final_url || '')
@@ -232,6 +243,42 @@ export default function Publish({ initialWorkDir, go }) {
       const r = await api.coverDelete(workDir, versionId)
       setCoverHist(r.history)
     } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  const savePhrase = async () => {
+    setBusy('phrase'); setError('')
+    try {
+      const r = await api.saveCoverPhrase(workDir, coverPhrase)
+      setCoverPhrase(r.cover_phrase || '')
+      setCoverPhraseSaved(r.cover_phrase || '')
+      setCoverPhraseDefault(r.cover_phrase_default || '')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  // Burn the cover (or the phrase in big type) into the video's first frame —
+  // Shorts ignore uploaded thumbnails and show frame 1 in the feed.
+  const burnFirstFrame = async () => {
+    setBusy('burn'); setError(''); setFfStatus('Burning the cover into the first frame…')
+    let pollTimer = null
+    try {
+      const { task_id } = await api.firstFrameCover({ work_dir: workDir, mode: ffCoverMode })
+      await new Promise((resolve, reject) => {
+        const check = async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              if (t.final_url) setFinalUrl(t.final_url)
+              if (t.video_history) setVideoHistory(t.video_history)
+              setFfStatus('Burned into the first frame — the previous cut is kept as a version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              reject(new Error(t.error || `First-frame cover ${t.status}.`))
+            } else pollTimer = setTimeout(check, 3000)
+          } catch (e) { reject(e) }
+        }
+        check()
+      })
+    } catch (e) { setError(e.message); setFfStatus('') } finally { clearTimeout(pollTimer); setBusy('') }
   }
 
   // Push the current cover to the already-published video's thumbnail.
@@ -453,6 +500,27 @@ export default function Publish({ initialWorkDir, go }) {
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
           <div className="mt-16">
+            <Field label="Cover phrase" hint="The short text painted on the cover and burned into the first frame — follows the title until you edit it.">
+              <input className="input" value={coverPhrase} maxLength={80} disabled={!workDir || busy === 'phrase'}
+                onChange={(e) => setCoverPhrase(e.target.value)} />
+            </Field>
+            {coverPhrase !== coverPhraseSaved && (
+              <div className="row center gap-8 mt-8">
+                <Button variant="primary" icon="floppy-disk" disabled={busy === 'phrase' || !coverPhrase.trim()}
+                  onClick={savePhrase}>{busy === 'phrase' ? 'Saving…' : 'Save phrase'}</Button>
+                <Button variant="ghost" disabled={busy === 'phrase'}
+                  onClick={() => setCoverPhrase(coverPhraseSaved)}>Cancel</Button>
+              </div>
+            )}
+            {coverPhrase === coverPhraseSaved && coverPhraseSaved !== coverPhraseDefault && (
+              <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+                Custom phrase — <a role="button" tabIndex={0}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  onClick={() => setCoverPhrase(coverPhraseDefault)}>use the title again</a>, then Save.
+              </div>
+            )}
+          </div>
+          <div className="mt-16">
             <Check checked={includeThumbnail} onChange={setIncludeThumbnail}
               label="Upload thumbnail to YouTube" />
           </div>
@@ -484,6 +552,28 @@ export default function Publish({ initialWorkDir, go }) {
           )}
           <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
             onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={busy === 'cover'} />
+          {/* First-frame burn lives with the cover it stamps — Shorts ignore
+              uploaded thumbnails and show the video's first frame in the feed. */}
+          <div className="mt-16" style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+            <span className="label-sm">First frame</span>
+            <p className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
+              For Shorts, burn the cover (or the phrase in big type) into the video&apos;s
+              first frame before publishing — the feed shows that frame, not the thumbnail.
+            </p>
+            <div className="row center gap-8 mt-10 row--wrap">
+              <select className="select" value={ffCoverMode} disabled={!workDir || busy === 'burn'}
+                onChange={(e) => setFfCoverMode(e.target.value)} style={{ maxWidth: 170 }}>
+                <option value="image">Cover image</option>
+                <option value="text">Cover text</option>
+              </select>
+              <Button variant="ghost" icon="image"
+                disabled={!workDir || busy === 'burn' || !finalUrl || (ffCoverMode === 'image' && !coverUrl)}
+                onClick={burnFirstFrame}>
+                {busy === 'burn' ? 'Burning…' : 'Burn into first frame'}
+              </Button>
+            </div>
+            {ffStatus && <div className="muted" style={{ fontSize: 11.5, marginTop: 8 }}>{ffStatus}</div>}
+          </div>
         </Card>
         {finalUrl && (
           <Card className="reveal reveal-d3" style={{ padding: 0, overflow: 'hidden' }}>

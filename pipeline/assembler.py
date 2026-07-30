@@ -219,6 +219,38 @@ def upscale_video(input_path: Path, output_path: Path, width: int, height: int) 
     return output_path
 
 
+def replace_first_frame(video_path: Path, frame_image: Path, output_path: Path) -> Path:
+    """Show *frame_image* on the video's very first frame (frame 0 only).
+
+    YouTube Shorts ignore uploaded thumbnails and show the video's first frame
+    in the feed — burning the cover into frame 0 makes that frame the cover.
+    The frame is REPLACED, not prepended, so duration and caption timing are
+    untouched; audio is stream-copied. Writes to a separate output so callers
+    can atomically swap it in after ffmpeg succeeds.
+    """
+    width, height = _get_video_dimensions(video_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.info(
+        "[ffmpeg] replace_first_frame: %s ← %s", video_path.name, frame_image.name,
+    )
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(video_path),
+        "-i", str(frame_image),
+        "-filter_complex", (
+            f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"crop={width}:{height},setsar=1[cover];"
+            "[0:v][cover]overlay=enable='eq(n,0)',format=yuv420p[out]"
+        ),
+        "-map", "[out]", "-map", "0:a?",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(output_path),
+    ], timeout=3600)
+    return output_path
+
+
 def temporal_ai_upscale_video(
     input_path: Path,
     output_path: Path,
