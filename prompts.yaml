@@ -43,7 +43,7 @@ script_claude_initial:
     STRUCTURE RULES — critical for YouTube retention:
     - Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
     - Middle scenes: Build the narrative progressively, each scene raising the stakes or deepening understanding. Every narration should end with an implicit pull toward the next scene.
-    - Final scene (conclusion): Land with a satisfying payoff — a moment of insight, wonder, or emotional resolution that makes the viewer feel their time was well spent. Leave them with something worth remembering or sharing.
+    - Final scene (conclusion): Land with a satisfying payoff — a moment of insight, wonder, or emotional resolution that makes the viewer feel their time was well spent. Whatever the video's length, the final narration must read unmistakably as the ENDING: wrap up the story in clear, simple, plain language, resolve the hook and any question the video raised, and state the conclusion directly so the viewer understands exactly how the story ends. No cliffhangers, no new questions, no cryptic, vague, or overly poetic closing lines.
 
     Write the narrations as a single continuous narrative. The arc must feel purposeful: curiosity ignited → journey deepened → reward delivered.
 
@@ -114,7 +114,7 @@ script_local_story:
     Rules:
     - SCENE 1 must open with a compelling hook: tease the most surprising or emotionally resonant moment from later in the video — a question unanswered, a tension unresolved, or a revelation hinted at but withheld. Make the listener feel they cannot afford to stop watching.
     - MIDDLE SCENES build the narrative progressively, deepening understanding and raising stakes. Each narration should carry an implicit pull toward the next scene.
-    - FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Leave them with something memorable or worth sharing.
+    - FINAL SCENE must deliver a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying — and read unmistakably as the ENDING, whatever the video's length: wrap up the story in clear, simple, plain language, resolve the hook and any question the video raised, and state the conclusion directly. No cliffhangers, no new questions, no cryptic or vague closing lines.
     - Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
     - If you listed CHARACTER_* above, refer to those characters BY NAME in the narrations of the scenes where they appear, so the visuals can depict them consistently.
     - NEVER mention "the narrator" in any narration — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).
@@ -194,7 +194,7 @@ story_outline:
     ARC RULES — critical for YouTube retention:
     - Chapter 1 opens with a compelling hook: tease the most surprising or emotionally resonant moment from later in the story — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld.
     - Middle chapters build progressively, each raising the stakes or deepening understanding. NO repeated beats: each chapter must cover NEW ground — never restate what an earlier chapter already established.
-    - The final chapter lands a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying.
+    - The final chapter lands a satisfying payoff — insight, wonder, or emotional resolution that rewards the viewer for staying. Its summary must state, in plain words, HOW the story wraps up — the clear conclusion the ending will deliver.
     - The narrator is NOT part of the story: never reference "the narrator" in any summary. (Only exception: the topic/direction explicitly asks the narrator to introduce or refer to themselves.)
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
@@ -217,6 +217,7 @@ story_chapter:
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
     - Write as one continuous narrative with an implicit pull forward — the listener should never want to stop.
+    - EXCEPTION — the outline's FINAL chapter: the pull forward stops at the story's end. If the chapter you are writing is the last one, its closing lines must END the story with a clear, simple conclusion in plain language — resolve the hook and any question the story raised, and make it unmistakable that the story is complete. No cliffhangers, no new questions, no cryptic, vague, or overly poetic closing lines.
     - You ARE the voice speaking: NEVER mention or describe "the narrator" — no "the narrator explains", no "our narrator", no third-person references to the storytelling voice. Tell the story directly. (Only exception: the video topic/direction explicitly asks the narrator to introduce or refer to themselves.)
   user: |
     Video topic: ${title_context}
@@ -234,10 +235,11 @@ story_critique:
     Story mode step 3: an editor judges the assembled draft for coherence,
     repetition, and pacing, flagging chapters that need a rewrite.
   system: |
-    You are a ruthless story editor reviewing the full draft of a narrated YouTube documentary. Judge ONLY these three things:
+    You are a ruthless story editor reviewing the full draft of a narrated YouTube documentary. Judge ONLY these four things:
     - COHERENCE: does the story hold together as one continuous narrative, with no contradictions or broken references? Prose that refers to "the narrator" in the third person is a defect — the voice must tell the story directly, never describe itself.
     - REPETITION: is any information, phrase, or beat told more than once?
     - PACING: does every chapter advance the story, with a strong hook early and a real payoff at the end?
+    - ENDING: does the story close with a clear, simple conclusion — plain language that resolves the hook and any question the story raised, leaving no doubt the story is complete? Whatever the story's length, an ending that is cryptic, vague, abrupt, or trails off like a teaser is a defect — flag the final chapter and say what a rewrite must fix.
 
     Do NOT judge factual accuracy, style, or subject choice. Do NOT rewrite anything.
 
@@ -295,7 +297,7 @@ story_redraft_outline:
 
     Rules:
     - Retell, never reinvent: every chapter summary must be grounded in the existing story. When the new length is LONGER, plan where to deepen — more detail, texture, and build-up around the story's existing beats. When SHORTER, keep only the strongest beats and cut the rest.
-    - Keep the retention arc: chapter 1 opens with the hook, middle chapters build without repeating, the final chapter lands the payoff.
+    - Keep the retention arc: chapter 1 opens with the hook, middle chapters build without repeating, the final chapter lands the payoff and ends the story with a clear, simple conclusion — its summary must state in plain words how the story wraps up.
     - The narrator is NOT part of the story: never reference "the narrator" in any summary.
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
@@ -321,6 +323,7 @@ story_redraft_chapter:
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
+    - If the chapter you are writing is the outline's FINAL chapter, its closing lines must END the story with a clear, simple conclusion in plain language — resolve the hook and any question the story raised, and make it unmistakable that the story is complete. No cliffhangers, no new questions, no cryptic, vague, or overly poetic closing lines.
     - You ARE the voice speaking: NEVER mention or describe "the narrator" — no third-person references to the storytelling voice. Tell the story directly. (Only exception: the video topic/direction explicitly asks the narrator to introduce or refer to themselves.)
   user: |
     Video topic: ${title_context}
@@ -381,7 +384,7 @@ script_critic:
     You are a ruthless script editor doing quality control on a narrated video script, scene by scene. Judge ONLY these four things:
     - CONSISTENCY: contradictions, broken references, scenes that assume something never established. Narration that refers to "the narrator" in the third person is a defect — rewrite it to tell the story directly (exception: the TOPIC/DIRECTION explicitly asks the narrator to introduce themselves).
     - REPETITION: information, phrases, or beats told more than once across scenes — cut or rewrite the later occurrence. This check INCLUDES the first and final scenes: an ending that near-duplicates an earlier scene is a defect even though the final scene itself must not be deleted — delete or rewrite the earlier copy, or rewrite the final scene so the payoff lands without repeating.
-    - ENGAGEMENT: scene 1 must hook; every scene must advance the story and pull toward the next; the final scene must land a payoff. Flag dead scenes that add nothing.
+    - ENGAGEMENT: scene 1 must hook; every scene must advance the story and pull toward the next; the final scene must land a payoff AND read as a clear ending — plain, simple language that wraps up the story and resolves the hook, leaving no doubt the story is complete, whatever the video's length. A final scene that is cryptic, vague, or trails off without closure is a defect — rewrite it so the conclusion is unmistakable. Flag dead scenes that add nothing.
     - INSTRUCTIONS (guardrail): the script was commissioned with the TOPIC/DIRECTION and AVOID constraints below — world rules (who and what exists, how things look), required subjects, tone, motion direction, and exclusions. Check EVERY scene's narration AND its IMAGE/VIDEO prompts against them; any field that breaks a constraint is a defect — rewrite that field so it complies.
 
     You may REWRITE scene fields, DELETE scenes, ADD scenes, and REORDER scenes. Output ONLY a JSON object:
