@@ -1258,6 +1258,47 @@ class CharacterReferenceImageTests(TempConfigCase):
         paths = app._scene_reference_images(scene["image_prompt"], scene, cfg, "Hero")
         self.assertEqual(len(paths), app._MAX_SCENE_REFERENCES)
 
+    _FLUX2 = {"t2i_ref_workflow": "flux2_t2i_ref.json"}
+
+    def test_prompt_and_refs_appends_named_note_on_flux2(self):
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man", "ref_image": "x"}])
+        cfg = app.set_character_image(cfg["characters"][0]["id"], self._png_bytes())
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        prompt, refs = app._characters_prompt_and_refs(
+            scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
+        self.assertIn("a man", prompt)  # description still injected
+        self.assertIn("Bob appears EXACTLY as the character", prompt)
+        self.assertEqual(len(refs), 1)
+
+    def test_prompt_and_refs_notes_even_without_description(self):
+        # A character with only an uploaded look (no description) still gets the
+        # name→reference binding — the exact case a bare upload used to lose.
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "", "ref_image": "x"}])
+        cfg = app.set_character_image(cfg["characters"][0]["id"], self._png_bytes())
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        prompt, refs = app._characters_prompt_and_refs(
+            scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
+        self.assertIn("Bob appears EXACTLY as the character", prompt)
+        self.assertEqual(len(refs), 1)
+
+    def test_prompt_and_refs_no_note_without_reference_support(self):
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man", "ref_image": "x"}])
+        cfg = app.set_character_image(cfg["characters"][0]["id"], self._png_bytes())
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        for engine in (None, {}):  # flux1 has no t2i_ref_workflow
+            prompt, refs = app._characters_prompt_and_refs(
+                scene["image_prompt"], scene, cfg, "Hero", engine=engine)
+            self.assertNotIn("appears EXACTLY", prompt)
+            self.assertEqual(len(refs), 1)
+
+    def test_prompt_and_refs_no_note_when_nothing_matches(self):
+        cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])  # no image
+        scene = {"image_prompt": "Bob waves.", "narration": ""}
+        prompt, refs = app._characters_prompt_and_refs(
+            scene["image_prompt"], scene, cfg, "Hero", engine=self._FLUX2)
+        self.assertNotIn("appears EXACTLY", prompt)
+        self.assertEqual(refs, [])
+
     def test_set_and_clear_character_image(self):
         cfg = self._hero_with_chars([{"name": "Bob", "description": "a man"}])
         cid = cfg["characters"][0]["id"]
