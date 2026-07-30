@@ -9759,19 +9759,21 @@ def _run_narration_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         _finish_film_task_error(task_id, e)
 
 
-def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path) -> tuple[str, list[Path]]:
+def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
+                             engine: dict | None = None) -> tuple[str, list[Path]]:
     """Styled image prompt + character reference images for a film-scene re-render.
 
     Mirrors _generate_active_scene_preview so a frame regenerated from the edit
     video screen keeps its recurring characters' looks: re-inject each featured
-    character's canonical appearance into the prompt and gather their reference
-    images (FLUX.2 conditioning). work_dir folds in the script's own per-script
+    character's canonical appearance into the prompt, gather their reference
+    images, and (FLUX.2) bind each name to its reference so the render actually
+    follows the uploaded look. work_dir folds in the script's own per-script
     characters, not just the catalogue ones the style opted into. The style
     prefix is applied last, matching the plain (character-less) re-render path."""
     style_name = jc.get("style_name", "")
     base_prompt = (row.get("image_prompt") or "").strip()
-    base_prompt = gapp._inject_characters(base_prompt, row, cfg, style_name, wd)
-    reference_images = gapp._scene_reference_images(base_prompt, row, cfg, style_name, wd)
+    base_prompt, reference_images = gapp._characters_prompt_and_refs(
+        base_prompt, row, cfg, style_name, wd, engine=engine)
     style_clean = (jc.get("style") or "").strip().rstrip(".")
     if style_clean and base_prompt and not base_prompt.startswith(style_clean):
         base_prompt = f"{style_clean}. {base_prompt}"
@@ -9797,7 +9799,7 @@ def _run_image_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
 
     try:
         _film_checkpoint(task_id)
-        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd)
+        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd, engine)
         # One-off user steering from the Re-generate popover (not persisted).
         image_prompt = gapp._apply_prompt_instruction(image_prompt, instruction)
 
@@ -9869,7 +9871,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _film_checkpoint(task_id)
         # Character-consistent, styled image prompt + reference images, so a
         # regenerated first frame keeps the scene's recurring characters' looks.
-        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd)
+        image_prompt, reference_images = _film_scene_image_prompt(jc, row, cfg, wd, engine)
         video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
         style_clean = jc.get("style", "").strip().rstrip(".")
         if style_clean and video_prompt and not video_prompt.startswith(style_clean):
