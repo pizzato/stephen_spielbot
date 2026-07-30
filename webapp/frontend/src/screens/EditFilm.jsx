@@ -1182,7 +1182,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             previous cut is kept as a selectable version.
           </p>
           <div className="mt-24">
-            <Field label="Add to first frame">
+            <Field label="Add to first frame" hint="The text’s font, size and colour come from the film’s style settings.">
               <select className="select" value={ffCoverMode} disabled={anyBusy}
                 onChange={(e) => setFfCoverMode(e.target.value)}>
                 <option value="image">Cover image</option>

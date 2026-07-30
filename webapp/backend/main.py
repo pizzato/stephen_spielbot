@@ -3677,6 +3677,10 @@ def start_generation(body: GenerateBody) -> dict:
         # Burn the cover into the final video's first frame at the end of the
         # render ("none" | "image" | "text") — Shorts show frame 1 in the feed.
         "first_frame_cover": gapp._norm_first_frame_cover(ss.get("first_frame_cover")),
+        # Cover-text look (the "text" mode): font file, % of width, colour.
+        "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
+        "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
+        "first_frame_text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
@@ -5250,6 +5254,28 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     return {"ok": True, "task_id": tid}
 
 
+@api.get("/api/fonts")
+def list_fonts(refresh: bool = Query(False)) -> dict:
+    """Fonts installed on this machine, for the per-style cover-text picker."""
+    from pipeline.cover import available_fonts
+    return {"fonts": available_fonts(refresh=refresh)}
+
+
+def _first_frame_text_opts(wd: Path) -> dict:
+    """Cover-text font/size/colour for this film's burns.
+
+    Resolved LIVE from the film's style (so a Settings tweak applies to the
+    very next burn, no re-render needed); style_settings falls back to the
+    default style when the film's style is gone."""
+    jc = _film_job_config(wd)
+    ss = gapp.style_settings(gapp.load_config(), jc.get("style_name") or "")
+    return {
+        "text_font": str(ss.get("first_frame_text_font") or ""),
+        "text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
+        "text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
+    }
+
+
 def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
     """Re-apply the job's standing first-frame cover after a final rebuild.
 
@@ -5269,6 +5295,7 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
             cover_path=wd / "cover.png",
             title=_video_title_for(wd),
             work_dir=wd,
+            **_first_frame_text_opts(wd),
         )
     except Exception as e:
         gapp.logger.warning("First-frame cover re-apply failed (non-fatal): %s", e)
@@ -5305,6 +5332,7 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
             cover_path=wd / "cover.png",
             title=_video_title_for(wd),
             work_dir=wd,
+            **_first_frame_text_opts(wd),
         )
         label = "Cover on first frame" if mode == "image" else "Title on first frame"
         final_video_history.record(wd, final_path, label=label, lang=cur_lang)
