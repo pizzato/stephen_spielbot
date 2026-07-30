@@ -701,7 +701,10 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
     )
     is_last_batch = (first_batch == n_scenes)
     conclusion_note = (
-        f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — deliver a satisfying payoff."
+        f"\nIMPORTANT: Scene {n_scenes} is the FINAL scene — end the video with a clear, "
+        f"simple conclusion: wrap up the story in plain language, resolve the hook, and "
+        f"make it unmistakable that the story is complete. No cliffhangers, no new "
+        f"questions, no cryptic closing lines."
         if is_last_batch else ""
     )
     title_line = f'Topic: "{title}"\n'
@@ -763,7 +766,10 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
             f'  Scene {s["id"]}: "{s["title"]}" — {s["narration"]}' for s in ctx
         )
         conclusion_note = (
-            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — deliver a satisfying payoff."
+            f"\nIMPORTANT: Scene {batch_end} is the FINAL scene — end the video with a "
+            f"clear, simple conclusion: wrap up the story in plain language, resolve the "
+            f"hook, and make it unmistakable that the story is complete. No cliffhangers, "
+            f"no new questions, no cryptic closing lines."
             if is_last else ""
         )
         cont_msg = _prompts.user(
