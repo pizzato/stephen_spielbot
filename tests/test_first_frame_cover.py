@@ -153,6 +153,62 @@ class OverlayCoverTextTests(unittest.TestCase):
             self.assertGreater(whites, 50, "expected a light outline around dark text")
 
 
+class CoverPhraseTests(unittest.TestCase):
+    def test_derived_from_title_when_no_override(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(cover.cover_phrase_for(Path(tmp), "The Silent City: A Story"),
+                             "The Silent City")
+
+    def test_override_file_wins_and_is_capped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "cover_phrase.txt").write_text("SILENT CITY!")
+            self.assertEqual(cover.cover_phrase_for(Path(tmp), "The Silent City: A Story"),
+                             "SILENT CITY!")
+            (Path(tmp) / "cover_phrase.txt").write_text("x" * 200)
+            self.assertEqual(len(cover.cover_phrase_for(Path(tmp), "t")), 80)
+
+    def test_blank_override_falls_back_to_title(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "cover_phrase.txt").write_text("   \n")
+            self.assertEqual(cover.cover_phrase_for(Path(tmp), "Plain Title"), "Plain Title")
+
+
+class CoverPhraseEndpointTests(unittest.TestCase):
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        q = mock.patch.object(backend, "_video_title_for",
+                              return_value="The Silent City: A Story")
+        q.start()
+        self.addCleanup(q.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+
+    def test_save_and_clear_round_trip(self):
+        r = backend.save_cover_phrase(
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="  SILENT\nCITY! "))
+        self.assertEqual(r["cover_phrase"], "SILENT CITY!")       # whitespace collapsed
+        self.assertEqual(r["cover_phrase_default"], "The Silent City")
+        self.assertEqual((self.wd / "cover_phrase.txt").read_text(), "SILENT CITY!")
+
+        r = backend.save_cover_phrase(
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase=""))
+        self.assertEqual(r["cover_phrase"], "The Silent City")    # back to derived
+        self.assertFalse((self.wd / "cover_phrase.txt").exists())
+
+    def test_saving_the_derived_phrase_clears_the_override(self):
+        (self.wd / "cover_phrase.txt").write_text("OLD")
+        backend.save_cover_phrase(
+            backend.CoverPhraseBody(work_dir=str(self.wd), phrase="The Silent City"))
+        self.assertFalse((self.wd / "cover_phrase.txt").exists())
+
+    def test_rejects_paths_outside_output_dir(self):
+        with self.assertRaises(backend.HTTPException) as ctx:
+            backend.save_cover_phrase(
+                backend.CoverPhraseBody(work_dir="/tmp/elsewhere", phrase="x"))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
 class BurnCoverTests(unittest.TestCase):
     def test_rejects_unknown_mode(self):
         with self.assertRaises(ValueError):
@@ -222,6 +278,17 @@ class BurnCoverTests(unittest.TestCase):
             # The style's cover-text look flows through to the overlay.
             self.assertEqual(looks, [{"font_path": "/tmp/MyFont.ttf",
                                       "size_pct": 18, "color": "#FFD700"}])
+
+            # An edited cover phrase (cover_phrase.txt) wins over the title.
+            (wd / "cover_phrase.txt").write_text("SILENT CITY!")
+            video.write_bytes(b"original")
+            with mock.patch("pipeline.assembler.extract_first_frame", side_effect=fake_extract), \
+                 mock.patch("pipeline.cover.overlay_cover_text", side_effect=fake_overlay), \
+                 mock.patch("pipeline.assembler.replace_first_frame", side_effect=fake_replace):
+                cover.burn_cover_into_first_frame(
+                    video, "text",
+                    title="The Silent City: A Story of Machines", work_dir=wd)
+            self.assertEqual(texts[-1], "SILENT CITY!")
             self.assertEqual(video.read_bytes(), b"stamped")
             self.assertTrue((wd / "first_frame_text_base.png").exists())
 
