@@ -209,9 +209,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [fieldBusy, setFieldBusy] = useState('')
   const [confirmDelScript, setConfirmDelScript] = useState(false)
   const [confirmDelScene, setConfirmDelScene] = useState(false)
-  // "Spoken text" disclosure — auto-open on scenes that already have one.
-  const [ttsOpen, setTtsOpen] = useState(false)
-  useEffect(() => { setTtsOpen(false) }, [cur])
 
   // Sync state and switch to Cover when a new job loads
   useEffect(() => {
@@ -1095,19 +1092,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </Field>
                 )}
 
-                {(d.mode || 'narration') === 'narration' && ((d.tts_text || '').trim() || ttsOpen ? (
-                  <Field label="Spoken text — what TTS says instead"
-                    hint="Captions keep showing the narration above; the voice reads this. Respell tricky words (lead pipes → led pipes, lives → livz) and add [pause] or [pause:1.5] for real silence. Clear it to speak the narration again.">
-                    <textarea className="textarea" rows={3} value={d.tts_text || ''}
-                      placeholder={d.narration || ''}
-                      onChange={(e) => setField('tts_text', e.target.value)} onBlur={() => persist(cur)} />
-                  </Field>
-                ) : (
-                  <button type="button" className="muted" style={{ background: 'none', border: 'none', padding: 0, textAlign: 'left', fontSize: 13, cursor: 'pointer' }}
-                    onClick={() => setTtsOpen(true)}>
-                    <Icon name="microphone-lines" /> Pronunciation off? Add spoken text for TTS…
-                  </button>
-                ))}
+                {(d.mode || 'narration') === 'narration' && (d.tts_text || '').trim() && (
+                  <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                    <Icon name="microphone-lines" /> Spoken text is split from the narration (set on the film's
+                    edit screen) — the voice reads: “{d.tts_text}”{' '}
+                    <button type="button" style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
+                      onClick={() => { const s = { ...scenes[cur], tts_text: '' }; setField('tts_text', ''); persist(cur, s) }}>
+                      Unsplit — speak the narration
+                    </button>
+                  </div>
+                )}
 
                 <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
                   <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />

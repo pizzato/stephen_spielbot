@@ -1,7 +1,7 @@
 """Spoken-text layer (pipeline/tts_text.py) + its wiring into generate_narration.
 
 The narration string used to be both the caption text and the literal TTS
-input. These tests cover the disentanglement: pronunciation respellings,
+input. These tests cover the disentanglement: the per-scene spoken-text split,
 [pause] markers becoming real spliced silence, per-sentence gaps, and the
 fallback to a single marker-less take when chunk splicing fails.
 """
@@ -22,47 +22,6 @@ class SpokenSourceTests(unittest.TestCase):
     def test_blank_override_falls_back_to_narration(self):
         self.assertEqual(tts_text.spoken_source("caption text", "   "), "caption text")
         self.assertEqual(tts_text.spoken_source("caption text", None), "caption text")
-
-
-class PronunciationTests(unittest.TestCase):
-    RULES = [{"find": "lead pipes", "say": "led pipes"},
-             {"find": "lives", "say": "livz"}]
-
-    def test_phrase_respelling(self):
-        self.assertEqual(
-            tts_text.apply_pronunciations("The lead pipes burst.", self.RULES),
-            "The led pipes burst.",
-        )
-
-    def test_case_insensitive_match(self):
-        self.assertEqual(
-            tts_text.apply_pronunciations("Lead pipes burst.", self.RULES),
-            "led pipes burst.",
-        )
-
-    def test_whole_word_only(self):
-        # "lives" must not fire inside "livestock"; "lead" alone isn't a rule.
-        self.assertEqual(
-            tts_text.apply_pronunciations("The livestock lead the way.", self.RULES),
-            "The livestock lead the way.",
-        )
-
-    def test_something_still_lives(self):
-        self.assertEqual(
-            tts_text.apply_pronunciations("Something still lives.", self.RULES),
-            "Something still livz.",
-        )
-
-    def test_malformed_rules_skipped(self):
-        rules = [None, "bogus", {"find": "", "say": "x"}, {"find": "a b", "say": ""},
-                 {"find": "night", "say": "nite"}]
-        self.assertEqual(tts_text.apply_pronunciations("Good night.", rules), "Good nite.")
-
-    def test_backslash_in_say_stays_literal(self):
-        self.assertEqual(
-            tts_text.apply_pronunciations("x", [{"find": "x", "say": r"a\1b"}]),
-            r"a\1b",
-        )
 
 
 class StripMarkerTests(unittest.TestCase):
@@ -180,9 +139,10 @@ class GenerateNarrationSplicingTests(unittest.TestCase):
         self.assertEqual(self.texts, ["Held beat."])
         self.assertAlmostEqual(_wav_seconds(self.out), self.CHUNK_SECS + 3.0, delta=0.02)
 
-    def test_pronunciations_reach_the_engine(self):
-        self._generate("The lead pipes burst.",
-                       pronunciations=[{"find": "lead pipes", "say": "led pipes"}])
+    def test_respelled_spoken_text_reaches_the_engine_verbatim(self):
+        # The per-scene split stores the respelling directly; TTS must receive
+        # exactly those characters.
+        self._generate("The led pipes burst.")
         self.assertEqual(self.texts, ["The led pipes burst."])
 
     def test_chunk_temp_files_cleaned_up(self):

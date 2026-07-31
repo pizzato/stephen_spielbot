@@ -105,7 +105,6 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
                        speed=p.get("voice_speed"),
                        tts_engine=p.get("tts_engine") or "openf5",
                        language=p.get("tts_language") or "en",
-                       pronunciations=p.get("tts_pronunciations"),
                        sentence_pause=p.get("tts_sentence_pause"))
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
