@@ -43,7 +43,7 @@ from pipeline.orchestrator import (  # noqa: E402
 )
 from pipeline.scene_video import generate_scene_video as generate_scene_video_task  # noqa: E402
 from pipeline.tts_text import spoken_source  # noqa: E402
-from pipeline.tts_worker import generate_narration  # noqa: E402
+from pipeline.tts_worker import generate_narration, resolve_robotic_amount  # noqa: E402
 
 
 LOG = logging.getLogger("spielbot.worker_agent")
@@ -100,8 +100,7 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
 
     ref = Path(p["voice_ref"]).expanduser() if p.get("voice_ref") else None
     generate_narration(narration_text, output, reference_wav=ref, host=endpoint,
-                       robotic=bool(p.get("voice_robotic")),
-                       robotic_amount=p.get("voice_robotic_amount"),
+                       robotic_amount=resolve_robotic_amount(p),
                        speed=p.get("voice_speed"),
                        tts_engine=p.get("tts_engine") or "openf5",
                        language=p.get("tts_language") or "en",

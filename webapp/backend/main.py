@@ -1291,7 +1291,6 @@ def promote_script_character(job_id: str, char_id: str) -> dict:
 
 class VoiceTest(BaseModel):
     voice: str = ""
-    robotic: bool = False
     robotic_amount: float | None = None
     speed: float | None = None
     text: str = ""
@@ -1321,8 +1320,7 @@ def voices_test(body: VoiceTest) -> dict:
     ref = Path(ref_str).expanduser() if ref_str else None
 
     amount = (body.robotic_amount if body.robotic_amount is not None
-              else float(gapp.style_settings(cfg).get("voice_robotic_amount", 0.35)))
-    robotic = bool(body.robotic)
+              else float(gapp.style_settings(cfg).get("voice_robotic_amount", 0.0) or 0.0))
     speed = (body.speed if body.speed is not None
              else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
     engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
@@ -1343,7 +1341,7 @@ def voices_test(body: VoiceTest) -> dict:
     except OSError:
         ref_stamp = ""
     key = hashlib.md5(
-        f"{voice}|{engine}|{language}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}|{round(sentence_pause, 3)}".encode()
+        f"{voice}|{engine}|{language}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}|{round(sentence_pause, 3)}".encode()
     ).hexdigest()[:16]
     out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
@@ -1353,7 +1351,7 @@ def voices_test(body: VoiceTest) -> dict:
         try:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
-                                   robotic=robotic, robotic_amount=amount, speed=speed,
+                                   robotic_amount=amount, speed=speed,
                                    tts_engine=engine, language=language,
                                    sentence_pause=sentence_pause)
         except Exception as e:
@@ -1541,7 +1539,6 @@ class GenerateScriptBody(BaseModel):
     visual_style: str | None = None
     auto_approve: bool = False
     voice: str = ""
-    voice_robotic: bool = False
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
@@ -1725,7 +1722,7 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         sg = _do_story_generate(body)
         return _do_story_divide(DivideStoryBody(
             work_dir=sg["work_dir"], voice=body.voice,
-            voice_robotic=body.voice_robotic, resolution=body.resolution,
+            resolution=body.resolution,
             auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
             style_name=body.style_name, auto_critic=body.auto_critic))
 
@@ -1808,7 +1805,6 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "n_scenes": int(body.n_scenes),
         "visual_style": (body.visual_style or "").strip(),
         "voice": (body.voice or "").strip(),
-        "voice_robotic": bool(body.voice_robotic),
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
@@ -1865,7 +1861,6 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": ss["name"],
         "music_desc": music_desc,
         "voice": create_brief["voice"] or ss.get("voice", ""),
-        "voice_robotic": create_brief["voice_robotic"],
         "resolution": create_brief["resolution"],
         "create_brief": create_brief,
         "scenes": [_scene_to_json(s, work_dir) for s in scenes_list],
@@ -1885,7 +1880,6 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
             style=style,
             resolution=body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
             voice=body.voice or ss.get("voice", ""),
-            voice_robotic=body.voice_robotic,
             music_desc=music_desc,
             queue_item_id=body.queue_item_id,
             style_name=ss["name"],
@@ -1914,7 +1908,6 @@ class DivideStoryBody(BaseModel):
     # Edited chapter texts from the Create review panel; [] keeps the draft as-is.
     chapters: list[StoryChapterEdit] = []
     voice: str = ""
-    voice_robotic: bool = False
     resolution: str = ""
     auto_approve: bool = False
     queue_item_id: str = ""
@@ -1999,7 +1992,6 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "n_scenes": int(body.n_scenes),
         "visual_style": (body.visual_style or "").strip(),
         "voice": (body.voice or "").strip(),
-        "voice_robotic": bool(body.voice_robotic),
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
@@ -2026,7 +2018,6 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             "style": story.get("style", ""), "style_name": ss["name"],
             "music_desc": story.get("music", ""),
             "voice": create_brief["voice"] or ss.get("voice", ""),
-            "voice_robotic": create_brief["voice_robotic"],
             "resolution": create_brief["resolution"],
             "n_scenes": int(body.n_scenes),
             "story": story, "create_brief": create_brief,
@@ -2088,7 +2079,6 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         visual_style=(brief.get("visual_style") or "").strip(),
         auto_approve=bool(body.auto_approve),
         voice=(body.voice or brief.get("voice") or "").strip(),
-        voice_robotic=bool(body.voice_robotic or brief.get("voice_robotic")),
         resolution=(body.resolution or brief.get("resolution") or "").strip(),
         queue_item_id=body.queue_item_id,
         style_name=ss["name"],
@@ -2652,10 +2642,6 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, style_name)
     voice = (brief.get("voice") or "").strip() or ss.get("voice", "")
-    if "voice_robotic" in brief:
-        voice_robotic = bool(brief.get("voice_robotic"))
-    else:
-        voice_robotic = bool(ss.get("voice_robotic", False))
     resolution = (brief.get("resolution") or "").strip() or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
     return {
         "job_id": job_id,
@@ -2667,7 +2653,6 @@ def _register_script_into(wd: Path, scenes_list: list, *, video_title: str,
         "style_name": ss["name"],
         "music_desc": music_desc,
         "voice": voice,
-        "voice_robotic": voice_robotic,
         "resolution": resolution,
         "create_brief": brief,
         "scenes": [_scene_to_json(r, wd) for r in rows],
@@ -3590,7 +3575,6 @@ class GenerateBody(BaseModel):
     title: str = ""
     n_scenes: int = 0
     voice: str = ""
-    voice_robotic: bool | None = None
     resolution: str = ""
     music_desc: str = ""
     style: str = ""
@@ -3634,8 +3618,6 @@ def start_generation(body: GenerateBody) -> dict:
     if not voice_name or voice_name == gapp.F5TTS_DEFAULT_OPTION:
         voice_name = ss.get("voice") or voice_name
     voice_ref = gapp.voice_path_for(voice_name)
-    voice_robotic = (body.voice_robotic if body.voice_robotic is not None
-                     else bool(ss.get("voice_robotic", False)))
     resolution = body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
     vid_width, vid_height = gapp._RESOLUTIONS.get(resolution, (832, 480))
 
@@ -3703,8 +3685,9 @@ def start_generation(body: GenerateBody) -> dict:
     job_cfg.update({
         "resolution": resolution, "max_clip_secs": 0,
         "default_voice": voice_name, "voice_ref": voice_ref or "",
-        "voice_robotic": voice_robotic,
-        "voice_robotic_amount": ss.get("voice_robotic_amount", 0.35),
+        # 0 = natural; >0 robotizes at that strength (the on/off toggle was
+        # folded into the level).
+        "voice_robotic_amount": ss.get("voice_robotic_amount", 0.0),
         "voice_speed": ss.get("voice_speed", 1.0),
         "tts_engine": gapp.tts_engines.norm(ss.get("tts_engine")),
         "tts_language": gapp._norm_tts_language(ss.get("tts_language")),
@@ -9290,7 +9273,6 @@ def _start_queue_item(item: dict) -> dict:
             start_generation(GenerateBody(
                 job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
                 voice=item.get("gen_voice") or "",
-                voice_robotic=item.get("gen_voice_robotic"),
                 resolution=item.get("gen_resolution") or "",
                 music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
                 style=item.get("gen_style") or _job_meta_field(job_id, "style"),
@@ -9313,7 +9295,6 @@ def _start_queue_item(item: dict) -> dict:
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=n, voice=ss.get("voice", ""),
-            voice_robotic=item.get("gen_voice_robotic"),
             resolution=resolution,
             music_desc=gen.get("music_desc", ""), style=gen.get("style", ""),
             style_name=gen.get("style_name", "")))
@@ -9349,7 +9330,6 @@ class FromJobBody(BaseModel):
     style: str = ""
     resolution: str = ""
     voice: str = ""
-    voice_robotic: bool | None = None
     music_desc: str = ""
     queue_item_id: str = ""
     style_name: str = ""
@@ -9390,7 +9370,7 @@ def queue_from_job(body: FromJobBody) -> dict:
         video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
         approved=bool(body.approved),
         gen_style=body.style, gen_resolution=body.resolution,
-        gen_voice=body.voice, gen_voice_robotic=body.voice_robotic, gen_music=body.music_desc,
+        gen_voice=body.voice, gen_music=body.music_desc,
         gen_style_name=body.style_name,
     )
 
@@ -10025,7 +10005,7 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
                             tts_host: str | None = None,
                             update_task: bool = True) -> None:
     from pipeline.assembler import mux_video_audio
-    from pipeline.tts_worker import generate_narration
+    from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 
     # out_dir scopes the output to a language-specific subdirectory (localize
     # feature) instead of the film's canonical top-level files; the raw scene
@@ -10052,8 +10032,7 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     if voice_ref is None and not selected_voice:
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
-    voice_robotic = bool(jc.get("voice_robotic", False))
-    voice_robotic_amount = jc.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35))
+    voice_robotic_amount = resolve_robotic_amount(jc)  # 0 = natural; legacy toggle honored
     voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
     tts_engine = tts_engine_override or jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language = language or jc.get("tts_language", cfg.get("default_tts_language", "en"))
@@ -10065,7 +10044,7 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
 
     if update_task:
         _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
-    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language,
+    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language,
                        sentence_pause=gapp._norm_tts_sentence_pause(jc.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause"))))
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
@@ -11012,7 +10991,7 @@ def _auto_write_scripts(cfg: dict) -> int:
             item_id, video_job_id=gen["job_id"], work_dir=gen["work_dir"],
             script_ready=True, approved=False, suggested_scene_count=n,
             gen_style=gen.get("style", ""), gen_resolution=resolution,
-            gen_voice=ss.get("voice", ""), gen_voice_robotic=q.get("gen_voice_robotic"),
+            gen_voice=ss.get("voice", ""),
             gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))
         written += 1
     return written
