@@ -75,6 +75,7 @@ function SceneCard({
   const [lightbox, setLightbox] = useState(false)
   const [title, setTitle] = useState(scene.title || '')
   const [narration, setNarration] = useState(scene.narration || '')
+  const [ttsText, setTtsText] = useState(scene.tts_text || '')
   const [voice, setVoice] = useState(scene.voice || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
@@ -98,6 +99,7 @@ function SceneCard({
   useEffect(() => {
     setTitle(scene.title || '')
     setNarration(scene.narration || '')
+    setTtsText(scene.tts_text || '')
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
@@ -109,7 +111,7 @@ function SceneCard({
     const st = override || sceneType
     try {
       await api.saveScene(jobId, scene.id, {
-        title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
+        title, narration, tts_text: ttsText, voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
         mode: st.mode || 'narration', lines: st.lines || [], duration: st.duration || 0,
       })
     } catch (e) {
@@ -410,6 +412,11 @@ function SceneCard({
                 {(sceneType.mode || 'narration') === 'narration' && (<>
                   <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
                     <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
+                  </Field>
+                  <Field label="Spoken text — what TTS says instead (optional)"
+                    hint="Captions keep the narration above; the voice reads this on re-render. Respell tricky words (lead pipes → led pipes) and add [pause] or [pause:1.5] for real silence.">
+                    <textarea className="textarea" rows={2} value={ttsText} placeholder={narration}
+                      onChange={(e) => setTtsText(e.target.value)} />
                   </Field>
                   <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
                     <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>

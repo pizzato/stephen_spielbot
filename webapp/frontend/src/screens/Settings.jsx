@@ -342,15 +342,16 @@ function PlayButton({ src }) {
 // robotic-level and voice-speed fields so you can dial them in by ear before
 // saving. Deliberately no voice picker of its own: a second dropdown here
 // looked like the style's voice setting but silently saved nothing.
-function VoiceTester({ voice, roboticAmount, speed, engine, language, onError }) {
+function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePause, onError }) {
   const [busy, setBusy] = useState(false)
+  const [text, setText] = useState('')
   const audioRef = useRef(null)
 
   const play = async () => {
     onError(''); setBusy(true)
     try {
       const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '', language: language || '' })
+      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '', language: language || '', text: text.trim(), sentence_pause: sentencePause ?? null })
       const a = audioRef.current
       // Don't await play(): after a long first generation Chrome may block
       // autoplay (the click's activation window expired), and a blocked play()
@@ -363,9 +364,11 @@ function VoiceTester({ voice, roboticAmount, speed, engine, language, onError })
   const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level and voice speed (cached after the first time).`}>
+      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level, voice speed and sentence pause (cached after the first time). Type a custom line to audition pronunciation rules and [pause:1.5] markers.`}>
       <div className="row center gap-10 row--wrap">
         <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
+        <input className="input grow" placeholder="Custom line to speak (optional) — e.g. The lead pipes burst. [pause] Something still lives."
+          value={text} onChange={(e) => setText(e.target.value)} />
         <audio ref={audioRef} hidden />
       </div>
     </Field>
@@ -1343,6 +1346,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   }
   const makeDefault = () => editCfg((c) => ({ ...c, default_style: st.name }))
 
+  // Global TTS pronunciation rules (find → say), staged like any other config
+  // field and persisted by the main Save button.
+  const setPronRule = (i, patch) => editCfg((c) => {
+    const rules = [...(c.tts_pronunciations || [])]
+    rules[i] = { ...rules[i], ...patch }
+    return { ...c, tts_pronunciations: rules }
+  })
+  const addPronRule = () => editCfg((c) => ({ ...c, tts_pronunciations: [...(c.tts_pronunciations || []), { find: '', say: '' }] }))
+  const removePronRule = (i) => editCfg((c) => ({ ...c, tts_pronunciations: (c.tts_pronunciations || []).filter((_, j) => j !== i) }))
+
   // Master toggle: derived from the per-step flags, and ticking it sets them all.
   const fullyAutomated = AUTO_FLAGS.every((f) => cfg[f])
   const setFullyAutomated = (v) => editCfg((c) => {
@@ -2022,8 +2035,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
                   <ParentVal k="voice_robotic_amount" />
                 </Field></div>
+                <div className="grow"><Field label={`Sentence pause — ${(eff.tts_sentence_pause ?? 0).toFixed(2)}s`}
+                  hint="Extra silence enforced between narration sentences for a calmer cadence — 0 keeps the model's own pacing. Try 0.3–0.6s.">
+                  <input className="slider" type="range" min={0} max={2} step={0.05}
+                    value={eff.tts_sentence_pause ?? 0}
+                    onChange={(e) => setStyleField('tts_sentence_pause', +e.target.value)} />
+                  <ParentVal k="tts_sentence_pause" />
+                </Field></div>
               </div>
-              <VoiceTester voice={eff.voice} roboticAmount={eff.voice_robotic_amount} speed={eff.voice_speed} engine={eff.tts_engine} language={eff.tts_language} onError={setError} />
+              <VoiceTester voice={eff.voice} roboticAmount={eff.voice_robotic_amount} speed={eff.voice_speed} engine={eff.tts_engine} language={eff.tts_language} sentencePause={eff.tts_sentence_pause} onError={setError} />
             </div>
           </Card>
 
@@ -2243,6 +2263,35 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <VoicesManager voices={cfg.voices} busy={vbusy}
             ttsLanguages={(ttsEngineInfo?.engines || []).find((e) => Object.keys(e.languages || {}).length)?.languages}
             onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
+
+          {/* ── Pronunciation (spoken-text respellings, pipeline/tts_text.py) ── */}
+          <Card span={12} className="reveal reveal-d3">
+            <span className="label-sm">Pronunciation</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              “Say it like this” rules applied to everything sent to the voice engine — captions and
+              on-screen text never change. Matching is whole-word and case-insensitive; use multi-word
+              phrases to fix a word in context (<strong>lead pipes → led pipes</strong>,
+              {' '}<strong>still lives → still livz</strong>). Audition rules with the voice tester under
+              {' '}<strong>Styles</strong>. For one-off fixes and enforced breaks, each scene also has a
+              {' '}<strong>Spoken text</strong> field and <strong>[pause:1.5]</strong> markers.
+            </div>
+            <div className="stack gap-10 mt-16">
+              {(cfg.tts_pronunciations || []).length === 0 && (
+                <div className="muted" style={{ fontSize: 13 }}>No rules yet — narration is spoken exactly as written.</div>
+              )}
+              {(cfg.tts_pronunciations || []).map((r, i) => (
+                <div key={i} className="row center gap-10 row--wrap">
+                  <input className="input" placeholder="written as — e.g. lead pipes" value={r.find || ''}
+                    onChange={(e) => setPronRule(i, { find: e.target.value })} style={{ maxWidth: 280 }} />
+                  <Icon name="arrow-right" />
+                  <input className="input" placeholder="spoken as — e.g. led pipes" value={r.say || ''}
+                    onChange={(e) => setPronRule(i, { say: e.target.value })} style={{ maxWidth: 280 }} />
+                  <Button variant="ghost" icon="trash" title="Remove rule" onClick={() => removePronRule(i)} />
+                </div>
+              ))}
+              <div><Button variant="ghost" icon="plus" onClick={addPronRule}>Add rule</Button></div>
+            </div>
+          </Card>
         </>)}
 
         {tab === 'channels' && (<>
