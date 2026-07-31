@@ -10,6 +10,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from pipeline import tts_text
+
 logger = logging.getLogger("video_gen")
 
 DEFAULT_REF = Path(__file__).parent.parent / "assets" / "default_narrator.mp3"
@@ -282,6 +284,39 @@ def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
         logger.warning("Trailing-artifact trim skipped for %s: %s", wav_path.name, exc)
 
 
+def _concat_wav_chunks(chunks: list[tuple[Path | None, float]], output_path: Path) -> None:
+    """Join synthesized chunk WAVs into *output_path*, splicing real silence.
+
+    *chunks* is ``[(wav_path_or_None, silence_secs_after), …]`` in playback
+    order; a ``None`` path contributes only its silence (a leading pause). All
+    chunks come from the same engine/voice/host, so their formats must agree —
+    a mismatch raises and the caller falls back to a single unchunked take.
+    """
+    import wave
+
+    first = next((p for p, _ in chunks if p is not None), None)
+    if first is None:
+        raise RuntimeError("no synthesized chunks to concatenate")
+    with wave.open(str(first), "rb") as w:
+        nch, sw, rate = w.getnchannels(), w.getsampwidth(), w.getframerate()
+
+    frames = bytearray()
+    for path, gap in chunks:
+        if path is not None:
+            with wave.open(str(path), "rb") as w:
+                if (w.getnchannels(), w.getsampwidth(), w.getframerate()) != (nch, sw, rate):
+                    raise RuntimeError("TTS chunks disagree on WAV format")
+                frames += w.readframes(w.getnframes())
+        if gap > 0:
+            frames += b"\x00" * (int(round(gap * rate)) * nch * sw)
+
+    with wave.open(str(output_path), "wb") as w:
+        w.setnchannels(nch)
+        w.setsampwidth(sw)
+        w.setframerate(rate)
+        w.writeframes(bytes(frames))
+
+
 def generate_narration(
     text: str,
     output_path: Path,
@@ -292,6 +327,8 @@ def generate_narration(
     speed: float | None = None,
     tts_engine: str = "openf5",
     language: str = "en",
+    pronunciations=None,
+    sentence_pause: float | None = None,
 ) -> Path:
     """Generate narration audio, running F5-TTS on host.
 
@@ -314,6 +351,12 @@ def generate_narration(
 
     language is the narration language (ISO 639-1); only the multilingual
     chatterbox backend uses it — the F5 engines ignore it.
+
+    *text* is the SPOKEN text (see pipeline/tts_text.py): ``tts_pronunciations``
+    rules in *pronunciations* are applied to it, ``[pause]`` / ``[pause:secs]``
+    markers become real spliced silence, and *sentence_pause* seconds of
+    silence are spliced between sentences when set. With none of those in play
+    the synthesis is a single take, exactly as before.
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
@@ -322,21 +365,55 @@ def generate_narration(
     engine = tts_engine or "openf5"
     language = language or "en"
     speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
-    logger.info("TTS on %s [%s/%s]%s: %r", host, engine, language,
-                " (robotic)" if robotic else "", text[:60])
-    if host in ("localhost", "127.0.0.1"):
-        _f5_local(text, ref, output_path, speed, engine, language)
-    elif host.startswith(("http://", "https://")):
-        _f5_http(text, ref, output_path, host, speed, engine, language)
+
+    spoken = tts_text.apply_pronunciations(text, pronunciations)
+    chunks = tts_text.split_pause_chunks(spoken, float(sentence_pause or 0.0))
+    plain = tts_text.strip_pause_markers(spoken) or spoken
+    logger.info("TTS on %s [%s/%s]%s%s: %r", host, engine, language,
+                " (robotic)" if robotic else "",
+                f" ({len(chunks)} chunks)" if len(chunks) > 1 else "", spoken[:60])
+
+    def _synth(chunk_text: str, out: Path) -> None:
+        if host in ("localhost", "127.0.0.1"):
+            _f5_local(chunk_text, ref, out, speed, engine, language)
+        elif host.startswith(("http://", "https://")):
+            _f5_http(chunk_text, ref, out, host, speed, engine, language)
+        else:
+            raise RuntimeError(
+                f"TTS worker must be an http:// container URL (e.g. http://host:8189); "
+                f"got bare host {host!r}. Set tts_workers to http:// URLs (issue #12)."
+            )
+        if engine == "chatterbox-multilingual":
+            # Chatterbox tends to append quiet babble after the last word; the F5
+            # engines don't, so only its output gets the trim. Per chunk, so the
+            # junk never lands in the middle of a spliced narration.
+            _trim_trailing_artifacts(out)
+
+    if len(chunks) == 1 and chunks[0][0] and chunks[0][1] <= 0:
+        _synth(plain, output_path)
     else:
-        raise RuntimeError(
-            f"TTS worker must be an http:// container URL (e.g. http://host:8189); "
-            f"got bare host {host!r}. Set tts_workers to http:// URLs (issue #12)."
-        )
-    if engine == "chatterbox-multilingual":
-        # Chatterbox tends to append quiet babble after the last word; the F5
-        # engines don't, so only its output gets the trim.
-        _trim_trailing_artifacts(output_path)
+        # Pause markers / sentence gaps in play: synthesize each chunk, then
+        # join them with real silence. Any failure in the splicing machinery
+        # falls back to one marker-less take so narration still renders.
+        parts: list[tuple[Path | None, float]] = []
+        try:
+            try:
+                for i, (chunk, gap) in enumerate(chunks):
+                    if chunk:
+                        part = output_path.with_name(f"{output_path.stem}.chunk{i:02d}.wav")
+                        _synth(chunk, part)
+                        parts.append((part, gap))
+                    else:
+                        parts.append((None, gap))
+                _concat_wav_chunks(parts, output_path)
+            except Exception as exc:
+                logger.warning("Chunked narration failed (%s) — falling back to a "
+                               "single take without pause markers", exc)
+                _synth(plain, output_path)
+        finally:
+            for part, _gap in parts:
+                if part is not None:
+                    part.unlink(missing_ok=True)
     if robotic:
         _robotize_wav(output_path, robotic_amount)
     return output_path

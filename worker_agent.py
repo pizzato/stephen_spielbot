@@ -42,6 +42,7 @@ from pipeline.orchestrator import (  # noqa: E402
     worker_id,
 )
 from pipeline.scene_video import generate_scene_video as generate_scene_video_task  # noqa: E402
+from pipeline.tts_text import spoken_source  # noqa: E402
 from pipeline.tts_worker import generate_narration  # noqa: E402
 
 
@@ -88,7 +89,9 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
     if store.skip_task_if_artifact_exists(task.id, output, artifact_kind="narration", min_size=1000):
         return
 
-    narration_text = (p.get("narration") or "").strip()
+    # Spoken-text override (metadata.tts_text) wins over the narration/caption
+    # text; see pipeline/tts_text.py for the disentanglement.
+    narration_text = spoken_source(p.get("narration") or "", p.get("tts_text")).strip()
     if not narration_text:
         # Fall back to the scene title so TTS never receives blank text,
         # which causes F5-TTS to emit boilerplate audio.
@@ -101,7 +104,9 @@ def _execute_narration(store: DurableStore, task: TaskRecord, endpoint: str) -> 
                        robotic_amount=p.get("voice_robotic_amount"),
                        speed=p.get("voice_speed"),
                        tts_engine=p.get("tts_engine") or "openf5",
-                       language=p.get("tts_language") or "en")
+                       language=p.get("tts_language") or "en",
+                       pronunciations=p.get("tts_pronunciations"),
+                       sentence_pause=p.get("tts_sentence_pause"))
     duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "narration", output, duration_seconds=duration)
     store.complete_task(task.id, result={"path": str(output), "duration": duration}, message="narration ready")

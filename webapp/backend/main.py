@@ -184,6 +184,7 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "image_prompt": row.get("image_prompt", ""),
         "video_prompt": row.get("video_prompt", ""),
         "narration": row.get("narration", ""),
+        "tts_text": meta.get("tts_text", ""),
         "voice": meta.get("voice", ""),
         "mode": meta.get("mode", "narration"),
         "lines": meta.get("lines", []),
@@ -1315,6 +1316,10 @@ def voices_test(body: VoiceTest) -> dict:
              else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
     engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
     language = gapp._norm_tts_language(body.language or gapp.style_settings(cfg).get("tts_language"))
+    # Pronunciation rules + sentence gap apply here too, so the tester is where
+    # respellings and [pause] markers can be auditioned before a render.
+    pronunciations = gapp._norm_tts_pronunciations(cfg.get("tts_pronunciations"))
+    sentence_pause = gapp._norm_tts_sentence_pause(gapp.style_settings(cfg).get("tts_sentence_pause"))
 
     # Content-addressed cache key: a given (voice, robotic level, speed, text,
     # source clip) always maps to the same file, so F5-TTS never re-runs for a
@@ -1325,8 +1330,9 @@ def voices_test(body: VoiceTest) -> dict:
         ref_stamp = f"{st.st_mtime_ns}:{st.st_size}"
     except OSError:
         ref_stamp = ""
+    pron_stamp = json.dumps(pronunciations, sort_keys=True)
     key = hashlib.md5(
-        f"{voice}|{engine}|{language}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}".encode()
+        f"{voice}|{engine}|{language}|{robotic}|{round(amount, 3)}|{round(speed, 3)}|{text}|{ref_stamp}|{pron_stamp}|{round(sentence_pause, 3)}".encode()
     ).hexdigest()[:16]
     out = gapp.CONFIG_FILE.parent / f"voice_test_{key}.wav"
 
@@ -1337,7 +1343,9 @@ def voices_test(body: VoiceTest) -> dict:
             with _track_op("Testing voice", spoken):
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
                                    robotic=robotic, robotic_amount=amount, speed=speed,
-                                   tts_engine=engine, language=language)
+                                   tts_engine=engine, language=language,
+                                   pronunciations=pronunciations,
+                                   sentence_pause=sentence_pause)
         except Exception as e:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
@@ -2760,6 +2768,9 @@ class SceneUpdate(BaseModel):
     video_prompt: str = ""
     narration: str = ""
     voice: str | None = None
+    # Spoken-text override (optional; blank ⟹ TTS speaks the narration text —
+    # stored in scene metadata, see pipeline/tts_text.py).
+    tts_text: str | None = None
     # Dialogue/performance (optional; absent ⟹ narration — stored in scene metadata).
     mode: str | None = None
     lines: list | None = None
@@ -2780,6 +2791,12 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["voice"] = voice
             else:
                 meta.pop("voice", None)
+        if body.tts_text is not None:
+            tt = (body.tts_text or "").strip()
+            if tt:
+                meta["tts_text"] = tt
+            else:
+                meta.pop("tts_text", None)
         # Dialogue fields: store only when non-default so narration scenes' metadata
         # (and thus script.json) stay byte-identical.
         if body.mode is not None:
@@ -3681,6 +3698,9 @@ def start_generation(body: GenerateBody) -> dict:
         "voice_speed": ss.get("voice_speed", 1.0),
         "tts_engine": gapp.tts_engines.norm(ss.get("tts_engine")),
         "tts_language": gapp._norm_tts_language(ss.get("tts_language")),
+        # Sentence gap spliced into narration (pipeline/tts_text.py); stamped so
+        # the render and later film-editor re-voicing keep the style's cadence.
+        "tts_sentence_pause": gapp._norm_tts_sentence_pause(ss.get("tts_sentence_pause")),
         # Per-style render quality + audio mix (issue #66): the resumable
         # worker reads these flat keys from job_config.json, so resolving them
         # here is what makes the chosen style drive the render and the mix.
@@ -9905,6 +9925,14 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
 
     _film_checkpoint(task_id)
     narration_text = (row.get("narration") or row.get("title") or f"Scene {sid}").strip()
+    # Spoken-text override (metadata.tts_text) — original cut only: it is
+    # authored for the original narration language, so localized re-voicing
+    # (language/out_dir set) sticks to the translated narration text.
+    if language is None and out_dir is None:
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        override = str(meta.get("tts_text") or "").strip()
+        if override:
+            narration_text = override
     selected_voice = voice_name if voice_name is not None else _scene_voice_name(row, jc)
     voice_ref = _voice_ref_for_name(selected_voice)
     if voice_ref is None and not selected_voice:
@@ -9923,7 +9951,9 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
 
     if update_task:
         _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
-    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language)
+    generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language,
+                       pronunciations=gapp._norm_tts_pronunciations(cfg.get("tts_pronunciations")),
+                       sentence_pause=gapp._norm_tts_sentence_pause(jc.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause"))))
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
     clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"
@@ -10357,6 +10387,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
             tts_host=tts_host,
             tts_engine=jc.get("tts_engine", cfg.get("default_tts_engine", "openf5")),
             tts_language=jc.get("tts_language", cfg.get("default_tts_language", "en")),
+            pronunciations=gapp._norm_tts_pronunciations(cfg.get("tts_pronunciations")),
             canvas=(vid_w, vid_h),
             line_cm=line_cm, silent_video=silent_video,
             establishing=establishing,
