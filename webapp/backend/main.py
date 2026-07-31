@@ -1287,6 +1287,7 @@ class VoiceTest(BaseModel):
     text: str = ""
     engine: str = ""
     language: str = ""
+    sentence_pause: float | None = None
 
 
 @api.post("/api/voices/test")
@@ -1319,7 +1320,9 @@ def voices_test(body: VoiceTest) -> dict:
     # Pronunciation rules + sentence gap apply here too, so the tester is where
     # respellings and [pause] markers can be auditioned before a render.
     pronunciations = gapp._norm_tts_pronunciations(cfg.get("tts_pronunciations"))
-    sentence_pause = gapp._norm_tts_sentence_pause(gapp.style_settings(cfg).get("tts_sentence_pause"))
+    sentence_pause = gapp._norm_tts_sentence_pause(
+        body.sentence_pause if body.sentence_pause is not None
+        else gapp.style_settings(cfg).get("tts_sentence_pause"))
 
     # Content-addressed cache key: a given (voice, robotic level, speed, text,
     # source clip) always maps to the same file, so F5-TTS never re-runs for a
