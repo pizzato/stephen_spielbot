@@ -486,7 +486,8 @@ class DurableStore:
             "flux_vae": config.get("flux_vae"),
             "flux_steps": config.get("flux_steps"),
             "voice_ref": config.get("voice_ref"),
-            "voice_robotic": config.get("voice_robotic"),
+            # 0 = natural; >0 robotizes at that strength (toggle-less since the
+            # "Robotic voice" checkbox was folded into the level).
             "voice_robotic_amount": config.get("voice_robotic_amount"),
             "voice_speed": config.get("voice_speed"),
             "tts_engine": config.get("tts_engine"),

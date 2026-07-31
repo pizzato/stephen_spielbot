@@ -32,7 +32,6 @@ def _style(name, **overrides):
         "extra_instructions": f"{name} instructions",
         "title_style": f"{name} title style",
         "voice": f"{name}-voice",
-        "voice_robotic": False,
         "voice_robotic_amount": 0.2,
         "n_scenes": 7,
         "resolution": "Landscape HD (1024×576)",
@@ -145,8 +144,11 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(st["visual_style"], "Cel-shaded graphic novel")
         self.assertEqual(st["extra_instructions"], "Always sign off.")
         self.assertEqual(st["voice"], "Narrator")
-        self.assertTrue(st["voice_robotic"])
+        # The legacy on-toggle folds into the level: 0.5 survives, the toggle
+        # keys are gone (style and flat).
+        self.assertNotIn("voice_robotic", st)
         self.assertEqual(st["voice_robotic_amount"], 0.5)
+        self.assertNotIn("default_voice_robotic", cfg)
         self.assertEqual(st["n_scenes"], 6)
         self.assertEqual(st["resolution"], "Landscape 720p (1280×720)")
         self.assertEqual(st["lora_strength"], 0.7)
@@ -155,6 +157,34 @@ class MigrationTests(TempConfigCase):
         # mirror unchanged: the flat keys still expose the same values
         self.assertEqual(cfg["default_visual_style"], "Cel-shaded graphic novel")
         self.assertEqual(cfg["voice_vol"], 200)
+
+    def test_robotic_toggle_folds_into_level(self):
+        # The removed "Robotic voice" toggle folds into the level once: a style
+        # whose toggle resolved off gets an explicit 0 (natural), one that was
+        # on keeps its effective level, sparse children keep inheriting, and
+        # the legacy keys disappear from styles and flat mirror alike.
+        self.write_config({
+            "styles": [
+                _style("A", voice_robotic=False, voice_robotic_amount=0.4),
+                _style("B", voice_robotic=True, voice_robotic_amount=0.8),
+                {"name": "B kid", "parent": "B", "voice_robotic": False},
+                {"name": "B grandkid", "parent": "B kid"},
+            ],
+            "default_style": "B",
+            "default_voice_robotic": True,
+            "default_voice_robotic_amount": 0.8,
+        })
+        cfg = app.load_config()
+        by = {s["name"]: s for s in cfg["styles"]}
+        for s in cfg["styles"]:
+            self.assertNotIn("voice_robotic", s)
+        self.assertNotIn("default_voice_robotic", cfg)
+        self.assertEqual(by["A"]["voice_robotic_amount"], 0.0)      # was off
+        self.assertEqual(by["B"]["voice_robotic_amount"], 0.8)      # was on
+        self.assertEqual(by["B kid"]["voice_robotic_amount"], 0.0)  # child opted out
+        self.assertNotIn("voice_robotic_amount", by["B grandkid"])  # stays sparse
+        self.assertEqual(app.style_settings(cfg, "B grandkid")["voice_robotic_amount"], 0.0)
+        self.assertEqual(cfg["default_voice_robotic_amount"], 0.8)  # mirror of B
 
     def test_default_style_settings_win_over_stale_flat_keys(self):
         self.write_config({
@@ -178,6 +208,23 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(on_disk["default_style"], "Dup")
         # mirror follows the default style
         self.assertEqual(on_disk["music_vol"], 11)
+
+
+class RoboticLevelResolverTests(unittest.TestCase):
+    """resolve_robotic_amount: new job configs/payloads carry only the level
+    (0 = off); legacy ones gated it behind the removed voice_robotic toggle."""
+
+    def test_resolver_handles_new_and_legacy_shapes(self):
+        from pipeline.tts_worker import resolve_robotic_amount as resolve
+        self.assertEqual(resolve({}), 0.0)
+        self.assertEqual(resolve({"voice_robotic_amount": 0.5}), 0.5)
+        self.assertEqual(resolve({"voice_robotic": False, "voice_robotic_amount": 0.5}), 0.0)
+        self.assertEqual(resolve({"voice_robotic": True, "voice_robotic_amount": 0.5}), 0.5)
+        self.assertEqual(resolve({"voice_robotic": True}), 0.35)   # legacy default level
+        self.assertEqual(resolve({"default_voice_robotic": False,
+                                  "default_voice_robotic_amount": 0.5}), 0.0)
+        self.assertEqual(resolve({"voice_robotic_amount": 7}), 1.0)      # clamped
+        self.assertEqual(resolve({"voice_robotic_amount": "bad"}), 0.0)  # junk-safe
 
 
 class StyleSettingsTests(TempConfigCase):
@@ -226,7 +273,7 @@ class StyleSettingsTests(TempConfigCase):
         self.assertEqual(ss["extra_instructions"], "")
         self.assertEqual(ss["title_style"], "")
         self.assertEqual(ss["voice"], "")
-        self.assertFalse(ss["voice_robotic"])
+        self.assertEqual(ss["voice_robotic_amount"], 0.0)
         # …including the open-source attribution family (footer / X hashtags /
         # YouTube keyword tags): experiment mode carries no "Generated with…" credit
         self.assertEqual(ss["attribution_description"], "")
@@ -315,6 +362,8 @@ class StartGenerationStyleTests(TempConfigCase):
         self.write_config({
             "styles": [
                 _style("A"),
+                # Legacy-shaped on purpose: the stored on-toggle must fold into
+                # the level so an already-robotic style keeps its voice.
                 _style("B", music_vol=42, voice_vol=142, ambient_vol=3,
                        lora_strength=0.9, first_pass_steps=20, second_pass_steps=9,
                        resolution="Landscape HD (1024×576)", voice_robotic=True,
@@ -352,7 +401,7 @@ class StartGenerationStyleTests(TempConfigCase):
         self.assertEqual(jc["first_pass_steps"], 20)
         self.assertEqual(jc["second_pass_steps"], 9)
         self.assertEqual(jc["resolution"], "Landscape HD (1024×576)")
-        self.assertTrue(jc["voice_robotic"])
+        self.assertNotIn("voice_robotic", jc)   # toggle folded into the level
         self.assertEqual(jc["voice_robotic_amount"], 0.8)
         self.assertEqual(jc["voice_speed"], 0.85)
         self.assertNotIn("styles", jc)  # the snapshot stores resolved values only
@@ -379,7 +428,7 @@ class StartGenerationStyleTests(TempConfigCase):
         self.assertEqual(jc["style_name"], app.NO_STYLE)
         self.assertEqual(jc["music_vol"], 11)        # default style A's mix
         self.assertEqual(jc["default_voice"], "")    # no voice imposed → F5 default
-        self.assertFalse(jc["voice_robotic"])
+        self.assertEqual(jc["voice_robotic_amount"], 0.0)   # natural voice
         self.assertEqual(jc["voice_speed"], 1.0)     # natural pace, not style A's
 
     def _seed_with_negative(self, negative):
