@@ -128,7 +128,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         work_dir: job.work_dir,
         chapters: storyChapters(),
         voice: job.voice || '',
-        voice_robotic: !!job.voice_robotic,
         resolution: job.resolution || '',
         style_name: job.style_name || '',
         queue_item_id: job.queue_item_id || '',
@@ -316,7 +315,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const applyLoaded = (loaded) => setJob({
     ...loaded,
     voice: loaded.voice || meta.config?.default_voice || '',
-    voice_robotic: loaded.voice_robotic ?? !!meta.config?.default_voice_robotic,
     resolution: loaded.resolution || meta.config?.resolution || meta.default_resolution || '',
   })
 
@@ -633,7 +631,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const r = await api.queueFromJob({
         job_id: job.job_id, work_dir: job.work_dir,
         video_title: job.video_title || job.title || '', n_scenes: total,
-        style, resolution, voice: job.voice || '', voice_robotic: job.voice_robotic,
+        style, resolution, voice: job.voice || '',
         music_desc: job.music_desc || '',
         queue_item_id: job.queue_item_id || '',
         style_name: job.style_name || '',
@@ -748,7 +746,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   resolution: b.resolution || job.resolution || '',
                   styleName: b.style_name || job.style_name || '',
                   voice: b.voice || job.voice || '',
-                  voice_robotic: b.voice_robotic ?? job.voice_robotic,
                   visualStyle: b.visual_style || '',
                   scriptMode: b.script_mode || '',
                   autoApprove: b.auto_approve,

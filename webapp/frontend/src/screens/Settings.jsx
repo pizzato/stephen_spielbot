@@ -350,8 +350,7 @@ function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePa
   const play = async () => {
     onError(''); setBusy(true)
     try {
-      const amount = roboticAmount ?? 0.35
-      const r = await api.testVoice({ voice: voice || '', robotic: amount > 0, robotic_amount: amount, speed: speed ?? 1, engine: engine || '', language: language || '', text: text.trim(), sentence_pause: sentencePause ?? null })
+      const r = await api.testVoice({ voice: voice || '', robotic_amount: roboticAmount ?? 0, speed: speed ?? 1, engine: engine || '', language: language || '', text: text.trim(), sentence_pause: sentencePause ?? null })
       const a = audioRef.current
       // Don't await play(): after a long first generation Chrome may block
       // autoplay (the click's activation window expired), and a blocked play()
@@ -1998,17 +1997,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </Field>
                 )
               })()}
-              {/* Narration — narrator beside the robotic toggle, the dial-in sliders and test right below */}
+              {/* Narration — narrator picker, the dial-in sliders and test right below */}
               <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
                 <div className="grow"><Field label="Narrator voice"><select className="select" value={eff.voice || ''} onChange={(e) => setStyleField('voice', e.target.value)}>
                   <option value="">(F5-TTS default)</option>
                   {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>)}
                 </select><ParentVal k="voice" /></Field></div>
-                <div className="grow" style={{ paddingBottom: 12 }}>
-                  <Check checked={!!eff.voice_robotic} onChange={(v) => setStyleField('voice_robotic', v)}
-                    label="Robotic voice — synthetic monotone so it isn't mistaken for a human" />
-                  <ParentVal k="voice_robotic" />
-                </div>
               </div>
               <div className="row gap-22 row--wrap">
                 <div className="grow"><Field label={`Voice speed — ×${(eff.voice_speed ?? 1).toFixed(2)}`}
@@ -2018,10 +2012,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     onChange={(e) => setStyleField('voice_speed', +e.target.value)} />
                   <ParentVal k="voice_speed" />
                 </Field></div>
-                <div className="grow"><Field label={`Robotic level — ${Math.round((eff.voice_robotic_amount ?? 0.35) * 100)}%`}
-                  hint="0% is natural, higher is more synthetic — used when “Robotic voice” is on.">
+                <div className="grow"><Field label={`Robotic level — ${Math.round((eff.voice_robotic_amount ?? 0) * 100)}%`}
+                  hint="0% is natural (off); higher is a more synthetic monotone so the voice isn't mistaken for a human.">
                   <input className="slider" type="range" min={0} max={1} step={0.05}
-                    value={eff.voice_robotic_amount ?? 0.35}
+                    value={eff.voice_robotic_amount ?? 0}
                     onChange={(e) => setStyleField('voice_robotic_amount', +e.target.value)} />
                   <ParentVal k="voice_robotic_amount" />
                 </Field></div>

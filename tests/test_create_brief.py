@@ -23,7 +23,7 @@ class CreateBriefTests(TempConfigCase):
         super().setUp()
         self.write_config({
             "styles": [_style("Hero", n_scenes=8, voice="Narrator",
-                              voice_robotic=False, resolution="Landscape FHD (1920×1080)",
+                              resolution="Landscape FHD (1920×1080)",
                               visual_style="cinematic",
                               extra_instructions="Always mention Rome.")],
             "default_style": "Hero",
@@ -41,7 +41,6 @@ class CreateBriefTests(TempConfigCase):
             n_scenes=7,
             visual_style="oil painting",
             voice="Custom Voice",
-            voice_robotic=True,
             resolution="Portrait FHD (1080×1920)",
             style_name="Hero",
             **kwargs,
@@ -64,7 +63,7 @@ class CreateBriefTests(TempConfigCase):
         self.assertEqual(brief["n_scenes"], 7)
         self.assertEqual(brief["visual_style"], "oil painting")
         self.assertEqual(brief["voice"], "Custom Voice")
-        self.assertTrue(brief["voice_robotic"])
+        self.assertNotIn("voice_robotic", brief)   # toggle removed — level is per style
         self.assertEqual(brief["resolution"], "Portrait FHD (1080×1920)")
         self.assertEqual(brief["style_name"], "Hero")
 
@@ -74,7 +73,6 @@ class CreateBriefTests(TempConfigCase):
         self.assertEqual(res["create_brief"]["topic"], "Focus on the Rubicon decision")
         self.assertEqual(res["voice"], "Custom Voice")
         self.assertEqual(res["resolution"], "Portrait FHD (1080×1920)")
-        self.assertTrue(res["voice_robotic"])
 
     def test_load_script_returns_create_brief(self):
         res = self._generate()
@@ -83,7 +81,6 @@ class CreateBriefTests(TempConfigCase):
         self.assertEqual(loaded["create_brief"]["n_scenes"], 7)
         self.assertEqual(loaded["voice"], "Custom Voice")
         self.assertEqual(loaded["resolution"], "Portrait FHD (1080×1920)")
-        self.assertTrue(loaded["voice_robotic"])
         self.assertEqual(loaded["topic"], "Focus on the Rubicon decision")
 
     def test_duplicate_copies_create_brief(self):

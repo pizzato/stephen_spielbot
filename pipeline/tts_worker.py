@@ -53,26 +53,38 @@ def _resolve_ffmpeg() -> str:
     return "ffmpeg"
 
 
-# How strongly to robotize narration, 0.0 (natural) .. 1.0 (harsh metallic monotone).
-# It's the fraction of the phase-zeroed signal blended over the natural voice; lower
-# values keep more natural prosody so the robot reads as subtle. Tune to taste.
-_ROBOT_AMOUNT = 0.35
+def resolve_robotic_amount(cfg) -> float:
+    """Effective robotic level (0..1) from a job-config/payload mapping — 0 is
+    off. Mappings written before the "Robotic voice" toggle was removed gate
+    the level behind it: an explicit off-toggle zeroes any stored level, and an
+    on-toggle without a stored level means the old 0.35 default."""
+    legacy = cfg.get("voice_robotic", cfg.get("default_voice_robotic"))
+    if legacy is not None and not legacy:
+        return 0.0
+    amount = cfg.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount"))
+    if amount is None:
+        amount = 0.35 if legacy else 0.0
+    try:
+        return max(0.0, min(1.0, float(amount)))
+    except (TypeError, ValueError):
+        return 0.0
 
 
-def _robotize_wav(path: Path, amount: float | None = None) -> None:
+def _robotize_wav(path: Path, amount: float) -> None:
     """Apply a subtle 'robot voice' effect to a narration WAV, in place.
 
-    Blends a phase-zeroed copy of the spectrum back over the natural voice at
-    _ROBOT_AMOUNT, all within one ffmpeg afftfilt pass. Zeroing the phase is the
-    classic robotization (it flattens prosody into a synthetic monotone); mixing
-    it only partially keeps the voice clearly synthetic and not mistaken for a
-    human (issue #52) without the harsh metallic buzz of full phase removal. Per
-    bin the output is ((1-a)*re, (1-a)*im + a*|X|), the natural<->full-robot
-    blend, which at a=1 reduces exactly to the original effect. Spectral, so it
-    preserves duration: downstream muxing aligns audio to video by length, which
-    must not change.
+    *amount* is how strongly to robotize, 0.0 (natural) .. 1.0 (harsh metallic
+    monotone): the fraction of a phase-zeroed copy of the spectrum blended back
+    over the natural voice, all within one ffmpeg afftfilt pass. Zeroing the
+    phase is the classic robotization (it flattens prosody into a synthetic
+    monotone); mixing it only partially keeps the voice clearly synthetic and
+    not mistaken for a human (issue #52) without the harsh metallic buzz of
+    full phase removal. Per bin the output is ((1-a)*re, (1-a)*im + a*|X|),
+    the natural<->full-robot blend, which at a=1 reduces exactly to the
+    original effect. Spectral, so it preserves duration: downstream muxing
+    aligns audio to video by length, which must not change.
     """
-    a = max(0.0, min(1.0, _ROBOT_AMOUNT if amount is None else amount))
+    a = max(0.0, min(1.0, amount))
     dry, wet = round(1.0 - a, 3), round(a, 3)
     af = (
         f"afftfilt=real='{dry}*re':imag='{dry}*im+{wet}*hypot(re,im)':"
@@ -322,7 +334,6 @@ def generate_narration(
     output_path: Path,
     reference_wav: Path | None = None,
     host: str = "localhost",
-    robotic: bool = False,
     robotic_amount: float | None = None,
     speed: float | None = None,
     tts_engine: str = "openf5",
@@ -338,9 +349,10 @@ def generate_narration(
     Workers are containers reached over HTTP, so tts_workers must be http:// URLs;
     a bare hostname is rejected.
 
-    When robotic is set, post-process the result into a robotic monotone so the
-    voice is not mistaken for a human (issue #52). The effect runs locally on
-    the produced WAV, so remote TTS hosts need no extra tooling.
+    When robotic_amount is above 0, post-process the result into a robotic
+    monotone at that strength so the voice is not mistaken for a human (issue
+    #52); 0 (or None) leaves the voice natural. The effect runs locally on the
+    produced WAV, so remote TTS hosts need no extra tooling.
 
     speed is F5-TTS's speaking pace (1.0 natural, lower slower); clamped to a
     range the model handles gracefully.
@@ -363,12 +375,13 @@ def generate_narration(
     engine = tts_engine or "openf5"
     language = language or "en"
     speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
+    robotic = max(0.0, min(1.0, float(robotic_amount or 0.0)))
 
     spoken = text or ""
     chunks = tts_text.split_pause_chunks(spoken, float(sentence_pause or 0.0))
     plain = tts_text.strip_pause_markers(spoken) or spoken
     logger.info("TTS on %s [%s/%s]%s%s: %r", host, engine, language,
-                " (robotic)" if robotic else "",
+                f" (robotic {robotic:.0%})" if robotic > 0 else "",
                 f" ({len(chunks)} chunks)" if len(chunks) > 1 else "", spoken[:60])
 
     def _synth(chunk_text: str, out: Path) -> None:
@@ -412,6 +425,6 @@ def generate_narration(
             for part, _gap in parts:
                 if part is not None:
                     part.unlink(missing_ok=True)
-    if robotic:
-        _robotize_wav(output_path, robotic_amount)
+    if robotic > 0:
+        _robotize_wav(output_path, robotic)
     return output_path

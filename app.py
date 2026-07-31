@@ -216,8 +216,10 @@ DEFAULT_CFG = {
     "temporal_video_upscaler_timeout": 7200,
     # Generation defaults
     "default_voice": "",
-    "default_voice_robotic": False,   # post-process narration into a robotic monotone (issue #52)
-    "default_voice_robotic_amount": 0.35,  # how strong the robotic effect is: 0.0 (natural) .. 1.0 (harsh metallic)
+    # Robotic-monotone post-processing of narration (issue #52): 0.0 is off
+    # (natural voice), up to 1.0 (harsh metallic). Level 0 replaced the old
+    # on/off toggle (default_voice_robotic), folded in by _ensure_styles.
+    "default_voice_robotic_amount": 0.0,
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
     "default_n_scenes": 6,
     # How scripts are written: "classic" generates scenes directly in batches;
@@ -385,7 +387,6 @@ STYLE_FIELD_TO_FLAT = {
     "attribution_hashtags":        "default_attribution_hashtags",
     "attribution_youtube_tags":    "default_attribution_youtube_tags",
     "voice":                "default_voice",
-    "voice_robotic":        "default_voice_robotic",
     "voice_robotic_amount": "default_voice_robotic_amount",
     "voice_speed":          "default_voice_speed",
     "n_scenes":             "default_n_scenes",
@@ -732,6 +733,38 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     if not styles:
         styles = [_style_from_flat(cfg, BLANK_STYLE_NAME if fresh else LEGACY_STYLE_NAME)]
 
+    # One-time fold of the removed "Robotic voice" toggle into the level (level
+    # 0 now IS off): a style whose toggle resolved off gets an explicit 0 so its
+    # voice stays natural; one that resolved on keeps its effective level.
+    # Presence-triggered, so it runs once and is a no-op on folded configs.
+    if "default_voice_robotic" in cfg or any("voice_robotic" in s for s in styles):
+        by_raw = {str(s.get("name") or "").strip(): s for s in reversed(styles)}
+
+        def _legacy_eff(style: dict, key: str, flat: str, fallback):
+            cur, hops = style, 0
+            while cur is not None and hops <= len(styles):   # hop cap severs cycles
+                if key in cur:
+                    return cur[key]
+                cur, hops = by_raw.get(str(cur.get("parent") or "").strip()), hops + 1
+            return cfg.get(flat, fallback)
+
+        folded = []
+        for s in styles:
+            on = bool(_legacy_eff(s, "voice_robotic", "default_voice_robotic", False))
+            amount = _legacy_eff(s, "voice_robotic_amount", "default_voice_robotic_amount", 0.35)
+            try:
+                amount = float(amount)
+            except (TypeError, ValueError):
+                amount = 0.35
+            folded.append(amount if on else 0.0)
+        for s, amount in zip(styles, folded):
+            # A sparse child that carried neither key keeps inheriting — its
+            # parent's folded level is exactly its old effective behavior.
+            if "voice_robotic" in s or "voice_robotic_amount" in s or not str(s.get("parent") or "").strip():
+                s["voice_robotic_amount"] = amount
+            s.pop("voice_robotic", None)
+        cfg.pop("default_voice_robotic", None)
+
     # NO_STYLE is pre-seeded as taken so no real style can claim the sentinel.
     normalized, seen, missing = [], {NO_STYLE}, []
     for s in styles:
@@ -1047,7 +1080,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
     just a narrator or language while tracking the parent for everything else.
 
     ``name == NO_STYLE`` is the experiment mode: the content-shaped fields
-    (visual style, extra instructions, voice, robotic, speed) come back blank so
+    (visual style, extra instructions, voice, robotic level, speed) come back blank so
     nothing is imposed on the video, while render quality and the audio mix
     keep the default style's values."""
     out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
@@ -1081,7 +1114,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
                    extra_instructions="", script_avoid="", description_suffix="",
                    attribution_description="", attribution_hashtags="",
                    attribution_youtube_tags="",
-                   title_style="", voice="", voice_robotic=False, voice_speed=1.0,
+                   title_style="", voice="", voice_robotic_amount=0.0, voice_speed=1.0,
                    character_ids=[], auto_accept_characters=False)
         out["name"] = NO_STYLE
         out["description"] = ""
