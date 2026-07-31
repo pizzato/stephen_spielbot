@@ -23,6 +23,7 @@ import subprocess
 from pathlib import Path
 
 from pipeline.assembler import _FFPROBE
+from pipeline.tts_text import strip_pause_markers
 
 logger = logging.getLogger("video_gen")
 
@@ -165,7 +166,8 @@ def build_srt(work_dir: Path, lang: str | None = None,
         # Translated text when captioning a localized language; the original
         # narration is the fallback so the track stays complete if a scene was
         # never translated (it plays in the original language on every cut).
-        text = translations.get(sid) or str(scene.get("narration") or "")
+        # [pause] markers are TTS pacing directives, never caption text.
+        text = strip_pause_markers(translations.get(sid) or str(scene.get("narration") or ""))
         sentences = _split_sentences(text)
         if sentences:
             weights = [len(s) for s in sentences]
