@@ -188,6 +188,9 @@ DEFAULT_CFG = {
     # Narration language per style (ISO 639-1) — used by multilingual TTS
     # engines (chatterbox); the F5 engines ignore it (issue #176).
     "default_tts_language": "en",
+    # Silence (seconds) spliced between narration sentences to enforce cadence
+    # (see pipeline/tts_text.py); 0 keeps the model's own pacing. Per style.
+    "default_tts_sentence_pause": 0.0,
     # One-time migration guard: when False, _ensure_styles flips styles still on
     # the old default (flux1-schnell) to the new default, then sets this True so a
     # later deliberate flux1-schnell choice is preserved.
@@ -410,6 +413,8 @@ STYLE_FIELD_TO_FLAT = {
     "tts_engine":           "default_tts_engine",
     # Narration language (multilingual TTS engines only)
     "tts_language":         "default_tts_language",
+    # Silence spliced between narration sentences (seconds; 0 = model pacing)
+    "tts_sentence_pause":   "default_tts_sentence_pause",
     # Render quality
     "resolution":           "resolution",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
@@ -678,6 +683,15 @@ def _norm_tts_language(value) -> str:
     return norm_language(value if isinstance(value, str) else "")
 
 
+def _norm_tts_sentence_pause(value) -> float:
+    """Clamp the per-style sentence gap to a sane 0..5 s (0 = model pacing)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return max(0.0, min(5.0, v))
+
+
 def _norm_script_mode(value) -> str:
     """Coerce a script-generation mode to "classic" or "story"."""
     return "story" if value == "story" else "classic"
@@ -806,6 +820,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
+        _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_text_font", lambda v: str(v or ""))

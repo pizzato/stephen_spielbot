@@ -491,6 +491,8 @@ class DurableStore:
             "voice_speed": config.get("voice_speed"),
             "tts_engine": config.get("tts_engine"),
             "tts_language": config.get("tts_language"),
+            # Per-style sentence gap for the narration tasks (pipeline/tts_text.py).
+            "tts_sentence_pause": config.get("tts_sentence_pause"),
         }
         resource_classes = config.get("resource_classes", {}) or {}
 
@@ -507,6 +509,9 @@ class DurableStore:
                 "video_prompt": _scene_value(scene, "video_prompt", ""),
                 "negative_prompt": _scene_value(scene, "negative_prompt", ""),
                 "narration": _scene_value(scene, "narration", ""),
+                # Per-scene spoken-text override (metadata.tts_text): what TTS
+                # says when it must differ from the narration/captions.
+                "tts_text": str((_scene_value(scene, "metadata", {}) or {}).get("tts_text") or ""),
             }
             scene_payload.update({k: v for k, v in common_scene_payload.items() if v is not None})
 

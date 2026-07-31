@@ -534,6 +534,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       await api.saveScene(job.job_id, s.id, {
         title: s.title || '', image_prompt: s.image_prompt || '',
         video_prompt: s.video_prompt || '', narration: s.narration || '',
+        tts_text: s.tts_text || '',
         mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       })
     } catch (e) { setError(e.message) }
@@ -1089,6 +1090,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>
                     <textarea className="textarea" rows={4} value={d.narration || ''} onChange={(e) => setField('narration', e.target.value)} onBlur={() => persist(cur)} />
                   </Field>
+                )}
+
+                {(d.mode || 'narration') === 'narration' && (d.tts_text || '').trim() && (
+                  <div className="muted" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                    <Icon name="microphone-lines" /> Spoken text is split from the narration (set on the film's
+                    edit screen) — the voice reads: “{d.tts_text}”{' '}
+                    <button type="button" style={{ background: 'none', border: 'none', padding: 0, color: 'inherit', textDecoration: 'underline', cursor: 'pointer', fontSize: 'inherit' }}
+                      onClick={() => { const s = { ...scenes[cur], tts_text: '' }; setField('tts_text', ''); persist(cur, s) }}>
+                      Unsplit — speak the narration
+                    </button>
+                  </div>
                 )}
 
                 <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">

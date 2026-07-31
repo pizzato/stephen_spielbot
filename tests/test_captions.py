@@ -220,5 +220,32 @@ class LocalizedSrtTests(unittest.TestCase):
         self.assertIn("Second scene.", content)
 
 
+class SpokenTextTests(unittest.TestCase):
+    def test_pause_markers_never_reach_captions(self):
+        # [pause] markers are TTS pacing directives (pipeline/tts_text.py);
+        # typed into the narration they must vanish from the caption text.
+        wd, patch = _film(
+            [{"id": 1, "narration": "Wait. [pause:1.5] Something still lives."}],
+            {"scene_01_narration.wav": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertNotIn("pause", content.lower())
+        self.assertIn("Something still lives.", content)
+
+    def test_tts_text_override_does_not_change_captions(self):
+        # The spoken-text override (metadata.tts_text) feeds TTS only — the
+        # captions keep showing the narration text.
+        wd, patch = _film(
+            [{"id": 1, "narration": "The lead pipes burst.",
+              "metadata": {"tts_text": "The led pipes burst."}}],
+            {"scene_01_narration.wav": 3.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("The lead pipes burst.", content)
+        self.assertNotIn("led pipes", content)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
-  Card, Field, Button, Chip, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
+  Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
   VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
@@ -75,6 +75,10 @@ function SceneCard({
   const [lightbox, setLightbox] = useState(false)
   const [title, setTitle] = useState(scene.title || '')
   const [narration, setNarration] = useState(scene.narration || '')
+  // Spoken-text split: normally narration IS what the voice reads; the toggle
+  // forks a separate spoken line (kept in scene metadata while on).
+  const [split, setSplit] = useState(!!(scene.tts_text || '').trim())
+  const [ttsText, setTtsText] = useState(scene.tts_text || '')
   const [voice, setVoice] = useState(scene.voice || '')
   const [imagePrompt, setImagePrompt] = useState(scene.image_prompt || '')
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
@@ -98,6 +102,8 @@ function SceneCard({
   useEffect(() => {
     setTitle(scene.title || '')
     setNarration(scene.narration || '')
+    setSplit(!!(scene.tts_text || '').trim())
+    setTtsText(scene.tts_text || '')
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
@@ -109,7 +115,7 @@ function SceneCard({
     const st = override || sceneType
     try {
       await api.saveScene(jobId, scene.id, {
-        title, narration, voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
+        title, narration, tts_text: split ? ttsText : '', voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
         mode: st.mode || 'narration', lines: st.lines || [], duration: st.duration || 0,
       })
     } catch (e) {
@@ -411,6 +417,20 @@ function SceneCard({
                   <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
                     <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
                   </Field>
+                  <div>
+                    <Check checked={split}
+                      onChange={(v) => { setSplit(v); if (v && !ttsText.trim()) setTtsText(narration) }}
+                      label="Split spoken text from the narration — the voice reads its own line while captions keep the narration" />
+                    {split && (
+                      <div className="mt-10">
+                        <Field label="Spoken text — what the voice reads on re-render"
+                          hint="Respell tricky words (lead pipes → led pipes, lives → livz) and add [pause] or [pause:1.5] for real silence. Untick to speak the narration again.">
+                          <textarea className="textarea" rows={2} value={ttsText} placeholder={narration}
+                            onChange={(e) => setTtsText(e.target.value)} />
+                        </Field>
+                      </div>
+                    )}
+                  </div>
                   <Field label="Narrator voice" hint="Leave on film narrator unless this scene should use a different voice. Re-render narration after changing it.">
                     <select className="select" value={voice} onChange={(e) => setVoice(e.target.value)}>
                       <option value="">Film narrator ({filmVoice || 'Default (F5-TTS)'})</option>
