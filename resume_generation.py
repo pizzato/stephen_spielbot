@@ -47,7 +47,7 @@ from pipeline.assembler import (
     write_silence_wav as _write_silence_wav,
 )
 from pipeline.tts_text import spoken_source
-from pipeline.tts_worker import generate_narration
+from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 from pipeline.orchestrator import (
     DurableStore, TaskRun,
     JOB_DONE, JOB_ERROR, JOB_RUNNING,
@@ -386,8 +386,7 @@ def main(work_dir: Path) -> None:
     music_vol         = cfg.get("music_vol", 18) / 100.0
     voice_vol         = cfg.get("voice_vol", 100) / 100.0
     voice_name        = cfg.get("default_voice", "Thomas")
-    voice_robotic     = bool(cfg.get("voice_robotic", cfg.get("default_voice_robotic", False)))
-    voice_robotic_amount = float(cfg.get("voice_robotic_amount", cfg.get("default_voice_robotic_amount", 0.35)))
+    voice_robotic_amount = resolve_robotic_amount(cfg)  # 0 = natural; legacy toggle honored
     voice_speed       = float(cfg.get("voice_speed", cfg.get("default_voice_speed", 1.0)) or 1.0)
     tts_engine        = cfg.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language      = cfg.get("tts_language", cfg.get("default_tts_language", "en"))
@@ -434,7 +433,6 @@ def main(work_dir: Path) -> None:
         "vid_width": vid_width,
         "vid_height": vid_height,
         "voice_ref": voice_ref_str or "",
-        "voice_robotic": voice_robotic,
         "voice_robotic_amount": voice_robotic_amount,
         "voice_speed": voice_speed,
     }
@@ -709,7 +707,7 @@ def main(work_dir: Path) -> None:
                     lease_seconds=600,
                     start_message=f"TTS on {host}",
                 ) as run:
-                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, sentence_pause=tts_sentence_pause)
+                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, sentence_pause=tts_sentence_pause)
                     dur = _get_duration(out)
                     store.record_artifact(
                         durable_job_id,

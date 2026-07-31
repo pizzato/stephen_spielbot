@@ -29,8 +29,8 @@ export default function Create({ seed, meta, onGenerated }) {
   ), [meta.voices])
   const vmeta = useMemo(() => voiceMetaMap(meta.config?.voices), [meta.config?.voices])
 
-  // Style profiles (issue #66): the picked style OWNS the narrator voice,
-  // robotic toggle and visual style (those inputs are locked to it), prefills
+  // Style profiles (issue #66): the picked style OWNS the narrator voice
+  // and visual style (those inputs are locked to it), prefills
   // scenes/resolution, and rides along with the job so the render uses its
   // quality + audio mix too. `profile == null` means "No style" — the locked
   // fields open up, keeping their last values as a starting point.
@@ -51,7 +51,6 @@ export default function Create({ seed, meta, onGenerated }) {
   const [direction, setDirection] = useState(seed?.description || '')
   const [scenes, setScenes] = useState(seed?.scenes || profile?.n_scenes || 6)
   const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
-  const [robotic, setRobotic] = useState(!!profile?.voice_robotic)
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
@@ -74,7 +73,6 @@ export default function Create({ seed, meta, onGenerated }) {
   useEffect(() => {
     if (!profile) return
     setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
-    setRobotic(!!profile.voice_robotic)
     setStyle(profile.visual_style || '')
     setScriptMode(profile.script_mode === 'story' ? 'story' : 'classic')
   }, [profile, voiceChoices])
@@ -93,7 +91,6 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed.styleName) setStyleName(seed.styleName)
     // No-style free fields (locked styles re-sync voice/visuals from the profile).
     if (seed.voice) setVoice(seed.voice)
-    if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
     if (seed.visualStyle) setStyle(seed.visualStyle)
     if (seed.scriptMode) setScriptMode(seed.scriptMode)
     if (seed.autoApprove != null) setAutoApprove(!!seed.autoApprove)
@@ -104,7 +101,6 @@ export default function Create({ seed, meta, onGenerated }) {
   useEffect(() => {
     if (!seed || profile) return
     if (seed.voice) setVoice(seed.voice)
-    if (seed.voice_robotic != null) setRobotic(!!seed.voice_robotic)
     if (seed.visualStyle) setStyle(seed.visualStyle)
     if (seed.scriptMode) setScriptMode(seed.scriptMode)
   }, [seed, profile])
@@ -131,14 +127,13 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [videoTitle, direction, resolution, styleName])
 
   // Switching to "No style" clears the style's imprint: blank the visual style
-  // and reset the narrator to the default voice (un-robotic), so you start from a
+  // and reset the narrator to the default voice, so you start from a
   // clean slate rather than inheriting the last style's fields.
   const onStyleChange = (name) => {
     setStyleName(name)
     if (name === NO_STYLE) {
       setStyle('')
       setVoice(voiceChoices[0] || 'Default (F5-TTS)')
-      setRobotic(false)
       setScriptMode('classic')
     }
   }
@@ -167,7 +162,6 @@ export default function Create({ seed, meta, onGenerated }) {
         visual_style: style.trim() || null,
         auto_approve: autoApprove,
         voice,
-        voice_robotic: robotic,
         resolution,
         format,
         queue_item_id: seed?.queueItemId || '',
@@ -178,10 +172,10 @@ export default function Create({ seed, meta, onGenerated }) {
         // Phase 1: draft the story, then open the Script screen's Story view —
         // the draft is persisted server-side, so the review survives leaving.
         const data = await api.generateStory(body)
-        onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
+        onGenerated(data, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
       } else {
         const data = await api.generateScript(body)
-        onGenerated(data, { voice, voice_robotic: robotic, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
+        onGenerated(data, { voice, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
       }
     } catch (e) {
       setError(e.message)
@@ -257,10 +251,6 @@ export default function Create({ seed, meta, onGenerated }) {
               <select className="select" value={voice} disabled={locked} onChange={(e) => setVoice(e.target.value)}>
                 {voiceChoices.map((v) => <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>)}
               </select>
-              <div className="mt-8">
-                <Check checked={robotic} disabled={locked} onChange={setRobotic}
-                  label="Make it robotic — a synthetic monotone so it isn't mistaken for a human" />
-              </div>
             </Field>
 
             <Field label="Format"
