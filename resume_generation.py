@@ -391,9 +391,7 @@ def main(work_dir: Path) -> None:
     voice_speed       = float(cfg.get("voice_speed", cfg.get("default_voice_speed", 1.0)) or 1.0)
     tts_engine        = cfg.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language      = cfg.get("tts_language", cfg.get("default_tts_language", "en"))
-    # Spoken-text controls (pipeline/tts_text.py): global respelling rules +
-    # per-style sentence gap, threaded into every generate_narration call.
-    tts_pronunciations = cfg.get("tts_pronunciations") or []
+    # Per-style sentence gap spliced between narration sentences (pipeline/tts_text.py).
     tts_sentence_pause = float(cfg.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause", 0.0)) or 0.0)
     voice_ref_str     = None
     for v in cfg.get("voices", []):
@@ -642,7 +640,6 @@ def main(work_dir: Path) -> None:
                     voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
                     echomimic_host=host,
                     tts_host=tts_host, tts_engine=tts_engine, tts_language=tts_language,
-                    pronunciations=tts_pronunciations,
                     canvas=(vid_width, vid_height),
                     line_cm=_make_line_cm(host), silent_video=silent_video,
                     establishing=establishing,
@@ -712,7 +709,7 @@ def main(work_dir: Path) -> None:
                     lease_seconds=600,
                     start_message=f"TTS on {host}",
                 ) as run:
-                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, pronunciations=tts_pronunciations, sentence_pause=tts_sentence_pause)
+                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic=voice_robotic, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, sentence_pause=tts_sentence_pause)
                     dur = _get_duration(out)
                     store.record_artifact(
                         durable_job_id,

@@ -191,9 +191,6 @@ DEFAULT_CFG = {
     # Silence (seconds) spliced between narration sentences to enforce cadence
     # (see pipeline/tts_text.py); 0 keeps the model's own pacing. Per style.
     "default_tts_sentence_pause": 0.0,
-    # Global "say it like this" respellings applied to every text sent to TTS
-    # (never to captions): [{"find": "lead pipes", "say": "led pipes"}, …].
-    "tts_pronunciations": [],
     # One-time migration guard: when False, _ensure_styles flips styles still on
     # the old default (flux1-schnell) to the new default, then sets this True so a
     # later deliberate flux1-schnell choice is preserved.
@@ -693,19 +690,6 @@ def _norm_tts_sentence_pause(value) -> float:
     except (TypeError, ValueError):
         return 0.0
     return max(0.0, min(5.0, v))
-
-
-def _norm_tts_pronunciations(value) -> list[dict]:
-    """Coerce tts_pronunciations config into a clean [{"find","say"}] list."""
-    out = []
-    for rule in (value if isinstance(value, list) else []):
-        if not isinstance(rule, dict):
-            continue
-        find = str(rule.get("find") or "").strip()
-        say = str(rule.get("say") or "").strip()
-        if find and say:
-            out.append({"find": find, "say": say})
-    return out
 
 
 def _norm_script_mode(value) -> str:

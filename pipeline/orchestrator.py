@@ -491,9 +491,7 @@ class DurableStore:
             "voice_speed": config.get("voice_speed"),
             "tts_engine": config.get("tts_engine"),
             "tts_language": config.get("tts_language"),
-            # Spoken-text controls (pipeline/tts_text.py): pronunciation
-            # respellings + per-style sentence gap for the narration tasks.
-            "tts_pronunciations": config.get("tts_pronunciations"),
+            # Per-style sentence gap for the narration tasks (pipeline/tts_text.py).
             "tts_sentence_pause": config.get("tts_sentence_pause"),
         }
         resource_classes = config.get("resource_classes", {}) or {}

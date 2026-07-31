@@ -6,11 +6,10 @@ engines (F5/Chatterbox) offer no SSML, so the only way to steer pronunciation
 and pacing is to change the text itself — which would corrupt the captions.
 This module disentangles the two:
 
-* **Per-scene override** — a scene's ``metadata.tts_text`` is what gets spoken
-  when set; ``narration`` stays the caption/display text.
-* **Pronunciation rules** — global ``tts_pronunciations`` config, a list of
-  ``{"find": "lead pipes", "say": "led pipes"}`` phrase respellings applied
-  (whole-word, case-insensitive) to every text sent to TTS, never to captions.
+* **Per-scene split** — a scene normally has ONE text. When the user splits
+  it (film editor toggle), ``metadata.tts_text`` is what gets spoken —
+  respellings like "led pipes" live there — while ``narration`` stays the
+  caption/display text. Absent ⟹ the narration is spoken verbatim.
 * **Pause markers** — ``[pause]`` / ``[pause:1.5]`` in spoken text become REAL
   silence: the text is split into chunks, each synthesized separately, and the
   chunks are joined with the requested silence in between (tts_worker.py).
@@ -38,28 +37,6 @@ def spoken_source(narration: str, tts_text: str | None) -> str:
     """The text TTS should start from: the scene's spoken-text override when
     set, else its narration (caption) text."""
     return (tts_text or "").strip() or (narration or "")
-
-
-def apply_pronunciations(text: str, rules) -> str:
-    """Apply ``tts_pronunciations`` phrase respellings to *text*.
-
-    Each rule is ``{"find": ..., "say": ...}``; matching is case-insensitive
-    and whole-word (``lead`` never matches inside ``leaden``), so multi-word
-    phrases like "lead pipes" make safe context-scoped fixes for heteronyms.
-    Rules apply in list order; malformed entries are skipped.
-    """
-    out = text or ""
-    for rule in rules or []:
-        if not isinstance(rule, dict):
-            continue
-        find = str(rule.get("find") or "").strip()
-        say = str(rule.get("say") or "").strip()
-        if not find or not say:
-            continue
-        pattern = re.compile(r"(?<!\w)" + re.escape(find) + r"(?!\w)", re.IGNORECASE)
-        # Lambda replacement so backslashes/group refs in `say` stay literal.
-        out = pattern.sub(lambda _m: say, out)
-    return out
 
 
 def strip_pause_markers(text: str) -> str:

@@ -327,7 +327,6 @@ def generate_narration(
     speed: float | None = None,
     tts_engine: str = "openf5",
     language: str = "en",
-    pronunciations=None,
     sentence_pause: float | None = None,
 ) -> Path:
     """Generate narration audio, running F5-TTS on host.
@@ -352,11 +351,10 @@ def generate_narration(
     language is the narration language (ISO 639-1); only the multilingual
     chatterbox backend uses it — the F5 engines ignore it.
 
-    *text* is the SPOKEN text (see pipeline/tts_text.py): ``tts_pronunciations``
-    rules in *pronunciations* are applied to it, ``[pause]`` / ``[pause:secs]``
-    markers become real spliced silence, and *sentence_pause* seconds of
-    silence are spliced between sentences when set. With none of those in play
-    the synthesis is a single take, exactly as before.
+    *text* is the SPOKEN text (see pipeline/tts_text.py): ``[pause]`` /
+    ``[pause:secs]`` markers become real spliced silence, and *sentence_pause*
+    seconds of silence are spliced between sentences when set. With neither in
+    play the synthesis is a single take, exactly as before.
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
@@ -366,7 +364,7 @@ def generate_narration(
     language = language or "en"
     speed = max(0.3, min(2.0, float(speed))) if speed else 1.0
 
-    spoken = tts_text.apply_pronunciations(text, pronunciations)
+    spoken = text or ""
     chunks = tts_text.split_pause_chunks(spoken, float(sentence_pause or 0.0))
     plain = tts_text.strip_pause_markers(spoken) or spoken
     logger.info("TTS on %s [%s/%s]%s%s: %r", host, engine, language,

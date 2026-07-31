@@ -364,7 +364,7 @@ function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePa
   const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level, voice speed and sentence pause (cached after the first time). Type a custom line to audition pronunciation rules and [pause:1.5] markers.`}>
+      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level, voice speed and sentence pause (cached after the first time). Type a custom line to audition a respelling or [pause:1.5] markers.`}>
       <div className="row center gap-10 row--wrap">
         <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
         <input className="input grow" placeholder="Custom line to speak (optional) — e.g. The lead pipes burst. [pause] Something still lives."
@@ -1346,16 +1346,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   }
   const makeDefault = () => editCfg((c) => ({ ...c, default_style: st.name }))
 
-  // Global TTS pronunciation rules (find → say), staged like any other config
-  // field and persisted by the main Save button.
-  const setPronRule = (i, patch) => editCfg((c) => {
-    const rules = [...(c.tts_pronunciations || [])]
-    rules[i] = { ...rules[i], ...patch }
-    return { ...c, tts_pronunciations: rules }
-  })
-  const addPronRule = () => editCfg((c) => ({ ...c, tts_pronunciations: [...(c.tts_pronunciations || []), { find: '', say: '' }] }))
-  const removePronRule = (i) => editCfg((c) => ({ ...c, tts_pronunciations: (c.tts_pronunciations || []).filter((_, j) => j !== i) }))
-
   // Master toggle: derived from the per-step flags, and ticking it sets them all.
   const fullyAutomated = AUTO_FLAGS.every((f) => cfg[f])
   const setFullyAutomated = (v) => editCfg((c) => {
@@ -2263,35 +2253,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <VoicesManager voices={cfg.voices} busy={vbusy}
             ttsLanguages={(ttsEngineInfo?.engines || []).find((e) => Object.keys(e.languages || {}).length)?.languages}
             onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
-
-          {/* ── Pronunciation (spoken-text respellings, pipeline/tts_text.py) ── */}
-          <Card span={12} className="reveal reveal-d3">
-            <span className="label-sm">Pronunciation</span>
-            <div className="field__hint" style={{ marginTop: 6 }}>
-              “Say it like this” rules applied to everything sent to the voice engine — captions and
-              on-screen text never change. Matching is whole-word and case-insensitive; use multi-word
-              phrases to fix a word in context (<strong>lead pipes → led pipes</strong>,
-              {' '}<strong>still lives → still livz</strong>). Audition rules with the voice tester under
-              {' '}<strong>Styles</strong>. For one-off fixes and enforced breaks, each scene also has a
-              {' '}<strong>Spoken text</strong> field and <strong>[pause:1.5]</strong> markers.
-            </div>
-            <div className="stack gap-10 mt-16">
-              {(cfg.tts_pronunciations || []).length === 0 && (
-                <div className="muted" style={{ fontSize: 13 }}>No rules yet — narration is spoken exactly as written.</div>
-              )}
-              {(cfg.tts_pronunciations || []).map((r, i) => (
-                <div key={i} className="row center gap-10 row--wrap">
-                  <input className="input" placeholder="written as — e.g. lead pipes" value={r.find || ''}
-                    onChange={(e) => setPronRule(i, { find: e.target.value })} style={{ maxWidth: 280 }} />
-                  <Icon name="arrow-right" />
-                  <input className="input" placeholder="spoken as — e.g. led pipes" value={r.say || ''}
-                    onChange={(e) => setPronRule(i, { say: e.target.value })} style={{ maxWidth: 280 }} />
-                  <Button variant="ghost" icon="trash" title="Remove rule" onClick={() => removePronRule(i)} />
-                </div>
-              ))}
-              <div><Button variant="ghost" icon="plus" onClick={addPronRule}>Add rule</Button></div>
-            </div>
-          </Card>
         </>)}
 
         {tab === 'channels' && (<>
