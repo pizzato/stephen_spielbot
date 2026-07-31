@@ -1,6 +1,15 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Segmented } from '../components.jsx'
 import { api } from '../api.js'
+
+// Publish-state bucket for a finished film, mirroring the card chip priority
+// (published → needs approval → approved), so every film lands in exactly one
+// bucket and the filter counts add up to the total.
+const statusOf = (f) =>
+  f.published ? 'published'
+  : f.awaiting_approval ? 'approval'
+  : f.approved ? 'approved'
+  : 'unpublished'
 
 export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
@@ -10,6 +19,7 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
   const [busyDel, setBusyDel] = useState('')
   const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
   const [busyApprove, setBusyApprove] = useState('') // work_dir pending publish approval
+  const [filter, setFilter] = useState('all')        // publish-state filter bucket
 
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
@@ -42,6 +52,20 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
     catch (e) { setError(e.message) } finally { setBusyDel('') }
   }
 
+  // Filter options carry counts; a bucket only appears once it has films (or is
+  // the current selection, so it doesn't vanish under the user when the last
+  // match moves on). With the approval gate off, the approval buckets never show.
+  const counts = jobs.finished.reduce((m, f) => { const s = statusOf(f); m[s] = (m[s] || 0) + 1; return m }, {})
+  const filterOpts = [
+    { value: 'all', label: 'All', n: jobs.finished.length },
+    { value: 'approval', label: 'Needs approval', n: counts.approval || 0 },
+    { value: 'approved', label: 'Approved', n: counts.approved || 0 },
+    { value: 'published', label: 'Published', n: counts.published || 0 },
+    { value: 'unpublished', label: 'Not published', n: counts.unpublished || 0 },
+  ].filter((o) => o.value === 'all' || o.n > 0 || o.value === filter)
+    .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
+  const shown = filter === 'all' ? jobs.finished : jobs.finished.filter((f) => statusOf(f) === filter)
+
   return (
     <div>
       <div className="page-head">
@@ -54,7 +78,13 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
 
       <Banner tone="danger">{error}</Banner>
 
-      {jobs.resumable.length > 0 && (
+      {loaded && jobs.finished.length > 0 && (
+        <div className="reveal" style={{ marginBottom: 20 }}>
+          <Segmented options={filterOpts} value={filter} onChange={setFilter} />
+        </div>
+      )}
+
+      {filter === 'all' && jobs.resumable.length > 0 && (
         <>
           <div className="label-sm" style={{ marginBottom: 12 }}>Active and unfinished</div>
           <div className="bento" style={{ marginBottom: 28 }}>
@@ -88,8 +118,9 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
       <div className="label-sm" style={{ marginBottom: 12 }}>Finished</div>
       <div className="bento">
         {loaded && jobs.finished.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No finished films yet — create your first one.</p></Card>}
-        {jobs.finished.map((f, i) => (
-          <Card key={i} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
+        {loaded && jobs.finished.length > 0 && shown.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No films match this filter.</p></Card>}
+        {shown.map((f, i) => (
+          <Card key={f.work_dir} span={4} link onClick={() => openCard(f.work_dir)} className={`reveal reveal-d${(i % 4) + 1}`} style={{ padding: 0, overflow: 'hidden' }}>
             <div style={{ position: 'relative', aspectRatio: '16/9' }}>
               {f.cover_url
                 ? <img src={f.cover_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' }} />

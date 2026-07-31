@@ -104,6 +104,16 @@ def _row_to_dict(row) -> dict:
     return {k: row[k] for k in row.keys()}
 
 
+def _busted_file_url(p: Path) -> str:
+    """/api/file URL with the file's mtime as a cache-buster, so a rewritten
+    final (reassemble, remix) gets a fresh URL and the player refetches it
+    instead of replaying the browser's cached copy of the old cut."""
+    try:
+        return f"/api/file?path={p}&t={int(p.stat().st_mtime)}"
+    except OSError:
+        return f"/api/file?path={p}"
+
+
 _WORKER_RUNNING_STATUSES = ("running", "leased")
 
 
@@ -3848,7 +3858,7 @@ def progress(work_dir: str = Query("")) -> dict:
 
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
-        "final_url": f"/api/file?path={final_path}" if done else "",
+        "final_url": _busted_file_url(final_path) if done else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
         "title": title,
         "status": (job or {}).get("status", ""),
@@ -4095,7 +4105,7 @@ def remix_load(work_dir: str = Query("")) -> dict:
     _title = _video_title_for(wd)
     return {
         "work_dir": str(wd),
-        "final_url": f"/api/file?path={final_vid}",
+        "final_url": _busted_file_url(final_vid),
         "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
@@ -4133,7 +4143,7 @@ def remix_apply(body: RemixBody) -> dict:
             _maybe_burn_first_frame_cover(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
-    return {"message": message, "final_url": f"/api/file?path={final_path}"}
+    return {"message": message, "final_url": _busted_file_url(Path(final_path))}
 
 
 def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
@@ -6916,7 +6926,7 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
     return {
         "work_dir": str(wd),
         "title": _title,
-        "final_url": f"/api/file?path={final}" if final.exists() and final.stat().st_size > 10_000 else "",
+        "final_url": _busted_file_url(final) if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
@@ -7869,7 +7879,7 @@ def yt_post(body: PostBody) -> dict:
              and cover.exists() and cover.stat().st_size > 1000 else None)
 
     task_id = uuid.uuid4().hex[:12]
-    _upload_tasks[task_id] = {"status": "uploading"}
+    _upload_tasks[task_id] = {"status": "uploading", "work_dir": str(wd)}
     channel = body.channel or _channel_for_work_dir(wd)
     # A manual publish (auto=False) claims the job — the same claim
     # _claim_and_post_youtube uses — so the scheduler/immediate auto-poster can't
@@ -9810,14 +9820,23 @@ class ReassembleBody(BaseModel):
     work_dir: str
 
 
-@api.post("/api/films/reassemble")
-def reassemble_film(body: ReassembleBody) -> dict:
-    wd = Path(body.work_dir)
-    if not _safe_under(wd, gapp.OUTPUT_DIR):
-        raise HTTPException(400, "Path is outside the output folder.")
-    if not wd.exists():
-        raise HTTPException(404, "Film directory not found.")
+# One reassembly per film at a time: a user click and the automation loop's
+# stale-final sweep must not interleave two ffmpeg writes to the same
+# combined.mp4/final. Locks are per-work-dir and never removed (tiny).
+_reassemble_locks: dict = {}
+_reassemble_locks_guard = threading.Lock()
 
+
+def _reassemble_lock(wd: Path) -> threading.Lock:
+    with _reassemble_locks_guard:
+        return _reassemble_locks.setdefault(str(wd), threading.Lock())
+
+
+def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
+    """Concat the scene finals in display order and re-mix music/ambient into
+    the published final (re-applying any standing first-frame cover burn).
+    Returns the scene count. Raises ValueError when the film has nothing to
+    assemble; ffmpeg failures propagate as-is."""
     job_id = job_id_from_work_dir(wd)
     store = DurableStore.default()
     try:
@@ -9826,7 +9845,7 @@ def reassemble_film(body: ReassembleBody) -> dict:
         store.close()
 
     if not rows:
-        raise HTTPException(400, "No scene data found.")
+        raise ValueError("No scene data found.")
 
     all_ids = [int(r.get("id") or r.get("scene_id") or 0) for r in rows]
     order = _load_scene_order(wd) or all_ids
@@ -9838,11 +9857,11 @@ def reassemble_film(body: ReassembleBody) -> dict:
         and (wd / f"scene_{sid:02d}_final.mp4").stat().st_size > 10_000
     ]
     if not scene_finals:
-        raise HTTPException(400, "No rendered scenes found. Re-render scenes first.")
+        raise ValueError("No rendered scenes found. Re-render scenes first.")
 
     music_path = wd / "background_music.wav"
     if not music_path.exists():
-        raise HTTPException(400, "No background music found in this film folder.")
+        raise ValueError("No background music found in this film folder.")
 
     final_path = gapp._final_path_for_work_dir(wd)
     combined = wd / "combined.mp4"
@@ -9853,27 +9872,122 @@ def reassemble_film(body: ReassembleBody) -> dict:
     music_vol = float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0
     ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
 
+    with _reassemble_lock(wd), _track_op(op_name, wd.name):
+        from pipeline.assembler import concatenate_scenes, mix_background_music
+        concatenate_scenes(scene_finals, combined)
+        ambient = wd / "ambient.wav"
+        mix_background_music(
+            combined, music_path, final_path,
+            volume=music_vol,
+            voice_volume=voice_vol,
+            ambient_path=ambient if ambient.exists() else None,
+            ambient_volume=ambient_vol,
+        )
+        _maybe_burn_first_frame_cover(wd, final_path)
+    return len(scene_finals)
+
+
+@api.post("/api/films/reassemble")
+def reassemble_film(body: ReassembleBody) -> dict:
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not wd.exists():
+        raise HTTPException(404, "Film directory not found.")
+
     try:
-        with _track_op("Reassembling film", wd.name):
-            from pipeline.assembler import concatenate_scenes, mix_background_music
-            concatenate_scenes(scene_finals, combined)
-            ambient = wd / "ambient.wav"
-            mix_background_music(
-                combined, music_path, final_path,
-                volume=music_vol,
-                voice_volume=voice_vol,
-                ambient_path=ambient if ambient.exists() else None,
-                ambient_volume=ambient_vol,
-            )
-            _maybe_burn_first_frame_cover(wd, final_path)
+        scene_count = _reassemble_film_core(wd)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     except Exception as e:
         raise HTTPException(500, f"Reassembly failed: {str(e).splitlines()[0][:200]}")
 
     return {
         "ok": True,
-        "final_url": f"/api/file?path={final_path}",
-        "scene_count": len(scene_finals),
+        "final_url": _busted_file_url(gapp._final_path_for_work_dir(wd)),
+        "scene_count": scene_count,
     }
+
+
+# ── stale-final auto-reassembly ──────────────────────────────────────────────
+# Editing a rendered film (per-scene re-renders, take picks, reorders, adds,
+# deletes) refreshes the scene parts but leaves the published final untouched
+# until "Reassemble film" is clicked — easy to forget, and the stale final is
+# indistinguishable in the player. The automation loop sweeps finished films
+# and reassembles any whose parts are newer than the final, once the film has
+# gone quiet: no edit task running, nothing publishing, and the parts stable
+# for a few minutes so a mid-session film isn't churned between every tweak.
+
+_REASSEMBLE_QUIET_S = 300  # parts must stop changing this long before a sweep
+
+
+def _film_edit_busy(wd: Path) -> bool:
+    """True while an edit-screen task or an in-flight publish touches this film
+    — either makes rewriting the final right now unsafe."""
+    swd = str(wd)
+    for tid, tmeta in list(_film_task_meta.items()):
+        if tmeta.get("work_dir") != swd:
+            continue
+        task = _film_tasks.get(tid)
+        if isinstance(task, dict) and task.get("status") == "running":
+            return True
+    for task in list(_upload_tasks.values()):
+        if isinstance(task, dict) and task.get("status") == "uploading" \
+                and task.get("work_dir") == swd:
+            return True
+    entry = pq.item_by_work_dir(swd)
+    if entry:
+        for platform in ("youtube", "x"):
+            if (entry.get(platform) or {}).get("status") == "publishing":
+                return True
+    return False
+
+
+def _stale_final_films() -> list:
+    """Finished films whose scene parts or display order are newer than the
+    published final, stable for _REASSEMBLE_QUIET_S, and not busy."""
+    now = time.time()
+    stale = []
+    for _label, wd in gapp._list_recent_jobs(max_results=50):
+        p = Path(wd)
+        try:
+            meta = json.loads((p / "job.json").read_text())
+        except Exception:
+            continue
+        if meta.get("status") != "done":
+            continue
+        final_path = gapp._final_path_for_work_dir(p)
+        if not final_path.exists():
+            continue
+        try:
+            newest = max((f.stat().st_mtime for f in p.glob("scene_*_final.mp4")),
+                         default=0.0)
+            order_file = p / "scene_edit_order.json"
+            if order_file.exists():
+                newest = max(newest, order_file.stat().st_mtime)
+            if not newest or newest <= final_path.stat().st_mtime + 1.0:
+                continue  # final already reflects the parts
+        except OSError:
+            continue
+        if now - newest < _REASSEMBLE_QUIET_S:
+            continue  # still being edited — wait for the film to go quiet
+        if _film_edit_busy(p):
+            continue
+        stale.append(p)
+    return stale
+
+
+def _reassemble_stale_finals() -> None:
+    for wd in _stale_final_films():
+        try:
+            count = _reassemble_film_core(wd, op_name="Auto-reassembling film")
+            gapp.logger.info(
+                "Auto-reassembled %s (%d scenes; parts were newer than the final)",
+                wd.name, count)
+        except ValueError:
+            pass  # nothing assemblable (no rows/music) — same films the button rejects
+        except Exception as exc:
+            gapp.logger.warning("Auto-reassembly failed for %s: %s", wd.name, exc)
 
 
 class RerenderSceneBody(BaseModel):
@@ -11564,6 +11678,14 @@ def _automation_loop():
                 if not any(t.name == "ensure_tags" for t in threading.enumerate()):
                     threading.Thread(target=_ensure_tags, daemon=True,
                                      name="ensure_tags").start()
+            except Exception:
+                pass
+            # Keep published finals in sync with edited scene parts — always on,
+            # like the publish-queue population (consistency, not automation).
+            try:
+                if not any(t.name == "reassemble_stale" for t in threading.enumerate()):
+                    threading.Thread(target=_reassemble_stale_finals, daemon=True,
+                                     name="reassemble_stale").start()
             except Exception:
                 pass
         try:
