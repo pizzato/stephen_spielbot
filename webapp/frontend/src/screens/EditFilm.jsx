@@ -1679,6 +1679,22 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
     }).catch(() => {})
   }, [workDir])
 
+  // activeRenders is client-side bookkeeping (mount snapshot + per-card
+  // callbacks). A running task whose card never resumes a poller — two tasks
+  // queued on one scene, or a deleted scene's task — would leave the count
+  // stuck above zero and the Reassemble button silently disabled forever.
+  // While the count claims renders are active, re-sync with the server so the
+  // button always frees up once the work is actually done.
+  useEffect(() => {
+    if (activeRenders <= 0) return undefined
+    const poll = setInterval(() => {
+      api.filmTasksForWorkDir(workDir).then((r) => {
+        setActiveRenders((r.tasks || []).filter((t) => t.status === 'running').length)
+      }).catch(() => {})
+    }, 5000)
+    return () => clearInterval(poll)
+  }, [activeRenders > 0, workDir])
+
   const handleDelete = async (sceneId) => {
     setError('')
     try {
