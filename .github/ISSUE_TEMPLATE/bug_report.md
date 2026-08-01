@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: Something broke — a render failed, the UI misbehaved, a publish didn't happen
 title: ''
 labels: ''
 assignees: ''
@@ -14,25 +14,21 @@ A clear and concise description of what the bug is.
 Steps to reproduce the behavior:
 1. Go to '...'
 2. Click on '....'
-3. Scroll down to '....'
-4. See error
+3. See error
 
 **Expected behavior**
 A clear and concise description of what you expected to happen.
 
-**Screenshots**
-If applicable, add screenshots to help explain your problem.
+**Setup (please complete what applies):**
+ - Controller OS: [e.g. macOS 15, Ubuntu 24.04]
+ - Workers: [e.g. single machine / remote hosts; GPU model(s)]
+ - LLM backend: [Claude API / local vLLM / other]
+ - Browser (for UI bugs): [e.g. Chrome 130]
 
-**Desktop (please complete the following information):**
- - OS: [e.g. iOS]
- - Browser [e.g. chrome, safari]
- - Version [e.g. 22]
-
-**Smartphone (please complete the following information):**
- - Device: [e.g. iPhone6]
- - OS: [e.g. iOS8.1]
- - Browser [e.g. stock browser, safari]
- - Version [e.g. 22]
+**Logs**
+The backend log is at `~/.local/share/video-generator/logs/app.log` — paste the
+relevant lines (strip anything private). For worker issues,
+`docker logs <container>` on the worker host is the place to look.
 
 **Additional context**
-Add any other context about the problem here.
+Add any other context about the problem here (screenshots welcome).

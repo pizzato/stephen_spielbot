@@ -14,7 +14,7 @@ Engines:
 - ``openf5``      — OpenF5-TTS-Base, Apache-2.0, commercial OK (the default).
 - ``f5-original`` — the original SWivid ``F5TTS_v1_Base``; generally higher
   quality but CC-BY-NC (non-commercial), so flagged "preview" in the UI. Useful
-  to A/B against ``openf5``. See NOTICE.md for the licensing rationale.
+  to A/B against ``openf5``. See docs/tts_licensing.md for the licensing rationale.
 - ``chatterbox-multilingual`` — Chatterbox Multilingual, MIT, 23 languages;
   the per-style ``tts_language`` picks which one it speaks.
 """
@@ -61,7 +61,7 @@ TTS_ENGINES: dict[str, dict] = {
 }
 
 # Default for new styles and the normalize/resolve fallback. MUST stay
-# commercial-safe — the output narrates monetized channels (see NOTICE.md).
+# commercial-safe — the output narrates monetized channels (see docs/tts_licensing.md).
 DEFAULT_TTS_ENGINE = "openf5"
 
 

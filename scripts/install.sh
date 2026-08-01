@@ -17,7 +17,7 @@ banner() { echo ""; echo "=== $* ==="; }
 banner "Setting up local Python environment"
 VENV="$REPO_ROOT/.venv"
 if [[ ! -x "$VENV/bin/python" ]]; then
-    # Prefer Python 3.13/3.12/3.11/3.10 — gradio requires 3.10+
+    # Prefer the newest Python available (3.11+ is what CI tests)
     PYTHON3=""
     for candidate in python3.13 python3.12 python3.11 python3.10; do
         if command -v "$candidate" &>/dev/null; then

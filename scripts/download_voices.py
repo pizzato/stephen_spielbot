@@ -4,8 +4,10 @@
 Ten public-domain voice references carved from LibriVox recordings (archive.org),
 each ~18 s — enough for F5-TTS zero-shot cloning — with speaker metadata
 (gender, age, accent) so story characters can be auto-assigned a fitting voice
-(see app._auto_assign_character_voices). Public-domain audio, so cloning and
-commercial use are unrestricted; sources are recorded per voice for transparency.
+(see app._auto_assign_character_voices). Public-domain audio, so there are no
+copyright restrictions on cloning or commercial use — though the readers' own
+voice/personality rights are a separate question in some jurisdictions; sources
+are recorded per voice for transparency.
 
 Idempotent: existing clips are kept, missing ones fetched (only ~1.5 MB of each
 source chapter is downloaded — the clip is carved from the first minutes).

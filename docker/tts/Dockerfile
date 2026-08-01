@@ -4,7 +4,7 @@
 # HTTP service wrapping the same F5-TTS CLI the SSH runner used. The controller
 # reaches it over HTTP when a tts_workers entry is an http:// URL.
 #
-# The OpenF5-TTS-Base weights (Apache-2.0, commercial-safe — see NOTICE.md) are
+# The OpenF5-TTS-Base weights (Apache-2.0, commercial-safe — see docs/tts_licensing.md) are
 # fetched from HuggingFace into HF_HOME on first request; mount that as a volume
 # so it persists across container recreation (see docker/docker-compose.yml).
 

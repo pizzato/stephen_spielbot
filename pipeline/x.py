@@ -125,6 +125,7 @@ def _save_token(account: str, token: dict) -> None:
     path = _token_path(account)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(token, indent=2))
+    path.chmod(0o600)
 
 
 def _token_auth(client_id: str, client_secret: str):
