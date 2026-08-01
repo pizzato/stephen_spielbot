@@ -107,3 +107,28 @@ def test_delete_unknown_version_raises(tmp_path):
         pass
     else:
         raise AssertionError("expected ValueError for unknown version id")
+
+
+def test_record_or_replace_overwrites_the_same_label_in_place(tmp_path):
+    _write(_final(tmp_path), b"one")
+    fvh.record(tmp_path, _final(tmp_path), "Original")
+    _write(_final(tmp_path), b"rebuilt")
+    fvh.record_or_replace(tmp_path, _final(tmp_path), "Rebuilt from scenes")
+    _write(_final(tmp_path), b"rebuilt-again")
+    h = fvh.record_or_replace(tmp_path, _final(tmp_path), "Rebuilt from scenes")
+
+    # Reassembly re-runs on every parts change; it must not grow the history.
+    assert [v["label"] for v in h["versions"]] == ["Original", "Rebuilt from scenes"]
+    assert Path(h["versions"][-1]["path"]).read_bytes() == b"rebuilt-again"
+    assert h["selected"] == h["versions"][-1]["id"]
+
+
+def test_is_base_distinguishes_plain_concat_from_derived_cuts(tmp_path):
+    assert fvh.is_base({"label": "Original", "kind": ""})
+    assert not fvh.is_base({"label": "LTX IC-LoRA 1920x1080", "kind": "upscale"})
+    assert not fvh.is_base({"label": "Portuguese", "kind": "localize"})
+
+
+def test_is_base_falls_back_to_the_label_on_pre_kind_manifests(tmp_path):
+    assert fvh.is_base({"label": "Original"})
+    assert not fvh.is_base({"label": "LTX IC-LoRA 1920x1080"})
