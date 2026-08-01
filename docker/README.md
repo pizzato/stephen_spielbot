@@ -39,7 +39,7 @@ make install WORKERS="s1 s2 s3"               # seeds config + container deploy
 ```
 
 Per host it: preflights Docker + the NVIDIA toolkit; rsyncs the build context
-(no GitHub access needed on the worker — the repo is private); writes
+(no GitHub access needed on the worker); writes
 `docker/.env` with `MODELS_DIR=~/github/ComfyUI/models` (the host's existing
 models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.

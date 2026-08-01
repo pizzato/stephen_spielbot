@@ -3,7 +3,7 @@
 Resemble AI's Chatterbox Multilingual synthesises expressive speech in 23
 languages with zero-shot voice cloning from a reference clip, so the existing
 voice library carries straight over. Code (``chatterbox-tts``) and weights
-(``ResembleAI/chatterbox``) are both MIT — commercial use OK (see NOTICE.md).
+(``ResembleAI/chatterbox``) are both MIT — commercial use OK (see docs/tts_licensing.md).
 Every generated clip carries Resemble's Perth neural watermark, which we keep:
 the output is meant to be identifiable as synthetic.
 

@@ -12,7 +12,7 @@ Emilia-YODAS (CC-BY-4.0). Its architecture is identical to ``F5TTS_v1_Base``
 the same F5-TTS inference code — pass its config / checkpoint / vocab via
 ``--model_cfg`` / ``--ckpt_file`` / ``--vocab_file`` instead of ``--model``.
 
-See NOTICE.md for the licensing rationale.
+See docs/tts_licensing.md for the licensing rationale.
 """
 
 from __future__ import annotations

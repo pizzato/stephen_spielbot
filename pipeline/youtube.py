@@ -109,6 +109,7 @@ def _load_credentials(client_secrets_path: str, channel: str = "") -> Any | None
         try:
             creds.refresh(Request())
             token_path.write_text(creds.to_json())
+            token_path.chmod(0o600)
             return creds
         except Exception as exc:
             logger.warning("Failed to refresh YouTube token: %s", exc)
@@ -226,6 +227,7 @@ class _AuthFlow:
                 token_path = _token_path(key)
                 token_path.parent.mkdir(parents=True, exist_ok=True)
                 token_path.write_text(creds.to_json())
+                token_path.chmod(0o600)
                 _clear_auth_cache(key)
                 self.result = {"success": True, "error": "", "channel": key,
                                "channel_id": channel_id, "channel_name": channel_name}

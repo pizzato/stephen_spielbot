@@ -10,8 +10,8 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) writes a multi-scene script with visual prompts, narration, and a mood-matched music description
 2. **Images** — FLUX.2 Klein (the default per-style image engine) generates each scene's first-frame still, with optional recurring [characters](docs/characters.md) kept consistent via reference images
-3. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-Video) animates each scene from its still via ComfyUI (local or distributed workers)
-4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [NOTICE.md](NOTICE.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
+3. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) animates each scene from its still via ComfyUI (local or distributed workers)
+4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be talking-head [dialogue or silent scenes](docs/dialogue_scenes.md): characters speak their lines in their own cloned voices, lip-synced by EchoMimic-V3
 6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
@@ -52,10 +52,13 @@ and the render process fit together.
 ## Requirements
 
 **Controller** (runs the web app):
-- Python 3.10+
+- Python 3.11+
+- Node.js 20+ (builds the React frontend — `make install` skips the UI without it)
 - FFmpeg (final assembly)
 - A local vLLM server **or** a Claude API key for script generation
 - Passwordless SSH to each worker (`ssh-copy-id`)
+- Optional: [c2patool](https://github.com/contentauth/c2pa-rs) + OpenSSL, for C2PA
+  Content Credentials on published videos (signing is skipped when absent)
 
 **Workers** (GPU machines):
 - Docker + the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
@@ -211,6 +214,11 @@ cluster status panel). Worker lists are part of this file:
 | Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + narration language), or the non-commercial `f5-original` preview |
 | Resolution | Portrait FHD (1080×1920) default; landscape / portrait / square presets from 512×288 up to 1920×1080 |
 
+The table above is a highlight reel — the Settings screen is the intended
+editor for everything else. The full key set, with defaults and inline
+documentation, is `DEFAULT_CFG` in [`app.py`](app.py); missing keys always fall
+back to those defaults, so a minimal `config.yaml` is fine.
+
 ## Environment variables
 
 | Variable | Default | Description |
@@ -302,6 +310,7 @@ locally.
 - [`docs/dialogue_scenes.md`](docs/dialogue_scenes.md) — dialogue, silent, and narration scene modes; the EchoMimic worker
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
 - [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
+- [`docs/x_setup.md`](docs/x_setup.md) — X (Twitter) developer app setup for posting
 - [`docker/README.md`](docker/README.md) — the containerized worker stack in detail
 - [`webapp/README.md`](webapp/README.md) — web UI architecture and development workflow
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) — dev setup, tests, and the CI gate
@@ -311,7 +320,8 @@ locally.
 Stephen Spielbot's code is licensed under [Apache-2.0](LICENSE).
 
 The AI **models** it downloads each carry their own licenses — see
-[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE.md`](NOTICE.md).
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
+[`docs/tts_licensing.md`](docs/tts_licensing.md).
 The defaults (FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model)
 are commercial-friendly; the original F5-TTS narration weights are offered only
 as an opt-in **non-commercial** preview. Review the notices before monetizing.
