@@ -24,38 +24,13 @@ cadence, comment fetching / AI replies / community engagement, a predictive
 engagement model, and C2PA "AI-generated" content credentials on published
 videos.
 
-## Durable orchestration
-
-Generation state is mirrored into a SQLite controller database at
-`~/.local/share/video-generator/orchestrator.sqlite3`.  Each story, image,
-narration, music, scene-video, mux, and final-assembly unit is tracked as a
-task with dependencies, attempts, leases, worker ownership, and produced
-artifacts.  The web app's **Render** screen shows this durable task graph
-alongside the progress bar.
-
-The standard app path still launches `resume_generation.py`, but that process
-now writes durable task/artifact state as it runs.  For a fully agent-driven
-deployment, run one worker daemon per execution resource:
-
-```bash
-make worker-agent KIND=comfy ENDPOINT=http://s1:8188
-make worker-agent KIND=tts ENDPOINT=http://s1:8189
-make worker-agent KIND=local ENDPOINT=assembler
-```
-
-Worker agents lease ready tasks, heartbeat while running, and expired leases are
-made available for retry.  This gives recovery a persisted source of truth
-instead of relying only on process memory, ComfyUI queue state, and files.
-See [`docs/orchestration.md`](docs/orchestration.md) for how the durable layer
-and the render process fit together.
-
 ## Requirements
 
 **Controller** (runs the web app):
 - Python 3.11+
 - Node.js 20+ (builds the React frontend — `make install` skips the UI without it)
 - FFmpeg (final assembly)
-- A local vLLM server **or** a Claude API key for script generation
+- A local vLLM server **or** an API key (Claude, Grok, or OpenAI) for script generation
 - Passwordless SSH to each worker (`ssh-copy-id`)
 - Optional: [c2patool](https://github.com/contentauth/c2pa-rs) + OpenSSL, for C2PA
   Content Credentials on published videos (signing is skipped when absent)
@@ -195,6 +170,31 @@ but CUDA fails" state left behind when the driver or its modules were
 load the modules before Docker: `printf 'nvidia\nnvidia-uvm\n' | sudo tee
 /etc/modules-load.d/nvidia.conf`.
 
+## Durable orchestration
+
+Generation state is mirrored into a SQLite controller database at
+`~/.local/share/video-generator/orchestrator.sqlite3`.  Each story, image,
+narration, music, scene-video, mux, and final-assembly unit is tracked as a
+task with dependencies, attempts, leases, worker ownership, and produced
+artifacts.  The web app's **Render** screen shows this durable task graph
+alongside the progress bar.
+
+The standard app path still launches `resume_generation.py`, but that process
+now writes durable task/artifact state as it runs.  For a fully agent-driven
+deployment, run one worker daemon per execution resource:
+
+```bash
+make worker-agent KIND=comfy ENDPOINT=http://s1:8188
+make worker-agent KIND=tts ENDPOINT=http://s1:8189
+make worker-agent KIND=local ENDPOINT=assembler
+```
+
+Worker agents lease ready tasks, heartbeat while running, and expired leases are
+made available for retry.  This gives recovery a persisted source of truth
+instead of relying only on process memory, ComfyUI queue state, and files.
+See [`docs/orchestration.md`](docs/orchestration.md) for how the durable layer
+and the render process fit together.
+
 ## Configuration
 
 All settings live in the single YAML file `~/.config/video-generator/config.yaml`
@@ -223,7 +223,7 @@ back to those defaults, so a minimal `config.yaml` is fine.
 
 | Variable | Default | Description |
 |---|---|---|
-| `F5TTS_PYTHON` | `~/miniconda3/envs/f5tts/bin/python` | Python interpreter for *local* TTS (F5 and Chatterbox; workers use the container) |
+| `F5TTS_PYTHON` | _(auto-detected `f5tts` conda env)_ | Python interpreter for *local* TTS (F5 and Chatterbox; workers use the container). Probes anaconda3/miniconda3/miniforge3 and `/opt/conda` when unset |
 | `ANTHROPIC_API_KEY` | _(unset)_ | Fallback Claude API key when `claude_api_key` isn't set in config |
 | `XAI_API_KEY` | _(unset)_ | Fallback Grok/xAI API key when `grok_api_key` isn't set in config |
 | `OPENAI_API_KEY` | _(unset)_ | Fallback OpenAI API key when `openai_api_key` isn't set in config |
