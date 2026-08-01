@@ -101,7 +101,7 @@ class StaleFinalCase(unittest.TestCase):
         self.assertEqual(backend._stale_final_films(), [])
 
     def test_publishing_queue_state_blocks_sweep(self):
-        wd = self.make_film("mid-publish")
+        self.make_film("mid-publish")
         entry = {"youtube": {"status": "publishing"}, "x": {"status": "pending"}}
         with mock.patch.object(backend.pq, "item_by_work_dir", return_value=entry):
             self.assertEqual(backend._stale_final_films(), [])
