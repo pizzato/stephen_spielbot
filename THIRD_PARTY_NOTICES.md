@@ -15,7 +15,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 
 | Model | Hugging Face repo | License | Commercial? |
 |---|---|---|---|
-| FLUX.2 Klein 4B (**default** generate + edit) | `Comfy-Org/vae-text-encorder-for-flux-klein-4b` | Apache-2.0 | ✅ Yes |
+| FLUX.2 Klein 4B (**default** generate + edit) | `Comfy-Org/vae-text-encorder-for-flux-klein-4b` (repackaging of `black-forest-labs/FLUX.2-klein-4B`) | Apache-2.0 (per the upstream Black Forest Labs model card — note the **9B** Klein variants are non-commercial; this project uses the 4B) | ✅ Yes |
 | FLUX.1 schnell (legacy, opt-in) | `Comfy-Org/flux1-schnell`, `comfyanonymous/flux_text_encoders`, `black-forest-labs/FLUX.1-schnell` (VAE) | Apache-2.0 | ✅ Yes |
 
 > The non-commercial FLUX engines (FLUX.1 Fill, FLUX.2 dev) have been removed
@@ -25,8 +25,8 @@ a convenience summary, **not** legal advice — always check the linked model ca
 
 | Model | Hugging Face repo | License | Commercial? |
 |---|---|---|---|
-| LTX-Video 2.3 (checkpoint, distilled LoRA, spatial upscaler) | `Lightricks/LTX-2.3-fp8`, `Lightricks/LTX-2.3` | Lightricks LTX-Video license — **review the model card** | Permitted under Lightricks' terms (revenue thresholds may apply) |
-| LTX-2.3 IC-LoRA Pixel Spatial Upscaler (2×/4×) | `Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler` | Lightricks LTX-2 community license — **review the model card** | Permitted under Lightricks' terms |
+| LTX-Video 2.3 (checkpoint, distilled LoRA, spatial upscaler) | `Lightricks/LTX-2.3-fp8`, `Lightricks/LTX-2.3` | **LTX-2 Community License Agreement** (not an OSI license) | ✅ Free commercial use for entities under **US$10M annual revenue** (all affiliates combined); above that, a paid Commercial Use Agreement with Lightricks is required |
+| LTX-2.3 IC-LoRA Pixel Spatial Upscaler (2×/4×) | `Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler` | **LTX-2 Community License Agreement** | Same terms as above |
 | Gemma 3 text encoder (required by the LTX graph) | `Comfy-Org/ltx-2` (`gemma_3_12B_it_fp4_mixed`) | Google **Gemma Terms of Use** + Prohibited Use Policy (not an OSI license) | Allowed under Gemma terms; you must comply with the Prohibited Use Policy |
 
 ## Audio models
@@ -43,27 +43,46 @@ a convenience summary, **not** legal advice — always check the linked model ca
 > `chatterbox-multilingual` engine is MIT (code and weights); the original SWivid
 > `f5-original` weights are CC-BY-NC and offered only as an opt-in "preview"
 > (flagged non-commercial in Settings) for A/B quality checks — **don't** select
-> it for monetized output. See [`NOTICE.md`](NOTICE.md) for the TTS-weights
-> rationale. The bundled reference clip (`assets/default_narrator.mp3`) provenance
-> is still pending a public-domain replacement (tracked TODO).
+> it for monetized output. See [`docs/tts_licensing.md`](docs/tts_licensing.md)
+> for the TTS-weights rationale. The bundled reference clip
+> (`assets/default_narrator.mp3`) provenance is still pending a public-domain
+> replacement (tracked TODO).
 
 ## Talking-head models (dialogue scenes)
 
 The `echomimic` worker container downloads these on first use
-(`pipeline/echomimic_server.py`); **review each model card** before monetizing
-dialogue output:
+(`pipeline/echomimic_server.py`):
 
-| Model | Hugging Face repo |
-|---|---|
-| EchoMimic-V3 (flash transformer) | `BadToBest/EchoMimicV3` |
-| Wan2.1-Fun-V1.1-1.3B-InP (base video model) | `alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP` |
-| chinese-wav2vec2-base (audio encoder) | `TencentGameMate/chinese-wav2vec2-base` |
+| Model | Hugging Face repo | License | Commercial? |
+|---|---|---|---|
+| EchoMimic-V3 (flash transformer) | `BadToBest/EchoMimicV3` | Apache-2.0 | ✅ Yes |
+| Wan2.1-Fun-V1.1-1.3B-InP (base video model) | `alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP` | Apache-2.0 | ✅ Yes |
+| chinese-wav2vec2-base (audio encoder) | `TencentGameMate/chinese-wav2vec2-base` | MIT | ✅ Yes |
 
 ## Runtime tools
 
 - **ComfyUI** — GPL-3.0 (run as a separate service; not linked into this code).
 - **FFmpeg** — used as an external binary; your build is typically LGPL/GPL.
   Stephen Spielbot calls it as a subprocess and does not bundle it.
+
+## Code installed into the worker containers
+
+The Dockerfiles under `docker/` clone or pip-install third-party code when
+**you** build the images — none of it is part of this repository:
+
+| Project | Installed by | License |
+|---|---|---|
+| [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | `docker/comfyui` | GPL-3.0 |
+| [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | `docker/comfyui` | GPL-3.0 |
+| [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `docker/comfyui` (cloned + patched at build time) | LTX-2 Community License Agreement |
+| [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
+| [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
+| [echomimic_v3](https://github.com/antgroup/echomimic_v3) | `docker/echomimic` | Apache-2.0 |
+
+> Running the built images locally is unremarkable. But **publishing** a built
+> `spielbot-comfyui` image to a registry distributes GPL-3.0 code (and
+> Lightricks-licensed code), which triggers those licenses' source and notice
+> obligations — keep built images private unless you're prepared to meet them.
 
 ## Bundled assets
 
@@ -76,6 +95,9 @@ dialogue output:
 `make install` (via `scripts/download_voices.py`) downloads ten ~18-second voice
 reference clips carved from **LibriVox** audiobook recordings hosted on
 archive.org. LibriVox recordings are released into the **public domain** by
-their readers, so the clips (and voices cloned from them by F5-TTS) carry no
-usage restrictions, including commercial use. Each voice's source recording is
-recorded in `config.yaml` (`voices[].source`) for transparency.
+their readers, so the clips carry no **copyright** restrictions, commercial use
+included. Note that copyright is not the whole picture for voice *cloning*: the
+readers are (or were) real people, and several jurisdictions protect a person's
+voice and likeness separately from copyright — that dimension is yours to
+assess for your use. Each voice's source recording is recorded in `config.yaml`
+(`voices[].source`) for transparency.

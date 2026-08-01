@@ -1059,6 +1059,21 @@ class CharacterTests(TempConfigCase):
         ])
         self.assertEqual(len({c["id"] for c in rows}), 2)
 
+    def test_norm_characters_strips_path_like_ids(self):
+        # Ids become filenames (<id>.png), so path-y input must not survive
+        # normalization — a traversal id would otherwise write outside the
+        # characters dir.
+        rows = app._norm_characters([
+            {"id": "../../../tmp/evil", "name": "Sneaky", "description": "x"},
+            {"id": "fine_id-1", "name": "Ok", "description": "y"},
+        ])
+        self.assertEqual(rows[0]["id"], "tmpevil")
+        self.assertEqual(rows[1]["id"], "fine_id-1")
+
+    def test_norm_characters_regenerates_fully_pathy_id(self):
+        rows = app._norm_characters([{"id": "../..", "name": "A", "description": "a"}])
+        self.assertTrue(rows[0]["id"].startswith("char_"))
+
     def test_characters_default_empty_on_fresh_install(self):
         cfg = app.load_config()
         self.assertEqual(cfg["styles"][0]["character_ids"], [])

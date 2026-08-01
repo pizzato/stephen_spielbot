@@ -519,7 +519,10 @@ def _norm_characters(value) -> list[dict]:
         name = str(raw.get("name") or "").strip()
         if not name:
             continue
-        cid = str(raw.get("id") or "").strip() or f"char_{uuid.uuid4().hex[:8]}"
+        # Ids become filenames (<id>.png under the characters dir), so anything
+        # path-like is stripped rather than trusted.
+        cid = re.sub(r"[^A-Za-z0-9_-]", "", str(raw.get("id") or "").strip())
+        cid = cid or f"char_{uuid.uuid4().hex[:8]}"
         while cid in seen:
             cid = f"char_{uuid.uuid4().hex[:8]}"
         seen.add(cid)
@@ -1224,6 +1227,8 @@ def save_config(cfg: dict) -> None:
     _ensure_styles(cfg)
     CONFIG_FILE.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_FILE.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))
+    # The config holds API keys in cleartext — keep it out of other users' reach.
+    os.chmod(CONFIG_FILE, 0o600)
 
 
 # Config keys whose VALUE is a credential — never returned to the browser, and

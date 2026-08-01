@@ -36,7 +36,8 @@ config) and is intended for a real deployment with GPU workers — see the
 ## Running it
 
 ```bash
-make web-dev        # FastAPI + Vite with hot reload (http://localhost:8001)
+make web-dev        # FastAPI + Vite with hot reload (UI at http://localhost:5174;
+                    # :8001 serves the API and the last *built* frontend)
 make web-build      # production build of the frontend
 ```
 
@@ -68,7 +69,8 @@ build, with no secrets — so it works the same on pull requests from forks.
 - **Mind model licensing for monetized output.** The default image/video/audio
   models are commercial-friendly on purpose. Don't make a non-commercial model
   (e.g. the original F5-TTS weights, FLUX `[dev]`) the *default* — see
-  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and [`NOTICE.md`](NOTICE.md).
+  [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and
+  [`docs/tts_licensing.md`](docs/tts_licensing.md).
 
 ## Pull request process
 
