@@ -40,7 +40,7 @@ from pipeline import engines as _engines
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
-    _get_duration, mux_video_audio,
+    _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     concat_audio, concatenate_scenes,
     ensure_video_resolution, mix_background_music,
     fit_video_canvas,
@@ -1120,7 +1120,8 @@ def main(work_dir: Path) -> None:
                 lease_seconds=600,
                 start_message="muxing scene",
             ) as run:
-                mux_video_audio(raw, narration_paths[s.id], scene_final, extra_tail_secs=2.0 if is_last else 0.0)
+                mux_video_audio(raw, narration_paths[s.id], scene_final,
+                                extra_tail_secs=FINAL_SCENE_TAIL_SECS if is_last else 0.0)
                 store.record_artifact(
                     durable_job_id,
                     mux_task,

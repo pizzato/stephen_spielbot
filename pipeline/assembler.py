@@ -45,15 +45,24 @@ _FFPROBE = _resolve_media_tool("ffprobe")
 # fps + audio rate/layout so the concat filter accepts them.
 _FILM_FPS = 25
 _FILM_AR = 48000
-# Prefer whole-scene upscale. The LTX graph rejects >1000 frames (~40s at 25fps);
-# only clips longer than that are split. Override with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS
-# if a worker runs out of VRAM on long scenes. Overlapped xfade joins rare long clips.
-_LTX_UPSCALE_MAX_SECONDS = (1000 - 1) / 25.0  # matches pipeline.comfyui LTX_MAX_FRAMES / LTX_FPS
+# Longest clip handed to the AI upscaler in one piece; longer ones are split
+# into overlapped chunks and xfade-joined.
+#
+# The LTX graph's own ceiling is 1000 frames (~40s at 25fps), but well under
+# that a worker can run out of memory and return a *solid black clip while
+# reporting success* — observed on a GB10 at 505 frames (20.2s) after 78
+# minutes, on a film whose 244-317 frame scenes all upscaled cleanly. 12s sits
+# below every length known to work, so the split lands inside the proven range.
+# Raise it with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS on a roomier GPU.
 _TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
-    "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
-    str(_LTX_UPSCALE_MAX_SECONDS),
+    "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "12.0",
 ))
 _TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP", "0.5"))
+# A silently-failed upscale is uniformly black, so compare brightness against
+# the source rather than a fixed floor — a genuinely dark scene must still pass.
+_UPSCALE_MIN_LUMA_RATIO = 0.35
+_UPSCALE_DARK_SOURCE_LUMA = 8.0  # below this the source has no brightness to compare
+_UPSCALE_PROBES = 6
 
 # Open-source attribution stamped into the published final video's container
 # metadata. A plain `comment` tag survives the downstream re-encode/upscale
@@ -157,6 +166,73 @@ def _get_video_fps(path: Path) -> float:
     except Exception:
         pass
     return 25.0
+
+
+def _luma_profile(path: Path, probes: int = _UPSCALE_PROBES) -> list[float]:
+    """Frame brightness (0–255) at evenly spaced points through a clip.
+
+    Probes sit strictly inside the clip, so a legitimate fade to black at
+    either end is never sampled.
+    """
+    try:
+        duration = _get_duration(path)
+    except Exception:
+        return []  # unreadable — the caller treats "can't measure" as "can't judge"
+    if duration <= 0:
+        return []
+    values = []
+    for i in range(probes):
+        at = duration * (i + 1) / (probes + 1)
+        result = subprocess.run(
+            [
+                _FFMPEG, "-v", "info",
+                "-ss", f"{at:.3f}", "-i", str(path),
+                "-vframes", "1",
+                "-vf", "signalstats,metadata=print",
+                "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=60,
+        )
+        for line in result.stderr.splitlines():
+            _, _, value = line.partition("lavfi.signalstats.YAVG=")
+            if value:
+                try:
+                    values.append(float(value.strip()))
+                except ValueError:
+                    pass
+                break
+    return values
+
+
+def _verify_upscale_not_blank(source: Path, result: Path) -> None:
+    """Reject an AI upscale that came back blank.
+
+    ComfyUI reports success and hands back a solid black clip when the worker
+    runs out of memory on a long one. Nothing downstream notices, so the black
+    scene is concatenated into the film and published over the good final.
+
+    Compared probe by probe at matching positions (the upscale preserves
+    duration), not on the average: a single black chunk out of several would
+    survive an averaged check.
+    """
+    if not result.exists() or result.stat().st_size == 0:
+        raise RuntimeError("AI upscaler did not produce an output video.")
+    source_luma = _luma_profile(source)
+    result_luma = _luma_profile(result)
+    if not source_luma or len(result_luma) != len(source_luma):
+        return  # can't compare like for like — don't fail a good upscale on it
+    for at, (want, got) in enumerate(zip(source_luma, result_luma), start=1):
+        # A dark moment in the source has no brightness to compare against.
+        if want < _UPSCALE_DARK_SOURCE_LUMA or got >= want * _UPSCALE_MIN_LUMA_RATIO:
+            continue
+        raise RuntimeError(
+            f"AI upscale of {source.name} came back blank {at}/{len(source_luma)} "
+            f"of the way in — brightness {got:.1f} against {want:.1f} in the "
+            f"source. The worker most likely ran out of memory on this "
+            f"{_get_duration(source):.0f}s clip; lower "
+            f"TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS (currently "
+            f"{_TEMPORAL_UPSCALE_CHUNK_SECONDS:.0f}s) and try again."
+        )
 
 
 def ensure_video_resolution(video_path: Path, width: int, height: int) -> Path:
@@ -324,7 +400,7 @@ def temporal_ai_upscale_video(
             )
 
         if duration > chunk_seconds + 0.25:
-            return _chunked_comfy_temporal_upscale(
+            result = _chunked_comfy_temporal_upscale(
                 input_path,
                 output_path,
                 width,
@@ -336,18 +412,20 @@ def temporal_ai_upscale_video(
                 overlap_seconds=chunk_overlap,
                 upscale_fn=_comfy_upscale,
             )
-
-        if eng == "ltx_latent":
-            return upscale_video_ltx_latent(
+        elif eng == "ltx_latent":
+            result = upscale_video_ltx_latent(
                 input_path, output_path, width, height,
                 fps=fps, timeout_seconds=timeout, comfy_url=url,
             )
-        return upscale_video_ltx(
-            input_path, output_path, width, height,
-            fps=fps, timeout_seconds=timeout, comfy_url=url,
-            source_width=actual_w, source_height=actual_h,
-            duration_seconds=duration,
-        )
+        else:
+            result = upscale_video_ltx(
+                input_path, output_path, width, height,
+                fps=fps, timeout_seconds=timeout, comfy_url=url,
+                source_width=actual_w, source_height=actual_h,
+                duration_seconds=duration,
+            )
+        _verify_upscale_not_blank(input_path, result)
+        return result
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     values = {
@@ -368,8 +446,7 @@ def temporal_ai_upscale_video(
         eng, actual_w, actual_h, width, height, input_path.name,
     )
     _run(cmd, timeout=timeout, max_retries=1)
-    if not output_path.exists() or output_path.stat().st_size == 0:
-        raise RuntimeError("Temporal AI upscaler did not produce an output video.")
+    _verify_upscale_not_blank(input_path, output_path)
     return output_path
 
 
@@ -749,6 +826,12 @@ def concat_audio(audio_paths: list[Path], output_path: Path) -> Path:
     ])
     concat_list.unlink(missing_ok=True)
     return output_path
+
+
+# How long the closing scene holds on its last frame after the narration ends,
+# so a film doesn't cut dead on its last word. Every path that muxes the closing
+# scene — first render, worker render, editor re-render — must use this.
+FINAL_SCENE_TAIL_SECS = 2.0
 
 
 def mux_video_audio(
