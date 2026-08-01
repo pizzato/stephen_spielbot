@@ -6,6 +6,13 @@
 
 An AI video generator that turns a topic into a fully produced short film — complete with cinematic visuals, narration, and background music.
 
+<p align="center">
+  <a href="https://www.youtube.com/watch?v=2h5T0mkW1gc">
+    <img src="https://img.youtube.com/vi/2h5T0mkW1gc/maxresdefault.jpg" alt="Watch: how Stephen Spielbot works" width="640"><br>
+    ▶️ Watch how it works
+  </a>
+</p>
+
 ## What it does
 
 1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) writes a multi-scene script with visual prompts, narration, and a mood-matched music description
