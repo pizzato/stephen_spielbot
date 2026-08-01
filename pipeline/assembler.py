@@ -751,6 +751,12 @@ def concat_audio(audio_paths: list[Path], output_path: Path) -> Path:
     return output_path
 
 
+# How long the closing scene holds on its last frame after the narration ends,
+# so a film doesn't cut dead on its last word. Every path that muxes the closing
+# scene — first render, worker render, editor re-render — must use this.
+FINAL_SCENE_TAIL_SECS = 2.0
+
+
 def mux_video_audio(
     video_path: Path,
     audio_path: Path,

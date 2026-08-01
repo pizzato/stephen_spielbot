@@ -1799,6 +1799,11 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               {' · '}
               <button type="button" className="btn btn--quiet" style={{ fontSize: 12.5, padding: 0 }} onClick={onSwitchToFilm}>View final cut</button>
             </div>
+            {assembleResult.note && (
+              <div style={{ fontSize: 12.5, marginTop: 6, color: 'var(--warn)' }}>
+                <Icon name="triangle-exclamation" /> {assembleResult.note}
+              </div>
+            )}
           </div>
         </div>
       )}

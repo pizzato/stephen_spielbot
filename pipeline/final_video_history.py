@@ -66,7 +66,15 @@ def record(
     video_path: str | Path,
     label: str = "",
     lang: str | None = None,
+    kind: str = "",
 ) -> dict[str, Any]:
+    """Copy *video_path* in as a new kept version and select it.
+
+    ``kind`` says how the cut was made: "" (the plain concat of the scene parts)
+    or a derived cut — "upscale", "localize", "cover". Reassembling a film
+    rebuilds the plain concat, so a derived cut is work that reassembly throws
+    away; see ``is_base``.
+    """
     source = Path(video_path)
     if not source.exists():
         raise FileNotFoundError(str(source))
@@ -85,11 +93,55 @@ def record(
         "file": str(Path(_SUBDIR) / dest_name),
         "label": label or f"Version {next_id}",
         "lang": lang,
+        "kind": kind,
     }
     versions.append(entry)
     data = {"selected": next_id, "versions": versions}
     _save(work_dir, data)
     return history(work_dir)
+
+
+def record_or_replace(
+    work_dir: str | Path,
+    video_path: str | Path,
+    label: str = "",
+    lang: str | None = None,
+    kind: str = "",
+) -> dict[str, Any]:
+    """Like ``record``, but overwrite the existing same-label version in place.
+
+    Reassembly re-runs whenever the scene parts change, so appending a new
+    ~40 MB copy every time would grow without bound; the film only ever needs
+    one "rebuilt from the scene parts" entry.
+    """
+    source = Path(video_path)
+    if not source.exists():
+        raise FileNotFoundError(str(source))
+
+    data = _load(work_dir)
+    versions = list(data.get("versions") or [])
+    match = next((v for v in versions if (v.get("label") or "") == label), None)
+    if match is None:
+        return record(work_dir, source, label=label, lang=lang, kind=kind)
+
+    dest = Path(work_dir) / str(match.get("file", ""))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, dest)
+    match["lang"] = lang
+    match["kind"] = kind
+    data = {"selected": int(match.get("id", 0) or 0), "versions": versions}
+    _save(work_dir, data)
+    return history(work_dir)
+
+
+def is_base(entry: dict[str, Any]) -> bool:
+    """True when a version is the plain concat of the scene parts — the cut a
+    reassembly reproduces. Manifests written before ``kind`` existed carry no
+    key at all, so those fall back to the label the seed always used."""
+    kind = entry.get("kind")
+    if kind is None:
+        return str(entry.get("label") or "").strip().lower() == "original"
+    return not str(kind).strip()
 
 
 def select(
@@ -150,6 +202,7 @@ def history(work_dir: str | Path) -> dict[str, Any]:
                 "path": str(path),
                 "label": version.get("label") or "Version",
                 "lang": version.get("lang"),
+                "kind": version.get("kind"),
             }
         )
     selected = data.get("selected")
