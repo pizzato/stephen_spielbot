@@ -22,7 +22,9 @@ import app
 import webapp.backend.main as backend
 
 
-class StaleFinalCase(unittest.TestCase):
+class _FilmCase(unittest.TestCase):
+    """Fixture: an OUTPUT_DIR of finished films with controllable mtimes."""
+
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory(prefix="spielbot-stale-final-")
         self.addCleanup(self._tmp.cleanup)
@@ -57,6 +59,8 @@ class StaleFinalCase(unittest.TestCase):
         os.utime(final, (now - final_age_s, now - final_age_s))
         return wd
 
+
+class StaleFinalCase(_FilmCase):
     def test_part_newer_than_final_and_quiet_is_stale(self):
         wd = self.make_film("edited")
         self.assertEqual(backend._stale_final_films(), [wd])
@@ -111,6 +115,80 @@ class StaleFinalCase(unittest.TestCase):
         with mock.patch.object(backend, "_reassemble_film_core", return_value=1) as core:
             backend._reassemble_stale_finals()
         core.assert_called_once_with(wd, op_name="Auto-reassembling film")
+
+
+class CuratedFinalCase(_FilmCase):
+    """A published cut the sweep cannot reproduce (upscale / localized re-voicing
+    / hand-burnt cover) must survive an unattended reassembly."""
+
+    def write_history(self, wd: Path, versions: list, selected: int) -> None:
+        (wd / "final_video_history").mkdir(exist_ok=True)
+        for version in versions:
+            (wd / version["file"]).write_bytes(b"v")
+        (wd / "final_video_history.json").write_text(
+            json.dumps({"selected": selected, "versions": versions}))
+
+    def test_selected_upscale_blocks_sweep(self):
+        wd = self.make_film("upscaled")
+        self.write_history(wd, [
+            {"id": 1, "file": "final_video_history/final_video_v1.mp4",
+             "label": "Original", "kind": ""},
+            {"id": 2, "file": "final_video_history/final_video_v2.mp4",
+             "label": "LTX IC-LoRA 1920x1080", "kind": "upscale"},
+        ], selected=2)
+        self.assertEqual(backend._stale_final_films(), [])
+
+    def test_legacy_manifest_without_kind_still_blocks(self):
+        """Manifests written before kinds existed carry no key — the seed's
+        "Original" label is the only marker of the plain concat."""
+        wd = self.make_film("upscaled-legacy")
+        self.write_history(wd, [
+            {"id": 1, "file": "final_video_history/final_video_v1.mp4", "label": "Original"},
+            {"id": 2, "file": "final_video_history/final_video_v2.mp4",
+             "label": "LTX IC-LoRA 1920x1080"},
+        ], selected=2)
+        self.assertEqual(backend._stale_final_films(), [])
+
+    def test_selected_base_version_still_sweeps(self):
+        wd = self.make_film("back-on-base")
+        self.write_history(wd, [
+            {"id": 1, "file": "final_video_history/final_video_v1.mp4",
+             "label": "Original", "kind": ""},
+            {"id": 2, "file": "final_video_history/final_video_v2.mp4",
+             "label": "LTX IC-LoRA 1920x1080", "kind": "upscale"},
+        ], selected=1)
+        self.assertEqual(backend._stale_final_films(), [wd])
+
+    def test_no_history_sweeps(self):
+        wd = self.make_film("plain")
+        self.assertEqual(backend._stale_final_films(), [wd])
+
+
+class LastSceneTailCase(unittest.TestCase):
+    """The closing scene holds its last frame past the narration. That tail
+    lives inside the scene part, so an editor re-render has to re-apply it."""
+
+    def test_render_paths_share_one_tail_constant(self):
+        from pipeline.assembler import FINAL_SCENE_TAIL_SECS
+        self.assertEqual(FINAL_SCENE_TAIL_SECS, 2.0)
+
+    def test_last_scene_id_prefers_display_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = Path(tmp)
+            (wd / "scene_edit_order.json").write_text("[3, 1, 2]")
+            self.assertEqual(backend._last_scene_id(wd), 2)
+
+    def test_last_scene_id_falls_back_to_scene_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = Path(tmp)
+            with mock.patch.object(app, "_load_scenes_for_work_dir",
+                                   return_value=[{"id": 1}, {"id": 2}]):
+                self.assertEqual(backend._last_scene_id(wd), 2)
+
+    def test_last_scene_id_unknown_without_scenes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(app, "_load_scenes_for_work_dir", return_value=[]):
+                self.assertIsNone(backend._last_scene_id(Path(tmp)))
 
 
 if __name__ == "__main__":

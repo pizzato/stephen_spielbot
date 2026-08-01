@@ -4516,7 +4516,8 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
         ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
     )
     staged_final.replace(final_path)
-    history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang)
+    history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang,
+                                         kind="localize")
     return history, len(scene_finals)
 
 
@@ -5071,7 +5072,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             "ic_lora": "LTX IC-LoRA",
         }.get(mode, mode)
         label = f"{mode_label} {target_w}x{target_h}"
-        final_video_history.record(wd, final_path, label=label, lang=cur_lang)
+        final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="upscale")
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -5368,7 +5369,7 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
             **_first_frame_text_opts(wd),
         )
         label = "Cover on first frame" if mode == "image" else "Title on first frame"
-        final_video_history.record(wd, final_path, label=label, lang=cur_lang)
+        final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="cover")
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -9598,6 +9599,17 @@ def _save_scene_order(work_dir: Path, order: list) -> None:
     (work_dir / "scene_edit_order.json").write_text(json.dumps(order))
 
 
+def _last_scene_id(work_dir: Path) -> int | None:
+    """Id of the film's closing scene in display order, or None if unknown."""
+    order = _load_scene_order(work_dir)
+    if not order:
+        try:
+            order = [int(r.get("id") or 0) for r in (gapp._load_scenes_for_work_dir(work_dir) or [])]
+        except Exception:
+            return None
+    return int(order[-1]) if order else None
+
+
 def _film_job_config(work_dir: Path) -> dict:
     try:
         return json.loads((work_dir / "job_config.json").read_text())
@@ -9832,6 +9844,26 @@ def _reassemble_lock(wd: Path) -> threading.Lock:
         return _reassemble_locks.setdefault(str(wd), threading.Lock())
 
 
+_REASSEMBLED_LABEL = "Rebuilt from scenes"
+
+
+def _curated_final_version(wd: Path) -> dict | None:
+    """The picked final-video version when it is a derived cut — an upscale, a
+    localized re-voicing, a hand-burnt cover — rather than the plain concat of
+    the scene parts. Reassembly rebuilds the plain concat and overwrites the
+    published file, so a derived pick is work it silently throws away."""
+    try:
+        hist = final_video_history.history(wd)
+    except Exception:
+        return None
+    selected = hist.get("selected")
+    entry = next((v for v in (hist.get("versions") or [])
+                  if int(v.get("id") or 0) == selected), None)
+    if entry is None or final_video_history.is_base(entry):
+        return None
+    return entry
+
+
 def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     """Concat the scene finals in display order and re-mix music/ambient into
     the published final (re-applying any standing first-frame cover burn).
@@ -9873,7 +9905,9 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
 
     with _reassemble_lock(wd), _track_op(op_name, wd.name):
-        from pipeline.assembler import concatenate_scenes, mix_background_music
+        from pipeline.assembler import (concatenate_scenes, ensure_video_resolution,
+                                        mix_background_music)
+        from pipeline.comfyui import ltx_dimensions
         concatenate_scenes(scene_finals, combined)
         ambient = wd / "ambient.wav"
         mix_background_music(
@@ -9883,7 +9917,22 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
             ambient_path=ambient if ambient.exists() else None,
             ambient_volume=ambient_vol,
         )
+        # Same normalisation the full render applies after mixing: a scene
+        # re-rendered at a rounded-off size would otherwise leave the film off
+        # its selected resolution. No-op when the concat already matches.
+        res_name = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(res_name, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
+        ensure_video_resolution(final_path, *ltx_dimensions(vid_w, vid_h))
         _maybe_burn_first_frame_cover(wd, final_path)
+        # Films with kept versions: the published file is now the plain concat,
+        # so say so instead of leaving the manifest pointing at the upscale (or
+        # other derived cut) this just replaced. Films with no history — almost
+        # all of them — stay untouched rather than gaining a 40 MB copy.
+        if (final_video_history.history(wd).get("versions") or []):
+            final_video_history.record_or_replace(
+                wd, final_path, label=_REASSEMBLED_LABEL,
+                lang=gapp._norm_tts_language(jc.get("tts_language")),
+            )
     return len(scene_finals)
 
 
@@ -9895,6 +9944,9 @@ def reassemble_film(body: ReassembleBody) -> dict:
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
 
+    # Read the pick before the rebuild overwrites the published file, so the
+    # answer can say what the fresh cut replaced.
+    curated = _curated_final_version(wd)
     try:
         scene_count = _reassemble_film_core(wd)
     except ValueError as e:
@@ -9902,10 +9954,15 @@ def reassemble_film(body: ReassembleBody) -> dict:
     except Exception as e:
         raise HTTPException(500, f"Reassembly failed: {str(e).splitlines()[0][:200]}")
 
+    note = ""
+    if curated:
+        note = (f"This replaced the picked cut “{curated['label']}” with a fresh build of the "
+                f"scene parts. Pick it again under Versions to get it back.")
     return {
         "ok": True,
         "final_url": _busted_file_url(gapp._final_path_for_work_dir(wd)),
         "scene_count": scene_count,
+        "note": note,
     }
 
 
@@ -9919,6 +9976,10 @@ def reassemble_film(body: ReassembleBody) -> dict:
 # for a few minutes so a mid-session film isn't churned between every tweak.
 
 _REASSEMBLE_QUIET_S = 300  # parts must stop changing this long before a sweep
+
+# work dir → the parts mtime we last announced a curated-final skip for, so the
+# every-tick sweep says it once per round of edits instead of every 15 seconds.
+_curated_skips: dict = {}
 
 
 def _film_edit_busy(wd: Path) -> bool:
@@ -9973,6 +10034,21 @@ def _stale_final_films() -> list:
             continue  # still being edited — wait for the film to go quiet
         if _film_edit_busy(p):
             continue
+        curated = _curated_final_version(p)
+        if curated:
+            # The published cut is an upscale / localized re-voicing / hand-burnt
+            # cover, none of which a rebuild from the scene parts can reproduce.
+            # Unattended, that is silent data loss — leave it for the button.
+            # The sweep runs every tick, so say it once per round of edits.
+            if _curated_skips.get(str(p)) != newest:
+                _curated_skips[str(p)] = newest
+                gapp.logger.info(
+                    "Skipping auto-reassembly of %s: the published cut is “%s”, "
+                    "which rebuilding from the scene parts would discard. "
+                    "Use “Reassemble film” to rebuild it anyway.",
+                    p.name, curated.get("label"))
+            continue
+        _curated_skips.pop(str(p), None)
         stale.append(p)
     return stale
 
@@ -10004,7 +10080,7 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
                             record_video_history: bool = True,
                             tts_host: str | None = None,
                             update_task: bool = True) -> None:
-    from pipeline.assembler import mux_video_audio
+    from pipeline.assembler import FINAL_SCENE_TAIL_SECS, mux_video_audio
     from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 
     # out_dir scopes the output to a language-specific subdirectory (localize
@@ -10059,7 +10135,13 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         if update_task:
             _film_tasks[task_id]["step"] = "mux"
         staged_final = target_dir / f"scene_{sid:02d}_final.staging.mp4"
-        mux_video_audio(actual_video, narration_path, staged_final)
+        # The closing scene holds its last frame past the narration so the film
+        # doesn't cut dead on its last word — the full render does this too. The
+        # tail lives inside the scene part, so re-rendering the closing scene
+        # without it makes the ending abrupt from the next reassembly onwards.
+        is_last = _last_scene_id(wd) == int(sid)
+        mux_video_audio(actual_video, narration_path, staged_final,
+                        extra_tail_secs=FINAL_SCENE_TAIL_SECS if is_last else 0.0)
         staged_final.replace(final_path)
         if record_video_history:
             video_history.record(wd, sid, final_path)
