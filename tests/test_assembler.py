@@ -98,6 +98,7 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             src = Path(tmp) / "src.mp4"
             out = Path(tmp) / "out.mp4"
             src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")  # the mocked upscaler's output
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
                  mock.patch.object(assembler, "_get_duration", return_value=3.0), \
@@ -126,6 +127,7 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             src = Path(tmp) / "src.mp4"
             out = Path(tmp) / "out.mp4"
             src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")  # the mocked upscaler's output
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
                  mock.patch.object(assembler, "_get_duration", return_value=2.0), \
@@ -144,32 +146,39 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             latent.assert_called_once()
             ic.assert_not_called()
 
-    def test_temporal_ai_upscale_whole_scene_by_default(self):
-        """Typical scene lengths stay in one Comfy job (no 4s slicing)."""
+    def _route_upscale(self, duration: float):
+        """Run one upscale at *duration* and report whether it was chunked."""
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"
             out = Path(tmp) / "out.mp4"
             src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(512, 288)), \
-                 mock.patch.object(assembler, "_get_duration", return_value=18.0), \
+                 mock.patch.object(assembler, "_get_duration", return_value=duration), \
                  mock.patch.object(assembler, "_get_video_fps", return_value=25.0), \
-                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale") as chunked, \
-                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as comfy_upscale, \
-                 mock.patch.dict("os.environ", {
-                     "TEMPORAL_VIDEO_UPSCALER_CMD": "",
-                     # Default is ~40s (LTX frame cap); a normal scene must not slice.
-                     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "39.96",
-                 }, clear=False):
-                result = assembler.temporal_ai_upscale_video(
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale",
+                                   return_value=out) as chunked, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as whole, \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
                     src, out, 1920, 1080,
                     timeout_seconds=123,
                     comfy_url="http://worker:8188",
                 )
+            return chunked.called, whole.called
 
-            self.assertEqual(result, out)
-            chunked.assert_not_called()
-            comfy_upscale.assert_called_once()
+    def test_typical_scene_upscales_in_one_job(self):
+        """A ~11s scene is the length the fleet is known to handle whole."""
+        chunked, whole = self._route_upscale(11.0)
+        self.assertFalse(chunked)
+        self.assertTrue(whole)
+
+    def test_long_scene_is_split_before_the_worker_can_blank_it(self):
+        """A 20s scene is what came back solid black on a GB10 — it must split."""
+        chunked, whole = self._route_upscale(20.2)
+        self.assertTrue(chunked)
+        self.assertFalse(whole)
 
     def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -265,6 +274,50 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(extract.call_count, 2)
             concat.assert_called_once()
             xfade.assert_not_called()
+
+
+class BlankUpscaleGuardTests(unittest.TestCase):
+    """ComfyUI reports success and returns a solid black clip when a worker runs
+    out of memory, so the upscale has to be checked against its own source."""
+
+    def _verify(self, source_luma, result_luma):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "src.mp4", Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+            profiles = {str(src): source_luma, str(out): result_luma}
+            with mock.patch.object(assembler, "_luma_profile",
+                                   side_effect=lambda p, **_kw: profiles[str(p)]), \
+                 mock.patch.object(assembler, "_get_duration", return_value=20.0):
+                assembler._verify_upscale_not_blank(src, out)
+
+    def test_blank_result_is_rejected(self):
+        with self.assertRaises(RuntimeError) as caught:
+            self._verify([95.0] * 6, [16.0] * 6)
+        self.assertIn("came back blank", str(caught.exception))
+
+    def test_one_black_chunk_among_good_ones_is_rejected(self):
+        """Averaging would hide this: half the clip black still reads as 50%."""
+        with self.assertRaises(RuntimeError):
+            self._verify([95.0] * 6, [93.0, 91.0, 94.0, 0.0, 0.0, 0.0])
+
+    def test_faithful_result_is_accepted(self):
+        self._verify([68.6, 70.1, 69.4, 68.0, 71.2, 70.4],
+                     [70.4, 71.0, 70.9, 69.1, 72.0, 71.3])
+
+    def test_genuinely_dark_scene_is_not_mistaken_for_a_failure(self):
+        self._verify([2.0] * 6, [1.4] * 6)
+
+    def test_unmeasurable_clip_does_not_fail_the_upscale(self):
+        """A probe hiccup must not throw away an hour of GPU time."""
+        self._verify([], [])
+
+    def test_missing_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src, out = Path(tmp) / "src.mp4", Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            with self.assertRaises(RuntimeError):
+                assembler._verify_upscale_not_blank(src, out)
 
 
 if __name__ == "__main__":
