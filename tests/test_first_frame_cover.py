@@ -454,6 +454,120 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(final.read_bytes(), b"stamped" * 3000)
 
 
+class BurnSecondsOverrideTests(unittest.TestCase):
+    """The edit/publish screens can hold the cover longer or shorter than the
+    style says, for this one burn."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        self.final = _OUT / f"{self.wd.name}.mp4"
+        self.final.write_bytes(b"v" * 20_000)
+
+    def _burn(self, seconds):
+        captured = {}
+
+        def fake_burn(path, mode, **kw):
+            captured.update(kw)
+            Path(path).write_bytes(b"stamped" * 3000)
+            return path
+
+        tid = f"ff_{seconds}"
+        backend._film_tasks[tid] = {"status": "running", "step": "first_frame_cover"}
+        backend._film_task_meta[tid] = {
+            "work_dir": str(self.wd), "scene_id": 0,
+            "component": "first_frame_cover", "started_at": 0.0,
+        }
+        with mock.patch("pipeline.cover.burn_cover_into_first_frame", side_effect=fake_burn), \
+             mock.patch.object(backend, "_video_title_for", return_value="A Film"), \
+             mock.patch.object(backend.gapp, "load_config", return_value={}):
+            backend._run_first_frame_cover(tid, self.wd, "image", seconds)
+        self.assertEqual(backend._film_tasks[tid]["status"], "done",
+                         backend._film_tasks[tid].get("error"))
+        return captured
+
+    def test_explicit_seconds_win_and_are_clamped(self):
+        self.assertEqual(self._burn(2.5)["seconds"], 2.5)
+        self.assertEqual(self._burn(99)["seconds"], 3.0)
+
+    def test_none_falls_back_to_the_style(self):
+        self.assertEqual(self._burn(None)["seconds"], 1.0)
+
+    def test_endpoint_passes_the_hold_through(self):
+        with mock.patch.object(backend.threading, "Thread") as thread:
+            backend.remix_first_frame_cover(backend.FirstFrameCoverBody(
+                work_dir=str(self.wd), mode="text", seconds=1.5))
+        self.assertEqual(thread.call_args.kwargs["args"][3], 1.5)
+
+    def test_hold_is_optional(self):
+        with mock.patch.object(backend.threading, "Thread") as thread:
+            backend.remix_first_frame_cover(
+                backend.FirstFrameCoverBody(work_dir=str(self.wd), mode="text"))
+        self.assertIsNone(thread.call_args.kwargs["args"][3])
+
+
+class FirstFramePreviewTests(unittest.TestCase):
+    """The preview draws the phrase over the film's own first frame and writes
+    a PNG next to it — the video itself is never touched."""
+
+    def setUp(self):
+        from PIL import Image
+
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        self.final = _OUT / f"{self.wd.name}.mp4"
+        self.final.write_bytes(b"v" * 20_000)
+        self.extracts = []
+
+        def fake_extract(src, out):
+            self.extracts.append(out)
+            Image.new("RGB", (360, 640), (40, 90, 40)).save(out)
+            return out
+
+        q = mock.patch("pipeline.assembler.extract_first_frame", side_effect=fake_extract)
+        q.start()
+        self.addCleanup(q.stop)
+        t = mock.patch.object(backend, "_video_title_for",
+                              return_value="The Silent City: A Story")
+        t.start()
+        self.addCleanup(t.stop)
+
+    def test_draws_the_saved_phrase_over_the_frame(self):
+        from PIL import Image
+
+        r = backend.film_first_frame_preview(work_dir=str(self.wd), text="")
+        self.assertEqual(r["phrase"], "The Silent City")   # derived from the title
+        self.assertIn("first_frame_preview.png", r["preview_url"])
+        img = Image.open(self.wd / "first_frame_preview.png")
+        self.assertEqual(img.size, (360, 640))
+        # Title band gained bright text; the rest of the frame is untouched.
+        whites = sum(img.crop((0, 0, 360, 200)).convert("L").histogram()[200:])
+        self.assertGreater(whites, 100)
+        self.assertEqual(img.convert("RGB").getpixel((180, 620)), (40, 90, 40))
+
+    def test_unsaved_text_wins_and_the_frame_is_extracted_once(self):
+        backend.film_first_frame_preview(work_dir=str(self.wd), text="")
+        r = backend.film_first_frame_preview(work_dir=str(self.wd), text="  TYPING… ")
+        self.assertEqual(r["phrase"], "TYPING…")
+        # Typing in the phrase box must not re-run ffmpeg for every keystroke.
+        self.assertEqual(len(self.extracts), 1)
+
+    def test_rejects_paths_outside_the_output_dir(self):
+        with self.assertRaises(backend.HTTPException) as ctx:
+            backend.film_first_frame_preview(work_dir="/tmp/elsewhere", text="")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_requires_a_final_video(self):
+        empty = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        with self.assertRaises(backend.HTTPException) as ctx:
+            backend.film_first_frame_preview(work_dir=str(empty), text="")
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
 class BurnOptsResolutionTests(unittest.TestCase):
     """Manual burns and rebuild re-applies resolve the hold and the cover-text
     look LIVE from the film's style, so a Settings tweak applies to the very

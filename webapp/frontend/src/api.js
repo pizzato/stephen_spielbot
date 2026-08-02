@@ -205,6 +205,8 @@ export const api = {
   regenNarrator: (body) => req('POST', '/remix/narrator', body),
   upscaleRemixVideo: (body) => req('POST', '/remix/upscale', body),
   firstFrameCover: (body) => req('POST', '/remix/first-frame-cover', body),
+  firstFramePreview: (workDir, text) => req('GET',
+    `/films/first-frame-preview?work_dir=${encodeURIComponent(workDir)}&text=${encodeURIComponent(text || '')}`),
   saveCoverPhrase: (workDir, phrase) => req('POST', '/films/cover-phrase', { work_dir: workDir, phrase }),
   listFonts: () => req('GET', '/fonts'),
   localizeFilm: (body) => req('POST', '/remix/localize', body),
