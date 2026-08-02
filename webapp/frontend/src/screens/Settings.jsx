@@ -1883,9 +1883,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select>
                 <ParentVal k="x_account" />
               </Field>
-              <Field label="First-frame cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
+              <Field label="Opening cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
                 <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
-                  <option value="none">Off — leave the first frame as rendered</option>
+                  <option value="none">Off — leave the opening as rendered</option>
                   <option value="image">Cover image</option>
                   <option value="text">Cover text — big title over the video</option>
                 </select>

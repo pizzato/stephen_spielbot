@@ -5341,10 +5341,11 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
 
 class FirstFrameCoverBody(BaseModel):
     work_dir: str
-    mode: str  # "image" (stamp cover.png) | "text" (big title on the frame)
+    mode: str  # "image" (stamp cover.png) | "text" (big title over the video)
+    seconds: float | None = None  # hold; None = the style's setting
 
 
-def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
+def _run_first_frame_cover(task_id: str, wd: Path, mode: str, seconds=None) -> None:
     """Background thread: burn the cover (image or big title text) into the head
     of the final video — YouTube Shorts ignore uploaded thumbnails and pick
     their own frame. Keeps the previous cut as a selectable version."""
@@ -5365,12 +5366,15 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
             None,
         )
         _film_tasks[task_id] = {"status": "running", "step": "first_frame_cover"}
+        opts = _first_frame_burn_opts(wd)
+        if seconds is not None:
+            opts["seconds"] = gapp._norm_first_frame_cover_seconds(seconds)
         burn_cover_into_first_frame(
             final_path, mode,
             cover_path=wd / "cover.png",
             title=_video_title_for(wd),
             work_dir=wd,
-            **_first_frame_burn_opts(wd),
+            **opts,
         )
         label = "Cover on first frame" if mode == "image" else "Title on first frame"
         final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="cover")
@@ -5417,10 +5421,52 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
     }
     threading.Thread(
         target=_run_first_frame_cover,
-        args=(tid, wd, mode),
+        args=(tid, wd, mode, body.seconds),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+@api.get("/api/films/first-frame-preview")
+def film_first_frame_preview(work_dir: str = Query(...), text: str = Query("")) -> dict:
+    """The "text" cover as it will look: the title card drawn over the film's
+    own first frame. Renders a PNG next to the film — the video is untouched.
+
+    *text* previews an unsaved cover phrase; blank falls back to the saved one.
+    """
+    from PIL import Image
+    from pipeline.assembler import extract_first_frame
+    from pipeline.cover import COVER_PHRASE_MAX_CHARS, render_cover_text_overlay
+
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    final_path = gapp._final_path_for_work_dir(wd)
+    if not final_path.exists():
+        raise HTTPException(404, f"Final video not found for {wd.name}.")
+
+    # The extracted frame only changes when the film does — reuse it so typing
+    # in the phrase box doesn't re-run ffmpeg on every keystroke.
+    base = wd / "first_frame_preview_base.png"
+    try:
+        stale = base.stat().st_mtime < final_path.stat().st_mtime
+    except OSError:
+        stale = True
+    if stale:
+        extract_first_frame(final_path, base)
+
+    phrase = (text or "").strip()[:COVER_PHRASE_MAX_CHARS] \
+        or cover_phrase_for(wd, _video_title_for(wd))
+    look = _first_frame_burn_opts(wd)
+    frame = Image.open(base).convert("RGBA")
+    card = wd / "first_frame_preview_card.png"
+    render_cover_text_overlay(frame.width, frame.height, card, phrase,
+                              font_path=look["text_font"], size_pct=look["text_size"],
+                              color=look["text_color"])
+    preview = wd / "first_frame_preview.png"
+    Image.alpha_composite(frame, Image.open(card).convert("RGBA")) \
+         .convert("RGB").save(str(preview), "PNG")
+    return {"preview_url": _busted_file_url(preview), "phrase": phrase}
 
 
 @api.post("/api/remix/video-select")
@@ -6939,6 +6985,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
+        # How long a manual burn holds the cover — prefilled from the film's
+        # style; the burn controls let you override it for this film.
+        "first_frame_cover_seconds": _first_frame_burn_opts(wd)["seconds"],
         "description": _cached_description(wd),
         "youtube_url": meta.get("youtube_url", ""),
         "youtube_video_id": meta.get("youtube_video_id", ""),
