@@ -32,8 +32,8 @@ survives fine-tuning:
 They are selectable in Settings as the opt-in `f5-original` engine (flagged
 **non-commercial**) for A/B quality comparison only — they **must not** be made
 the default or used for monetized output; the default stays `openf5`. The model
-registry lives in [`pipeline/tts_engines.py`](../pipeline/tts_engines.py) and the
-OpenF5 source in [`pipeline/openf5.py`](../pipeline/openf5.py); the `OPENF5_REPO`
+registry lives in [`pipeline/tts_engines.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/tts_engines.py) and the
+OpenF5 source in [`pipeline/openf5.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/openf5.py); the `OPENF5_REPO`
 environment variable can point at a mirror or pinned fork but should remain an
 Apache/CC-BY-licensed repository.
 
@@ -50,7 +50,7 @@ Resemble AI, selectable in Settings as the `chatterbox-multilingual` engine:
   identifiable as synthetic (it complements the robotic-voice measure of issue #52
   and the C2PA content credentials).
 - The per-style narration language lives in `tts_language`; the CLI wrapper is
-  [`pipeline/chatterbox.py`](../pipeline/chatterbox.py). The `CHATTERBOX_REPO`
+  [`pipeline/chatterbox.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/chatterbox.py). The `CHATTERBOX_REPO`
   environment variable can point at a mirror or pinned fork but should remain an
   MIT-licensed repository.
 
