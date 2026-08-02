@@ -1,10 +1,11 @@
 """First-frame cover (YouTube Shorts thumbnails): burn the cover image — or the
-title in large type — into frame 0 of the finished film. Shorts ignore uploaded
-thumbnails and show the video's first frame in the feed, so the cover is
-stamped onto the frame itself. Covers the pipeline helpers (mode coercion,
-ffmpeg command shape, PIL text overlay, staged in-place swap), the style
-plumbing (_ensure_styles coercion + flat mirror + style_settings resolution),
-and the edit-screen endpoint (validation + history versioning)."""
+title in large type — into the head of the finished film. Shorts ignore uploaded
+thumbnails and pick their own frame, so the cover is stamped onto the opening
+frames and held ~1s (a single frame is a flash the picker discards). Covers the
+pipeline helpers (mode/duration coercion, ffmpeg command shape, PIL text
+overlay, staged in-place swap), the style plumbing (_ensure_styles coercion +
+flat mirror + style_settings resolution), and the edit-screen endpoint
+(validation + history versioning)."""
 import os
 import tempfile
 import unittest
@@ -40,6 +41,15 @@ class NormModeTests(unittest.TestCase):
         for bad in (None, "", "big"):
             self.assertEqual(cover.norm_first_frame_text_size(bad), 11)
 
+    def test_cover_seconds_clamps_to_one_frame_through_three_seconds(self):
+        self.assertEqual(cover.norm_first_frame_cover_seconds(1.5), 1.5)
+        self.assertEqual(cover.norm_first_frame_cover_seconds("0.5"), 0.5)
+        self.assertEqual(cover.norm_first_frame_cover_seconds(0), 0.04)    # one frame
+        self.assertEqual(cover.norm_first_frame_cover_seconds(-2), 0.04)
+        self.assertEqual(cover.norm_first_frame_cover_seconds(30), 3.0)
+        for bad in (None, "", "a while"):
+            self.assertEqual(cover.norm_first_frame_cover_seconds(bad), 1.0)
+
     def test_text_color_normalizes_to_rrggbb(self):
         self.assertEqual(cover.norm_first_frame_text_color("#ffd700"), "#FFD700")
         self.assertEqual(cover.norm_first_frame_text_color("#abc"), "#AABBCC")
@@ -66,7 +76,7 @@ class AvailableFontsTests(unittest.TestCase):
 
 
 class ReplaceFirstFrameCommandTests(unittest.TestCase):
-    def test_overlays_only_frame_zero_and_copies_audio(self):
+    def _graph(self, **kwargs):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "final.mp4"
             frame = Path(tmp) / "cover.png"
@@ -76,49 +86,59 @@ class ReplaceFirstFrameCommandTests(unittest.TestCase):
 
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(720, 1280)), \
                  mock.patch.object(assembler, "_run") as run:
-                result = assembler.replace_first_frame(src, frame, out)
+                result = assembler.replace_first_frame(src, frame, out, **kwargs)
 
             self.assertEqual(result, out)
             cmd = run.call_args.args[0]
-            graph = cmd[cmd.index("-filter_complex") + 1]
-            # The cover is scaled to the video frame and shown on frame 0 ONLY —
-            # replacing (not prepending) keeps duration and caption timing valid.
-            self.assertIn("scale=720:1280:force_original_aspect_ratio=increase", graph)
-            self.assertIn("overlay=enable='eq(n,0)'", graph)
-            self.assertIn("-c:a", cmd)
-            self.assertIn("copy", cmd)
-            # Audio is mapped through even when absent (0:a? is optional).
-            self.assertIn("0:a?", cmd)
+            return cmd, cmd[cmd.index("-filter_complex") + 1]
+
+    def test_overlays_the_opening_frames_and_copies_audio(self):
+        cmd, graph = self._graph(frames=25)
+        # The cover is scaled to the video frame and held over the opening run
+        # of frames — overlaying (not prepending) keeps duration and caption
+        # timing valid.
+        self.assertIn("scale=720:1280:force_original_aspect_ratio=increase", graph)
+        self.assertIn("overlay=enable='lt(n,25)'", graph)
+        # RGBA survives the scale so a transparent title card (the "text" mode)
+        # composites over the video instead of blanking it.
+        self.assertIn("[1:v]format=rgba", graph)
+        self.assertIn("-c:a", cmd)
+        self.assertIn("copy", cmd)
+        # Audio is mapped through even when absent (0:a? is optional).
+        self.assertIn("0:a?", cmd)
+
+    def test_defaults_to_a_single_frame(self):
+        _, graph = self._graph()
+        self.assertIn("overlay=enable='lt(n,1)'", graph)
 
 
-class OverlayCoverTextTests(unittest.TestCase):
-    def test_draws_large_text_across_the_top(self):
+class CoverTextOverlayTests(unittest.TestCase):
+    """The title card is drawn on a TRANSPARENT canvas so ffmpeg lays it over
+    the running video — holding it a second costs no motion."""
+
+    def test_draws_large_text_across_the_top_of_a_transparent_canvas(self):
         from PIL import Image
 
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp) / "frame.png"
             out = Path(tmp) / "texted.png"
-            Image.new("RGB", (360, 640), (40, 90, 40)).save(base)
-
-            cover.overlay_cover_text(base, out, "The Silent City")
+            cover.render_cover_text_overlay(360, 640, out, "The Silent City")
 
             img = Image.open(out)
             self.assertEqual(img.size, (360, 640))
-            # Top region gained the scrim + white text; bottom stays untouched.
+            self.assertEqual(img.mode, "RGBA")
+            # Top region carries the scrim + white text…
             top = img.crop((0, 0, 360, 200)).convert("L")
-            extremes = top.histogram()
-            whites = sum(extremes[200:])
+            whites = sum(top.histogram()[200:])
             self.assertGreater(whites, 100, "expected bright text pixels near the top")
-            bottom_px = img.getpixel((180, 620))
-            self.assertEqual(bottom_px, (40, 90, 40))
+            # …and below it the canvas stays fully transparent, so the video
+            # underneath shows through untouched.
+            self.assertEqual(img.getpixel((180, 620))[3], 0)
 
     def test_honours_style_font_size_and_colour(self):
         from PIL import Image
 
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp) / "frame.png"
             out = Path(tmp) / "texted.png"
-            Image.new("RGB", (400, 700), (40, 90, 40)).save(base)
 
             sizes = []
             real_load = cover._load_font
@@ -128,13 +148,13 @@ class OverlayCoverTextTests(unittest.TestCase):
                 return real_load(font_size)
 
             with mock.patch.object(cover, "_load_font", side_effect=spy_load):
-                cover.overlay_cover_text(base, out, "Gold",
-                                         font_path="/tmp/F.ttf", size_pct=20, color="#ff0000")
+                cover.render_cover_text_overlay(400, 700, out, "Gold",
+                                                font_path="/tmp/F.ttf", size_pct=20,
+                                                color="#ff0000")
 
             # 20% of a 400px frame = 80px type, from the requested font file.
             self.assertEqual(sizes, [(80, "/tmp/F.ttf")])
-            img = Image.open(out)
-            data = img.crop((0, 0, 400, 250)).convert("RGB").tobytes()
+            data = Image.open(out).crop((0, 0, 400, 250)).convert("RGB").tobytes()
             reds = sum(1 for i in range(0, len(data), 3)
                        if data[i] > 180 and data[i + 1] < 90 and data[i + 2] < 90)
             self.assertGreater(reds, 50, "expected red text pixels near the top")
@@ -143,10 +163,9 @@ class OverlayCoverTextTests(unittest.TestCase):
         from PIL import Image
 
         with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp) / "frame.png"
             out = Path(tmp) / "texted.png"
-            Image.new("RGB", (400, 700), (40, 90, 40)).save(base)
-            cover.overlay_cover_text(base, out, "Ink", size_pct=20, color="#000000")
+            cover.render_cover_text_overlay(400, 700, out, "Ink",
+                                            size_pct=20, color="#000000")
             data = Image.open(out).crop((0, 0, 400, 250)).convert("RGB").tobytes()
             whites = sum(1 for i in range(0, len(data), 3)
                          if data[i] > 200 and data[i + 1] > 200 and data[i + 2] > 200)
@@ -229,8 +248,11 @@ class BurnCoverTests(unittest.TestCase):
             cover_png = Path(tmp) / "cover.png"
             cover_png.write_bytes(b"p" * 2000)
 
-            def fake_replace(src, frame, out):
+            held = []
+
+            def fake_replace(src, frame, out, frames=1):
                 self.assertEqual(frame, cover_png)
+                held.append(frames)
                 out.write_bytes(b"stamped")
                 return out
 
@@ -240,33 +262,53 @@ class BurnCoverTests(unittest.TestCase):
 
             self.assertEqual(result, video)
             self.assertEqual(video.read_bytes(), b"stamped")
+            # Default hold is 1s — 25 frames at the film's fixed 25fps.
+            self.assertEqual(held, [25])
             self.assertFalse(list(Path(tmp).glob("*.tmp*")), "staging file cleaned up")
 
-    def test_text_mode_stamps_the_shortened_title_on_the_first_frame(self):
+    def test_hold_seconds_become_frames(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "final.mp4"
+            cover_png = Path(tmp) / "cover.png"
+            cover_png.write_bytes(b"p" * 2000)
+
+            held = []
+
+            def fake_replace(src, frame, out, frames=1):
+                held.append(frames)
+                out.write_bytes(b"stamped")
+                return out
+
+            for secs, frames in ((0.6, 15), (2, 50), (0, 1), (99, 75), ("x", 25)):
+                video.write_bytes(b"original")
+                with mock.patch("pipeline.assembler.replace_first_frame",
+                                side_effect=fake_replace):
+                    cover.burn_cover_into_first_frame(
+                        video, "image", cover_path=cover_png, seconds=secs)
+            self.assertEqual(held, [15, 50, 1, 75, 25])
+
+    def test_text_mode_lays_the_shortened_title_over_the_video(self):
         with tempfile.TemporaryDirectory() as tmp:
             wd = Path(tmp) / "job"
             wd.mkdir()
             video = Path(tmp) / "final.mp4"
             video.write_bytes(b"original")
 
-            texts, looks = [], []
+            texts, looks, sizes = [], [], []
 
-            def fake_extract(src, out):
-                out.write_bytes(b"frame")
-                return out
-
-            def fake_overlay(base, out, text, **kw):
+            def fake_render(width, height, out, text, **kw):
+                sizes.append((width, height))
                 texts.append(text)
                 looks.append(kw)
                 out.write_bytes(b"texted")
 
-            def fake_replace(src, frame, out):
+            def fake_replace(src, frame, out, frames=1):
                 self.assertEqual(frame.name, "first_frame_text.png")
                 out.write_bytes(b"stamped")
                 return out
 
-            with mock.patch("pipeline.assembler.extract_first_frame", side_effect=fake_extract), \
-                 mock.patch("pipeline.cover.overlay_cover_text", side_effect=fake_overlay), \
+            with mock.patch("pipeline.assembler._get_video_dimensions", return_value=(720, 1280)), \
+                 mock.patch("pipeline.cover.render_cover_text_overlay", side_effect=fake_render), \
                  mock.patch("pipeline.assembler.replace_first_frame", side_effect=fake_replace):
                 cover.burn_cover_into_first_frame(
                     video, "text",
@@ -275,22 +317,25 @@ class BurnCoverTests(unittest.TestCase):
 
             # The subtitle after ":" is dropped — same phrase the cover uses.
             self.assertEqual(texts, ["The Silent City"])
+            # The card is drawn at the video's own size, transparent underneath.
+            self.assertEqual(sizes, [(720, 1280)])
             # The style's cover-text look flows through to the overlay.
             self.assertEqual(looks, [{"font_path": "/tmp/MyFont.ttf",
                                       "size_pct": 18, "color": "#FFD700"}])
+            # No still is extracted any more — the video keeps playing under it.
+            self.assertFalse((wd / "first_frame_text_base.png").exists())
 
             # An edited cover phrase (cover_phrase.txt) wins over the title.
             (wd / "cover_phrase.txt").write_text("SILENT CITY!")
             video.write_bytes(b"original")
-            with mock.patch("pipeline.assembler.extract_first_frame", side_effect=fake_extract), \
-                 mock.patch("pipeline.cover.overlay_cover_text", side_effect=fake_overlay), \
+            with mock.patch("pipeline.assembler._get_video_dimensions", return_value=(720, 1280)), \
+                 mock.patch("pipeline.cover.render_cover_text_overlay", side_effect=fake_render), \
                  mock.patch("pipeline.assembler.replace_first_frame", side_effect=fake_replace):
                 cover.burn_cover_into_first_frame(
                     video, "text",
                     title="The Silent City: A Story of Machines", work_dir=wd)
             self.assertEqual(texts[-1], "SILENT CITY!")
             self.assertEqual(video.read_bytes(), b"stamped")
-            self.assertTrue((wd / "first_frame_text_base.png").exists())
 
 
 class StylePlumbingTests(unittest.TestCase):
@@ -306,6 +351,16 @@ class StylePlumbingTests(unittest.TestCase):
         cfg = {"styles": [{"name": "Shorts", "first_frame_cover": "sideways"}]}
         app._ensure_styles(cfg)
         self.assertEqual(cfg["styles"][0]["first_frame_cover"], "none")
+
+    def test_hold_seconds_are_coerced_and_mirrored(self):
+        cfg = {"styles": [{"name": "Shorts", "first_frame_cover_seconds": 99}]}
+        app._ensure_styles(cfg)
+        self.assertEqual(cfg["styles"][0]["first_frame_cover_seconds"], 3.0)   # clamped
+        self.assertEqual(cfg["default_first_frame_cover_seconds"], 3.0)
+        # A style that never set it gets the 1s default, not the old one frame.
+        cfg = {"styles": [{"name": "Shorts"}]}
+        app._ensure_styles(cfg)
+        self.assertEqual(app.style_settings(cfg, "Shorts")["first_frame_cover_seconds"], 1.0)
 
     def test_text_look_fields_are_kept_and_mirrored(self):
         cfg = {"styles": [{"name": "Shorts",
@@ -399,29 +454,31 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(final.read_bytes(), b"stamped" * 3000)
 
 
-class TextOptsResolutionTests(unittest.TestCase):
-    """Manual burns and rebuild re-applies resolve the cover-text look LIVE from
-    the film's style, so a Settings tweak applies to the very next burn."""
+class BurnOptsResolutionTests(unittest.TestCase):
+    """Manual burns and rebuild re-applies resolve the hold and the cover-text
+    look LIVE from the film's style, so a Settings tweak applies to the very
+    next burn."""
 
     def test_resolves_live_style_settings(self):
         with tempfile.TemporaryDirectory() as tmp:
             wd = Path(tmp)
             (wd / "job_config.json").write_text('{"style_name": "Shorts"}')
             cfg = {"styles": [{"name": "Shorts",
+                               "first_frame_cover_seconds": 1.5,
                                "first_frame_text_font": "/tmp/F.ttf",
                                "first_frame_text_size": 18,
                                "first_frame_text_color": "#FFD700"}]}
             app._ensure_styles(cfg)
             with mock.patch.object(backend.gapp, "load_config", return_value=cfg):
-                opts = backend._first_frame_text_opts(wd)
-            self.assertEqual(opts, {"text_font": "/tmp/F.ttf",
+                opts = backend._first_frame_burn_opts(wd)
+            self.assertEqual(opts, {"seconds": 1.5, "text_font": "/tmp/F.ttf",
                                     "text_size": 18, "text_color": "#FFD700"})
 
     def test_defaults_when_style_is_gone(self):
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.object(backend.gapp, "load_config", return_value={}):
-                opts = backend._first_frame_text_opts(Path(tmp))
-            self.assertEqual(opts, {"text_font": "",
+                opts = backend._first_frame_burn_opts(Path(tmp))
+            self.assertEqual(opts, {"seconds": 1.0, "text_font": "",
                                     "text_size": 11, "text_color": "#FFFFFF"})
 
 

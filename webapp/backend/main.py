@@ -3702,9 +3702,12 @@ def start_generation(body: GenerateBody) -> dict:
         # in resume_generation.py (previously those fell back to FLUX.1 via the
         # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
         "image_engine": ss.get("image_engine"),
-        # Burn the cover into the final video's first frame at the end of the
-        # render ("none" | "image" | "text") — Shorts show frame 1 in the feed.
+        # Burn the cover into the head of the final video at the end of the
+        # render ("none" | "image" | "text") — Shorts pick their own frame —
+        # and how long it is held (seconds).
         "first_frame_cover": gapp._norm_first_frame_cover(ss.get("first_frame_cover")),
+        "first_frame_cover_seconds": gapp._norm_first_frame_cover_seconds(
+            ss.get("first_frame_cover_seconds")),
         # Cover-text look (the "text" mode): font file, % of width, colour.
         "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
         "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
@@ -5295,8 +5298,8 @@ def list_fonts(refresh: bool = Query(False)) -> dict:
     return {"fonts": available_fonts(refresh=refresh)}
 
 
-def _first_frame_text_opts(wd: Path) -> dict:
-    """Cover-text font/size/colour for this film's burns.
+def _first_frame_burn_opts(wd: Path) -> dict:
+    """Hold duration and cover-text font/size/colour for this film's burns.
 
     Resolved LIVE from the film's style (so a Settings tweak applies to the
     very next burn, no re-render needed); style_settings falls back to the
@@ -5304,6 +5307,7 @@ def _first_frame_text_opts(wd: Path) -> dict:
     jc = _film_job_config(wd)
     ss = gapp.style_settings(gapp.load_config(), jc.get("style_name") or "")
     return {
+        "seconds": gapp._norm_first_frame_cover_seconds(ss.get("first_frame_cover_seconds")),
         "text_font": str(ss.get("first_frame_text_font") or ""),
         "text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
         "text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
@@ -5329,7 +5333,7 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
             cover_path=wd / "cover.png",
             title=_video_title_for(wd),
             work_dir=wd,
-            **_first_frame_text_opts(wd),
+            **_first_frame_burn_opts(wd),
         )
     except Exception as e:
         gapp.logger.warning("First-frame cover re-apply failed (non-fatal): %s", e)
@@ -5341,9 +5345,9 @@ class FirstFrameCoverBody(BaseModel):
 
 
 def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
-    """Background thread: burn the cover (image or big title text) into the
-    final video's first frame — YouTube Shorts ignore uploaded thumbnails and
-    show frame 1 in the feed. Keeps the previous cut as a selectable version."""
+    """Background thread: burn the cover (image or big title text) into the head
+    of the final video — YouTube Shorts ignore uploaded thumbnails and pick
+    their own frame. Keeps the previous cut as a selectable version."""
     from pipeline.cover import burn_cover_into_first_frame
 
     started = _film_task_started_at(task_id) or time.time()
@@ -5366,7 +5370,7 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
             cover_path=wd / "cover.png",
             title=_video_title_for(wd),
             work_dir=wd,
-            **_first_frame_text_opts(wd),
+            **_first_frame_burn_opts(wd),
         )
         label = "Cover on first frame" if mode == "image" else "Title on first frame"
         final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="cover")
@@ -5390,8 +5394,8 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str) -> None:
 
 @api.post("/api/remix/first-frame-cover")
 def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
-    """Stamp the cover image — or the title in large type — onto the final
-    video's first frame (Shorts show frame 1, not the uploaded thumbnail)."""
+    """Stamp the cover image — or the title in large type — onto the head of the
+    final video (Shorts pick their own frame, not the uploaded thumbnail)."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")

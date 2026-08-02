@@ -227,10 +227,12 @@ DEFAULT_CFG = {
     # then divides it into scenes (see pipeline/story.py). Mirrors the default
     # style like every other STYLE_FIELD_TO_FLAT entry.
     "default_script_mode": "classic",
-    # Burn the cover into the final video's first frame when a render finishes
+    # Burn the cover into the head of the final video when a render finishes
     # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
-    # and show frame 1 in the feed. Mirrors the default style.
+    # and pick their own frame. Held for _seconds (1s by default; a single
+    # frame reads as a flash and gets discarded). Mirrors the default style.
     "default_first_frame_cover": "none",
+    "default_first_frame_cover_seconds": 1.0,
     # Look of the "text" first-frame cover: font file ("" = bold system font),
     # size as % of the video width, and text colour. Mirror the default style.
     "default_first_frame_text_font": "",
@@ -392,9 +394,11 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Script generation mode: "classic" (direct scenes) or "story" (story-first)
     "script_mode":          "default_script_mode",
-    # Burn the cover into the final video's first frame after each render
-    # ("none" | "image" | "text") — Shorts show frame 1, not the thumbnail
+    # Burn the cover into the head of the final video after each render
+    # ("none" | "image" | "text") — Shorts pick their own frame, not the
+    # uploaded thumbnail — and how long that cover is held (seconds)
     "first_frame_cover":    "default_first_frame_cover",
+    "first_frame_cover_seconds": "default_first_frame_cover_seconds",
     # Cover-text look for the "text" mode: font file, % of width, colour
     "first_frame_text_font":  "default_first_frame_text_font",
     "first_frame_text_size":  "default_first_frame_text_size",
@@ -707,6 +711,12 @@ def _norm_first_frame_cover(value) -> str:
     return norm_first_frame_cover(value)
 
 
+def _norm_first_frame_cover_seconds(value) -> float:
+    """Coerce how long the burned cover is held to 0.04..3.0 seconds."""
+    from pipeline.cover import norm_first_frame_cover_seconds
+    return norm_first_frame_cover_seconds(value)
+
+
 def _norm_first_frame_text_size(value) -> int:
     """Coerce the cover-text size (% of frame width) to a sane int."""
     from pipeline.cover import norm_first_frame_text_size
@@ -859,6 +869,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
+        _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
         _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
         _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
         _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)

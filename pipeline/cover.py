@@ -295,8 +295,9 @@ def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> No
     img.convert("RGB").save(str(output_path), "PNG")
 
 
-def overlay_cover_text(
-    base_path: Path,
+def render_cover_text_overlay(
+    width: int,
+    height: int,
     output_path: Path,
     text: str,
     *,
@@ -304,19 +305,21 @@ def overlay_cover_text(
     size_pct=None,
     color: str = "",
 ) -> None:
-    """Draw the cover phrase in large type across the top of a video frame.
+    """Draw the cover phrase in large type across the top of a TRANSPARENT
+    canvas, ready to composite over the video.
 
     Used by the "text" first-frame cover mode: the shortened title is drawn
     top-center in big letters (with a dark scrim from the top edge) so the
-    frame reads as a thumbnail in the Shorts feed. Font, size (% of frame
-    width) and colour come from the style's cover-text settings; defaults
-    reproduce the original look (bold system font, 11%, white).
+    opening reads as a thumbnail in the Shorts feed. The canvas is transparent
+    so ffmpeg lays it over the moving video — the title card costs no motion,
+    however long it is held. Font, size (% of frame width) and colour come from
+    the style's cover-text settings; defaults reproduce the original look (bold
+    system font, 11%, white).
     """
     from PIL import Image, ImageDraw
     import textwrap
 
-    img = Image.open(base_path).convert("RGBA")
-    width, height = img.size
+    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     font_size = max(16, width * norm_first_frame_text_size(size_pct) // 100)
     font = _load_font(font_size, font_path)
@@ -331,7 +334,7 @@ def overlay_cover_text(
     total_h = len(lines) * line_height
 
     # Dark gradient scrim fading down from the top edge, sized to the text
-    # block, so the text stays readable over any first frame.
+    # block, so the text stays readable over any frame underneath.
     overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
     draw_ov = ImageDraw.Draw(overlay)
     scrim_h = min(height, top + total_h + int(height * 0.06))
@@ -353,10 +356,29 @@ def overlay_cover_text(
                   stroke_width=stroke, stroke_fill=stroke_fill + (255,))
         y += line_height
 
-    img.convert("RGB").save(str(output_path), "PNG")
+    img.save(str(output_path), "PNG")
 
 
 FIRST_FRAME_COVER_MODES = ("none", "image", "text")
+
+# How long the burned cover is held at the head of the film. YouTube Shorts
+# ignore uploaded thumbnails and pick their own frame; a single stamped frame
+# (0.04s at 25fps) reads as a flash and is discarded by frame samplers, so the
+# cover is held ~1s — long enough to be its own shot, short enough to keep the
+# hook. Capped at 3s; the floor is one frame (the pre-1s behaviour).
+FIRST_FRAME_COVER_SECONDS_DEFAULT = 1.0
+FIRST_FRAME_COVER_SECONDS_MIN = 0.04
+FIRST_FRAME_COVER_SECONDS_MAX = 3.0
+
+
+def norm_first_frame_cover_seconds(value) -> float:
+    """Coerce the cover hold to 0.04..3.0 seconds (1.0 when unset/invalid)."""
+    try:
+        secs = float(value)
+    except (TypeError, ValueError):
+        return FIRST_FRAME_COVER_SECONDS_DEFAULT
+    return round(min(FIRST_FRAME_COVER_SECONDS_MAX,
+                     max(FIRST_FRAME_COVER_SECONDS_MIN, secs)), 2)
 
 
 def norm_first_frame_cover(value) -> str:
@@ -371,40 +393,43 @@ def burn_cover_into_first_frame(
     cover_path: Path | None = None,
     title: str = "",
     work_dir: Path | None = None,
+    seconds=None,
     text_font: str = "",
     text_size=None,
     text_color: str = "",
 ) -> Path:
-    """Burn a cover into the final video's first frame, in place.
+    """Burn a cover into the head of the final video, in place.
 
-    YouTube Shorts ignore uploaded thumbnails and show the video's first frame
-    in the feed, so the cover is stamped onto frame 0 itself. mode "image"
-    uses the job's cover image; mode "text" overlays the shortened title in
-    large type on the video's own first frame. Exactly one frame is replaced
-    (nothing is prepended), so duration, audio, and caption timing all stay
-    valid. Working PNGs land in *work_dir* (defaults to the video's folder).
+    YouTube Shorts ignore uploaded thumbnails and pick their own frame from the
+    video, so the cover is stamped onto the opening frames themselves — held
+    *seconds* long (default 1s) so YouTube's frame picker sees a shot rather
+    than a one-frame flash. mode "image" covers the video with the job's cover
+    image; mode "text" lays the shortened title in large type OVER the running
+    video, so the title card costs no motion. Frames are overlaid, never
+    prepended, so duration, audio, and caption timing all stay valid. Working
+    PNGs land in *work_dir* (defaults to the video's folder).
     """
-    from pipeline.assembler import extract_first_frame, replace_first_frame
+    from pipeline.assembler import _FILM_FPS, _get_video_dimensions, replace_first_frame
 
     mode = (mode or "").strip().lower()
     if mode not in ("image", "text"):
         raise ValueError(f"Unknown first-frame cover mode: {mode!r}")
     wd = Path(work_dir) if work_dir else video_path.parent
+    frames = max(1, round(norm_first_frame_cover_seconds(seconds) * _FILM_FPS))
     if mode == "image":
         if not (cover_path and cover_path.exists() and cover_path.stat().st_size > 1000):
             raise FileNotFoundError("No cover image for this film — generate the cover first.")
         frame_src = cover_path
     else:
         text = cover_phrase_for(wd, (title or "").strip() or video_path.stem)
-        base = wd / "first_frame_text_base.png"
-        extract_first_frame(video_path, base)
+        width, height = _get_video_dimensions(video_path)
         frame_src = wd / "first_frame_text.png"
-        overlay_cover_text(base, frame_src, text,
-                           font_path=text_font, size_pct=text_size, color=text_color)
+        render_cover_text_overlay(width, height, frame_src, text,
+                                  font_path=text_font, size_pct=text_size, color=text_color)
 
     staged = video_path.with_name(f"{video_path.stem}.firstframe.tmp{video_path.suffix}")
     try:
-        replace_first_frame(video_path, frame_src, staged)
+        replace_first_frame(video_path, frame_src, staged, frames=frames)
         staged.replace(video_path)
     finally:
         staged.unlink(missing_ok=True)
