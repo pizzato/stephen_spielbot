@@ -1,0 +1,16 @@
+/* Material falls back to indigo for links when the primary colour is black or
+   white. Point them at a warm amber instead — it matches the logo and keeps
+   enough contrast to read as body-text links in both schemes. */
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #b0501c;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-typeset-a-color: #ffa06b;
+}
+
+/* Grid cards read better with a little more air between the icon row and the
+   links underneath. */
+.md-typeset .grid.cards > ul > li > hr {
+  margin: 0.6em 0;
+}

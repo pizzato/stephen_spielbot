@@ -7,6 +7,7 @@ W ?=
 .PHONY: install uninstall download-models download-voices download-flux download-flux-cluster \
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale channels \
+        docs docs-serve ensure-mkdocs \
         launchd-install launchd-uninstall \
         clean \
         lint lint-fix lint-web ensure-ruff
@@ -169,6 +170,19 @@ tailscale:
 	    echo "Turn it off with:  tailscale serve reset"; \
 	}
 
+# ── Documentation site (MkDocs → GitHub Pages) ──
+MKDOCS := .venv/bin/mkdocs
+ensure-mkdocs:
+	@$(MKDOCS) --version >/dev/null 2>&1 || .venv/bin/pip install -q -r requirements-docs.txt
+
+## Build the documentation site into site/ — --strict fails on a broken link (what CI runs).
+docs: ensure-mkdocs
+	@$(MKDOCS) build --strict
+
+## Preview the documentation site with live reload (http://localhost:8000).
+docs-serve: ensure-mkdocs
+	@$(MKDOCS) serve
+
 # ── Linting / dead-code ──
 RUFF := .venv/bin/ruff
 ensure-ruff:
@@ -231,6 +245,10 @@ help:
 	@echo "  web-dev         Dev mode: API + Vite dev server (localhost:5174)"
 	@echo "  web-build       Build the React frontend to webapp/frontend/dist"
 	@echo "  tailscale       Expose the web app to your Tailscale devices (tailnet-only HTTPS)"
+	@echo ""
+	@echo "Documentation site (MkDocs → GitHub Pages):"
+	@echo "  docs            Build the docs site into site/ (--strict: broken links fail)"
+	@echo "  docs-serve      Preview the docs with live reload (localhost:8000)"
 	@echo ""
 	@echo "Linting / dead-code:"
 	@echo "  lint            Lint Python with ruff (unused imports/vars, undefined names)"
