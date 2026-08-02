@@ -28,7 +28,7 @@ The manual upload form.
 - **Description** — **Generate** writes one from the script
 - **Category** and **Privacy** — privacy defaults to `private`; raise it deliberately
 - **Thumbnail** and **cover phrase** — the phrase is the short text painted on the cover
-  and burned into the first frame
+  and burned into the opening frames
 - **First frame** — the burn mode for this film, same control as
   [Edit film](edit-film.md#first-frame)
 

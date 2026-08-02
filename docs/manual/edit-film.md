@@ -28,13 +28,15 @@ into the first frame. It follows the title until you edit it, then stays put.
 
 ### First frame
 
-**Add to first frame** burns the cover into frame 0 of the final video — `none`, `image`,
-or `text`. YouTube Shorts ignore uploaded thumbnails and show frame 1 in the feed, which is
-what this is for.
+**Add to first frame** burns the cover into the opening of the final video — `none`,
+`image`, or `text`. YouTube Shorts ignore uploaded thumbnails and pick their own frame,
+which is what this is for.
 
-The burn **replaces** frame 0 rather than prepending a frame, so it never shifts the
-timing. Font, size, and colour come from the style's settings; re-renders re-apply the burn
-automatically.
+The cover is held for the style's [**cover hold**](settings.md#cover-first-frame) (1
+second by default) — a single frame is a 40ms flash that YouTube's frame picker throws
+away. Nothing is prepended, so the timing never shifts: `image` covers the picture while
+the audio keeps running, and `text` lays the title over the moving video. Font, size, and
+colour come from the style's settings; re-renders re-apply the burn automatically.
 
 ### Re-mix audio
 

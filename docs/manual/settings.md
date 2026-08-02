@@ -96,8 +96,12 @@ scenes".
 
 ### Cover & first frame
 
-**First-frame cover** (`none` / `image` / `text`) plus the **font**, **size** (as a % of
-video width), and **colour** for the text variant.
+**First-frame cover** (`none` / `image` / `text`) and **cover hold** — how long the cover
+stays on screen, in seconds (0.04–3, default 1). A single frame is a flash YouTube's frame
+picker discards; a second reads as its own shot. `image` freezes the picture for that long
+(audio keeps running), while `text` lays the title over the moving video, so holding it
+costs no motion. Then the **font**, **size** (as a % of video width), and **colour** for
+the text variant.
 
 ### Script & content
 
