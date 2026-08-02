@@ -67,7 +67,7 @@ This site is [MkDocs Material](https://squidfunk.github.io/mkdocs-material/). Pa
 plain Markdown under `docs/`, and the navigation is the `nav:` block in `mkdocs.yml`.
 
 ```bash
-make docs-serve     # live-reload preview at http://localhost:8000
+make docs-serve     # live-reload preview at http://localhost:8010
 make docs           # build with --strict (a broken internal link fails)
 ```
 

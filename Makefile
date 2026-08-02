@@ -172,6 +172,7 @@ tailscale:
 
 # ── Documentation site (MkDocs → GitHub Pages) ──
 MKDOCS := .venv/bin/mkdocs
+DOCS_PORT ?= 8010
 ensure-mkdocs:
 	@$(MKDOCS) --version >/dev/null 2>&1 || .venv/bin/pip install -q -r requirements-docs.txt
 
@@ -179,9 +180,10 @@ ensure-mkdocs:
 docs: ensure-mkdocs
 	@$(MKDOCS) build --strict
 
-## Preview the documentation site with live reload (http://localhost:8000).
+## Preview the documentation site with live reload (http://localhost:8010).
+## Not MkDocs' default 8000 — that's where a local vLLM usually listens.
 docs-serve: ensure-mkdocs
-	@$(MKDOCS) serve
+	@$(MKDOCS) serve --dev-addr 127.0.0.1:$(DOCS_PORT)
 
 # ── Linting / dead-code ──
 RUFF := .venv/bin/ruff
@@ -248,7 +250,7 @@ help:
 	@echo ""
 	@echo "Documentation site (MkDocs → GitHub Pages):"
 	@echo "  docs            Build the docs site into site/ (--strict: broken links fail)"
-	@echo "  docs-serve      Preview the docs with live reload (localhost:8000)"
+	@echo "  docs-serve      Preview the docs with live reload (localhost:8010, DOCS_PORT= to change)"
 	@echo ""
 	@echo "Linting / dead-code:"
 	@echo "  lint            Lint Python with ruff (unused imports/vars, undefined names)"

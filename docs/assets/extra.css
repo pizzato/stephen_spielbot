@@ -1,11 +1,14 @@
-/* Material falls back to indigo for links when the primary colour is black or
-   white. Point them at a warm amber instead — it matches the logo and keeps
-   enough contrast to read as body-text links in both schemes. */
-[data-md-color-scheme="default"] {
+/* Material falls back to indigo/blue for links when the primary colour is black
+   or white. Point them at a warm amber instead — it matches the logo and keeps
+   enough contrast to read as body-text links in both schemes.
+   The scheme+primary pair matches the specificity of the palette rule being
+   overridden ([data-md-color-scheme=slate][data-md-color-primary=black]); a
+   scheme-only selector loses to it in dark mode. */
+[data-md-color-scheme="default"][data-md-color-primary="black"] {
   --md-typeset-a-color: #b0501c;
 }
 
-[data-md-color-scheme="slate"] {
+[data-md-color-scheme="slate"][data-md-color-primary="black"] {
   --md-typeset-a-color: #ffa06b;
 }
 
