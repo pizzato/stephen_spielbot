@@ -19,6 +19,9 @@ videos/
 *.flac
 !assets/default_narrator.mp3
 
+# Docs site build (MkDocs)
+site/
+
 # Logs
 *.log
 logs/

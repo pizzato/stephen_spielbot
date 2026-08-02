@@ -1,0 +1,127 @@
+site_name: Stephen Spielbot
+site_description: >-
+  An AI video generator that turns a topic into a fully produced short film —
+  cinematic visuals, narration, music, and a whole channel workflow around it.
+site_url: https://pizzato.github.io/stephen_spielbot/
+site_author: Luiz Pizzato
+
+repo_url: https://github.com/pizzato/stephen_spielbot
+repo_name: pizzato/stephen_spielbot
+edit_uri: edit/main/docs/
+
+copyright: Licensed under Apache-2.0. Models carry their own licenses.
+
+docs_dir: docs
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/favicon.png
+  icon:
+    repo: fontawesome/brands/github
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: black
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.instant
+    - navigation.tracking
+    - navigation.indexes
+    - toc.follow
+    - content.code.copy
+    - content.action.edit
+    - search.suggest
+    - search.highlight
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+
+extra_css:
+  - assets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/pizzato/stephen_spielbot
+      name: Source on GitHub
+    - icon: fontawesome/brands/youtube
+      link: https://www.youtube.com/@StephenSpielbot
+      name: Films on YouTube
+
+# Fail the build on a broken internal link — `mkdocs build --strict` is the CI gate.
+validation:
+  links:
+    absolute_links: ignore
+    unrecognized_links: warn
+
+nav:
+  - Home: index.md
+  - Getting started:
+      - Installation: installation.md
+      - Your first film: first-film.md
+      - Troubleshooting: troubleshooting.md
+  - Manual:
+      - Overview: manual/index.md
+      - Home: manual/home.md
+      - Create: manual/create.md
+      - AI ideas: manual/ideas.md
+      - Queue: manual/queue.md
+      - Script: manual/script.md
+      - Render & Activity: manual/render.md
+      - Films: manual/films.md
+      - Edit film: manual/edit-film.md
+      - Publishing: manual/publishing.md
+      - Community: manual/community.md
+      - Channel Analytics: manual/analytics.md
+      - Settings: manual/settings.md
+      - Prompts: manual/prompts.md
+  - Guides:
+      - Characters: characters.md
+      - Dialogue & silent scenes: dialogue_scenes.md
+      - YouTube setup: youtube_setup.md
+      - X setup: x_setup.md
+  - Reference:
+      - Configuration: configuration.md
+      - Environment variables: environment.md
+      - Cluster & workers: cluster.md
+      - Models: models.md
+      - Architecture: architecture.md
+      - Durable orchestration: orchestration.md
+      - Security: security.md
+      - Model licensing: tts_licensing.md
+      - Contributing: contributing.md
