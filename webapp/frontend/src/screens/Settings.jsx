@@ -1157,6 +1157,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return v === 'story' ? 'Story-first' : 'Classic'
       case 'first_frame_cover':
         return v === 'image' ? 'Cover image' : v === 'text' ? 'Cover text' : 'off'
+      case 'first_frame_cover_seconds':
+        return `${v ?? 1}s`
       case 'first_frame_text_font':
         return (fontInfo || []).find((f) => f.path === v)?.name
           || (v ? v.split('/').pop() : '(automatic)')
@@ -1881,13 +1883,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select>
                 <ParentVal k="x_account" />
               </Field>
-              <Field label="First-frame cover" hint="After each render, burn the cover into the video’s first frame — YouTube Shorts ignore uploaded thumbnails and show frame 1 in the feed. Replaces a single frame, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
+              <Field label="First-frame cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
                 <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="none">Off — leave the first frame as rendered</option>
                   <option value="image">Cover image</option>
-                  <option value="text">Cover text — big title on the frame</option>
+                  <option value="text">Cover text — big title over the video</option>
                 </select>
                 <ParentVal k="first_frame_cover" />
+              </Field>
+              <Field label="Cover hold" hint="How long the cover is held at the start, in seconds. A single frame (0.04s) is a flash YouTube’s frame picker throws away — 1s reads as its own shot. “Cover image” freezes the picture for that long (audio keeps running); “Cover text” lays the title over the moving video, so holding it costs no motion.">
+                <input className="input" type="number" min={0.04} max={3} step={0.1} value={eff.first_frame_cover_seconds ?? 1}
+                  onChange={(e) => setStyleField('first_frame_cover_seconds', +e.target.value)} style={{ maxWidth: 120 }} />
+                <ParentVal k="first_frame_cover_seconds" />
               </Field>
               <Field label="Cover text font" hint="Look of the “Cover text” mode (automatic and manual burns). Any font installed on this machine; “Automatic” picks a bold system font.">
                 <select className="select" value={eff.first_frame_text_font || ''} onChange={(e) => setStyleField('first_frame_text_font', e.target.value)} style={{ maxWidth: 320 }}>

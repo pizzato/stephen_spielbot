@@ -1184,9 +1184,9 @@ def main(work_dir: Path) -> None:
             ambient_path=ambient_path, ambient_volume=ambient_vol,
         )
         ensure_video_resolution(final_path, vid_width, vid_height)
-        # Per-style automation: burn the cover into the first frame — YouTube
-        # Shorts ignore uploaded thumbnails and show frame 1 in the feed. The
-        # frame is replaced (not prepended) so caption timing stays valid.
+        # Per-style automation: burn the cover into the head of the film —
+        # YouTube Shorts ignore uploaded thumbnails and pick their own frame.
+        # Frames are overlaid (not prepended) so caption timing stays valid.
         # Non-fatal: a finished film without the stamp beats a failed render.
         ff_cover = str(cfg.get("first_frame_cover")
                        or cfg.get("default_first_frame_cover") or "none").strip().lower()
@@ -1196,6 +1196,8 @@ def main(work_dir: Path) -> None:
                 _burn_first_frame(
                     final_path, ff_cover,
                     cover_path=cover_path, title=video_title, work_dir=work_dir,
+                    seconds=cfg.get("first_frame_cover_seconds",
+                                    cfg.get("default_first_frame_cover_seconds")),
                     text_font=str(cfg.get("first_frame_text_font",
                                           cfg.get("default_first_frame_text_font", "")) or ""),
                     text_size=cfg.get("first_frame_text_size",

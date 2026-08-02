@@ -295,28 +295,35 @@ def upscale_video(input_path: Path, output_path: Path, width: int, height: int) 
     return output_path
 
 
-def replace_first_frame(video_path: Path, frame_image: Path, output_path: Path) -> Path:
-    """Show *frame_image* on the video's very first frame (frame 0 only).
+def replace_first_frame(
+    video_path: Path, frame_image: Path, output_path: Path, *, frames: int = 1,
+) -> Path:
+    """Show *frame_image* over the video's first *frames* frames.
 
-    YouTube Shorts ignore uploaded thumbnails and show the video's first frame
-    in the feed — burning the cover into frame 0 makes that frame the cover.
-    The frame is REPLACED, not prepended, so duration and caption timing are
-    untouched; audio is stream-copied. Writes to a separate output so callers
-    can atomically swap it in after ffmpeg succeeds.
+    YouTube Shorts ignore uploaded thumbnails and pick their own frame from the
+    video, so the cover is burned into the opening itself. A single frame (40ms
+    at 25fps) is a flash that frame samplers discard — holding it ~1s makes it
+    its own shot, which is why callers pass a duration (see pipeline/cover.py).
+    Nothing is prepended, so duration and caption timing are untouched; audio is
+    stream-copied. An RGBA *frame_image* composites over the moving video (the
+    "text" cover mode); an opaque one covers it. Writes to a separate output so
+    callers can atomically swap it in after ffmpeg succeeds.
     """
     width, height = _get_video_dimensions(video_path)
+    frames = max(1, int(frames))
     output_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info(
-        "[ffmpeg] replace_first_frame: %s ← %s", video_path.name, frame_image.name,
+        "[ffmpeg] replace_first_frame: %s ← %s (%d frame(s))",
+        video_path.name, frame_image.name, frames,
     )
     _run([
         _FFMPEG, "-y",
         "-i", str(video_path),
         "-i", str(frame_image),
         "-filter_complex", (
-            f"[1:v]scale={width}:{height}:force_original_aspect_ratio=increase,"
+            f"[1:v]format=rgba,scale={width}:{height}:force_original_aspect_ratio=increase,"
             f"crop={width}:{height},setsar=1[cover];"
-            "[0:v][cover]overlay=enable='eq(n,0)',format=yuv420p[out]"
+            f"[0:v][cover]overlay=enable='lt(n,{frames})',format=yuv420p[out]"
         ),
         "-map", "[out]", "-map", "0:a?",
         "-c:v", "libx264", "-crf", "18", "-preset", "fast",
