@@ -247,14 +247,6 @@ DEFAULT_CFG = {
     # tracks the default style like every other STYLE_FIELD_TO_FLAT mirror.
     "default_size_presets": _DEFAULT_SIZE_PRESETS,
     "default_visual_style": "",
-    # Recurring characters are a GLOBAL library (see the top-level "characters"
-    # key below); each style opts into the ones it uses via "character_ids".
-    # This flat key mirrors the DEFAULT style's id list, like every other
-    # STYLE_FIELD_TO_FLAT mirror. Empty by default, so styles behave as before.
-    "default_character_ids": [],
-    # When set, a style opts into EVERY library character (incl. ones added
-    # later) instead of its hand-picked character_ids list — see _style_characters.
-    "default_auto_accept_characters": False,
     "default_video_style": "",        # motion/cinematography guidance for each scene's video_prompt (camera + subject movement)
     # Per-style LTX video negative prompt (mirror of the DEFAULT style). Blank
     # means "use the built-in quality default" — resolved at render time.
@@ -351,12 +343,13 @@ DEFAULT_CFG = {
     "engagement_min_samples": 15,        # below this, the model is flagged "insufficient"
     "engagement_data_lag_days": 3,       # exclude videos newer than this (no full prediction window yet)
     "engagement_short_max_seconds": 180, # videos this long (s) or shorter count as a Short
-    # Recurring characters — a GLOBAL library shared across every style (each
-    # style opts into the ones it uses via its per-style character_ids). Each
-    # entry is {id, name, aliases[], description, ref_image, ref_strength,
-    # enabled} — see _norm_characters. Empty by default, so styles behave
-    # exactly as before. Normalized (and migrated up from the old per-style
-    # lists) by _ensure_characters.
+    # Recurring characters — one library, each entry scoped by its "style"
+    # field: "" = the GLOBAL pool every style inherits automatically, else the
+    # name of the style that owns it (visible to that style and every style
+    # under it in the hierarchy). Each entry is {id, name, aliases[],
+    # description, ref_image, ref_strength, enabled, style} — see
+    # _norm_characters; resolution in _style_characters. Normalized (and
+    # migrated from the old per-style opt-in lists) by _ensure_characters.
     "characters": [],
     # Style profiles (issue #66) — named bundles of the script/content, render
     # quality and audio-mix settings above. load/save normalize this list and
@@ -371,10 +364,6 @@ DEFAULT_CFG = {
 STYLE_FIELD_TO_FLAT = {
     # Script & content
     "visual_style":         "default_visual_style",
-    # Which global characters (by id) this style opts into (see _ensure_characters)
-    "character_ids":        "default_character_ids",
-    # Opt into EVERY library character automatically instead of character_ids
-    "auto_accept_characters": "default_auto_accept_characters",
     "video_style":          "default_video_style",
     # Negative prompt applied to every LTX video render in this style (blank →
     # the built-in quality default, see pipeline/llm.py NEGATIVE_PROMPT)
@@ -546,6 +535,12 @@ def _norm_characters(value) -> list[dict]:
             "ref_image": str(raw.get("ref_image") or "").strip(),
             "ref_strength": strength,
             "enabled": bool(raw.get("enabled", True)),
+            # Owning style: "" ⟹ the global pool (every style inherits it);
+            # else visible to that style and its descendants. A scope naming a
+            # style that no longer exists is KEPT (dormant until the style is
+            # restored or the user re-homes it) — same philosophy as a
+            # dangling style parent.
+            "style": str(raw.get("style") or "").strip(),
             # Named voice (from the voices store) this character speaks with in
             # dialogue scenes; "" ⟹ fall back to the style's narrator voice.
             "voice": str(raw.get("voice") or "").strip(),
@@ -623,30 +618,24 @@ def _auto_assign_character_voices(chars: list[dict], cfg: dict,
     return chars
 
 
-def _norm_character_ids(value, valid_ids: set) -> list[str]:
-    """Normalize a style's opted-in character-id list: keep only ids that exist
-    in the global library, deduped and order-preserving. Drops stale ids left
-    behind when a character is deleted from the library."""
-    out, seen = [], set()
-    for cid in value if isinstance(value, list) else []:
-        cid = str(cid or "").strip()
-        if cid and cid in valid_ids and cid not in seen:
-            seen.add(cid)
-            out.append(cid)
-    return out
-
-
 def _ensure_characters(cfg: dict) -> dict:
-    """Normalize the GLOBAL character library in place, migrating the old
-    per-style lists up on first run.
+    """Normalize the character library in place, migrating older layouts on
+    first run.
 
-    Characters used to live on each style (cfg["styles"][i]["characters"]); they
-    are now one shared library (cfg["characters"]) that styles opt into by id
-    (cfg["styles"][i]["character_ids"]). The one-time migration collects every
-    per-style character into the library (deduped by id — a style duplicated via
-    "New style" shares the same ids, so it becomes a shared character) and seeds
-    each style's character_ids. Runs BEFORE _ensure_styles, which then strips the
-    obsolete per-style "characters" field and normalizes character_ids."""
+    v2 (characters_migrated_v2): characters used to live on each style
+    (cfg["styles"][i]["characters"]); they became one shared library
+    (cfg["characters"]) that styles opted into by id (character_ids).
+
+    v3 (characters_scoped_v3): the opt-in lists are gone — each character now
+    carries a single "style" scope instead. "" = the global pool (every style
+    inherits it automatically); a style name = owned by that style and visible
+    to it and its descendants. The migration derives the scope from the old
+    opt-ins: a character listed in exactly ONE style's own character_ids
+    becomes that style's; one listed by no style but named exactly like a
+    style (the narrator personas) goes to that style; anything else — shared
+    across styles, or only ever reached through auto_accept_characters —
+    stays global. The obsolete opt-in fields are removed from every style and
+    from the flat mirrors. Runs BEFORE _ensure_styles."""
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
     if not cfg.get("characters_migrated_v2"):
         library, seen = [], set()
@@ -669,6 +658,30 @@ def _ensure_characters(cfg: dict) -> dict:
         cfg.pop("default_characters", None)  # obsolete flat mirror
         cfg["characters_migrated_v2"] = True
     cfg["characters"] = _norm_characters(cfg.get("characters"))
+    if not cfg.get("characters_scoped_v3"):
+        owners: dict[str, list[str]] = {}
+        for s in styles:
+            sname = str(s.get("name") or "").strip()
+            ids = s.get("character_ids")
+            for cid in (ids if isinstance(ids, list) else []):
+                cid = str(cid or "").strip()
+                if cid and sname and sname not in owners.setdefault(cid, []):
+                    owners[cid].append(sname)
+        style_names = {str(s.get("name") or "").strip() for s in styles} - {""}
+        for c in cfg["characters"]:
+            if c.get("style"):  # already scoped by hand — keep it
+                continue
+            own = owners.get(c["id"], [])
+            if len(own) == 1:
+                c["style"] = own[0]
+            elif not own and c["name"] in style_names:
+                c["style"] = c["name"]
+        for s in styles:
+            s.pop("character_ids", None)
+            s.pop("auto_accept_characters", None)
+        cfg.pop("default_character_ids", None)
+        cfg.pop("default_auto_accept_characters", None)
+        cfg["characters_scoped_v3"] = True
     return cfg
 
 
@@ -852,16 +865,12 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     # mirror below snapshots the default style's onto the flat key. On sparse
     # children only fields they actually override are coerced — writing the
     # coerced value back for an absent field would freeze it as an override.
-    valid_char_ids = {c["id"] for c in (cfg.get("characters") or []) if isinstance(c, dict) and c.get("id")}
-
     def _coerce(row: dict, field: str, fn) -> None:
         if field in row or not row.get("parent"):
             row[field] = fn(row.get(field))
 
     for row in normalized:
         _coerce(row, "size_presets", _norm_size_presets)
-        _coerce(row, "character_ids", lambda v: _norm_character_ids(v, valid_char_ids))
-        _coerce(row, "auto_accept_characters", bool)
         _coerce(row, "image_engine", lambda v: _norm_engine(v, "generate"))
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "tts_engine", _norm_tts_engine)
@@ -1128,8 +1137,7 @@ def style_settings(cfg: dict, name: str = "") -> dict:
                    extra_instructions="", script_avoid="", description_suffix="",
                    attribution_description="", attribution_hashtags="",
                    attribution_youtube_tags="",
-                   title_style="", voice="", voice_robotic_amount=0.0, voice_speed=1.0,
-                   character_ids=[], auto_accept_characters=False)
+                   title_style="", voice="", voice_robotic_amount=0.0, voice_speed=1.0)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out
@@ -2093,17 +2101,24 @@ def _characters_refer_to_same(a: dict, b: dict) -> bool:
 
 
 def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
-    """The global characters a style has opted into, in library order.
+    """The library characters visible to a style, in library order.
 
-    A style with auto_accept_characters set includes every library character
-    (so characters added later are picked up automatically); otherwise it
-    resolves its character_ids against the shared cfg["characters"] library."""
-    settings = style_settings(cfg, style_name)
-    chars = cfg.get("characters") or []
-    if settings.get("auto_accept_characters"):
-        return list(chars)
-    ids = set(settings.get("character_ids") or [])
-    return [c for c in chars if c.get("id") in ids]
+    Every style automatically inherits the GLOBAL pool (characters with no
+    "style" scope). A character scoped to a style is visible to that style and
+    every style below it in the hierarchy — children inherit the parent's cast.
+    An empty/unknown name resolves like style_settings (the default style);
+    the "(none)" experiment style imposes nothing, so it sees no characters."""
+    requested = (style_name or "").strip()
+    if requested == NO_STYLE:
+        return []
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None:
+        target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
+                      styles[0] if styles else None)
+    visible = {str(s.get("name") or "") for s in _style_lineage(styles, target)} if target else set()
+    return [c for c in (cfg.get("characters") or [])
+            if isinstance(c, dict) and (not c.get("style") or c.get("style") in visible)]
 
 
 def _filter_identified_against_style(identified, cfg: dict, style_name: str = "") -> list[dict]:
@@ -2115,7 +2130,8 @@ def _filter_identified_against_style(identified, cfg: dict, style_name: str = ""
     become per-script characters; style-accessible globals keep winning.
 
     Matching is by name/alias (case-insensitive exact or whole-word either way).
-    Only enabled, style-opted-in catalogue characters count as accessible.
+    Only enabled catalogue characters visible to the style (global pool or
+    scoped to its lineage) count as accessible.
     """
     style_chars = [
         c for c in _style_characters(cfg, style_name)
@@ -2183,8 +2199,9 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
 
 
 def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:
-    """The characters a single job can use: the style's opted-in catalogue
-    characters plus the script's own (per-script) characters. Each entry carries
+    """The characters a single job can use: the catalogue characters visible
+    to the style (global pool + its lineage) plus the script's own
+    (per-script) characters. Each entry carries
     a resolved absolute reference-image path under '_ref_path', so callers need
     not know where a character's image is stored. A per-script character shadows
     a catalogue character of the same name (the editor's edits win). Returns fresh
@@ -2373,12 +2390,12 @@ def clear_character_image(char_id: str) -> dict:
 
 def generate_character_portrait(char_id: str, extra_prompt: str = "") -> dict:
     """Generate a portrait from the character's description and lock it in as the
-    reference image (re-callable to re-roll). Characters are global, so the
-    default style's image engine + visual look anchors the portrait. Needs a
-    worker. Returns the reloaded config."""
+    reference image (re-callable to re-roll). The portrait is anchored to the
+    OWNING style's image engine + visual look; a global-pool character falls
+    back to the default style's. Needs a worker. Returns the reloaded config."""
     cfg = load_config()
     char = _find_character(cfg, char_id)
-    style_name = cfg.get("default_style") or ""
+    style_name = char.get("style") or cfg.get("default_style") or ""
     parts = [p for p in (char.get("name"), char.get("description"), (extra_prompt or "").strip()) if p]
     prompt = ", ".join(parts) or char.get("name") or "character portrait"
     combined = _compose_visual_style("", cfg, style_name)
@@ -2479,9 +2496,10 @@ def generate_all_script_portraits(work_dir, style_name: str) -> int:
 
 
 def promote_script_character(work_dir, char_id: str, style_name: str = "") -> dict:
-    """Copy a per-script character into the GLOBAL catalogue (with its look image)
-    and opt the given style into it, so the user can reuse it across future
-    videos. The per-script copy stays put — this is a one-way "save to catalogue".
+    """Copy a per-script character into the catalogue (with its look image),
+    scoped to the job's style — so that style and its children reuse it in
+    future videos. Promoting without a style lands it in the global pool. The
+    per-script copy stays put — this is a one-way "save to catalogue".
     Returns the reloaded config."""
     work_dir = Path(work_dir)
     chars = _read_script_characters(work_dir)
@@ -2499,6 +2517,8 @@ def promote_script_character(work_dir, char_id: str, style_name: str = "") -> di
         "ref_image": "",
         "ref_strength": src.get("ref_strength", 1.0),
         "enabled": True,
+        # The "(none)" experiment style owns nothing — such promotes go global.
+        "style": "" if (style_name or "").strip() == NO_STYLE else (style_name or "").strip(),
     }
     # Copy the look image into the global characters dir under the new id.
     sp = _script_character_image_path(work_dir, src.get("ref_image"))
@@ -2512,22 +2532,6 @@ def promote_script_character(work_dir, char_id: str, style_name: str = "") -> di
         except OSError as exc:
             logger.warning("Could not copy portrait while promoting %r: %s", entry["name"], exc)
     library.append(entry)
-    # Opt the current style into the new catalogue character so it's used again.
-    # Mutate the real style dict in cfg["styles"] (style_settings returns a copy).
-    # A child style without its own character_ids override delegates the roster
-    # to its nearest ancestor that owns one — promote there, so every sibling
-    # variant sees the new character too instead of silently forking the list.
-    if style_name:
-        styles = [s for s in cfg.get("styles", []) if isinstance(s, dict)]
-        target = next((s for s in styles if s.get("name") == style_name), None)
-        if target is not None and not style_settings(cfg, style_name).get("auto_accept_characters"):
-            lineage = _style_lineage(styles, target)
-            owner = next((s for s in reversed(lineage) if "character_ids" in s),
-                         lineage[0] if lineage else target)
-            ids = list(owner.get("character_ids") or [])
-            if new_id not in ids:
-                ids.append(new_id)
-                owner["character_ids"] = ids
     save_config(cfg)
     return load_config()
 
