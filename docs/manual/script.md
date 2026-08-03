@@ -64,8 +64,10 @@ Each character has:
 | **Voice** | The cloned voice they speak with in dialogue scenes |
 
 Each also carries a **reference look** — a portrait the image engine uses for consistency.
-**Remove look** clears it; **Save to catalogue** promotes the character to the global
-library in [Settings → Characters](settings.md#characters) so other films can use them.
+**Remove look** clears it; **Save to catalogue** copies the character into
+[Settings → Characters](settings.md#characters) under this film's style, so that style
+and the styles beneath it reuse it in future films (move it to the global pool there if
+every style should have it).
 
 ## Scenes
 

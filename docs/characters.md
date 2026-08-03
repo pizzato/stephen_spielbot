@@ -94,13 +94,15 @@ placeholder with no UI.
 - `_scene_reference_images()` in `app.py` maps a scene's matched characters to their
   reference files, capped at `_MAX_SCENE_REFERENCES = 2` per scene (drops are logged).
 - Getting a reference image, per character: **upload** a photo, or **generate a
-  portrait** from the description (re-roll until happy, versions kept). Endpoints:
+  portrait** from the description (re-roll until happy, versions kept). Portraits are
+  anchored to the **owning style's** image engine + visual look — global-pool
+  characters fall back to the default style's. Endpoints:
   `/api/characters/image`, `.../image/clear`, `.../image/select`,
   `/api/characters/portrait`.
 
 ## Per-script characters
 
-Besides the global library, script generation identifies up to 2 recurring **main**
+Besides the catalogue, script generation identifies up to 2 recurring **main**
 characters (`_MAX_MAIN_CHARACTERS` in `pipeline/llm.py`), plus a follow-up pass for
 recurring supporting characters (`_detect_recurring_characters`, cap 8). Identified
 characters that already exist in the style's catalogue are dropped, so only genuinely

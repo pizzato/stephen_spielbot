@@ -89,8 +89,9 @@ re-muxes with your current levels. Every generated track is kept in a version st
 ## Characters
 
 The film's cast, same fields as the [Script](script.md#characters) view: name, aliases,
-appearance, voice, and a reference look. **Save to catalogue** promotes one to the global
-library. **Open Scenes** jumps to the scene list to assign them.
+appearance, voice, and a reference look. **Save to catalogue** copies one into
+[Settings → Characters](settings.md#characters) under the film's style (that style and
+its children reuse it). **Open Scenes** jumps to the scene list to assign them.
 
 See [Characters](../characters.md) for how consistency actually works.
 
