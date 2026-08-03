@@ -144,16 +144,25 @@ Three buckets — Small / Medium / Large — each pairing a **scenes** count wit
 
 ### Characters
 
-Opt this style into library characters — either a hand-picked list, or **auto-accept**,
-which opts into every character including ones added later.
+A read-only summary of the cast this style inherits: every **global** character, plus
+the ones that belong to this style or a style above it in the hierarchy. Manage (and
+move) them on the **Characters** tab.
 
 ---
 
 ## Characters
 
-The global character library: **name**, **also known as**, **appearance**, **voice**, and
-an enabled switch. Styles opt into them; films inherit from their style and can add
-film-specific characters of their own.
+The character library, browsed by home. A picker mirroring the **Styles** tree sits on
+top — **Global** first, then the style hierarchy, each pill counting the characters that
+live there — and clicking a pill lists that home's characters. **Global characters** are
+inherited by every style automatically; a character that **belongs to a style** is used
+only by that style and the styles under it — so a parent style's cast flows to all its
+children. Each card has **name**, **also known as**, **appearance**, **voice**, an
+enabled switch, and a **Belongs to** picker to move it between the global pool and any
+style. Reference images stay visible while you edit; uploading, portrait rolls, and
+version picks apply after **Save settings**. Generated portraits use the owning style's
+image model and visual look (global characters use the default style's). Films inherit
+their style's cast and can add film-specific characters of their own.
 
 See [Characters](../characters.md) for how consistency is enforced across scenes.
 

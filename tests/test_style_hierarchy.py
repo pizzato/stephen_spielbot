@@ -348,55 +348,54 @@ class HierarchyConsumerTests(TempConfigCase):
         self.assertEqual(app.style_settings(cfg, "Kid")["channel"], "")
 
 
-class PromoteNearestOwnerTests(TempConfigCase):
+class CharacterScopeHierarchyTests(TempConfigCase):
+    """Character visibility through the style hierarchy: the global pool flows
+    to every style, a style's own characters flow to its descendants, and a
+    promote from a job scopes the new catalogue entry to that job's style."""
+
     def _seed_script_char(self):
         wd = self.output_dir / "vid-20260101-000000"
         wd.mkdir(parents=True, exist_ok=True)
         saved = app._write_script_characters(wd, [{"name": "Caesar", "description": "a lean general"}])
         return wd, saved[0]["id"]
 
-    def test_promote_via_child_lands_on_the_parents_roster(self):
+    def test_promote_via_child_scopes_to_that_child(self):
         self.write_config({
-            "characters": [], "characters_migrated_v2": True,
-            "styles": [_style("BHOB", character_ids=[]),
+            "characters": [], "characters_migrated_v2": True, "characters_scoped_v3": True,
+            "styles": [_style("BHOB"),
                        _child("BHOB ES", "BHOB", voice="Spanish-voice")],
             "default_style": "BHOB",
         })
         wd, cid = self._seed_script_char()
         cfg = app.promote_script_character(wd, cid, "BHOB ES")
-        new_id = cfg["characters"][0]["id"]
-        root = next(s for s in cfg["styles"] if s["name"] == "BHOB")
-        child = next(s for s in cfg["styles"] if s["name"] == "BHOB ES")
-        self.assertIn(new_id, root["character_ids"])
-        self.assertNotIn("character_ids", child)  # roster stays shared
-        self.assertIn(new_id, app.style_settings(cfg, "BHOB ES")["character_ids"])
+        entry = cfg["characters"][0]
+        self.assertEqual(entry["style"], "BHOB ES")
+        self.assertIn(entry["id"], [c["id"] for c in app._style_characters(cfg, "BHOB ES")])
+        # The parent does NOT see a child-scoped character (inheritance flows down).
+        self.assertNotIn(entry["id"], [c["id"] for c in app._style_characters(cfg, "BHOB")])
 
-    def test_promote_respects_a_childs_own_roster_override(self):
+    def test_parent_scoped_character_flows_to_children(self):
         self.write_config({
-            "characters": [], "characters_migrated_v2": True,
-            "styles": [_style("BHOB", character_ids=[]),
-                       _child("BHOB ES", "BHOB", character_ids=[])],
+            "characters": [{"id": "char_p", "name": "Mascot", "description": "shared", "style": "BHOB"}],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+            "styles": [_style("BHOB"), _child("BHOB ES", "BHOB"), _style("Other")],
             "default_style": "BHOB",
         })
-        wd, cid = self._seed_script_char()
-        cfg = app.promote_script_character(wd, cid, "BHOB ES")
-        new_id = cfg["characters"][0]["id"]
-        root = next(s for s in cfg["styles"] if s["name"] == "BHOB")
-        child = next(s for s in cfg["styles"] if s["name"] == "BHOB ES")
-        self.assertIn(new_id, child["character_ids"])
-        self.assertNotIn(new_id, root["character_ids"])
+        cfg = app.load_config()
+        self.assertIn("char_p", [c["id"] for c in app._style_characters(cfg, "BHOB")])
+        self.assertIn("char_p", [c["id"] for c in app._style_characters(cfg, "BHOB ES")])
+        self.assertNotIn("char_p", [c["id"] for c in app._style_characters(cfg, "Other")])
 
-    def test_inherited_auto_accept_skips_roster_write(self):
+    def test_global_pool_flows_to_every_style(self):
         self.write_config({
-            "characters": [], "characters_migrated_v2": True,
-            "styles": [_style("BHOB", character_ids=[], auto_accept_characters=True),
-                       _child("BHOB ES", "BHOB")],
+            "characters": [{"id": "char_g", "name": "Kinho", "description": "mascot"}],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+            "styles": [_style("BHOB"), _child("BHOB ES", "BHOB"), _style("Other")],
             "default_style": "BHOB",
         })
-        wd, cid = self._seed_script_char()
-        cfg = app.promote_script_character(wd, cid, "BHOB ES")
-        root = next(s for s in cfg["styles"] if s["name"] == "BHOB")
-        self.assertEqual(root["character_ids"], [])  # auto-accept covers it
+        cfg = app.load_config()
+        for name in ("BHOB", "BHOB ES", "Other"):
+            self.assertIn("char_g", [c["id"] for c in app._style_characters(cfg, name)])
 
 
 class ChildStyleJobSnapshotTests(TempConfigCase):

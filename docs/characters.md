@@ -12,19 +12,34 @@ mechanisms work together:
 The video side needs no changes: LTX renders from the scene's first-frame still, so once
 the still is consistent, the motion clip inherits it.
 
-## Global library + per-style opt-in
+## One library, scoped by style
 
-Characters live in a single top-level `cfg["characters"]` list (not per style).
+Characters live in a single top-level `cfg["characters"]` list; each entry carries a
+`style` scope that says who inherits it:
+
+- `style: ""` — the **global pool**: every style inherits the character automatically.
+- `style: "<name>"` — owned by that style: visible to it **and every style under it**
+  in the [style hierarchy](configuration.md) (children inherit the parent's cast;
+  siblings and unrelated styles never see it).
+
+`_style_characters(cfg, style_name)` resolves a style's effective cast (global pool +
+its lineage, library order; the `(none)` experiment style gets nothing). The Settings →
+**Characters** tab has a scope picker mirroring the Styles tab's tree — a **Global**
+pill first, then the style hierarchy, each pill showing how many characters live there;
+picking a scope lists the characters homed in it, and each card has a **Belongs to**
+picker to move it. Reference images stay visible while the form has unsaved edits; only
+the operations that persist immediately (upload / portrait / version picks) wait for a
+clean form. The style cards under **Styles** show a read-only summary of the cast the
+selected style inherits.
+
 `_ensure_characters()` in `app.py` normalizes the library and performs the one-time
-migration from the old per-style lists. Each style holds:
-
-- `character_ids` — the library characters it uses (checkboxes in Settings), or
-- `auto_accept_characters` — a toggle that opts the style into *every* library character,
-  including ones added later.
-
-`_style_characters(cfg, style_name)` resolves a style's effective cast. The Settings →
-**Characters** tab manages the library (CRUD, portraits); each style card has the opt-in
-checkboxes.
+migrations: v2 hoisted the old per-style lists into the shared library; v3
+(`characters_scoped_v3`) replaced the old opt-in fields (`character_ids` /
+`auto_accept_characters`) with scopes — a character listed by exactly one style became
+that style's, one named exactly like a style (narrator personas) went to that style,
+everything else stayed global. A scope naming a deleted style is kept (dormant) until
+the style returns or the user re-homes the character; renaming a style re-points its
+characters, deleting one re-homes them to its parent (or the global pool).
 
 ### The character object
 
@@ -36,7 +51,8 @@ checkboxes.
   "description": "a middle-aged man, short grey beard, round glasses, navy wool coat",
   "ref_image": "char_a1b2c3.png",// filename under the characters dir; "" if text-only
   "voice": "...",                // named voice for dialogue scenes (see docs/dialogue_scenes.md)
-  "enabled": true
+  "enabled": true,
+  "style": "Children Story"      // "" = global pool, else the owning style
 }
 ```
 
@@ -78,13 +94,15 @@ placeholder with no UI.
 - `_scene_reference_images()` in `app.py` maps a scene's matched characters to their
   reference files, capped at `_MAX_SCENE_REFERENCES = 2` per scene (drops are logged).
 - Getting a reference image, per character: **upload** a photo, or **generate a
-  portrait** from the description (re-roll until happy, versions kept). Endpoints:
+  portrait** from the description (re-roll until happy, versions kept). Portraits are
+  anchored to the **owning style's** image engine + visual look — global-pool
+  characters fall back to the default style's. Endpoints:
   `/api/characters/image`, `.../image/clear`, `.../image/select`,
   `/api/characters/portrait`.
 
 ## Per-script characters
 
-Besides the global library, script generation identifies up to 2 recurring **main**
+Besides the catalogue, script generation identifies up to 2 recurring **main**
 characters (`_MAX_MAIN_CHARACTERS` in `pipeline/llm.py`), plus a follow-up pass for
 recurring supporting characters (`_detect_recurring_characters`, cap 8). Identified
 characters that already exist in the style's catalogue are dropped, so only genuinely
@@ -94,10 +112,11 @@ new cast become per-script.
   (`_read_script_characters` / `_write_script_characters` in `app.py`).
 - The editor's **Characters** tab (`Script.jsx`) offers CRUD, voice picker, look
   generation/upload, and **Promote to catalogue** — `promote_script_character()` copies
-  the character (and its look image) into the global library and opts the current style
-  in. One-way; the per-script copy stays.
-- At render time `_job_characters()` merges the style's global cast with the script's
-  own; a per-script character shadows a global one with the same name.
+  the character (and its look image) into the library scoped to the job's style, so
+  that style and its children reuse it. One-way; the per-script copy stays.
+- At render time `_job_characters()` merges the cast the style inherits (global pool +
+  lineage) with the script's own; a per-script character shadows a catalogue one with
+  the same name.
 
 ## Deploy notes
 

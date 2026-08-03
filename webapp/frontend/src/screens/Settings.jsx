@@ -921,6 +921,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
   const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [charLightbox, setCharLightbox] = useState(null)  // character being viewed full-res
+  const [charScope, setCharScope] = useState('')          // Characters tab: selected home ('' = Global)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -1168,10 +1169,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return String(v || '#FFFFFF')
       case 'voice':
         return v || '(F5-TTS default)'
-      case 'character_ids': {
-        const names = (v || []).map((id) => (cfg.characters || []).find((c) => c.id === id)?.name || id)
-        return names.length ? names.join(', ') : '(none)'
-      }
       case 'size_presets':
         return ['small', 'medium', 'large'].map((b) => {
           const p = (v || {})[b] || {}
@@ -1234,10 +1231,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       }),
     }
     if (k === 'name') {
-      // Renaming the default style keeps it the default, and child styles
-      // follow their renamed parent.
+      // Renaming the default style keeps it the default, child styles follow
+      // their renamed parent, and characters owned by the style stay owned.
       if (c.default_style === cur.name) next.default_style = v
       next.styles = next.styles.map((s) => (s.parent === cur.name ? { ...s, parent: v } : s))
+      next.characters = (c.characters || []).map((ch) => (ch.style === cur.name ? { ...ch, style: v } : ch))
     }
     return next
   })
@@ -1277,17 +1275,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     presets[bucket] = { ...(presets[bucket] || {}), [key]: value }
     setStyleField('size_presets', presets)
   }
-  // Recurring characters are a GLOBAL library (their own Characters tab); each
-  // style opts into the ones it uses by id. The backend normalizes/ids these on
-  // save (_norm_characters), so the UI can add bare rows and drop blank aliases.
+  // One character library; each entry's `style` field scopes it — '' = the
+  // global pool every style inherits automatically, else the owning style
+  // (visible to it and every style under it). The backend normalizes/ids these
+  // on save (_norm_characters), so the UI can add bare rows and drop blank
+  // aliases.
   const chars = cfg.characters || []
-  const addChar = () => set('characters', [...chars, { name: '', aliases: [], description: '', enabled: true }])
+  const addChar = (scope = '') => set('characters', [...chars, { name: '', aliases: [], description: '', enabled: true, style: scope }])
   const updateChar = (i, patch) => set('characters', chars.map((c, j) => (j === i ? { ...c, ...patch } : c)))
   const removeChar = (i) => set('characters', chars.filter((_, j) => j !== i))
-  // Which global characters the selected style opts into (inherited or own).
-  const styleCharIds = eff.character_ids || []
-  const toggleStyleChar = (id, on) => setStyleField('character_ids',
-    on ? [...new Set([...styleCharIds, id])] : styleCharIds.filter((x) => x !== id))
   // Character reference images persist server-side immediately (like voice ops),
   // so they're gated on a clean form. Merge the fresh global library back into
   // the working copy and bump the thumbnail cache-bust token.
@@ -1336,10 +1332,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       setError(`“${st.name}” is the parent of ${kids.join(', ')} — change their parent first.`)
       return
     }
-    if (!window.confirm(`Delete style “${st.name}”? Videos already rendered keep their settings.`)) return
+    // Characters owned by the style are re-homed, not orphaned: to its parent
+    // when it has one, else to the global pool.
+    const owned = (cfg.characters || []).filter((ch) => ch.style === st.name).length
+    const home = st.parent ? `“${st.parent}”` : 'the global pool'
+    const note = owned ? ` Its ${owned} character(s) move to ${home}.` : ''
+    if (!window.confirm(`Delete style “${st.name}”? Videos already rendered keep their settings.${note}`)) return
     editCfg((c) => {
       const list = (c.styles || []).filter((_, i) => i !== styleIdx)
-      const next = { ...c, styles: list }
+      const next = {
+        ...c,
+        styles: list,
+        characters: (c.characters || []).map((ch) => (ch.style === st.name ? { ...ch, style: st.parent || '' } : ch)),
+      }
       if (c.default_style === st.name) next.default_style = list[0]?.name || ''
       return next
     })
@@ -2038,31 +2043,43 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
 
-          {/* ── Characters (opt-in from the global library) ── */}
+          {/* ── Characters (inherited cast summary — managed on the Characters tab) ── */}
           <Card span={12} className="reveal reveal-d3">
             <div className="row center between">
               <span className="label-sm">Characters</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>define them under <strong>Characters</strong></span>
+              <Button variant="ghost" icon="user-group" onClick={() => setTab('characters')}>Manage characters</Button>
             </div>
             <div className="field__hint" style={{ marginTop: 6 }}>
-              Pick which recurring characters can appear in this style. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos.
+              The cast “{st.name}” inherits automatically: every <strong>global</strong> character, plus the ones that belong to this style or a style above it. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos.
             </div>
-            <div className="stack gap-10 mt-16">
-              <Check checked={!!eff.auto_accept_characters} onChange={(v) => setStyleField('auto_accept_characters', v)}
-                label="Accept all characters automatically — every character in the library, including ones added later, can appear in this style." />
-              <ParentVal k="auto_accept_characters" />
-              {eff.auto_accept_characters ? (
-                <div className="muted" style={{ fontSize: 12 }}>All {chars.filter((c) => c.id && c.enabled !== false).length} character(s) in the library are accepted. Turn this off to pick specific ones.</div>
-              ) : (<>
-                {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add some under the <strong>Characters</strong> tab, then enable them here.</div>}
-                {chars.filter((c) => c.id).map((c) => (
-                  <Check key={c.id} checked={styleCharIds.includes(c.id)} onChange={(v) => toggleStyleChar(c.id, v)}
-                    label={`${c.name || '(unnamed)'}${c.enabled === false ? ' — disabled in the library' : ''}${c.description ? ` · ${c.description.slice(0, 70)}${c.description.length > 70 ? '…' : ''}` : ''}`} />
-                ))}
-                {chars.some((c) => !c.id) && <div className="muted" style={{ fontSize: 12 }}>Save settings to enable newly added characters here.</div>}
-              </>)}
-              <ParentVal k="character_ids" />
-            </div>
+            {(() => {
+              const lineageNames = styleLineage(styles, st.name).map((s) => s.name)
+              const cast = chars.filter((c) => !c.style || lineageNames.includes(c.style))
+              if (!cast.length) {
+                return <div className="muted" style={{ fontSize: 12, marginTop: 14 }}>No characters reach this style yet — create some under <strong>Characters</strong>.</div>
+              }
+              return (
+                <div className="row row--wrap" style={{ gap: 8, marginTop: 14 }}>
+                  {cast.map((c, idx) => (
+                    <span key={c.id || `new-${idx}`} className="chip chip--neutral"
+                      title={c.description || ''}
+                      style={{ padding: '4px 12px 4px 5px', cursor: 'pointer', opacity: c.enabled === false ? 0.55 : 1 }}
+                      onClick={() => setTab('characters')}>
+                      {c.id && c.ref_image
+                        ? <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                            style={{ width: 22, height: 22, borderRadius: '50%', objectFit: 'cover' }} />
+                        : <span style={{ width: 22, height: 22, borderRadius: '50%', background: 'var(--paper-2)', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: 10.5 }}>
+                            {(c.name || '?').trim().charAt(0).toUpperCase() || '?'}
+                          </span>}
+                      {c.name || '(unnamed)'}
+                      <span className="muted" style={{ fontWeight: 400 }}>
+                        {!c.style ? '· global' : (c.style === st.name ? '' : `· from ${c.style}`)}{c.enabled === false ? ' · disabled' : ''}
+                      </span>
+                    </span>
+                  ))}
+                </div>
+              )
+            })()}
           </Card>
 
           {/* ── Render quality ── */}
@@ -2155,65 +2172,96 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           </Card>
         </>)}
 
-        {tab === 'characters' && (<>
-          {/* ── Characters (global library) ── */}
-          <Card span={12} className="reveal reveal-d1">
-            <div className="row center between">
-              <span className="label-sm">Characters</span>
-              <span className="muted" style={{ fontSize: 11.5 }}>shared across styles · enable per style under <strong>Styles</strong></span>
-            </div>
-            <div className="field__hint" style={{ marginTop: 6 }}>
-              Recurring people or things that should look the same across every scene and video. Define a character once here, then enable it on any style under <strong>Styles</strong>. When a scene mentions it by name (or an alias), its appearance is written into the image prompt so it stays consistent. A generated portrait uses the default style's image model.
-            </div>
-            <div className="stack gap-16 mt-16">
-              {chars.length === 0 && <div className="muted" style={{ fontSize: 12 }}>No characters yet — add one to keep a subject looking the same across scenes.</div>}
-              {chars.map((c, i) => (
-                <div key={c.id || i} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
-                  <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
-                    <div className="grow"><Field label="Name">
-                      <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
-                        onChange={(e) => updateChar(i, { name: e.target.value })} />
-                    </Field></div>
-                    <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
-                      <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
-                        key={`alias-${c.id || i}`}
-                        onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
-                    </Field></div>
-                  </div>
-                  <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
-                    <textarea className="textarea" rows={3} value={c.description || ''}
-                      onChange={(e) => updateChar(i, { description: e.target.value })} />
-                  </Field>
-                  <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
-                    <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
-                      onChange={(e) => updateChar(i, { voice: e.target.value })}>
-                      <option value="">Style narrator (default)</option>
-                      {(cfg.voices || []).map((v) => (
-                        <option key={v.name} value={v.name}>
-                          {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </Field>
-                  <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-                    <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
-                      label="Enabled — available to use in scripts and renders" />
-                    <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
-                  </div>
-                  {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
-                  {c.id && !dirty ? (
-                    <div className="stack gap-12">
-                      <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
-                        {c.ref_image
-                          ? <div onClick={() => setCharLightbox(c.id)}
-                              style={{ position: 'relative', width: 120, height: 120, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
-                              <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
-                                style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                              <span style={{ position: 'absolute', right: 6, bottom: 6, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 10.5, fontWeight: 600, padding: '2px 7px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)' }}>
-                                <Icon name="up-right-and-down-left-from-center" /> Full size
-                              </span>
-                            </div>
-                          : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+        {tab === 'characters' && (() => {
+          // One library, browsed by home: a scope picker mirroring the Styles
+          // tab's tree — a Global pill first (the pool every style inherits),
+          // then the style hierarchy — and below it the characters that
+          // belong to the picked scope. Scopes naming a deleted style surface
+          // as warning pills (dormant until re-homed).
+          const knownStyles = new Set(styles.map((s) => s.name))
+          const missingScopes = [...new Set(chars.map((c) => c.style).filter((sc) => sc && !knownStyles.has(sc)))]
+          const countFor = (key) => chars.filter((c) => (c.style || '') === key).length
+          // The picked scope can vanish mid-edit (style renamed, last dangling
+          // character re-homed) — fall back to Global rather than a dead view.
+          const scope = charScope === '' || knownStyles.has(charScope) || missingScopes.includes(charScope) ? charScope : ''
+          const missing = missingScopes.includes(scope)
+          const scopeEntries = chars.map((c, i) => ({ c, i })).filter(({ c }) => (c.style || '') === scope)
+          const scopeOptionsFor = (cur) => (<>
+            <option value="">Global — every style</option>
+            {styleTreeOrder(styles).map(({ style: s, depth }) => (
+              <option key={s.name} value={s.name}>{'\u00A0\u00A0'.repeat(depth)}{depth ? '↳ ' : ''}{s.name}</option>
+            ))}
+            {cur && !knownStyles.has(cur) && <option value={cur}>{cur} — missing style</option>}
+          </>)
+          const pill = (key, label, { icon, depth = 0 } = {}) => {
+            const n = countFor(key)
+            return (
+              <Button variant={scope === key ? 'primary' : 'ghost'} icon={icon}
+                title={key === '' ? 'Characters every style inherits' : undefined}
+                onClick={() => setCharScope(key)}>
+                {`${depth ? '↳ ' : ''}${label}`}
+                {n > 0 && <span style={{ opacity: 0.55, fontWeight: 500 }}>{n}</span>}
+              </Button>
+            )
+          }
+          const charCard = ({ c, i }) => (
+            <div key={c.id || `row-${i}`} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
+              <div className="row gap-12 row--wrap" style={{ alignItems: 'flex-end' }}>
+                <div className="grow"><Field label="Name">
+                  <input className="input" value={c.name || ''} placeholder="e.g. Robot XYZ"
+                    onChange={(e) => updateChar(i, { name: e.target.value })} />
+                </Field></div>
+                <div className="grow"><Field label="Also known as" hint="Comma-separated aliases that also refer to this character.">
+                  <input className="input" defaultValue={(c.aliases || []).join(', ')} placeholder="XYZ, the machine"
+                    key={`alias-${c.id || i}`}
+                    onBlur={(e) => updateChar(i, { aliases: e.target.value.split(',').map((s) => s.trim()).filter(Boolean) })} />
+                </Field></div>
+                <div style={{ minWidth: 210 }}><Field label="Belongs to" hint="Global, or one style (plus the styles under it).">
+                  <select className="select" value={c.style || ''} onChange={(e) => updateChar(i, { style: e.target.value })}>
+                    {scopeOptionsFor(c.style || '')}
+                  </select>
+                </Field></div>
+              </div>
+              <Field label="Appearance" hint="Written verbatim into the image prompt — describe the look only, no name. e.g. “matte-black humanoid chassis, single cyan optical sensor, exposed brass joints”.">
+                <textarea className="textarea" rows={3} value={c.description || ''}
+                  onChange={(e) => updateChar(i, { description: e.target.value })} />
+              </Field>
+              <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes. Blank = the style's narrator voice.">
+                <select className="input" style={{ maxWidth: 260 }} value={c.voice || ''}
+                  onChange={(e) => updateChar(i, { voice: e.target.value })}>
+                  <option value="">Style narrator (default)</option>
+                  {(cfg.voices || []).map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}{[v.gender, v.age, v.accent].filter(Boolean).length ? ` — ${[v.gender, v.age, v.accent].filter(Boolean).join(', ')}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <div className="row gap-12" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                <Check checked={c.enabled !== false} onChange={(v) => updateChar(i, { enabled: v })}
+                  label="Enabled — available to use in scripts and renders" />
+                <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
+              </div>
+              {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only).
+                  The image and kept versions are ALWAYS visible; only the ops that
+                  persist server-side immediately (upload / portrait / version picks)
+                  wait for a clean form, so staged edits can't be clobbered. */}
+              {c.id ? (
+                <div className="stack gap-12">
+                  <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
+                    {c.ref_image
+                      ? <div onClick={() => setCharLightbox(c.id)}
+                          style={{ position: 'relative', width: 120, height: 120, flex: '0 0 auto', borderRadius: 8, overflow: 'hidden', border: '1px solid var(--border)', cursor: 'zoom-in' }}>
+                          <img src={`${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}`} alt=""
+                            style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                          <span style={{ position: 'absolute', right: 6, bottom: 6, background: 'rgba(45,51,53,.72)', color: '#fff', fontSize: 10.5, fontWeight: 600, padding: '2px 7px', borderRadius: 6, display: 'inline-flex', alignItems: 'center', gap: 4, backdropFilter: 'blur(4px)' }}>
+                            <Icon name="up-right-and-down-left-from-center" /> Full size
+                          </span>
+                        </div>
+                      : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
+                    {dirty
+                      ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> Unsaved edits — <strong>Save settings</strong> to upload or re-roll the look.</span>
+                      : (<>
                         <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
                           <Icon name="upload" /> Upload image
                           <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
@@ -2224,30 +2272,105 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                           {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
                         </Button>
                         {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
-                      </div>
-                      <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
-                        onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
-                        aspect="1 / 1" busy={charBusy === c.id} />
-                    </div>
-                  ) : (
-                    <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
-                  )}
+                      </>)}
+                  </div>
+                  <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
+                    onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
+                    aspect="1 / 1" busy={charBusy === c.id || dirty} />
                 </div>
-              ))}
-              <div><Button variant="ghost" icon="plus" onClick={addChar}>Add character</Button></div>
+              ) : (
+                <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>
+              )}
             </div>
-          </Card>
+          )
+          return (<>
+            <Card span={12} className="reveal reveal-d1">
+              <div className="row center between">
+                <span className="label-sm">Characters</span>
+                <span className="muted" style={{ fontSize: 11.5 }}>Global characters reach every style; a style's characters reach it and the styles under it.</span>
+              </div>
+              {/* Scope picker — same compact tree as the Styles tab, with a
+                  leading Global pill (and warning pills for deleted homes). */}
+              {styles.some((s) => s.parent) ? (() => {
+                const cells = []
+                let row = 0   // row 0 = the Global pill
+                styleTreeOrder(styles).forEach((o, j, arr) => {
+                  if (j === 0 || o.depth !== arr[j - 1].depth + 1) row++
+                  cells.push({ ...o, row })
+                })
+                missingScopes.forEach((name) => { row++; cells.push({ missing: name, depth: 0, row }) })
+                const cols = cells.reduce((m, c) => Math.max(m, c.depth), 0) + 1
+                return (
+                  <div className="mt-16" style={{ overflowX: 'auto' }}>
+                    <div style={{ display: 'inline-grid', gridTemplateColumns: `repeat(${cols}, max-content)`, gap: 6, alignItems: 'center' }}>
+                      <div style={{ gridRow: 1, gridColumn: 1 }}>{pill('', 'Global', { icon: 'globe' })}</div>
+                      {cells.map((cell) => (
+                        <div key={cell.missing ? `miss-${cell.missing}` : cell.style.name}
+                          style={{ gridRow: cell.row + 1, gridColumn: cell.depth + 1 }}>
+                          {cell.missing
+                            ? pill(cell.missing, cell.missing, { icon: 'triangle-exclamation' })
+                            : pill(cell.style.name, cell.style.name, { depth: cell.depth })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })() : (
+                <div className="row gap-6 row--wrap mt-16">
+                  <div>{pill('', 'Global', { icon: 'globe' })}</div>
+                  {styles.map((s) => <div key={s.name}>{pill(s.name, s.name)}</div>)}
+                  {missingScopes.map((name) => <div key={`miss-${name}`}>{pill(name, name, { icon: 'triangle-exclamation' })}</div>)}
+                </div>
+              )}
 
-          {charLightbox && (() => {
-            const c = chars.find((x) => x.id === charLightbox)
-            if (!c) return null
-            return (
-              <ImageLightbox versions={c.history?.versions || []} start={charSelVerIdx(c)}
-                fallback={c.ref_image ? `${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}` : ''}
-                title={c.name || 'Character'} onClose={() => setCharLightbox(null)} />
-            )
-          })()}
-        </>)}
+              {/* The picked scope's cast */}
+              <div className="row center between" style={{ marginTop: 22 }}>
+                <span className="label-sm">
+                  {scope === '' ? 'Global characters' : (<>
+                    {!missing && styleLineage(styles, scope).slice(0, -1).map((a) => (
+                      <span key={a.name}>
+                        <a role="button" tabIndex={0} title={`Show “${a.name}” characters`}
+                          style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                          onClick={() => setCharScope(a.name)}>{a.name}</a>
+                        {' ▸ '}
+                      </span>
+                    ))}
+                    {scope}
+                  </>)}
+                  <span className="muted" style={{ fontWeight: 400 }}> · {scopeEntries.length}</span>
+                </span>
+                {!missing && <Button variant="ghost" icon="plus" onClick={() => addChar(scope)}>Add character</Button>}
+              </div>
+              <div className="field__hint" style={{ marginTop: 6 }}>
+                {scope === ''
+                  ? <>Recurring people or things that keep the same look across scenes and videos — these are inherited by <strong>every style</strong>. When a scene mentions one by name (or an alias), its appearance is written into the image prompt. Generated portraits use the owning style's image model and visual look (global characters use the default style's).</>
+                  : missing
+                    ? <>The style “{scope}” no longer exists, so these characters are dormant. Pick a new home with each card's <strong>Belongs to</strong>.</>
+                    : <>Used by “{scope}” and the styles under it, on top of the global pool every style inherits.</>}
+              </div>
+              <div className="stack gap-16 mt-16">
+                {scopeEntries.length === 0 && (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {scope === ''
+                      ? 'No global characters yet — these are the ones every style would share (e.g. a channel mascot).'
+                      : `No characters belong to “${scope}” yet — Add character creates one here, or move one in with its Belongs to picker.`}
+                  </div>
+                )}
+                {scopeEntries.map((e) => charCard(e))}
+              </div>
+            </Card>
+
+            {charLightbox && (() => {
+              const c = chars.find((x) => x.id === charLightbox)
+              if (!c) return null
+              return (
+                <ImageLightbox versions={c.history?.versions || []} start={charSelVerIdx(c)}
+                  fallback={c.ref_image ? `${fileUrl(`${meta.characters_dir}/${c.id}.png`)}&v=${charBust}` : ''}
+                  title={c.name || 'Character'} onClose={() => setCharLightbox(null)} />
+              )
+            })()}
+          </>)
+        })()}
 
         {tab === 'voices' && (<>
           {/* ── Voices (narrator reference clips) ── */}

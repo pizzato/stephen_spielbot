@@ -1076,12 +1076,14 @@ class CharacterTests(TempConfigCase):
 
     def test_characters_default_empty_on_fresh_install(self):
         cfg = app.load_config()
-        self.assertEqual(cfg["styles"][0]["character_ids"], [])
         self.assertEqual(cfg["characters"], [])
+        self.assertNotIn("character_ids", cfg["styles"][0])
+        self.assertTrue(cfg["characters_scoped_v3"])
 
-    def test_legacy_per_style_characters_migrate_to_global_library(self):
-        # A pre-global config kept characters on each style; loading migrates
-        # them into the shared library and opts each style into its own ids.
+    def test_legacy_per_style_characters_migrate_to_scoped_library(self):
+        # A pre-global config kept characters on each style; loading hoists
+        # them into the shared library (v2) and, since each was used by exactly
+        # one style, scopes them to that style (v3).
         self.write_config({
             "styles": [_style("Hero", characters=[
                 {"name": "Robot XYZ", "aliases": ["XYZ"],
@@ -1095,38 +1097,64 @@ class CharacterTests(TempConfigCase):
         self.assertEqual(chars[0]["name"], "Robot XYZ")
         self.assertEqual(chars[0]["aliases"], ["XYZ"])
         self.assertTrue(chars[0]["id"])
-        # the style opted into its migrated character…
-        self.assertEqual(cfg["styles"][0]["character_ids"], [chars[0]["id"]])
-        # …and the per-style "characters" field is gone (global now)
+        self.assertEqual(chars[0]["style"], "Hero")
+        # the per-style "characters" field and the old opt-in list are gone
         self.assertNotIn("characters", cfg["styles"][0])
-        # flat mirror tracks the default style's id list
-        self.assertEqual(cfg["default_character_ids"], [chars[0]["id"]])
+        self.assertNotIn("character_ids", cfg["styles"][0])
+        self.assertNotIn("default_character_ids", cfg)
 
-    def test_global_characters_round_trip_and_prune_stale_ids(self):
+    def test_scope_migration_from_opt_in_lists(self):
+        # v3: a character listed by exactly one style becomes that style's; one
+        # listed by several styles stays global; one listed by nobody but named
+        # exactly like a style (narrator personas) goes to that style; the old
+        # opt-in fields are consumed everywhere.
         self.write_config({
             "characters": [
                 {"id": "char_a", "name": "Ana", "description": "a woman"},
                 {"id": "char_b", "name": "Ben", "description": "a man"},
+                {"id": "char_h", "name": "Hero", "description": "the persona"},
+                {"id": "char_g", "name": "Ghost", "description": "unlisted"},
             ],
-            "styles": [_style("Hero", character_ids=["char_a", "char_gone", "char_a"])],
-            "default_style": "Hero",
-            "characters_migrated_v2": True,   # already global — no migration
-        })
-        cfg = app.load_config()
-        self.assertEqual([c["id"] for c in cfg["characters"]], ["char_a", "char_b"])
-        # stale id dropped, duplicate collapsed, order preserved
-        self.assertEqual(cfg["styles"][0]["character_ids"], ["char_a"])
-
-    def test_no_style_imposes_no_characters(self):
-        self.write_config({
-            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"}],
-            "styles": [_style("Hero", character_ids=["char_bob"])],
+            "styles": [_style("Hero", character_ids=["char_a", "char_b", "char_gone"]),
+                       _style("Villain", character_ids=["char_b"],
+                              auto_accept_characters=True)],
             "default_style": "Hero",
             "characters_migrated_v2": True,
         })
         cfg = app.load_config()
-        ss = app.style_settings(cfg, app.NO_STYLE)
-        self.assertEqual(ss["character_ids"], [])
+        scopes = {c["id"]: c["style"] for c in cfg["characters"]}
+        self.assertEqual(scopes, {"char_a": "Hero",     # single owner
+                                  "char_b": "",         # shared → global
+                                  "char_h": "Hero",     # name matches a style
+                                  "char_g": ""})        # unlisted → global
+        for s in cfg["styles"]:
+            self.assertNotIn("character_ids", s)
+            self.assertNotIn("auto_accept_characters", s)
+        self.assertNotIn("default_character_ids", cfg)
+        self.assertNotIn("default_auto_accept_characters", cfg)
+        self.assertTrue(cfg["characters_scoped_v3"])
+
+    def test_scope_migration_runs_once_and_keeps_hand_scopes(self):
+        self.write_config({
+            "characters": [{"id": "char_a", "name": "Ana", "description": "a",
+                            "style": "Villain"}],
+            "styles": [_style("Hero", character_ids=["char_a"]), _style("Villain")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True,
+        })
+        cfg = app.load_config()
+        # An entry already carrying a scope is never re-scoped by the migration.
+        self.assertEqual(cfg["characters"][0]["style"], "Villain")
+
+    def test_no_style_imposes_no_characters(self):
+        self.write_config({
+            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"}],
+            "styles": [_style("Hero")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        cfg = app.load_config()
+        self.assertEqual(app._style_characters(cfg, app.NO_STYLE), [])
 
     def test_character_sheet_lists_enabled_described_only(self):
         sheet = app._character_sheet([
@@ -1192,16 +1220,16 @@ class CharacterTests(TempConfigCase):
         out = app._inject_characters(scene["image_prompt"], scene, cfg, "Hero")
         self.assertEqual(out, "Robot XYZ stands still.")
 
-    def test_inject_respects_per_style_opt_in(self):
-        # One global character; "Hero" opts in, "Villain" does not — only the
-        # opted-in style injects the appearance, even for the same scene text.
+    def test_inject_respects_character_scope(self):
+        # A character scoped to "Hero" injects there but not in the unrelated
+        # "Villain" style, even for the same scene text.
         self.write_config({
             "characters": [{"id": "char_xyz", "name": "Robot XYZ",
-                            "description": "matte-black humanoid chassis"}],
-            "styles": [_style("Hero", character_ids=["char_xyz"]),
-                       _style("Villain", character_ids=[])],
+                            "description": "matte-black humanoid chassis",
+                            "style": "Hero"}],
+            "styles": [_style("Hero"), _style("Villain")],
             "default_style": "Hero",
-            "characters_migrated_v2": True,
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
         })
         cfg = app.load_config()
         scene = {"image_prompt": "Robot XYZ stands on a ridge.", "narration": ""}
@@ -1210,16 +1238,68 @@ class CharacterTests(TempConfigCase):
         self.assertEqual(app._inject_characters(scene["image_prompt"], scene, cfg, "Villain"),
                          "Robot XYZ stands on a ridge.")
 
-    def test_style_characters_resolves_only_opted_in(self):
+    def test_style_characters_resolves_scopes(self):
+        # Global pool → everyone; own scope → that style; another style's
+        # scope → hidden; a scope naming a deleted style → dormant everywhere.
         self.write_config({
-            "characters": [{"id": "char_a", "name": "Ana", "description": "a"},
-                           {"id": "char_b", "name": "Ben", "description": "b"}],
-            "styles": [_style("Hero", character_ids=["char_b"])],
+            "characters": [{"id": "char_g", "name": "Glo", "description": "g"},
+                           {"id": "char_h", "name": "Own", "description": "h", "style": "Hero"},
+                           {"id": "char_v", "name": "Foe", "description": "v", "style": "Villain"},
+                           {"id": "char_d", "name": "Lost", "description": "d", "style": "Deleted"}],
+            "styles": [_style("Hero"), _style("Villain")],
             "default_style": "Hero",
-            "characters_migrated_v2": True,
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
         })
         cfg = app.load_config()
-        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Hero")], ["char_b"])
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Hero")],
+                         ["char_g", "char_h"])
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Villain")],
+                         ["char_g", "char_v"])
+        # A dangling scope is kept in the library (heals if the style returns)
+        # but resolves nowhere meanwhile.
+        self.assertEqual(cfg["characters"][3]["style"], "Deleted")
+
+    def test_portrait_uses_owning_styles_look_not_default(self):
+        # The reported bug: portraits always rendered with the DEFAULT style's
+        # visual look, so a character made for another style came out with the
+        # default style's characteristics. The portrait must anchor to the
+        # character's owning style; only global-pool characters use the default.
+        self.write_config({
+            "characters": [
+                {"id": "char_v", "name": "Foe", "description": "a masked figure",
+                 "style": "Villain"},
+                {"id": "char_g", "name": "Glo", "description": "a mascot"},
+            ],
+            "styles": [_style("Hero", visual_style="sunny watercolor world"),
+                       _style("Villain", visual_style="grim neon noir world")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        prompts = []
+
+        def fake_generate(engine, prompt, out, **kw):
+            prompts.append(prompt)
+            Path(out).write_bytes(b"png")
+
+        with mock.patch.object(app, "generate_with_engine", side_effect=fake_generate), \
+             mock.patch.object(app, "_preview_worker_urls", return_value=["http://w1"]):
+            app.generate_character_portrait("char_v")
+            app.generate_character_portrait("char_g")
+        self.assertIn("grim neon noir world", prompts[0])      # owning style
+        self.assertNotIn("sunny watercolor world", prompts[0])
+        self.assertIn("sunny watercolor world", prompts[1])    # global → default
+
+    def test_style_characters_unknown_style_falls_back_to_default(self):
+        self.write_config({
+            "characters": [{"id": "char_h", "name": "Own", "description": "h", "style": "Hero"}],
+            "styles": [_style("Hero"), _style("Villain")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        cfg = app.load_config()
+        # Unknown/blank style names resolve like style_settings: the default.
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "Nope")], ["char_h"])
+        self.assertEqual([c["id"] for c in app._style_characters(cfg, "")], ["char_h"])
 
 
 class CharacterReferenceImageTests(TempConfigCase):

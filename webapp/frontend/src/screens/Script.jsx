@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import { styleLineage } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -67,6 +68,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [voiceOpts, setVoiceOpts] = useState([])
   const [voiceMeta, setVoiceMeta] = useState({})
   const [globalCast, setGlobalCast] = useState([])
+  const [castStyles, setCastStyles] = useState({ styles: [], defaultStyle: '' })
   useEffect(() => {
     api.getConfig().then((c) => {
       // /api/config nests the config under "config"; voices there are
@@ -74,7 +76,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const cfg = c?.config || c || {}
       setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
       setVoiceMeta(voiceMetaMap(cfg.voices))
-      setGlobalCast((cfg.characters || []).map((x) => x?.name).filter(Boolean))
+      // Keep each character's home style so the speaker options can be
+      // narrowed to the cast this job's style actually inherits.
+      setGlobalCast((cfg.characters || [])
+        .map((x) => ({ name: x?.name || '', style: x?.style || '' }))
+        .filter((x) => x.name))
+      setCastStyles({ styles: cfg.styles || [], defaultStyle: cfg.default_style || '' })
     }).catch(() => {})
   }, [])
 
@@ -538,10 +545,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) }
   }
 
-  // Dialogue speakers: the script's own cast plus the global character catalogue
-  // (both render — the resolver falls back to catalogue portraits/voices). The
-  // shot editing itself lives in the shared SceneTypeControls component.
-  const castOpts = [...new Set([...characters.map((c) => c.name), ...globalCast])].filter(Boolean)
+  // Dialogue speakers: the script's own cast plus the catalogue characters the
+  // job's style inherits — the global pool and its style lineage (mirrors the
+  // backend's _style_characters; the resolver falls back to catalogue
+  // portraits/voices). The shot editing itself lives in SceneTypeControls.
+  const lineageNames = new Set(styleLineage(castStyles.styles,
+    job?.style || castStyles.defaultStyle).map((s) => s.name))
+  const styleCast = job?.style === '(none)' ? []
+    : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
+  const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
   const move = async (to) => {
     if (to < 0 || to >= total) return
@@ -668,7 +680,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     api.setScriptCharacterImage(job.job_id, c.id, file.name, await fileToDataUrl(file)))
   const promoteCharacter = (c) => charOp(c.id, async () => {
     const r = await api.promoteScriptCharacter(job.job_id, c.id)
-    setCharMsg(`Saved “${c.name || 'character'}” to your character catalogue.`)
+    setCharMsg(job?.style && job.style !== '(none)'
+      ? `Saved “${c.name || 'character'}” to the “${job.style}” cast — that style and its child styles can now reuse it.`
+      : `Saved “${c.name || 'character'}” to the global character pool.`)
     return r
   })
   const selectCharVersion = (c, versionId) =>

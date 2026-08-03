@@ -37,8 +37,9 @@ class ScriptCharacterApiTests(unittest.TestCase):
         db.start()
         self.addCleanup(db.stop)
         self.config_file.write_text(yaml.safe_dump({
-            "styles": [_style("Hero", character_ids=[])],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters": [], "characters_migrated_v2": True,
+            "characters_scoped_v3": True,
         }))
         self.client = TestClient(backend.api)
 
@@ -64,14 +65,15 @@ class ScriptCharacterApiTests(unittest.TestCase):
         self.assertFalse(chars[0]["has_image"])  # no worker → no look yet
 
     def test_generate_skips_characters_already_in_style_catalogue(self):
-        # Opt Caesar into Hero; LLM also "identifies" Caesar + a new Brutus.
-        # Only Brutus becomes a per-script character; Caesar stays global.
+        # Caesar is scoped to Hero; the LLM also "identifies" Caesar + a new
+        # Brutus. Only Brutus becomes a per-script character.
         self.config_file.write_text(yaml.safe_dump({
-            "styles": [_style("Hero", character_ids=["char_caesar"])],
+            "styles": [_style("Hero")],
             "default_style": "Hero",
             "characters": [{"id": "char_caesar", "name": "Julius Caesar",
-                            "aliases": ["Caesar"], "description": "catalogue look"}],
-            "characters_migrated_v2": True,
+                            "aliases": ["Caesar"], "description": "catalogue look",
+                            "style": "Hero"}],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
         }))
         res = self._make_job([
             {"name": "Julius Caesar", "aliases": ["Caesar"], "description": "LLM override"},
@@ -119,9 +121,8 @@ class ScriptCharacterApiTests(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         lib = r.json()["config"]["characters"]
         self.assertEqual([c["name"] for c in lib], ["Caesar"])
-        # style opted into the new catalogue character
-        hero = next(s for s in r.json()["config"]["styles"] if s["name"] == "Hero")
-        self.assertIn(lib[0]["id"], hero["character_ids"])
+        # the new catalogue character is scoped to the job's style
+        self.assertEqual(lib[0]["style"], "Hero")
         # per-script copy remains (non-destructive)
         self.assertEqual(len(self.client.get(f"/api/jobs/{job_id}/characters").json()["characters"]), 1)
 

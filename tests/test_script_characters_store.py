@@ -68,8 +68,8 @@ class FilterIdentifiedAgainstStyleTests(TempConfigCase):
     def test_exact_name_match_dropped(self):
         self.write_config({
             "characters": [{"id": "char_c", "name": "Julius Caesar", "aliases": ["Caesar"],
-                            "description": "canonical red toga"}],
-            "styles": [_style("Hero", character_ids=["char_c"])],
+                            "description": "canonical red toga", "style": "Hero"}],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -83,8 +83,8 @@ class FilterIdentifiedAgainstStyleTests(TempConfigCase):
     def test_alias_and_whole_word_match_dropped(self):
         self.write_config({
             "characters": [{"id": "char_c", "name": "Julius Caesar", "aliases": ["Caesar"],
-                            "description": "canonical"}],
-            "styles": [_style("Hero", character_ids=["char_c"])],
+                            "description": "canonical", "style": "Hero"}],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -93,11 +93,13 @@ class FilterIdentifiedAgainstStyleTests(TempConfigCase):
             [{"name": "Caesar", "description": "other"}], cfg, "Hero")
         self.assertEqual(kept, [])
 
-    def test_catalogue_not_in_style_is_not_filtered(self):
-        # Global exists but style did not opt in → still create a per-script copy.
+    def test_catalogue_scoped_to_other_style_is_not_filtered(self):
+        # The catalogue entry belongs to an unrelated style — Hero can't see
+        # it, so the LLM's copy still becomes a per-script character.
         self.write_config({
-            "characters": [{"id": "char_c", "name": "Julius Caesar", "description": "canonical"}],
-            "styles": [_style("Hero", character_ids=[])],
+            "characters": [{"id": "char_c", "name": "Julius Caesar", "description": "canonical",
+                            "style": "Other"}],
+            "styles": [_style("Hero"), _style("Other")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -108,8 +110,9 @@ class FilterIdentifiedAgainstStyleTests(TempConfigCase):
 
     def test_disabled_catalogue_character_is_not_filtered(self):
         self.write_config({
-            "characters": [{"id": "char_c", "name": "Caesar", "description": "x", "enabled": False}],
-            "styles": [_style("Hero", character_ids=["char_c"])],
+            "characters": [{"id": "char_c", "name": "Caesar", "description": "x", "enabled": False,
+                            "style": "Hero"}],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -126,8 +129,8 @@ class JobCharactersMergeTests(TempConfigCase):
 
     def test_merges_catalogue_and_script(self):
         self.write_config({
-            "characters": [{"id": "char_cat", "name": "Ana", "description": "a"}],
-            "styles": [_style("Hero", character_ids=["char_cat"])],
+            "characters": [{"id": "char_cat", "name": "Ana", "description": "a", "style": "Hero"}],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -138,8 +141,8 @@ class JobCharactersMergeTests(TempConfigCase):
 
     def test_script_character_shadows_same_name_catalogue(self):
         self.write_config({
-            "characters": [{"id": "char_cat", "name": "Ana", "description": "OLD"}],
-            "styles": [_style("Hero", character_ids=["char_cat"])],
+            "characters": [{"id": "char_cat", "name": "Ana", "description": "OLD", "style": "Hero"}],
+            "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         cfg = app.load_config()
@@ -184,9 +187,9 @@ class PromoteScriptCharacterTests(TempConfigCase):
         wd.mkdir(parents=True, exist_ok=True)
         return wd
 
-    def test_promote_copies_into_catalogue_and_opts_style_in(self):
+    def test_promote_copies_into_catalogue_scoped_to_style(self):
         self.write_config({
-            "characters": [], "styles": [_style("Hero", character_ids=[])],
+            "characters": [], "styles": [_style("Hero")],
             "default_style": "Hero", "characters_migrated_v2": True,
         })
         wd = self._work_dir()
@@ -206,8 +209,8 @@ class PromoteScriptCharacterTests(TempConfigCase):
         self.assertNotEqual(new_id, cid)  # fresh catalogue id, independent of the script copy
         self.assertTrue((app._characters_dir() / f"{new_id}.png").exists())
         self.assertEqual(lib[0]["ref_image"], f"{new_id}.png")
-        hero = next(s for s in cfg["styles"] if s["name"] == "Hero")
-        self.assertIn(new_id, hero["character_ids"])
+        # Scoped to the job's style, so Hero (and future children) reuse it.
+        self.assertEqual(lib[0]["style"], "Hero")
         # Non-destructive: the per-script copy stays put.
         self.assertEqual(len(app._read_script_characters(wd)), 1)
 
