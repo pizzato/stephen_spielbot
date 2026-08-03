@@ -3865,7 +3865,7 @@ def progress(work_dir: str = Query("")) -> dict:
     return {
         "pct": pct, "msg": msg, "work_dir": str(wd), "done": bool(done),
         "final_url": _busted_file_url(final_path) if done else "",
-        "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+        "cover_url": _busted_file_url(cover) if cover.exists() and cover.stat().st_size > 1000 else "",
         "title": title,
         "status": (job or {}).get("status", ""),
         "tasks": tasks, "workers": workers, "counts": counts,
@@ -4015,7 +4015,7 @@ def list_jobs() -> dict:
     def _cover_url(work_dir: str) -> str:
         cover = Path(work_dir) / "cover.png"
         if cover.exists() and cover.stat().st_size > 1000:
-            return f"/api/file?path={cover}"
+            return _busted_file_url(cover)
         return ""
     finished = []
     for l, d in finished_rows:
@@ -6981,7 +6981,7 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "work_dir": str(wd),
         "title": _title,
         "final_url": _busted_file_url(final) if final.exists() and final.stat().st_size > 10_000 else "",
-        "cover_url": f"/api/file?path={cover}" if cover.exists() and cover.stat().st_size > 1000 else "",
+        "cover_url": _busted_file_url(cover) if cover.exists() and cover.stat().st_size > 1000 else "",
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
@@ -10079,6 +10079,14 @@ def _stale_final_films() -> list:
             order_file = p / "scene_edit_order.json"
             if order_file.exists():
                 newest = max(newest, order_file.stat().st_mtime)
+            # Styles that burn the cover into the opening (job_config
+            # "first_frame_cover": "image") show cover.png inside the final
+            # itself, so regenerating / re-selecting the cover also makes the
+            # final stale — the rebuild re-burns the current cover.
+            if str(_film_job_config(p).get("first_frame_cover") or "").strip().lower() == "image":
+                cover = p / "cover.png"
+                if cover.exists() and cover.stat().st_size > 1000:
+                    newest = max(newest, cover.stat().st_mtime)
             if not newest or newest <= final_path.stat().st_mtime + 1.0:
                 continue  # final already reflects the parts
         except OSError:
