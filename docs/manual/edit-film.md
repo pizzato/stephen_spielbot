@@ -26,6 +26,11 @@ into the first frame. It follows the title until you edit it, then stays put.
 
 **Edit cover** opens a masked inpaint on the cover image.
 
+Regenerated and edited covers are kept as **versions** — click one to make it the film's
+cover. For styles whose opening burn is `image`, picking a different cover also marks the
+final stale, so the automatic reassembly re-burns the chosen cover into the opening a few
+quiet minutes later.
+
 ### Opening cover
 
 **Add to the opening** burns the cover into the start of the final video — `image` (the

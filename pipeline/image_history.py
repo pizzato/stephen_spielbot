@@ -305,6 +305,10 @@ def cover_select(work_dir: Path, version_id: int) -> Path:
             raise FileNotFoundError(f"Cover version file missing: {src}")
         cover = _cover_canonical(work_dir)
         shutil.copy2(src, cover)
+        # Stamp the *selection* time (copy2 keeps the version's original mtime):
+        # the stale-final sweep and /api/file cache-busters key off cover.png's
+        # mtime, so picking an older version must still read as a fresh change.
+        os.utime(cover)
         entry["selected"] = version_id
         data[_COVER_KEY] = entry
         _save(work_dir, data)

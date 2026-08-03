@@ -3,6 +3,8 @@
 The module only copies files around, so the "images" here are tiny byte strings;
 distinct bytes per version let us assert that ``select`` copies the *right* one.
 """
+import os
+import time
 from pathlib import Path
 
 from pipeline import image_history as ih
@@ -162,6 +164,30 @@ def test_delete_unknown_version_raises(tmp_path):
         pass
     else:
         raise AssertionError("expected ValueError for unknown version id")
+
+
+def test_cover_select_restores_bytes_and_stamps_selection_time(tmp_path):
+    cover = tmp_path / "cover.png"
+    _write(cover, b"one")
+    ih.cover_record(tmp_path, cover)
+    _write(cover, b"two")
+    h = ih.cover_record(tmp_path, cover)
+    v1 = h["versions"][0]["id"]
+
+    # Age everything: plain copy2 would hand cover.png the kept version's old
+    # mtime, hiding the selection from mtime-keyed consumers (the stale-final
+    # sweep, /api/file cache-busters).
+    old = time.time() - 3600
+    for v in ih.cover_history(tmp_path)["versions"]:
+        os.utime(v["path"], (old, old))
+    os.utime(cover, (old, old))
+
+    before = time.time()
+    out = ih.cover_select(tmp_path, v1)
+
+    assert out.read_bytes() == b"one"
+    assert ih.cover_history(tmp_path)["selected"] == v1
+    assert out.stat().st_mtime >= before - 1
 
 
 def test_cover_delete_removes_unused_version(tmp_path):

@@ -117,6 +117,48 @@ class StaleFinalCase(_FilmCase):
         core.assert_called_once_with(wd, op_name="Auto-reassembling film")
 
 
+class CoverBurnStaleCase(_FilmCase):
+    """Styles that burn the cover into the opening (job_config
+    "first_frame_cover": "image") show cover.png inside the final itself —
+    regenerating or re-selecting the cover must mark the final stale so the
+    rebuild re-burns the chosen cover."""
+
+    def film_with_cover(self, name: str, *, mode="image",
+                        cover_age_s: float = 400.0, cover_bytes: int = 2000) -> Path:
+        """A film whose parts already match the final, plus a cover. *mode* None
+        writes no job_config at all."""
+        wd = self.make_film(name, part_age_s=2000.0, final_age_s=1000.0)
+        if mode is not None:
+            (wd / "job_config.json").write_text(
+                json.dumps({"first_frame_cover": mode}))
+        cover = wd / "cover.png"
+        cover.write_bytes(b"c" * cover_bytes)
+        ts = time.time() - cover_age_s
+        os.utime(cover, (ts, ts))
+        return wd
+
+    def test_newer_cover_marks_burned_film_stale(self):
+        wd = self.film_with_cover("cover-picked")
+        self.assertEqual(backend._stale_final_films(), [wd])
+
+    def test_newer_cover_ignored_without_standing_burn(self):
+        self.film_with_cover("no-config", mode=None)
+        self.film_with_cover("burn-off", mode="none")
+        self.assertEqual(backend._stale_final_films(), [])
+
+    def test_text_burn_ignores_cover_image(self):
+        self.film_with_cover("text-burn", mode="text")
+        self.assertEqual(backend._stale_final_films(), [])
+
+    def test_recent_cover_change_waits_for_quiet(self):
+        self.film_with_cover("just-picked", cover_age_s=10.0)
+        self.assertEqual(backend._stale_final_films(), [])
+
+    def test_placeholder_cover_ignored(self):
+        self.film_with_cover("tiny-cover", cover_bytes=10)
+        self.assertEqual(backend._stale_final_films(), [])
+
+
 class CuratedFinalCase(_FilmCase):
     """A published cut the sweep cannot reproduce (upscale / localized re-voicing
     / hand-burnt cover) must survive an unattended reassembly."""
