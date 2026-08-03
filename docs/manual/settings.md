@@ -152,14 +152,17 @@ move) them on the **Characters** tab.
 
 ## Characters
 
-The character library, grouped by home. **Global characters** are inherited by every
-style automatically; a character that **belongs to a style** is used only by that style
-and the styles under it — so a parent style's cast flows to all its children. Each card
-has **name**, **also known as**, **appearance**, **voice**, an enabled switch, and a
-**Belongs to** picker to move it between the global pool and any style. Generated
-portraits use the owning style's image model and visual look (global characters use the
-default style's). Films inherit their style's cast and can add film-specific characters
-of their own.
+The character library, browsed by home. A picker mirroring the **Styles** tree sits on
+top — **Global** first, then the style hierarchy, each pill counting the characters that
+live there — and clicking a pill lists that home's characters. **Global characters** are
+inherited by every style automatically; a character that **belongs to a style** is used
+only by that style and the styles under it — so a parent style's cast flows to all its
+children. Each card has **name**, **also known as**, **appearance**, **voice**, an
+enabled switch, and a **Belongs to** picker to move it between the global pool and any
+style. Reference images stay visible while you edit; uploading, portrait rolls, and
+version picks apply after **Save settings**. Generated portraits use the owning style's
+image model and visual look (global characters use the default style's). Films inherit
+their style's cast and can add film-specific characters of their own.
 
 See [Characters](../characters.md) for how consistency is enforced across scenes.
 

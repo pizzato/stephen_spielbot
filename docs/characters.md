@@ -24,9 +24,12 @@ Characters live in a single top-level `cfg["characters"]` list; each entry carri
 
 `_style_characters(cfg, style_name)` resolves a style's effective cast (global pool +
 its lineage, library order; the `(none)` experiment style gets nothing). The Settings →
-**Characters** tab shows the library grouped by home — the global pool first, then one
-section per style that owns characters — and each card has a **Belongs to** picker to
-move it. The style cards under **Styles** show a read-only summary of the cast the
+**Characters** tab has a scope picker mirroring the Styles tab's tree — a **Global**
+pill first, then the style hierarchy, each pill showing how many characters live there;
+picking a scope lists the characters homed in it, and each card has a **Belongs to**
+picker to move it. Reference images stay visible while the form has unsaved edits; only
+the operations that persist immediately (upload / portrait / version picks) wait for a
+clean form. The style cards under **Styles** show a read-only summary of the cast the
 selected style inherits.
 
 `_ensure_characters()` in `app.py` normalizes the library and performs the one-time

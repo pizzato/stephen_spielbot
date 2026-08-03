@@ -921,7 +921,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [charBusy, setCharBusy] = useState('')  // character id with an image op in flight
   const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [charLightbox, setCharLightbox] = useState(null)  // character being viewed full-res
-  const [newCharScope, setNewCharScope] = useState('')    // "New character" card's home pick
+  const [charScope, setCharScope] = useState('')          // Characters tab: selected home ('' = Global)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -2173,28 +2173,36 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         </>)}
 
         {tab === 'characters' && (() => {
-          // One library, grouped by home: the global pool first (inherited by
-          // every style), then each style that owns characters (tree order,
-          // children under parents), then any scope naming a style that no
-          // longer exists (dormant until re-homed).
-          const entries = chars.map((c, i) => ({ c, i }))
-          const treeOrder = styleTreeOrder(styles)
+          // One library, browsed by home: a scope picker mirroring the Styles
+          // tab's tree — a Global pill first (the pool every style inherits),
+          // then the style hierarchy — and below it the characters that
+          // belong to the picked scope. Scopes naming a deleted style surface
+          // as warning pills (dormant until re-homed).
           const knownStyles = new Set(styles.map((s) => s.name))
+          const missingScopes = [...new Set(chars.map((c) => c.style).filter((sc) => sc && !knownStyles.has(sc)))]
+          const countFor = (key) => chars.filter((c) => (c.style || '') === key).length
+          // The picked scope can vanish mid-edit (style renamed, last dangling
+          // character re-homed) — fall back to Global rather than a dead view.
+          const scope = charScope === '' || knownStyles.has(charScope) || missingScopes.includes(charScope) ? charScope : ''
+          const missing = missingScopes.includes(scope)
+          const scopeEntries = chars.map((c, i) => ({ c, i })).filter(({ c }) => (c.style || '') === scope)
           const scopeOptionsFor = (cur) => (<>
             <option value="">Global — every style</option>
-            {treeOrder.map(({ style: s, depth }) => (
-              <option key={s.name} value={s.name}>{'  '.repeat(depth)}{depth ? '↳ ' : ''}{s.name}</option>
+            {styleTreeOrder(styles).map(({ style: s, depth }) => (
+              <option key={s.name} value={s.name}>{'\u00A0\u00A0'.repeat(depth)}{depth ? '↳ ' : ''}{s.name}</option>
             ))}
             {cur && !knownStyles.has(cur) && <option value={cur}>{cur} — missing style</option>}
           </>)
-          const groups = [{ key: '', label: 'Global characters', global: true,
-                            entries: entries.filter(({ c }) => !c.style) }]
-          for (const { style: s } of treeOrder) {
-            const es = entries.filter(({ c }) => c.style === s.name)
-            if (es.length) groups.push({ key: s.name, label: s.name, entries: es })
-          }
-          for (const name of [...new Set(entries.map(({ c }) => c.style).filter((sc) => sc && !knownStyles.has(sc)))]) {
-            groups.push({ key: name, label: name, missing: true, entries: entries.filter(({ c }) => c.style === name) })
+          const pill = (key, label, { icon, depth = 0 } = {}) => {
+            const n = countFor(key)
+            return (
+              <Button variant={scope === key ? 'primary' : 'ghost'} icon={icon}
+                title={key === '' ? 'Characters every style inherits' : undefined}
+                onClick={() => setCharScope(key)}>
+                {`${depth ? '↳ ' : ''}${label}`}
+                {n > 0 && <span style={{ opacity: 0.55, fontWeight: 500 }}>{n}</span>}
+              </Button>
+            )
           }
           const charCard = ({ c, i }) => (
             <div key={c.id || `row-${i}`} className="stack gap-12" style={{ border: '1px solid var(--border)', borderRadius: 10, padding: 12 }}>
@@ -2234,8 +2242,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   label="Enabled — available to use in scripts and renders" />
                 <Button variant="ghost" icon="trash" onClick={() => removeChar(i)}>Remove</Button>
               </div>
-              {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only) */}
-              {c.id && !dirty ? (
+              {/* Reference image — anchors the look to a photo/portrait (FLUX.2 only).
+                  The image and kept versions are ALWAYS visible; only the ops that
+                  persist server-side immediately (upload / portrait / version picks)
+                  wait for a clean form, so staged edits can't be clobbered. */}
+              {c.id ? (
                 <div className="stack gap-12">
                   <div className="row gap-12 row--wrap" style={{ alignItems: 'center' }}>
                     {c.ref_image
@@ -2248,67 +2259,104 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                           </span>
                         </div>
                       : <span className="muted" style={{ fontSize: 12 }}>No reference image — text only.</span>}
-                    <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
-                      <Icon name="upload" /> Upload image
-                      <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
-                        onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
-                    </label>
-                    <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
-                      onClick={() => genCharPortrait(c)}>
-                      {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
-                    </Button>
-                    {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                    {dirty
+                      ? <span className="muted" style={{ fontSize: 12 }}><Icon name="circle-info" /> Unsaved edits — <strong>Save settings</strong> to upload or re-roll the look.</span>
+                      : (<>
+                        <label className={`btn btn--ghost${charBusy === c.id ? ' btn--disabled' : ''}`}>
+                          <Icon name="upload" /> Upload image
+                          <input type="file" accept="image/*" style={{ display: 'none' }} disabled={charBusy === c.id}
+                            onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadCharImage(c, f); e.target.value = '' }} />
+                        </label>
+                        <Button variant="ghost" icon="wand-magic-sparkles" disabled={charBusy === c.id || !c.description}
+                          onClick={() => genCharPortrait(c)}>
+                          {charBusy === c.id ? 'Working…' : (c.ref_image ? 'Re-roll portrait' : 'Generate portrait')}
+                        </Button>
+                        {c.ref_image && <Button variant="ghost" icon="trash" disabled={charBusy === c.id} onClick={() => clearCharImage(c)}>Remove image</Button>}
+                      </>)}
                   </div>
                   <VersionStrip versions={c.history?.versions} selected={c.history?.selected}
                     onSelect={(vid) => selectCharVersion(c, vid)} onDelete={(vid) => deleteCharVersion(c, vid)}
-                    aspect="1 / 1" busy={charBusy === c.id} />
+                    aspect="1 / 1" busy={charBusy === c.id || dirty} />
                 </div>
               ) : (
-                <span className="muted" style={{ fontSize: 12 }}>Save settings to add a reference image that pins this character's look (FLUX.2 only).</span>
+                <span className="muted" style={{ fontSize: 12 }}>Save settings, then upload or generate a reference image that pins this character's look (FLUX.2 only).</span>
               )}
             </div>
           )
           return (<>
-            {groups.map((g, gi) => {
-              const ancestors = g.missing ? [] : styleLineage(styles, g.key).slice(0, -1).map((s) => s.name)
-              return (
-                <Card span={12} key={`chargrp-${g.key || '(global)'}`} className={`reveal reveal-d${Math.min(gi + 1, 3)}`}>
-                  <div className="row center between">
-                    <span className="label-sm">
-                      <Icon name={g.global ? 'globe' : g.missing ? 'triangle-exclamation' : 'palette'} style={{ marginRight: 7, opacity: 0.6 }} />
-                      {ancestors.length > 0 && <span className="muted" style={{ fontWeight: 500 }}>{ancestors.join(' › ')} › </span>}
-                      {g.label}
-                      <span className="muted" style={{ fontWeight: 400 }}> · {g.entries.length}</span>
-                    </span>
-                    {!g.missing && <Button variant="ghost" icon="plus" onClick={() => addChar(g.key)}>Add character</Button>}
-                  </div>
-                  <div className="field__hint" style={{ marginTop: 6 }}>
-                    {g.global
-                      ? <>Recurring people or things that keep the same look across scenes and videos. Global characters are inherited by <strong>every style</strong>; a character that belongs to a style is used only by that style and the styles under it. When a scene mentions one by name (or an alias), its appearance is written into the image prompt. Generated portraits use the owning style's image model and visual look — global characters use the default style's.</>
-                      : g.missing
-                        ? <>The style “{g.label}” no longer exists, so these characters are dormant. Pick a new home with each card's <strong>Belongs to</strong>.</>
-                        : <>Used by “{g.label}” and the styles under it only.</>}
-                  </div>
-                  <div className="stack gap-16 mt-16">
-                    {g.global && g.entries.length === 0 &&
-                      <div className="muted" style={{ fontSize: 12 }}>No global characters — these are the ones every style would share (e.g. a channel mascot).</div>}
-                    {g.entries.map((e) => charCard(e))}
-                  </div>
-                </Card>
-              )
-            })}
-
-            {/* ── New character (pick where it lives) ── */}
-            <Card span={12} className="reveal reveal-d3">
-              <span className="label-sm">New character</span>
-              <div className="field__hint" style={{ marginTop: 6 }}>
-                Create a character and choose where it lives. Styles not listed above simply have no characters of their own yet.
+            <Card span={12} className="reveal reveal-d1">
+              <div className="row center between">
+                <span className="label-sm">Characters</span>
+                <span className="muted" style={{ fontSize: 11.5 }}>Global characters reach every style; a style's characters reach it and the styles under it.</span>
               </div>
-              <div className="row gap-12 mt-16 row--wrap" style={{ alignItems: 'center' }}>
-                <select className="select" style={{ maxWidth: 320 }} value={newCharScope} onChange={(e) => setNewCharScope(e.target.value)}>
-                  {scopeOptionsFor('')}
-                </select>
-                <Button variant="ghost" icon="plus" onClick={() => addChar(newCharScope)}>Add character</Button>
+              {/* Scope picker — same compact tree as the Styles tab, with a
+                  leading Global pill (and warning pills for deleted homes). */}
+              {styles.some((s) => s.parent) ? (() => {
+                const cells = []
+                let row = 0   // row 0 = the Global pill
+                styleTreeOrder(styles).forEach((o, j, arr) => {
+                  if (j === 0 || o.depth !== arr[j - 1].depth + 1) row++
+                  cells.push({ ...o, row })
+                })
+                missingScopes.forEach((name) => { row++; cells.push({ missing: name, depth: 0, row }) })
+                const cols = cells.reduce((m, c) => Math.max(m, c.depth), 0) + 1
+                return (
+                  <div className="mt-16" style={{ overflowX: 'auto' }}>
+                    <div style={{ display: 'inline-grid', gridTemplateColumns: `repeat(${cols}, max-content)`, gap: 6, alignItems: 'center' }}>
+                      <div style={{ gridRow: 1, gridColumn: 1 }}>{pill('', 'Global', { icon: 'globe' })}</div>
+                      {cells.map((cell) => (
+                        <div key={cell.missing ? `miss-${cell.missing}` : cell.style.name}
+                          style={{ gridRow: cell.row + 1, gridColumn: cell.depth + 1 }}>
+                          {cell.missing
+                            ? pill(cell.missing, cell.missing, { icon: 'triangle-exclamation' })
+                            : pill(cell.style.name, cell.style.name, { depth: cell.depth })}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              })() : (
+                <div className="row gap-6 row--wrap mt-16">
+                  <div>{pill('', 'Global', { icon: 'globe' })}</div>
+                  {styles.map((s) => <div key={s.name}>{pill(s.name, s.name)}</div>)}
+                  {missingScopes.map((name) => <div key={`miss-${name}`}>{pill(name, name, { icon: 'triangle-exclamation' })}</div>)}
+                </div>
+              )}
+
+              {/* The picked scope's cast */}
+              <div className="row center between" style={{ marginTop: 22 }}>
+                <span className="label-sm">
+                  {scope === '' ? 'Global characters' : (<>
+                    {!missing && styleLineage(styles, scope).slice(0, -1).map((a) => (
+                      <span key={a.name}>
+                        <a role="button" tabIndex={0} title={`Show “${a.name}” characters`}
+                          style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                          onClick={() => setCharScope(a.name)}>{a.name}</a>
+                        {' ▸ '}
+                      </span>
+                    ))}
+                    {scope}
+                  </>)}
+                  <span className="muted" style={{ fontWeight: 400 }}> · {scopeEntries.length}</span>
+                </span>
+                {!missing && <Button variant="ghost" icon="plus" onClick={() => addChar(scope)}>Add character</Button>}
+              </div>
+              <div className="field__hint" style={{ marginTop: 6 }}>
+                {scope === ''
+                  ? <>Recurring people or things that keep the same look across scenes and videos — these are inherited by <strong>every style</strong>. When a scene mentions one by name (or an alias), its appearance is written into the image prompt. Generated portraits use the owning style's image model and visual look (global characters use the default style's).</>
+                  : missing
+                    ? <>The style “{scope}” no longer exists, so these characters are dormant. Pick a new home with each card's <strong>Belongs to</strong>.</>
+                    : <>Used by “{scope}” and the styles under it, on top of the global pool every style inherits.</>}
+              </div>
+              <div className="stack gap-16 mt-16">
+                {scopeEntries.length === 0 && (
+                  <div className="muted" style={{ fontSize: 12 }}>
+                    {scope === ''
+                      ? 'No global characters yet — these are the ones every style would share (e.g. a channel mascot).'
+                      : `No characters belong to “${scope}” yet — Add character creates one here, or move one in with its Belongs to picker.`}
+                  </div>
+                )}
+                {scopeEntries.map((e) => charCard(e))}
               </div>
             </Card>
 
