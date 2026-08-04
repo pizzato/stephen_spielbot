@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Card, Chip, Button, Segmented, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Segmented, Icon, Banner, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -224,13 +224,16 @@ export default function Ideas({ go, meta = {} }) {
     } catch (e) { setError(e.message) }
     loadDiscarded(); loadAccepted()
   }
-  // Scenes + resolution come straight from the idea's style size preset, so each
-  // size is exactly what that style configured in Settings.
+  // Length + resolution come straight from the idea's style size preset, so
+  // each size is exactly what that style configured in Settings. Minutes are
+  // authoritative; a pre-minutes preset falls back to its legacy scene count.
   const presetFor = (idea, size) => {
     const styleObj = resolveStyle(styleList, styleOf(idea))
     const presets = styleObj?.size_presets || meta.default_size_presets || {}
-    return presets[size] || (meta.default_size_presets || {})[size]
-      || { scenes: 6, resolution: meta.default_resolution || '' }
+    const p = presets[size] || (meta.default_size_presets || {})[size]
+      || { minutes: 1, scenes: 6, resolution: meta.default_resolution || '' }
+    const minutes = p.minutes || Math.round(((p.scenes || 6) * LEGACY_SCENE_SECS / 60) * 100) / 100
+    return { ...p, minutes }
   }
   // Accepted rows keep their own size choice, seeded from the size chosen on
   // the card at accept time (falls back to 'small').
@@ -243,10 +246,10 @@ export default function Ideas({ go, meta = {} }) {
   // Queue/Create an accepted idea. The idea stays in the Accepted list — it's
   // only stamped as acted upon, so the list shows what's still waiting.
   const queueAccepted = async (rec) => {
-    const { scenes, resolution } = presetFor(rec, recSize(rec))
+    const { minutes, resolution } = presetFor(rec, recSize(rec))
     setBusy('acc-' + recKey(rec)); setError('')
     try {
-      await api.queueAdd(rec.title, scenes, rec.reason || '', resolution, styleOf(rec))
+      await api.queueAdd(rec.title, minutes, rec.reason || '', resolution, styleOf(rec))
       await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'queue' }).catch(() => {})
       await loadAccepted()
       setStatus('Added to queue.')
@@ -257,9 +260,9 @@ export default function Ideas({ go, meta = {} }) {
     }
   }
   const createAccepted = async (rec) => {
-    const { scenes, resolution } = presetFor(rec, recSize(rec))
+    const { minutes, resolution } = presetFor(rec, recSize(rec))
     await api.actSuggestion({ id: rec.id || '', title: rec.title || '', via: 'create' }).catch(() => {})
-    go('create', { title: rec.title, description: rec.reason || '', scenes, resolution, styleName: styleOf(rec) })
+    go('create', { title: rec.title, description: rec.reason || '', minutes, resolution, styleName: styleOf(rec) })
   }
   // Bring a declined idea back into the active list. Clear the local hide too,
   // otherwise visibleIdeas would re-filter it straight back out.
@@ -307,7 +310,7 @@ export default function Ideas({ go, meta = {} }) {
   // listed, moves to "Acted on"), move it to Declined, or remove it.
   const acceptedRow = (rec) => {
     const size = recSize(rec)
-    const { scenes, resolution } = presetFor(rec, size)
+    const { minutes, resolution } = presetFor(rec, size)
     const k = recKey(rec)
     return (
       <div key={k} className="row center between row--wrap gap-10"
@@ -323,7 +326,7 @@ export default function Ideas({ go, meta = {} }) {
         <div className="row center gap-10 row--wrap">
           <Segmented value={size} onChange={(v) => setRecSize(rec, v)}
             options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
-          <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>{minutes} min · {orientationOf(resolution)}</span>
           <Button variant="ghost" icon="ban" disabled={busy === 'acc-' + k} onClick={() => moveIdea(rec, 'declined')} title="Move to the Declined list">Decline</Button>
           <Button variant="ghost" icon="trash-can" disabled={busy === 'acc-' + k} onClick={() => forgetIdea(rec)} title="Remove from this list — it may resurface later">Remove</Button>
           <Button variant="ghost" icon="layer-group" disabled={busy === 'acc-' + k} onClick={() => queueAccepted(rec)}>Queue</Button>
@@ -391,7 +394,7 @@ export default function Ideas({ go, meta = {} }) {
         {view === 'ideas' && sortedIdeas.map((idea, i) => {
           const title = idea.title || idea.final_title || idea
           const size = ideaSize(idea)
-          const { scenes, resolution } = presetFor(idea, size)
+          const { minutes, resolution } = presetFor(idea, size)
           const key = ideaKey(idea) || `${title}-${i}`
           const pk = ideaKey(idea)
           return (
@@ -406,7 +409,7 @@ export default function Ideas({ go, meta = {} }) {
                   options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
               </div>
               <div className="row center between mt-16 row--wrap gap-10">
-                <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {orientationOf(resolution)}</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>{minutes} min · {orientationOf(resolution)}</span>
                 <div className="row gap-10 row--wrap">
                   <Button variant="ghost" icon="ban" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'declined')} title="Add to the Declined list so the AI steers away from it">Decline</Button>
                   <Button variant="ghost" icon="eye-slash" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'ignored')} title="Hide it for good — you won't see it again">Ignore</Button>

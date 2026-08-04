@@ -1,5 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
-import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -8,7 +8,13 @@ const STATUS_CHIP = {
   done: ['warn', 'Ready to publish'], upload_pending: ['warn', 'Ready to publish'],
   posted: ['ok', 'Posted'], failed: ['danger', 'Failed'], cancelled: ['neutral', 'Cancelled'],
 }
-function tier(n) { if (!n) return ''; if (n <= 11) return 'SHORT'; if (n <= 39) return 'MEDIUM'; return 'LARGE' }
+function tier(mins) { if (!mins) return ''; if (mins <= 1.7) return 'SHORT'; if (mins <= 6) return 'MEDIUM'; return 'LARGE' }
+// An item's target length: its minutes, else its legacy scene count (~9s each).
+function itemMinutes(it) {
+  if (it?.suggested_minutes) return it.suggested_minutes
+  const n = it?.suggested_scene_count
+  return n ? Math.round((n * LEGACY_SCENE_SECS / 60) * 100) / 100 : 0
+}
 function fmtNum(n) {
   if (n == null) return '—'
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
@@ -38,7 +44,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [editId, setEditId] = useState('')         // pending item open for inline edit
-  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_scene_count: 6, gen_resolution: '', gen_style_name: '' })
+  const [draft, setDraft] = useState({ final_title: '', video_prompt: '', suggested_minutes: 1, gen_resolution: '', gen_style_name: '' })
   const [sortBy, setSortBy] = useState(() => validSort(meta.config?.queue_sort_order))
   // id -> predicted early-window views (null = model unavailable, undefined = not fetched yet)
   const [views, setViews] = useState({})
@@ -103,7 +109,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
     setDraft({
       final_title: it.final_title || it.title || '',
       video_prompt: it.video_prompt || it.comment_text || '',
-      suggested_scene_count: it.suggested_scene_count || 6,
+      suggested_minutes: itemMinutes(it) || 1,
       gen_resolution: it.gen_resolution || meta.config?.resolution || meta.default_resolution || '',
       gen_style_name: it.gen_style_name || meta.config?.default_style || '',
     })
@@ -111,7 +117,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const saveEdit = (id) => run('save' + id, () => api.queueUpdate(id, {
     final_title: draft.final_title,
     video_prompt: draft.video_prompt,
-    suggested_scene_count: Number(draft.suggested_scene_count) || 6,
+    suggested_minutes: Number(draft.suggested_minutes) || 1,
     gen_resolution: draft.gen_resolution || '',
     gen_style_name: draft.gen_style_name || '',
   }), () => { setEditId(''); setStatus('Queue item updated.') })
@@ -159,9 +165,9 @@ export default function Queue({ go, onEditScript, meta = {} }) {
         {/* Top-aligned so fields with hints don't push the others off their
             labels (the old `center` row left Scenes/Style misaligned). */}
         <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
-          <Field label="Scenes">
-            <input className="input" type="number" min={6} max={200} style={{ width: 110 }} value={draft.suggested_scene_count}
-              onChange={(e) => setDraft((d) => ({ ...d, suggested_scene_count: e.target.value }))} />
+          <Field label="Length (min)">
+            <input className="input" type="number" min={0.25} max={40} step={0.25} style={{ width: 110 }} value={draft.suggested_minutes}
+              onChange={(e) => setDraft((d) => ({ ...d, suggested_minutes: e.target.value }))} />
           </Field>
           {styleList.length > 0 && (
             <Field label="Style" hint="Script, render and audio settings.">
@@ -179,7 +185,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
           <Button variant="ghost" disabled={!!busy} onClick={() => setEditId('')}>Cancel</Button>
           <Button variant="ghost" icon="floppy-disk" disabled={!!busy || !draft.final_title.trim()} onClick={() => saveEdit(it.id)}>{busy === 'save' + it.id ? 'Saving…' : 'Save'}</Button>
           <Button variant="primary" iconRight="feather-pointed" disabled={!!busy}
-            onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_scene_count: Number(draft.suggested_scene_count) || 6, gen_resolution: draft.gen_resolution || '', gen_style_name: draft.gen_style_name || '' })}>
+            onClick={() => openScript(it, { final_title: draft.final_title, video_prompt: draft.video_prompt, suggested_minutes: Number(draft.suggested_minutes) || 1, gen_resolution: draft.gen_resolution || '', gen_style_name: draft.gen_style_name || '' })}>
             {busy === 'e' + it.id ? 'Opening…' : 'Create script →'}
           </Button>
         </div>
@@ -190,7 +196,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
   const queueRow = (it, idx, sectionItems, { dim = false, noMove = false } = {}) => {
     const [tone, label] = STATUS_CHIP[it.status] || ['neutral', it.status]
     const titleText = it.final_title || it.title || '(untitled)'
-    const scenes = it.suggested_scene_count
+    const mins = itemMinutes(it)
     const isPending = it.status === 'pending'
     const editing = editId === it.id
     // The style this item renders with: its own, else (while still pending)
@@ -217,7 +223,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               {styleLabel && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {styleLabel}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
               {views[it.id] != null && <span title="Predicted reach"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(views[it.id])}</Chip></span>}
-              {scenes ? <span className="muted" style={{ fontSize: 12.5 }}>{scenes} scenes · {tier(scenes)}</span> : null}
+              {mins ? <span className="muted" style={{ fontSize: 12.5 }}>{mins} min · {tier(mins)}</span> : null}
               {it.est_text && <span className="muted" style={{ fontSize: 12.5 }} title={it.est_confidence === 'rough' ? 'Estimated render time (rough — little timing data for this setup yet)' : 'Estimated render time, from your past renders'}><Icon name="clock" style={{ fontSize: 11 }} /> {it.est_text}</span>}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
             </div>

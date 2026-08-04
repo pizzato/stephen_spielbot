@@ -23,6 +23,59 @@ export function voiceLabel(name, metaMap) {
   return c ? `${name} — ${c}` : name
 }
 
+// ── Voice cadence (words/minute) — mirror of pipeline/cadence.py ─────────────
+// Scenes are 10–15 s of narration (12 s target); legacy scene counts meant
+// ~9 s each; unmeasured voices fall back to the server's default cadence.
+// These are display estimates only — the backend plan is authoritative.
+export const SCENE_TARGET_SECS = 12
+export const LEGACY_SCENE_SECS = 9
+
+// A voice's natural cadence from meta.voice_cadences ("<voice>|<engine>" keys).
+export function voiceWpm(meta, voice, engine) {
+  let name = (voice || '').trim()
+  if (name.toLowerCase() === 'default (f5-tts)') name = ''
+  const key = `${name || '__default__'}|${(engine || 'openf5').trim()}`
+  const entry = (meta?.voice_cadences || {})[key]
+  if (entry && Number(entry.wpm) > 0) return { wpm: Number(entry.wpm), measured: true }
+  return { wpm: Number(meta?.default_wpm) || 150, measured: false }
+}
+
+// The cadence narration will actually play at for a resolved style: the target
+// cadence when set, else the voice's natural pace × any legacy speed multiplier.
+export function effectiveWpm(meta, eff, voiceOverride) {
+  const voice = voiceOverride !== undefined && voiceOverride !== '' ? voiceOverride : (eff?.voice || '')
+  const { wpm: nat, measured } = voiceWpm(meta, voice, eff?.tts_engine)
+  const target = Number(eff?.voice_cadence_wpm || 0)
+  if (target > 0) return { wpm: target, measured }
+  const speed = Number(eff?.voice_speed || 1) || 1
+  return { wpm: Math.round(nat * speed), measured }
+}
+
+// A style's effective target length in minutes (video_minutes, else what its
+// legacy scene count used to produce).
+export function styleMinutes(eff) {
+  const m = Number(eff?.video_minutes || 0)
+  if (m > 0) return m
+  const n = parseInt(eff?.n_scenes, 10) || 6
+  return Math.round((n * LEGACY_SCENE_SECS / 60) * 100) / 100
+}
+
+// minutes × cadence → estimated words + scene count (pause-aware).
+export function lengthEstimate(minutes, wpm, sentencePause = 0) {
+  const mins = Math.max(0.25, Number(minutes) || 0)
+  const rate = Number(wpm) > 0 ? Number(wpm) : 150
+  const gap = Math.max(0, Math.min(Number(sentencePause) || 0, 5))
+  const nScenes = Math.max(1, Math.round(mins * 60 / SCENE_TARGET_SECS))
+  const wordsScene = Math.max(1, Math.round(rate * (SCENE_TARGET_SECS - gap) / 60))
+  return { nScenes, words: nScenes * wordsScene, wordsScene }
+}
+
+// Compact "≈ 300 words · 10 scenes" line for length pickers.
+export function lengthEstimateLabel(minutes, wpm, sentencePause = 0) {
+  const est = lengthEstimate(minutes, wpm, sentencePause)
+  return `≈ ${est.words} words · ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of 10–15s`
+}
+
 // Scene-type controls shared by the Script editor and the video edit screen so
 // they stay identical. Renders the Narration | Dialogue | Silent selector and,
 // for dialogue, the shot sequence editor (speaking + silent shots); for silent,
