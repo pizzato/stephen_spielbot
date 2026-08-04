@@ -169,6 +169,9 @@ VIDEO_ENGINES: dict[str, dict] = {
         # 15 steps ≈ 25% faster than the ComfyUI template's 20 with little
         # visible loss (the reference recipe is 50 — 20 was already speed-tuned).
         "steps": 15,
+        # Native EasyCache (ComfyUI ≥ v0.30.0): skips DiT steps whose latent
+        # barely changes. 0.2 is the node default; higher = faster/looser.
+        "easycache_threshold": 0.2,
         # H3 scene renders can far outlive the default 1 h durable-task lease on
         # GB10-class workers; renderers extend the lease to this before starting.
         "lease_seconds": 14400,

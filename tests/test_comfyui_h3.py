@@ -75,6 +75,11 @@ class H3WorkflowTests(unittest.TestCase):
         self.assertEqual(wf["9"]["inputs"]["steps"], eng["steps"])
         self.assertEqual(wf["10"]["inputs"]["noise_seed"], 7)
         self.assertEqual(wf["16"]["inputs"]["format"], "mp4")
+        # EasyCache sits between the loader and both model consumers.
+        self.assertEqual(wf["17"]["class_type"], "EasyCache")
+        self.assertEqual(wf["17"]["inputs"]["reuse_threshold"], eng["easycache_threshold"])
+        self.assertEqual(wf["9"]["inputs"]["model"], ["17", 0])
+        self.assertEqual(wf["11"]["inputs"]["model"], ["17", 0])
 
     def test_h3_uses_long_heartbeat_warmup(self):
         _, cap = self._generate()

@@ -76,7 +76,7 @@
     "class_type": "BasicScheduler",
     "inputs": {
       "model": [
-        "1",
+        "17",
         0
       ],
       "scheduler": "simple",
@@ -94,7 +94,7 @@
     "class_type": "BasicGuider",
     "inputs": {
       "model": [
-        "1",
+        "17",
         0
       ],
       "conditioning": [
@@ -178,6 +178,19 @@
       "filename_prefix": "h3-i2v",
       "format": "mp4",
       "codec": "auto"
+    }
+  },
+  "17": {
+    "class_type": "EasyCache",
+    "inputs": {
+      "model": [
+        "1",
+        0
+      ],
+      "reuse_threshold": "{{EASYCACHE_THRESHOLD}}",
+      "start_percent": 0.15,
+      "end_percent": 0.95,
+      "verbose": false
     }
   }
 }

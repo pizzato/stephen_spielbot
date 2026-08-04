@@ -833,6 +833,7 @@ def generate_video_h3(
         "SEED":            seed,
         "STEPS":           steps,
         "IMAGE_NAME":      image_name,
+        "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
     })
 
     _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
