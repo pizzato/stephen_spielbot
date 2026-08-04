@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { Card, Chip, Button, Segmented, Icon, Banner, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Chip, Button, Segmented, Icon, Banner, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -326,7 +326,7 @@ export default function Ideas({ go, meta = {} }) {
         <div className="row center gap-10 row--wrap">
           <Segmented value={size} onChange={(v) => setRecSize(rec, v)}
             options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
-          <span className="muted" style={{ fontSize: 12.5 }}>{minutes} min · {orientationOf(resolution)}</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>{fmtDuration(minutes)} · {orientationOf(resolution)}</span>
           <Button variant="ghost" icon="ban" disabled={busy === 'acc-' + k} onClick={() => moveIdea(rec, 'declined')} title="Move to the Declined list">Decline</Button>
           <Button variant="ghost" icon="trash-can" disabled={busy === 'acc-' + k} onClick={() => forgetIdea(rec)} title="Remove from this list — it may resurface later">Remove</Button>
           <Button variant="ghost" icon="layer-group" disabled={busy === 'acc-' + k} onClick={() => queueAccepted(rec)}>Queue</Button>
@@ -409,7 +409,7 @@ export default function Ideas({ go, meta = {} }) {
                   options={SIZE_ORDER.map((s) => ({ value: s, label: SIZE_LABELS[s] }))} />
               </div>
               <div className="row center between mt-16 row--wrap gap-10">
-                <span className="muted" style={{ fontSize: 12.5 }}>{minutes} min · {orientationOf(resolution)}</span>
+                <span className="muted" style={{ fontSize: 12.5 }}>{fmtDuration(minutes)} · {orientationOf(resolution)}</span>
                 <div className="row gap-10 row--wrap">
                   <Button variant="ghost" icon="ban" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'declined')} title="Add to the Declined list so the AI steers away from it">Decline</Button>
                   <Button variant="ghost" icon="eye-slash" disabled={busy === 'idea-' + key} onClick={() => closeIdea(idea, 'ignored')} title="Hide it for good — you won't see it again">Ignore</Button>

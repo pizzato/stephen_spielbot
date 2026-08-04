@@ -212,7 +212,7 @@ story_chapter:
     Output ONLY the chapter's narration prose — plain text, flowing sentences. No headings, no labels, no markdown, no scene numbers.
 
     Rules:
-    - Approximately ${target_words} words.
+    - Approximately ${target_words} words — this is a HARD budget: never run more than a few words over (slightly under is fine). The chapter is divided into fixed-length scenes afterwards, so extra words stretch the video past its commissioned length.
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
@@ -318,7 +318,7 @@ story_redraft_chapter:
     Output ONLY the chapter's narration prose — plain text, flowing sentences. No headings, no labels, no markdown, no scene numbers.
 
     Rules:
-    - Approximately ${target_words} words.
+    - Approximately ${target_words} words — this is a HARD budget: never run more than a few words over (slightly under is fine). The chapter is divided into fixed-length scenes afterwards, so extra words stretch the video past its commissioned length.
     - Retell the SOURCE STORY faithfully: same facts, same arc, same voice. When the target is longer than the source material, elaborate with vivid detail and texture the source implies — never invent new events or facts. When shorter, condense to the strongest beats.
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
@@ -353,7 +353,7 @@ story_divide:
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors. Keep it ONE continuous shot that animates the still — same single location and the same subjects, no cuts, no scene changes, and nothing new appearing (the model animates only the first frame, so anything not already in it distorts).
       - "narration": about ${scene_words_target} words (hard range ${scene_words_min}-${scene_words_max}; NEVER exceed ${scene_words_max} words) — every scene must play ${scene_secs_min}-${scene_secs_max} seconds at the narrator's pace, no more. The narration MUST be drawn from the STORY TEXT below — condense it faithfully across the scenes, preserving its order, wording and voice as much as possible. Invent nothing that is not in the story text. Never refer to "the narrator" — the voice tells the story directly.
 
-    Together the scenes' narrations must cover the ENTIRE story text in order — nothing skipped, nothing repeated, nothing added.
+    Together the scenes' narrations must cover the ENTIRE story's CONTENT in order — every beat, nothing repeated, nothing added. The per-scene word cap OUTRANKS word-for-word coverage: when the story text carries more words than its scenes can hold, CONDENSE the prose — tighter wording, same beats — rather than exceeding ${scene_words_max} words or leaving anything out.
 
     SCENE BOUNDARIES: a scene is roughly ONE sentence of the story. Prefer cutting at sentence ends. When a story sentence is too long for one scene's word cap, cut it at a NATURAL PAUSE — a comma, semicolon, colon, or dash — so the visuals change mid-sentence where the voice would naturally breathe; never cut mid-clause, and never let a scene exceed ${scene_words_max} words to avoid it.
 
@@ -375,6 +375,20 @@ story_divide:
     ${ctx_str}${video_style_note}${avoid_note}${character_note}${language_note}${conclusion_note}
 
     Generate scene objects with IDs ${batch_start}–${batch_end}.
+
+
+condense_narration:
+  description: |
+    Rewrites one over-long scene narration down to the cadence word cap so the
+    scene stays 10-15s and the video keeps its planned length (the alternative
+    — splitting the scene in two — changes the scene count and runtime).
+  system: |
+    You are a documentary script editor condensing one scene's narration. Output ONLY the condensed narration text — no labels, no quotes, no explanation.
+  user: |
+    Condense this narration to AT MOST ${scene_words_max} words (aim for about ${scene_words_target}). Keep its meaning, facts, voice, and flow with the surrounding scenes — cut filler and redundancy, not story. One flowing sentence, or two short ones.${lang_note}
+
+    Narration:
+    ${narration}
 
 
 script_critic:

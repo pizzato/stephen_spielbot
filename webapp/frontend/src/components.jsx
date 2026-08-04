@@ -76,6 +76,38 @@ export function lengthEstimateLabel(minutes, wpm, sentencePause = 0) {
   return `≈ ${est.words} words · ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of 10–15s`
 }
 
+// "2 min 30 s" / "2 min" / "45 s" from a float-minutes value — lengths are
+// stored as minutes but always DISPLAYED as a time.
+export function fmtDuration(minutes) {
+  const total = Math.round((Number(minutes) || 0) * 60)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (!m) return `${s} s`
+  return s ? `${m} min ${s} s` : `${m} min`
+}
+
+// Minutes + seconds inputs writing a single float-minutes value (the unit the
+// config/API use). Clamped to 15 s .. maxMinutes.
+export function DurationInput({ value, onChange, disabled, maxMinutes = 40 }) {
+  const total = Math.round((Number(value) || 0) * 60)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  const set = (mins, secs) => {
+    const t = Math.max(15, Math.min(maxMinutes * 60, (Number(mins) || 0) * 60 + (Number(secs) || 0)))
+    onChange(Math.round((t / 60) * 10000) / 10000)
+  }
+  return (
+    <div className="row center gap-6">
+      <input className="input" type="number" min={0} max={maxMinutes} value={m} disabled={disabled}
+        onChange={(e) => set(e.target.value, s)} style={{ width: 74 }} />
+      <span className="muted" style={{ fontSize: 12 }}>min</span>
+      <input className="input" type="number" min={-5} max={60} step={5} value={s} disabled={disabled}
+        onChange={(e) => set(m, e.target.value)} style={{ width: 74 }} />
+      <span className="muted" style={{ fontSize: 12 }}>s</span>
+    </div>
+  )
+}
+
 // Scene-type controls shared by the Script editor and the video edit screen so
 // they stay identical. Renders the Narration | Dialogue | Silent selector and,
 // for dialogue, the shot sequence editor (speaking + silent shots); for silent,

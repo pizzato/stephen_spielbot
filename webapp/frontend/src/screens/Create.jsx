@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimateLabel, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -236,7 +236,7 @@ export default function Create({ seed, meta, onGenerated }) {
 
             <div className="row gap-22 row--wrap">
               <div className="grow">
-                <Field label={`Length — ${minutes} min`}
+                <Field label={`Length — ${fmtDuration(minutes)}`}
                   hint={`${lengthEstimateLabel(minutes, effectiveWpm(meta, profile || {}, voice).wpm, profile?.tts_sentence_pause)} at ${voice || 'the narrator'}’s cadence.`}>
                   <input className="slider" type="range" min={0.5} max={30} step={0.25} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
                 </Field>

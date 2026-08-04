@@ -9,7 +9,12 @@ os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))
 
 import webapp.backend.main as backend  # noqa: E402
 from pipeline import cadence  # noqa: E402
-from pipeline.llm import Scene  # noqa: E402
+from pipeline.llm import (  # noqa: E402
+    Scene,
+    condense_long_narrations,
+    enforce_scene_word_caps,
+    regen_split_scene_visuals,
+)
 from test_styles import TempConfigCase, _style  # noqa: E402
 
 
@@ -119,6 +124,74 @@ class QueueMinutesTests(LengthPlanCase):
         self.assertEqual(backend._queue_item_minutes({"suggested_minutes": 2.5}, ss), 2.5)
         self.assertEqual(backend._queue_item_minutes({"suggested_scene_count": 20}, ss), 3.0)
         self.assertEqual(backend._queue_item_minutes({}, ss), 1.2)  # style's 8 × 9 s
+
+
+class SceneContractTests(unittest.TestCase):
+    """Over-budget narrations must be condensed to the cap — keeping the scene
+    count and video length as planned — and any scene the splitting backstop
+    does create must get its own visuals, never a copy of its source's."""
+
+    def setUp(self):
+        self.plan = cadence.plan_script(1.0, 150.0)  # cap = 37 words/scene
+        # A ~60-word narration with natural pauses, so the splitter can cut it.
+        self.long = ("The cat sat inside the sealed box, neither alive nor dead, "
+                     "while the scientists argued about what it meant, and the "
+                     "equations said both outcomes were true at once, which felt "
+                     "impossible to everyone in the room, yet the mathematics held "
+                     "firm, and the debate about measurement spread far beyond "
+                     "physics into philosophy itself, changing the question forever.")
+
+    def test_condense_keeps_scene_count_and_length(self):
+        scenes = [Scene(id=1, title="T", image_prompt="img", video_prompt="vid",
+                        narration=self.long)]
+        short = "The cat sat in the sealed box, both alive and dead at once."
+
+        def call(system, user, max_tokens, label, retries=2):
+            self.assertIn("37", user)  # the cap reaches the prompt
+            return short
+
+        condense_long_narrations(call, scenes, self.plan)
+        self.assertEqual(scenes[0].narration, short)
+        out = enforce_scene_word_caps(scenes, self.plan)
+        self.assertEqual(len(out), 1)  # no split, no duplicate visuals
+
+    def test_condense_rejects_a_longer_rewrite(self):
+        scenes = [Scene(id=1, title="T", image_prompt="img", video_prompt="vid",
+                        narration=self.long)]
+        condense_long_narrations(
+            lambda *a, **k: self.long + " And even more words follow here now.",
+            scenes, self.plan)
+        self.assertEqual(scenes[0].narration, self.long)
+
+    def test_split_pieces_get_their_own_visuals(self):
+        scenes = [Scene(id=1, title="T", image_prompt="img", video_prompt="vid",
+                        narration=self.long)]
+        out = enforce_scene_word_caps(scenes, self.plan)
+        self.assertGreater(len(out), 1)
+        # Stand-in visuals inherited, continuation pieces marked for regen.
+        self.assertTrue(all(s.image_prompt == "img" for s in out))
+        self.assertFalse(getattr(out[0], "_split_clone", False))
+        self.assertTrue(all(getattr(s, "_split_clone", False) for s in out[1:]))
+
+        def call(system, user, max_tokens, label, retries=2):
+            return "IMAGE: a fresh still for this moment\nVIDEO: a fresh motion for this moment"
+
+        regen_split_scene_visuals(call, out, "Title", "style")
+        self.assertEqual(out[0].image_prompt, "img")  # first piece keeps the source's
+        for s in out[1:]:
+            self.assertEqual(s.image_prompt, "a fresh still for this moment")
+            self.assertEqual(s.video_prompt, "a fresh motion for this moment")
+
+    def test_regen_failure_keeps_standin_visuals(self):
+        scenes = [Scene(id=1, title="T", image_prompt="img", video_prompt="vid",
+                        narration=self.long)]
+        out = enforce_scene_word_caps(scenes, self.plan)
+
+        def boom(*a, **k):
+            raise RuntimeError("llm down")
+
+        regen_split_scene_visuals(boom, out, "Title", "style")
+        self.assertTrue(all(s.image_prompt == "img" for s in out))
 
 
 if __name__ == "__main__":

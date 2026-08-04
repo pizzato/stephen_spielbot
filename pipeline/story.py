@@ -33,8 +33,10 @@ from pipeline.llm import (
     _norm_identified_characters,
     _parse_claude_response,
     _scene_len_vars,
+    condense_long_narrations,
     enforce_scene_word_caps,
     narration_language_name,
+    regen_split_scene_visuals,
 )
 
 logger = logging.getLogger("video_gen")
@@ -433,10 +435,16 @@ def divide_story(story: dict, n_scenes: int | None = None,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after divide fill — used title", s.id)
-    # Enforce the per-scene word cap BEFORE character detection — splitting
-    # renumbers scene ids, which would break the detector's scene references.
+    # 10–15 s scene contract, in order: condense over-cap narrations down to
+    # the cap (scene count and video length stay as planned), split whatever
+    # still overflows, then give split pieces their own visuals — all BEFORE
+    # character detection, since splitting renumbers scene ids.
+    condense_long_narrations(call, final_scenes, scene_plan, language=language)
     final_scenes = enforce_scene_word_caps(final_scenes, scene_plan)
     style = style_hint.strip() if style_hint and style_hint.strip() else str(story.get("style") or "")
+    regen_split_scene_visuals(call, final_scenes, title, style,
+                              video_style_hint=video_style_hint,
+                              character_sheet=character_note)
     identified = _detect_recurring_characters(call, final_scenes, identified,
                                               style_hint=style)
     music = str(story.get("music") or "cinematic orchestral background music, atmospheric, instrumental")

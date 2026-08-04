@@ -1,5 +1,5 @@
 import { useState, useEffect, Fragment } from 'react'
-import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Field, ResolutionPicker, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -165,9 +165,9 @@ export default function Queue({ go, onEditScript, meta = {} }) {
         {/* Top-aligned so fields with hints don't push the others off their
             labels (the old `center` row left Scenes/Style misaligned). */}
         <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
-          <Field label="Length (min)">
-            <input className="input" type="number" min={0.25} max={40} step={0.25} style={{ width: 110 }} value={draft.suggested_minutes}
-              onChange={(e) => setDraft((d) => ({ ...d, suggested_minutes: e.target.value }))} />
+          <Field label={`Length — ${fmtDuration(draft.suggested_minutes)}`}>
+            <DurationInput value={draft.suggested_minutes}
+              onChange={(v) => setDraft((d) => ({ ...d, suggested_minutes: v }))} />
           </Field>
           {styleList.length > 0 && (
             <Field label="Style" hint="Script, render and audio settings.">
@@ -223,7 +223,7 @@ export default function Queue({ go, onEditScript, meta = {} }) {
               {styleLabel && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {styleLabel}</Chip>}
               {it.interestingness != null && <span style={{ color: 'var(--warm)', fontWeight: 600, fontSize: 13 }}><Icon name="star" style={{ fontSize: 11 }} /> {Number(it.interestingness).toFixed(1)}</span>}
               {views[it.id] != null && <span title="Predicted reach"><Chip tone="accent"><Icon name="chart-line" style={{ fontSize: 10 }} /> ~{fmtNum(views[it.id])}</Chip></span>}
-              {mins ? <span className="muted" style={{ fontSize: 12.5 }}>{mins} min · {tier(mins)}</span> : null}
+              {mins ? <span className="muted" style={{ fontSize: 12.5 }}>{fmtDuration(mins)} · {tier(mins)}</span> : null}
               {it.est_text && <span className="muted" style={{ fontSize: 12.5 }} title={it.est_confidence === 'rough' ? 'Estimated render time (rough — little timing data for this setup yet)' : 'Estimated render time, from your past renders'}><Icon name="clock" style={{ fontSize: 11 }} /> {it.est_text}</span>}
               {it.commenter && <span className="muted" style={{ fontSize: 12.5 }}>· {it.commenter}</span>}
             </div>

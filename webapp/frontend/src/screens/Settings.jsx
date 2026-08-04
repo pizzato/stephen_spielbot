@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
 
@@ -1217,12 +1217,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'voice_cadence_wpm':
         return Number(v) > 0 ? `${v} words/min` : 'natural pace'
       case 'video_minutes':
-        return Number(v) > 0 ? `${v} min` : '(from legacy scene count)'
+        return Number(v) > 0 ? fmtDuration(v) : '(from legacy scene count)'
       case 'size_presets':
         return ['small', 'medium', 'large'].map((b) => {
           const p = (v || {})[b] || {}
-          const mins = p.minutes || (p.scenes ? Math.round((p.scenes * LEGACY_SCENE_SECS / 60) * 100) / 100 : '?')
-          return `${b}: ${mins} min · ${p.resolution || '?'}`
+          const mins = p.minutes || (p.scenes ? p.scenes * LEGACY_SCENE_SECS / 60 : 0)
+          return `${b}: ${mins ? fmtDuration(mins) : '?'} · ${p.resolution || '?'}`
         }).join('  ·  ')
       default:
         if (typeof v === 'boolean') return v ? 'on' : 'off'
@@ -2023,11 +2023,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">Script & content</span>
             <div className="stack gap-22 mt-16">
-              <Field label="Video length (minutes)"
+              <Field label={`Video length — ${fmtDuration(styleMinutes(eff))}`}
                 hint={`How long this style's videos run. The script's word budget comes from the narrator's cadence, divided into 10–15s scenes — ${lengthEstimateLabel(styleMinutes(eff), effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}.`}>
-                <input className="input" type="number" min={0.25} max={40} step={0.25}
-                  value={eff.video_minutes || styleMinutes(eff)}
-                  onChange={(e) => setStyleField('video_minutes', +e.target.value)} style={{ maxWidth: 160 }} />
+                <DurationInput value={eff.video_minutes || styleMinutes(eff)}
+                  onChange={(v) => setStyleField('video_minutes', v)} />
                 <ParentVal k="video_minutes" />
               </Field>
               <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
@@ -2289,9 +2288,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                     <div style={{ minWidth: 78 }}>
                       <span className="label-sm" style={{ textTransform: 'capitalize' }}>{bucket}</span>
                     </div>
-                    <Field label="Minutes" hint={lengthEstimateLabel(mins, effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}>
-                      <input className="input" type="number" min={0.25} max={40} step={0.25} value={mins} style={{ maxWidth: 110 }}
-                        onChange={(e) => setSizePreset(bucket, 'minutes', +e.target.value)} />
+                    <Field label={`Length — ${fmtDuration(mins)}`} hint={lengthEstimateLabel(mins, effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}>
+                      <DurationInput value={mins} onChange={(v) => setSizePreset(bucket, 'minutes', v)} />
                     </Field>
                     <div className="grow"><Field label="Resolution">
                       <ResolutionPicker value={preset.resolution || ''} onChange={(r) => setSizePreset(bucket, 'resolution', r)} meta={meta} />

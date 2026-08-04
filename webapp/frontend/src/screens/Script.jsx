@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { styleLineage } from '../styleUtils.js'
 
@@ -129,7 +129,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         chapters: storyChapters(),
       })
       setStory(s); setStoryDrafts({}); setMinutesTarget(String(storyMinutes(s)))
-      setStoryMsg(`Story redrafted for ${storyMinutes(s)} minutes (${s.n_scenes} scenes) — review it, then divide into scenes.`)
+      setStoryMsg(`Story redrafted for ${fmtDuration(storyMinutes(s))} (${s.n_scenes} scenes) — review it, then divide into scenes.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const divideStory = async () => {
@@ -853,7 +853,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <div className="stack gap-22">
               {storyMsg && <Banner tone="ok">{storyMsg}</Banner>}
               {busy === 'story-redraft' && (
-                <Banner tone="info">Redrafting the story to {minutesTargetN} minutes — every chapter is being rewritten, this takes a while…</Banner>
+                <Banner tone="info">Redrafting the story to {fmtDuration(minutesTargetN)} — every chapter is being rewritten, this takes a while…</Banner>
               )}
               {(story.chapters || []).map((c) => (
                 <Field key={c.chapter}
@@ -869,10 +869,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   {busy === 'story-save' ? 'Saving…' : 'Save story'}
                 </Button>
                 <div className="row center gap-10 row--wrap">
-                  <span className="label-sm">Minutes</span>
-                  <input className="input" type="number" min={0.25} max={40} step={0.25} style={{ width: 84 }}
-                    value={minutesTarget} disabled={!!busy}
-                    onChange={(e) => { setMinutesTarget(e.target.value); setConfirmRedraft(false) }} />
+                  <span className="label-sm">Length</span>
+                  <DurationInput value={minutesTarget} disabled={!!busy}
+                    onChange={(v) => { setMinutesTarget(v); setConfirmRedraft(false) }} />
                   {!minutesTargetChanged ? (
                     <Button variant="primary" size="lg" iconRight="scissors" disabled={!!busy} onClick={divideStory}>
                       {busy === 'story-divide'
@@ -884,14 +883,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   ) : confirmRedraft ? (
                     <>
                       <Button variant="danger" icon="wand-magic-sparkles" disabled={!!busy} onClick={redraftStory}>
-                        {busy === 'story-redraft' ? 'Redrafting…' : `Confirm — rewrite for ${minutesTargetN} min`}
+                        {busy === 'story-redraft' ? 'Redrafting…' : `Confirm — rewrite for ${fmtDuration(minutesTargetN)}`}
                       </Button>
                       <Button variant="ghost" disabled={!!busy} onClick={() => setConfirmRedraft(false)}>Cancel</Button>
                     </>
                   ) : (
                     <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                       disabled={!!busy} onClick={() => setConfirmRedraft(true)}>
-                      {`Redraft to ${minutesTargetN} min…`}
+                      {`Redraft to ${fmtDuration(minutesTargetN)}…`}
                     </Button>
                   )}
                 </div>
@@ -917,7 +916,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   {minutesTargetChanged
-                    ? `Redrafting rewrites the WHOLE prose story to run ${minutesTargetN} minutes — the current draft is replaced and you'll review + divide again afterwards.`
+                    ? `Redrafting rewrites the WHOLE prose story to run ${fmtDuration(minutesTargetN)} — the current draft is replaced and you'll review + divide again afterwards.`
                       + (scenes.length ? ' Existing scenes stay untouched; dividing later forks into a new script.' : '')
                     : scenes.length
                       ? 'This script already has scenes, so dividing again forks the edited story into a NEW script — the current scenes stay untouched. Change the length to redraft the story longer or shorter first.'

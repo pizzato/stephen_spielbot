@@ -115,16 +115,64 @@ def _scene_len_vars(scene_plan: dict | None) -> dict:
     return cadence.prompt_vars(scene_plan or cadence.default_plan())
 
 
+def _condensable(s: "Scene") -> bool:
+    """Scenes whose narration length we may rewrite/split: plain narration
+    with no dialogue lines and no authored spoken-text override."""
+    return (s.mode in ("narration", "", None) and not s.lines
+            and not (s.metadata_extra or {}).get("tts_text")
+            and bool((s.narration or "").strip()))
+
+
+def condense_long_narrations(call_fn, scenes: list["Scene"], scene_plan: dict | None,
+                             language: str | None = None) -> None:
+    """Rewrite any over-cap narration DOWN to the plan's word cap, in place.
+
+    The first line of defense for the 10–15 s scene contract: an over-long
+    narration is condensed by the LLM to fit its scene — the scene count (and
+    with it the promised video length) stays exactly as planned, and no
+    visuals need duplicating. Only when a condensed narration STILL exceeds
+    the cap does the splitting backstop fire. A failed/over-cap rewrite keeps
+    whichever text is shorter; never raises.
+    """
+    from pipeline import cadence
+    if not scene_plan:
+        return
+    max_w = int(scene_plan.get("scene_words_max") or 0)
+    if max_w <= 0:
+        return
+    lang_name = narration_language_name(language)
+    lang_note = f"\nKeep the narration in {lang_name}." if lang_name else ""
+    for s in scenes:
+        if not _condensable(s) or cadence.word_count(s.narration) <= max_w:
+            continue
+        try:
+            rewritten = call_fn(
+                _prompts.system("condense_narration"),
+                _prompts.user("condense_narration", narration=s.narration,
+                              lang_note=lang_note, **_scene_len_vars(scene_plan)),
+                max_w * 3 + 80, f"condense narration scene {s.id}", retries=2,
+            ).strip().strip('"').strip()
+        except Exception as exc:  # noqa: BLE001 — the splitter still backstops
+            logger.warning("Condense failed for scene %d (%s) — keeping original", s.id, exc)
+            continue
+        if rewritten and cadence.word_count(rewritten) < cadence.word_count(s.narration):
+            logger.info("Scene %d condensed %d → %d words (cap %d)", s.id,
+                        cadence.word_count(s.narration), cadence.word_count(rewritten), max_w)
+            s.narration = rewritten
+
+
 def enforce_scene_word_caps(scenes: list["Scene"], scene_plan: dict | None) -> list["Scene"]:
     """Deterministic backstop for the 10–15 s scene contract.
 
     Any narration-mode scene whose spoken words exceed the plan's per-scene
     cap is split at sentence ends — or at a natural pause (comma, dash) inside
-    an over-long sentence — into consecutive scenes sharing the source scene's
-    visuals, then ids are renumbered 1..N. The LLM prompts aim well inside the
-    cap, so this only fires on drift. Dialogue/silent scenes (their timing is
-    per-line) and scenes with authored spoken-text overrides pass through
-    untouched. No-op without a plan.
+    an over-long sentence — into consecutive scenes, then ids are renumbered
+    1..N. Continuation pieces carry the source scene's visuals as a stand-in
+    and are marked (``_split_clone``) so callers can regenerate DISTINCT
+    image/video prompts for them (see regen_split_scene_visuals). With the
+    condense pass running first this should be rare. Dialogue/silent scenes
+    (their timing is per-line) and scenes with authored spoken-text overrides
+    pass through untouched. No-op without a plan.
     """
     from pipeline import cadence
     if not scene_plan:
@@ -135,26 +183,68 @@ def enforce_scene_word_caps(scenes: list["Scene"], scene_plan: dict | None) -> l
     min_w = int(scene_plan.get("scene_words_min") or 0)
     out: list[Scene] = []
     for s in scenes:
-        splittable = (s.mode in ("narration", "", None) and not s.lines
-                      and not (s.metadata_extra or {}).get("tts_text")
-                      and (s.narration or "").strip())
-        pieces = cadence.split_narration(s.narration, max_w, min_w) if splittable else []
+        pieces = cadence.split_narration(s.narration, max_w, min_w) if _condensable(s) else []
         if len(pieces) <= 1:
             out.append(s)
             continue
         logger.info("Scene %d narration over the %d-word cap — split into %d scenes",
                     s.id, max_w, len(pieces))
         for j, piece in enumerate(pieces):
-            out.append(Scene(
+            clone = Scene(
                 id=s.id, title=s.title,
                 image_prompt=s.image_prompt, video_prompt=s.video_prompt,
                 narration=piece, negative_prompt=s.negative_prompt,
                 mode=s.mode, lines=[], duration=s.duration,
                 metadata_extra=dict(s.metadata_extra) if j == 0 else {},
-            ))
+            )
+            if j > 0:
+                # Transient marker (not a dataclass field → never serialized):
+                # this piece needs its own visuals, not a copy of the source's.
+                clone._split_clone = True
+            out.append(clone)
     for i, s in enumerate(out, 1):
         s.id = i
     return out
+
+
+def regen_split_scene_visuals(call_fn, scenes: list["Scene"], title: str, style: str,
+                              video_style_hint: str | None = None,
+                              character_sheet: str | None = None) -> None:
+    """Write DISTINCT image/video prompts for scenes created by the splitting
+    backstop, in place — every scene of a split sentence should show its own
+    moment, not a duplicate of the source scene's visuals. Reuses the
+    script_local_visual prompt (plain IMAGE:/VIDEO: lines, backend-agnostic).
+    Best-effort: a failed call keeps the inherited stand-in visuals.
+    """
+    video_style_note = (
+        f"\nMOTION DIRECTION for the VIDEO line: {video_style_hint.strip()}"
+        if video_style_hint and video_style_hint.strip() else ""
+    )
+    character_note = (
+        f"\n{character_sheet.strip()}"
+        if character_sheet and character_sheet.strip() else ""
+    )
+    for s in scenes:
+        if not getattr(s, "_split_clone", False):
+            continue
+        try:
+            raw = call_fn(
+                _prompts.system("script_local_visual"),
+                _prompts.user("script_local_visual", title=title, style=style,
+                              scene_title=s.title, narration=s.narration,
+                              video_style_note=video_style_note,
+                              character_note=character_note),
+                400, f"visuals for split scene {s.id}", retries=2,
+            )
+            image_prompt = _get_field(raw, "IMAGE")
+            video_prompt = _get_field(raw, "VIDEO")
+            if image_prompt:
+                s.image_prompt = image_prompt
+                s.video_prompt = video_prompt or image_prompt
+                logger.info("Split scene %d got its own visuals", s.id)
+        except Exception as exc:  # noqa: BLE001 — inherited visuals remain
+            logger.warning("Visuals for split scene %d failed (%s) — keeping the "
+                           "source scene's", s.id, exc)
 
 # The batch-1 identify names at most one or two CENTRAL figures (it only sees the
 # first ~10 scenes). The post-assembly recurring-cast pass (over the whole script)
@@ -870,9 +960,16 @@ def _json_script_generate(title: str, n_scenes: int, style_hint: str | None,
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after cloud fill — used title", s.id)
-    # Enforce the per-scene word cap BEFORE character detection — splitting
-    # renumbers scene ids, which would break the detector's scene references.
+    # 10–15 s scene contract, in order: condense over-cap narrations down to
+    # the cap (scene count and video length stay as planned), split whatever
+    # still overflows, then give the split pieces their own visuals. All
+    # BEFORE character detection — splitting renumbers scene ids, which would
+    # break the detector's scene references.
+    condense_long_narrations(call_fn, final_scenes, scene_plan, language=language)
     final_scenes = enforce_scene_word_caps(final_scenes, scene_plan)
+    regen_split_scene_visuals(call_fn, final_scenes, title, style,
+                              video_style_hint=video_style_hint,
+                              character_sheet=character_note)
     # Second pass over the whole script: catch recurring supporting characters the
     # first-batch identify (scenes 1–10, 1-2 central subjects) missed.
     identified = _detect_recurring_characters(call_fn, final_scenes, identified,
@@ -1284,10 +1381,23 @@ def _local_generate(title: str, n_scenes: int,
     _fill_empty_outlines_local(outlines, title, video_title, url, model, language=language,
                                scene_plan=scene_plan)
 
-    # Enforce the per-scene word cap BEFORE the visual stage, so each split
-    # scene gets its own image/video prompts (not a copy of its source's).
+    # 10–15 s scene contract: condense over-cap narrations first (scene count
+    # and video length stay as planned), then split whatever still overflows —
+    # BEFORE the visual stage, so each split scene gets its own image/video
+    # prompts (not a copy of its source's).
     if scene_plan and int(scene_plan.get("scene_words_max") or 0) > 0:
         from pipeline import cadence
+
+        def _cond_call(system, user_msg, max_tokens, label, retries=2):  # noqa: ARG001
+            return _local_llm([{"role": "system", "content": system},
+                               {"role": "user", "content": user_msg}],
+                              max_tokens=max_tokens, url=url, model=model, retries=retries)
+        temp = [Scene(id=o["id"], title=o.get("title", ""), image_prompt="",
+                      video_prompt="", narration=o.get("narration", ""))
+                for o in outlines]
+        condense_long_narrations(_cond_call, temp, scene_plan, language=language)
+        for o, t in zip(outlines, temp):
+            o["narration"] = t.narration
         max_w = int(scene_plan["scene_words_max"])
         min_w = int(scene_plan.get("scene_words_min") or 0)
         expanded: list[dict] = []
