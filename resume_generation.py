@@ -414,6 +414,14 @@ def main(work_dir: Path) -> None:
                 engine_key = s.get("image_engine")
                 break
     image_engine = _engines.resolve(cfg, engine_key or cfg.get("default_image_engine"))
+    # Same three-step fallback for the style's video engine (scene I2V model).
+    video_key = cfg.get("video_engine")
+    if not video_key:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
+                video_key = s.get("video_engine")
+                break
+    video_engine = _engines.resolve_video(cfg, video_key or cfg.get("default_video_engine"))
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 
@@ -559,6 +567,7 @@ def main(work_dir: Path) -> None:
                     max_clip_secs, lora_strength, first_pass_cfg, first_pass_steps,
                     second_pass_cfg, second_pass_steps, url,
                     scene_first_frame=Path(still), image_engine=image_engine,
+                    video_engine=video_engine,
                 )
             finally:
                 worker_pool.release(url)
@@ -990,7 +999,9 @@ def main(work_dir: Path) -> None:
                     store,
                     video_task,
                     worker_id_value=comfy_worker,
-                    lease_seconds=3600,
+                    # Slow engines (MiniMax H3) declare a longer lease so the
+                    # controller doesn't re-lease the scene mid-render.
+                    lease_seconds=int(video_engine.get("lease_seconds") or 3600),
                     start_message=f"video on {url}",
                 ) as run:
                     sf, sa = _generate_scene_video(
@@ -1003,6 +1014,7 @@ def main(work_dir: Path) -> None:
                         scene_first_frame=scene_first_frame,
                         image_engine=image_engine,
                         on_first_frame=_finish_image,
+                        video_engine=video_engine,
                     )
                     store.record_artifact(
                         durable_job_id,

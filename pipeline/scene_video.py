@@ -7,8 +7,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from pipeline import engines
-from pipeline.assembler import extract_audio, _get_duration
-from pipeline.comfyui import generate_video_continuation, generate_with_engine
+from pipeline.assembler import ensure_video_resolution, extract_audio, _get_duration
+from pipeline.comfyui import generate_video_with_engine, generate_with_engine
 from pipeline.llm import Scene
 
 
@@ -32,11 +32,14 @@ def generate_scene_video(
     scene_first_frame: Path | None = None,
     image_engine: dict | None = None,
     on_first_frame: Callable[[Path], None] | None = None,
+    video_engine: dict | None = None,
 ) -> tuple[Path, Path | None]:
-    """Generate one video clip for the full scene: image-engine first frame plus LTX I2V.
+    """Generate one video clip for the full scene: image-engine first frame plus I2V.
 
     *image_engine* is an engine dict from :func:`pipeline.engines.resolve`
     (the style's selected image engine); None falls back to the default engine.
+    *video_engine* is a dict from :func:`pipeline.engines.resolve_video` picking
+    the I2V model (None = the default LTX 2.3 path).
 
     ``on_first_frame`` (if given) is invoked with the first-frame path the
     instant the image engine finishes — before the much longer I2V step — so
@@ -70,7 +73,8 @@ def generate_scene_video(
         scene.id,
         request_dur,
     )
-    generate_video_continuation(
+    generate_video_with_engine(
+        video_engine,
         scene.video_prompt,
         scene.negative_prompt,
         scene_first_frame,
@@ -85,6 +89,10 @@ def generate_scene_video(
         second_pass_steps=second_pass_steps,
         comfy_url=comfy_url,
     )
+    if video_engine and video_engine.get("family") == "minimax":
+        # H3 renders under its pixel cap; reframe the clip to the plan dims so
+        # every downstream file keeps the style resolution (no-op when equal).
+        ensure_video_resolution(raw, vid_width, vid_height)
 
     scene_amb: Path | None = None
     actual_dur = _get_duration(raw)

@@ -1,10 +1,15 @@
-"""Image-engine registry: selectable model bundles for generation and editing.
+"""Engine registries: selectable model bundles for image and video generation.
 
 An *engine* is a bundle of {ComfyUI workflow + text encoder + model files + steps
 + license}. The user-facing choice is an engine **key**, not a raw filename,
 because FLUX.1 and FLUX.2 use different ComfyUI graphs and encoders. Per-style
 settings carry ``image_engine`` (scene generation) and ``edit_engine`` (the
 "Edit image" inpaint); both fall back to ``flux1-schnell``.
+
+``VIDEO_ENGINES`` is the same idea for the scene I2V model (per-style
+``video_engine``): ``ltx23`` is the incumbent LTX 2.3 path, ``minimax-h3`` is
+opt-in. Unlike the image engines, video engines are not Apache-only — each
+entry carries its license terms and the Settings UI surfaces them.
 
 Only commercial-usable (Apache-2.0) engines are bundled:
 - ``flux2-klein`` — the default; fast 4-step FLUX.2 (Apache-2.0, commercial OK).
@@ -133,3 +138,80 @@ def public_list(commercial_only: bool = False) -> list[dict]:
             "commercial_ok": e["commercial_ok"], "license": e["license"],
         })
     return out
+
+
+# ── Video engines (per-style ``video_engine``) ───────────────────────────────
+# ltx23 has no ``models`` list: its weights are part of the bulk worker install
+# (scripts/download_models.sh). minimax-h3 downloads on demand like the opt-in
+# image engines, and additionally needs the worker's ComfyUI to register its
+# nodes (``requires_node`` — ComfyUI ≥ v0.30.0).
+VIDEO_ENGINES: dict[str, dict] = {
+    "ltx23": {
+        "key": "ltx23",
+        "label": "LTX 2.3 22B",
+        "sub": "Fast · native audio · negative prompt",
+        "family": "ltx",
+        "commercial_ok": True,
+        "license": "LTX-2 Community License",
+        "probe": ("CheckpointLoaderSimple", "ckpt_name", "ltx-2.3-22b-dev-fp8.safetensors"),
+    },
+    "minimax-h3": {
+        "key": "minimax-h3",
+        "label": "MiniMax H3 33B",
+        "sub": "Slow · higher fidelity · native stereo audio · restricted license",
+        "family": "minimax",
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        "workflow": "h3_i2v.json",
+        "steps": 20,
+        # H3 scene renders can far outlive the default 1 h durable-task lease on
+        # GB10-class workers; renderers extend the lease to this before starting.
+        "lease_seconds": 14400,
+        # ComfyUI-blessed consumer stack (~40 GB): pruned INT8 unet + NVFP4 AWQ
+        # Qwen3-VL 32B encoder + the two VAEs, exactly as in the official
+        # video_minimax_h3_i2v template. Swap filenames here to change variant.
+        "unet": "minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "requires_node": "MiniMaxH3ImageToVideo",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_fl2va_pruned_int8_convrot.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+        ],
+    },
+}
+
+DEFAULT_VIDEO_ENGINE = "ltx23"
+
+
+def get_video(key: str) -> dict | None:
+    return VIDEO_ENGINES.get((key or "").strip())
+
+
+def resolve_video(cfg: dict, key: str) -> dict:
+    """Return the video-engine dict for *key*, falling back to the default.
+    *cfg* is unused today but kept for symmetry with :func:`resolve`."""
+    return dict(get_video(key) or VIDEO_ENGINES[DEFAULT_VIDEO_ENGINE])
+
+
+def public_list_video() -> list[dict]:
+    """Compact video-engine descriptors for the Settings UI."""
+    return [{
+        "key": e["key"], "label": e["label"], "sub": e["sub"],
+        "commercial_ok": e["commercial_ok"], "license": e["license"],
+        "license_note": e.get("license_note"),
+        "downloadable": bool(e.get("models")),
+    } for e in VIDEO_ENGINES.values()]
