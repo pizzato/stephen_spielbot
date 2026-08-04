@@ -51,6 +51,7 @@ from pipeline.llm import generate_script, generate_video_suggestions, Scene  # n
 import pipeline.story as story_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
+from pipeline import cadence  # noqa: E402
 from pipeline import ui_activity  # noqa: E402
 from pipeline import film_timing  # noqa: E402
 from pipeline import image_history  # noqa: E402
@@ -805,6 +806,11 @@ def get_config() -> dict:
         # Settings editor and AI-ideas screen can render a per-style size picker.
         "size_buckets": list(gapp._SIZE_BUCKETS),
         "default_size_presets": gapp.DEFAULT_CFG["default_size_presets"],
+        # Measured per-voice cadences keyed "<voice>|<engine>" (words/minute at
+        # speed 1.0) + the fallback used until a voice is measured — drives the
+        # cadence slider defaults and the length→word-count estimates.
+        "voice_cadences": cadence.load_store(),
+        "default_wpm": cadence.DEFAULT_WPM,
     }
 
 
@@ -1293,6 +1299,9 @@ class VoiceTest(BaseModel):
     voice: str = ""
     robotic_amount: float | None = None
     speed: float | None = None
+    # Target cadence (words/minute) to audition — resolved against the voice's
+    # measured natural pace. None = the default style's setting; 0 = natural.
+    cadence_wpm: float | None = None
     text: str = ""
     engine: str = ""
     language: str = ""
@@ -1319,12 +1328,22 @@ def voices_test(body: VoiceTest) -> dict:
     ref_str = gapp.voice_path_for(voice)
     ref = Path(ref_str).expanduser() if ref_str else None
 
+    from pipeline import cadence as _cadence
     amount = (body.robotic_amount if body.robotic_amount is not None
               else float(gapp.style_settings(cfg).get("voice_robotic_amount", 0.0) or 0.0))
-    speed = (body.speed if body.speed is not None
-             else float(gapp.style_settings(cfg).get("voice_speed", 1.0) or 1.0))
     engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
     language = gapp._norm_tts_language(body.language or gapp.style_settings(cfg).get("tts_language"))
+    if body.speed is not None:
+        speed = float(body.speed)
+    else:
+        # Speed is expressed as a target cadence (words/minute) resolved against
+        # the voice's measured natural pace; legacy voice_speed still honored.
+        speed_settings = {**gapp.style_settings(cfg), "tts_engine": engine}
+        if voice:
+            speed_settings["voice"] = voice
+        if body.cadence_wpm is not None:
+            speed_settings["voice_cadence_wpm"] = body.cadence_wpm
+        speed = _cadence.resolve_voice_speed(speed_settings)
     # The sentence gap applies here too, so the tester is where cadence and
     # [pause] markers (typed into a custom line) can be auditioned.
     sentence_pause = gapp._norm_tts_sentence_pause(
@@ -1353,7 +1372,8 @@ def voices_test(body: VoiceTest) -> dict:
                 generate_narration(text, out, reference_wav=ref, host=tts_host,
                                    robotic_amount=amount, speed=speed,
                                    tts_engine=engine, language=language,
-                                   sentence_pause=sentence_pause)
+                                   sentence_pause=sentence_pause,
+                                   cadence_voice=voice)
         except Exception as e:
             raise HTTPException(503, f"Voice test failed: {str(e).splitlines()[0][:200]}")
 
@@ -1375,6 +1395,51 @@ def _first_live_tts_host(cfg: dict) -> str:
         if worker_alive(h, timeout=3):
             return h
     return configured[0] if configured else "localhost"
+
+
+class VoiceCalibrateBody(BaseModel):
+    voice: str = ""     # "" / the default option = the bundled default narrator
+    engine: str = ""    # "" = the default style's TTS engine
+    language: str = ""
+
+
+@api.post("/api/voices/calibrate")
+def voices_calibrate(body: VoiceCalibrateBody) -> dict:
+    """Measure one voice's natural cadence (words/minute) by synthesizing the
+    fixed calibration passage at speed 1.0 and timing it. Synchronous — a few
+    seconds per voice; the frontend loops over voices to calibrate the library.
+    The measurement lands in the cadence store (pipeline/cadence.py) that every
+    length estimate and speed derivation reads."""
+    cfg = gapp.load_config()
+    voice = (body.voice or "").strip()
+    ref_str = gapp.voice_path_for(voice)
+    ref = Path(ref_str).expanduser() if ref_str else None
+    engine = gapp.tts_engines.norm(body.engine or gapp.style_settings(cfg).get("tts_engine"))
+    language = gapp._norm_tts_language(body.language or "en")
+    label = voice if voice and voice != gapp.F5TTS_DEFAULT_OPTION else "the default narrator"
+    try:
+        with _track_op("Calibrating voice cadence", label):
+            wpm = cadence.calibrate_voice(voice, ref, _first_live_tts_host(cfg),
+                                          engine=engine, language=language)
+    except Exception as e:
+        raise HTTPException(503, f"Cadence calibration failed: {str(e).splitlines()[0][:200]}")
+    return {"ok": True, "voice": voice, "engine": engine, "wpm": round(wpm, 1),
+            "voice_cadences": cadence.load_store()}
+
+
+@api.get("/api/script/length-estimate")
+def script_length_estimate(style_name: str = Query(""), minutes: float = Query(0.0),
+                           voice: str = Query("")) -> dict:
+    """What a target length means in words and scenes for a style/narrator:
+    the word budget (minutes × the narrator's cadence, pause-aware) and the
+    10–15 s scene plan. Drives the live word-count indication shown when the
+    user picks a video length."""
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, style_name)
+    if (voice or "").strip():
+        ss = {**ss, "voice": voice.strip()}
+    plan = gapp.style_script_plan(ss, minutes=minutes if minutes and minutes > 0 else None)
+    return {"ok": True, **plan}
 
 
 def _next_worker_free_eta(cfg: dict) -> float | None:
@@ -1535,7 +1600,12 @@ def ui_heartbeat() -> dict:
 class GenerateScriptBody(BaseModel):
     video_title: str = ""
     topic: str = ""
-    n_scenes: int = 6
+    # Target video length in minutes — the primary length control. The word
+    # budget and scene count come from the narrator's cadence
+    # (app.style_script_plan). 0 falls back to n_scenes, then the style.
+    minutes: float = 0.0
+    # Legacy/explicit scene count. 0 = derive from minutes (or the style).
+    n_scenes: int = 0
     visual_style: str | None = None
     auto_approve: bool = False
     voice: str = ""
@@ -1700,6 +1770,25 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
     )
 
 
+def _plan_for_generate(body: GenerateScriptBody, ss: dict) -> dict:
+    """Cadence plan (word budget + 10–15 s scene caps) for a generation
+    request: explicit minutes win, an explicit scene count pins the count,
+    else the style's own length. The narrator considered is the request's
+    voice override when set (else the style's) — cadence is per voice."""
+    plan_ss = dict(ss)
+    if (body.voice or "").strip():
+        plan_ss["voice"] = body.voice.strip()
+    try:
+        minutes = float(body.minutes or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    try:
+        n = int(body.n_scenes or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return gapp.style_script_plan(plan_ss, minutes=minutes or None, n_scenes=n or None)
+
+
 def _do_script_generate(body: GenerateScriptBody) -> dict:
     """Run the LLM script generation and persist a durable job (mirrors
     app.on_generate_script, minus the Gradio plumbing). Synchronous: the API runs
@@ -1739,24 +1828,28 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # written in the style's TTS language; prompts/titles stay English.
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    plan = _plan_for_generate(body, ss)
     try:
         with _track_op("Generating script", display_topic):
             scenes, music_desc, style, characters = generate_script(
-                llm_topic, int(body.n_scenes), style_hint, (body.video_title or "").strip() or None,
+                llm_topic, plan["n_scenes"], style_hint, (body.video_title or "").strip() or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
                 avoid_hint=avoid_hint, dialogue_note=dialogue_note, language=language,
+                scene_plan=plan,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
 
     return _persist_generated_script(body, cfg, ss, user_topic,
-                                     scenes, music_desc, style, characters)
+                                     scenes, music_desc, style, characters,
+                                     scene_plan=plan)
 
 
 def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
                               user_topic: str, scenes, music_desc: str, style: str,
                               characters: list[dict],
-                              work_dir: Path | None = None) -> dict:
+                              work_dir: Path | None = None,
+                              scene_plan: dict | None = None) -> dict:
     """Persist a freshly generated scene list and return the client payload
     (extracted from _do_script_generate so the story-mode divide step reuses the
     exact same persistence). work_dir targets an existing folder (story mode);
@@ -1802,7 +1895,9 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     create_brief = {
         "video_title": (body.video_title or "").strip(),
         "topic": user_topic,
-        "n_scenes": int(body.n_scenes),
+        "minutes": (scene_plan or {}).get("minutes") or float(body.minutes or 0),
+        "n_scenes": (scene_plan or {}).get("n_scenes") or len(scenes_list),
+        "scene_plan": scene_plan,
         "visual_style": (body.visual_style or "").strip(),
         "voice": (body.voice or "").strip(),
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
@@ -1876,6 +1971,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
             job_id=job_id,
             work_dir=str(work_dir),
             video_title=(body.video_title or display_title).strip(),
+            minutes=float(create_brief.get("minutes") or 0),
             n_scenes=len(scenes_list),
             style=style,
             resolution=body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION,
@@ -1972,12 +2068,14 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    plan = _plan_for_generate(body, ss)
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
-                llm_topic, int(body.n_scenes), style_hint=style_hint,
+                llm_topic, plan["n_scenes"], style_hint=style_hint,
                 video_title=(body.video_title or "").strip() or None,
                 character_sheet=character_sheet, avoid_hint=avoid_hint,
+                scene_plan=plan,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
@@ -1989,7 +2087,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     create_brief = {
         "video_title": (body.video_title or "").strip(),
         "topic": user_topic,
-        "n_scenes": int(body.n_scenes),
+        "minutes": plan["minutes"],
+        "n_scenes": plan["n_scenes"],
+        "scene_plan": plan,
         "visual_style": (body.visual_style or "").strip(),
         "voice": (body.voice or "").strip(),
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
@@ -2019,7 +2119,7 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             "music_desc": story.get("music", ""),
             "voice": create_brief["voice"] or ss.get("voice", ""),
             "resolution": create_brief["resolution"],
-            "n_scenes": int(body.n_scenes),
+            "n_scenes": plan["n_scenes"],
             "story": story, "create_brief": create_brief,
             "scenes": [], "characters": []}
 
@@ -2088,7 +2188,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     )
     return _persist_generated_script(gen_body, cfg, ss, user_topic,
                                      scenes, music_desc, style, characters,
-                                     work_dir=wd)
+                                     work_dir=wd, scene_plan=story.get("scene_plan"))
 
 
 def _run_story_generate_task(task_id: str, body: "GenerateScriptBody") -> None:
@@ -2161,27 +2261,42 @@ def save_job_story(job_id: str, body: StorySaveBody) -> dict:
 
 
 class StoryRedraftBody(BaseModel):
-    n_scenes: int
+    # Target length in minutes (preferred; the scene count comes from the
+    # narrator's cadence) — or an explicit scene count when minutes is 0.
+    minutes: float = 0.0
+    n_scenes: int = 0
     # Edited chapter texts folded in before redrafting; [] keeps the draft as-is.
     chapters: list[StoryChapterEdit] = []
 
 
 def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
-    """Retell the prose story at a new scene count (pipeline.story.redraft_story)
+    """Retell the prose story at a new length (pipeline.story.redraft_story)
     and persist it back to story.json — the normal review + divide flow then
     runs with the new count."""
     wd = _job_wd_or_404(job_id)
     story = _read_story(wd)
     if not story:
         raise HTTPException(404, "This script has no story draft.")
-    n = int(body.n_scenes or 0)
-    if not (1 <= n <= 200):
-        raise HTTPException(400, "Scene count must be between 1 and 200.")
     _merge_story_edits(story, body.chapters)
 
     brief = _read_create_brief(wd)
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, brief.get("style_name", ""))
+    plan_ss = dict(ss)
+    if (brief.get("voice") or "").strip():
+        plan_ss["voice"] = brief["voice"].strip()
+    try:
+        minutes = float(body.minutes or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes > 0:
+        plan = gapp.style_script_plan(plan_ss, minutes=minutes)
+        n = plan["n_scenes"]
+    else:
+        n = int(body.n_scenes or 0)
+        if not (1 <= n <= 200):
+            raise HTTPException(400, "Give a target length in minutes, or a scene count between 1 and 200.")
+        plan = gapp.style_script_plan(plan_ss, n_scenes=n)
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
     user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
@@ -2190,14 +2305,16 @@ def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
     try:
         with _track_op(f"Redrafting story to {n} scenes", display_topic):
             story = story_mode.redraft_story(story, n, character_sheet=character_sheet,
-                                             avoid_hint=avoid_hint)
+                                             avoid_hint=avoid_hint, scene_plan=plan)
     except HTTPException:
         raise
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story redraft failed: {str(e).splitlines()[0][:300]}")
     _story_path(wd).write_text(json.dumps(story, indent=2))
     if brief:
+        brief["minutes"] = plan["minutes"]
         brief["n_scenes"] = n
+        brief["scene_plan"] = plan
         _write_create_brief(wd, brief)
     return story
 
@@ -2416,6 +2533,14 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
     _, _, _, style_name, brief = _script_source_meta(job_id, wd.name)
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, style_name)
+    # Rewrites must keep the script's own scene word caps (the plan it was
+    # generated with; else the style's current cadence).
+    scene_plan = brief.get("scene_plan") if isinstance(brief.get("scene_plan"), dict) else None
+    if not scene_plan:
+        plan_ss = dict(ss)
+        if (brief.get("voice") or "").strip():
+            plan_ss["voice"] = brief["voice"].strip()
+        scene_plan = gapp.style_script_plan(plan_ss)
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     title = (brief.get("topic") or brief.get("video_title") or wd.name).strip()
     video_title = (brief.get("video_title") or "").strip() or None
@@ -2471,7 +2596,7 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
                     scene_rows_min,
                     title, video_title=video_title, avoid_hint=avoid_hint,
                     pass_num=prior_passes + i, direction=direction,
-                    dup_note=dup_note)
+                    dup_note=dup_note, scene_plan=scene_plan)
         except Exception as e:
             raise HTTPException(500, f"Critic pass failed: {str(e).splitlines()[0][:300]}")
         if not ops["changed"]:
@@ -3474,6 +3599,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     cfg = gapp.load_config()
 
     video_title, topic, style, style_name, outline = "", "", "", "", ""
+    jc = {}
     try:
         store = DurableStore.default()
         try:
@@ -3493,6 +3619,18 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     except Exception:
         pass
 
+    # A regenerated narration must keep the script's scene word caps (10–15 s
+    # at the narrator's cadence) — the plan it was generated with, else the
+    # style's current cadence.
+    length_note = ""
+    if field == "narration":
+        plan = (jc.get("create_brief") or {}).get("scene_plan") if isinstance(jc, dict) else None
+        if not (isinstance(plan, dict) and plan.get("scene_words_max")):
+            plan = gapp.style_script_plan(gapp.style_settings(cfg, style_name))
+        length_note = (f" Keep it around {plan['scene_words_target']} words and NEVER more than "
+                       f"{plan['scene_words_max']} words — the scene must stay 10-15 seconds "
+                       f"spoken. One flowing sentence, or two short ones.")
+
     system = ("You are a documentary script writer for short, AI-generated videos. "
               "Be concise and return ONLY what the task asks for — no preamble, no labels.")
     user = (
@@ -3501,7 +3639,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
         f"Scene {scene_id} — current draft:\n"
         f"Title: {body.title}\nNarration: {body.narration}\n"
         f"Image prompt: {body.image_prompt}\nVideo prompt: {body.video_prompt}\n\n"
-        f"Task: {_FIELD_INSTRUCTIONS[field]}"
+        f"Task: {_FIELD_INSTRUCTIONS[field]}{length_note}"
         + _instruction_note(body.instruction)
     )
     try:
@@ -3707,7 +3845,11 @@ def start_generation(body: GenerateBody) -> dict:
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
         "voice_robotic_amount": ss.get("voice_robotic_amount", 0.0),
-        "voice_speed": ss.get("voice_speed", 1.0),
+        # Speed multiplier derived from the style's target cadence against the
+        # chosen voice's measured natural pace (pipeline/cadence.py); the
+        # target rides along so re-voicing can re-derive from fresher data.
+        "voice_speed": cadence.resolve_voice_speed({**ss, "voice": voice_name}),
+        "voice_cadence_wpm": ss.get("voice_cadence_wpm", 0),
         "tts_engine": gapp.tts_engines.norm(ss.get("tts_engine")),
         "tts_language": gapp._norm_tts_language(ss.get("tts_language")),
         # Sentence gap spliced into narration (pipeline/tts_text.py); stamped so
@@ -5732,7 +5874,7 @@ def _attach_render_estimates(queue: list[dict]) -> None:
     for it in pending:
         try:
             ss = gapp.style_settings(cfg, (it.get("gen_style_name") or "").strip())
-            n = max(6, int(it.get("suggested_scene_count") or ss.get("n_scenes") or 6))
+            n = gapp.style_script_plan(ss, minutes=_queue_item_minutes(it, ss))["n_scenes"]
             res = it.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
             w, h = gapp._RESOLUTIONS.get(res, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
             w, h = ltx_dimensions(w, h)
@@ -9198,8 +9340,29 @@ def queue_retry_reply(body: QueueIdBody) -> dict:
     raise HTTPException(502, f"Reply failed: {result.get('error', 'unknown error')}")
 
 
+def _queue_item_minutes(item: dict, ss: dict) -> float:
+    """Target length for a queue item: its explicit minutes, else its legacy
+    scene-count suggestion (~9 s scenes), else the style's own length."""
+    try:
+        m = float(item.get("suggested_minutes") or 0)
+    except (TypeError, ValueError):
+        m = 0.0
+    if m > 0:
+        return m
+    try:
+        sc = int(item.get("suggested_scene_count") or 0)
+    except (TypeError, ValueError):
+        sc = 0
+    if sc > 0:
+        return cadence.minutes_for_scenes(sc)
+    return gapp.style_video_minutes(ss)
+
+
 class QueueAddBody(BaseModel):
     title: str
+    # Target video length in minutes (preferred). 0 falls back to the legacy
+    # n_scenes, then the style's own length.
+    minutes: float = 0.0
     n_scenes: int = 0
     prompt: str = ""
     resolution: str = ""
@@ -9212,13 +9375,20 @@ def queue_add(body: QueueAddBody) -> dict:
     if not title:
         raise HTTPException(400, "Title is required.")
     cfg = gapp.load_config()
-    n = max(6, min(200, body.n_scenes
-                   or gapp.style_settings(cfg, body.style_name).get("n_scenes") or 6))
+    ss = gapp.style_settings(cfg, body.style_name)
+    try:
+        minutes = float(body.minutes or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes <= 0:
+        minutes = (cadence.minutes_for_scenes(body.n_scenes) if body.n_scenes
+                   else gapp.style_video_minutes(ss))
+    plan = gapp.style_script_plan(ss, minutes=minutes)
     comment = {"comment_id": "", "text": body.prompt, "commenter": "you",
-               "suggested_scene_count": n}
+               "suggested_scene_count": plan["n_scenes"]}
     entry = yt.add_to_queue(comment, title, source="manual")
     if entry:
-        updates = {}
+        updates = {"suggested_minutes": plan["minutes"]}
         if body.prompt.strip():
             updates["video_prompt"] = body.prompt.strip()
         if body.resolution.strip():
@@ -9234,6 +9404,7 @@ class QueueUpdateBody(BaseModel):
     id: str
     final_title: str | None = None
     video_prompt: str | None = None
+    suggested_minutes: float | None = None
     suggested_scene_count: int | None = None
     gen_resolution: str | None = None
     gen_style_name: str | None = None
@@ -9258,8 +9429,11 @@ def queue_update(body: QueueUpdateBody) -> dict:
         updates["final_title"] = title
     if body.video_prompt is not None:
         updates["video_prompt"] = body.video_prompt.strip()
+    if body.suggested_minutes is not None:
+        updates["suggested_minutes"] = round(max(0.25, min(cadence.MAX_MINUTES,
+                                                           float(body.suggested_minutes))), 2)
     if body.suggested_scene_count is not None:
-        updates["suggested_scene_count"] = max(6, min(200, int(body.suggested_scene_count)))
+        updates["suggested_scene_count"] = max(1, min(200, int(body.suggested_scene_count)))
     if body.gen_resolution is not None:
         updates["gen_resolution"] = body.gen_resolution.strip()
     if body.gen_style_name is not None:
@@ -9333,7 +9507,7 @@ def _start_queue_item(item: dict) -> dict:
     # at script time.
     style_name = (item.get("gen_style_name") or "").strip()
     ss = gapp.style_settings(cfg, style_name)
-    n = max(6, int(item.get("suggested_scene_count") or ss.get("n_scenes") or 6))
+    minutes = _queue_item_minutes(item, ss)
 
     # The claim above flipped the item to "creating". If the work below fails, flip it
     # to "failed" so it doesn't sit forever showing "Rendering" — and so automation,
@@ -9346,7 +9520,9 @@ def _start_queue_item(item: dict) -> dict:
             # Blank voice/resolution fall through to start_generation, which
             # resolves them from the job's stamped style profile (then the default).
             start_generation(GenerateBody(
-                job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=n,
+                # n_scenes=0: render every scene the script actually has (the
+                # cadence-driven count can differ from the item's suggestion).
+                job_id=job_id, work_dir=wd, video_title=title, title=title, n_scenes=0,
                 voice=item.get("gen_voice") or "",
                 resolution=item.get("gen_resolution") or "",
                 music_desc=item.get("gen_music") or _job_meta_field(job_id, "music_desc"),
@@ -9365,11 +9541,11 @@ def _start_queue_item(item: dict) -> dict:
         # protect) and use the result directly — the HTTP endpoint is the polling
         # wrapper around this same call.
         gen = _do_script_generate(GenerateScriptBody(
-            video_title=title, topic=topic, n_scenes=n, resolution=resolution,
+            video_title=title, topic=topic, minutes=minutes, resolution=resolution,
             style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
-            n_scenes=n, voice=ss.get("voice", ""),
+            n_scenes=0, voice=ss.get("voice", ""),
             resolution=resolution,
             music_desc=gen.get("music_desc", ""), style=gen.get("style", ""),
             style_name=gen.get("style_name", "")))
@@ -9401,6 +9577,8 @@ class FromJobBody(BaseModel):
     job_id: str
     work_dir: str
     video_title: str = ""
+    # Target length in minutes the script was generated for (display/restart).
+    minutes: float = 0.0
     n_scenes: int = 0
     style: str = ""
     resolution: str = ""
@@ -9439,7 +9617,11 @@ def queue_from_job(body: FromJobBody) -> dict:
                 store.close()
         except Exception:
             n = cfg.get("default_n_scenes", 6)
-    n = max(6, int(n or 6))
+    n = max(1, int(n or 1))
+    try:
+        minutes = round(float(body.minutes or 0), 2)
+    except (TypeError, ValueError):
+        minutes = 0.0
 
     script_fields = dict(
         video_job_id=body.job_id, work_dir=body.work_dir, script_ready=True,
@@ -9448,6 +9630,8 @@ def queue_from_job(body: FromJobBody) -> dict:
         gen_voice=body.voice, gen_music=body.music_desc,
         gen_style_name=body.style_name,
     )
+    if minutes > 0:
+        script_fields["suggested_minutes"] = minutes
 
     # In-place update of an existing pending slot — keep its queue position.
     # Prefer the explicit queue_item_id; otherwise fall back to a pending row
@@ -10191,9 +10375,18 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
         voice_ref_str = jc.get("voice_ref") or ""
         voice_ref = Path(voice_ref_str).expanduser() if voice_ref_str else None
     voice_robotic_amount = resolve_robotic_amount(jc)  # 0 = natural; legacy toggle honored
-    voice_speed = jc.get("voice_speed", cfg.get("default_voice_speed", 1.0))
     tts_engine = tts_engine_override or jc.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language = language or jc.get("tts_language", cfg.get("default_tts_language", "en"))
+    # Re-derive the speed for the ACTUAL voice speaking this scene: a per-scene
+    # voice differs from the narrator the job's stored multiplier was derived
+    # for, and cadence measurements may have sharpened since the render.
+    cadence_voice = selected_voice or jc.get("default_voice", "")
+    voice_speed = cadence.resolve_voice_speed({
+        "voice": cadence_voice,
+        "tts_engine": tts_engine,
+        "voice_cadence_wpm": jc.get("voice_cadence_wpm", 0),
+        "voice_speed": jc.get("voice_speed", cfg.get("default_voice_speed", 1.0)),
+    })
     if tts_host is None:
         # tts_host lets fanout callers spread scenes across the TTS fleet; the
         # single-scene paths pick the first *reachable* worker so a downed lead
@@ -10203,7 +10396,8 @@ def _render_scene_narration(task_id: str, wd: Path, sid: int, jc: dict, row: dic
     if update_task:
         _film_tasks[task_id] = {"status": "running", "step": "narration", "scene_id": sid}
     generate_narration(narration_text, narration_path, reference_wav=voice_ref, host=tts_host, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language,
-                       sentence_pause=gapp._norm_tts_sentence_pause(jc.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause"))))
+                       sentence_pause=gapp._norm_tts_sentence_pause(jc.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause"))),
+                       cadence_voice=(cadence_voice if tts_language == jc.get("tts_language", "en") else None))
 
     video_path = wd / f"scene_{sid:02d}_video.mp4"
     clip_path = wd / f"scene_{sid:02d}_clip_01.mp4"
@@ -11136,12 +11330,12 @@ def _auto_write_scripts(cfg: dict) -> int:
         title = q.get("final_title", "")
         style_name = (q.get("gen_style_name") or "").strip()
         ss = gapp.style_settings(cfg, style_name)
-        n = max(6, int(q.get("suggested_scene_count") or ss.get("n_scenes") or 6))
+        minutes = _queue_item_minutes(q, ss)
         topic = q.get("video_prompt") or title
         resolution = q.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
         try:
             gen = _do_script_generate(GenerateScriptBody(
-                video_title=title, topic=topic, n_scenes=n, resolution=resolution,
+                video_title=title, topic=topic, minutes=minutes, resolution=resolution,
                 style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
         except Exception:
             continue
@@ -11158,7 +11352,9 @@ def _auto_write_scripts(cfg: dict) -> int:
         # neither this nor _auto_start_best renders it until the user approves.
         yt.update_queue_item(
             item_id, video_job_id=gen["job_id"], work_dir=gen["work_dir"],
-            script_ready=True, approved=False, suggested_scene_count=n,
+            script_ready=True, approved=False,
+            suggested_minutes=round(minutes, 2),
+            suggested_scene_count=len(gen.get("scenes") or []) or None,
             gen_style=gen.get("style", ""), gen_resolution=resolution,
             gen_voice=ss.get("voice", ""),
             gen_music=gen.get("music_desc", ""), gen_style_name=gen.get("style_name", ""))

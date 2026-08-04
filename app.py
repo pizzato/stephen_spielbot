@@ -132,15 +132,17 @@ _DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
 
-# Per-style size presets: Small/Medium/Large buckets, each pairing a scene count
-# (≈ duration) with a resolution. The AI-ideas screen offers these as a one-tap
-# size that fits the style. Defaults mirror the old hardcoded Short/Medium/Long
-# lengths (6/12/20 scenes) — small portrait, medium/large landscape.
+# Per-style size presets: Small/Medium/Large buckets, each pairing a target
+# length in MINUTES with a resolution. The AI-ideas screen offers these as a
+# one-tap size that fits the style. `scenes` is the legacy field the minutes
+# were migrated from (kept so old readers and hand-edited configs keep
+# working); minutes are authoritative — the scene count is derived from the
+# narrator's cadence at generation time (pipeline/cadence.py).
 _SIZE_BUCKETS = ("small", "medium", "large")
 _DEFAULT_SIZE_PRESETS = {
-    "small":  {"scenes": 6,  "resolution": compose_resolution("Portrait", _DEFAULT_PIXELS)},
-    "medium": {"scenes": 12, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
-    "large":  {"scenes": 20, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
+    "small":  {"minutes": 1.0, "scenes": 6,  "resolution": compose_resolution("Portrait", _DEFAULT_PIXELS)},
+    "medium": {"minutes": 2.0, "scenes": 12, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
+    "large":  {"minutes": 3.0, "scenes": 20, "resolution": compose_resolution("Landscape", _DEFAULT_PIXELS)},
 }
 
 
@@ -224,7 +226,16 @@ DEFAULT_CFG = {
     # on/off toggle (default_voice_robotic), folded in by _ensure_styles.
     "default_voice_robotic_amount": 0.0,
     "default_voice_speed": 1.0,       # F5-TTS speaking pace: 1.0 natural, lower slower, higher faster
+    # Target narration cadence in words/minute (pipeline/cadence.py). 0 = the
+    # voice's natural measured pace; >0 derives the TTS speed multiplier as
+    # target ÷ natural. This replaces the voice-speed slider in the UI —
+    # voice_speed stays honored for configs/jobs that predate it.
+    "default_voice_cadence_wpm": 0,
     "default_n_scenes": 6,
+    # Target video length in MINUTES — the primary length control. The script
+    # word budget is minutes × cadence, divided into 10–15 s scenes
+    # (pipeline/cadence.py). 0 = derive the length from the legacy n_scenes.
+    "default_video_minutes": 0.0,
     # How scripts are written: "classic" generates scenes directly in batches;
     # "story" drafts a full prose story first (outline → chapters → critique),
     # then divides it into scenes (see pipeline/story.py). Mirrors the default
@@ -383,7 +394,11 @@ STYLE_FIELD_TO_FLAT = {
     "voice":                "default_voice",
     "voice_robotic_amount": "default_voice_robotic_amount",
     "voice_speed":          "default_voice_speed",
+    # Target narration cadence (words/minute; 0 = the voice's natural pace)
+    "voice_cadence_wpm":    "default_voice_cadence_wpm",
     "n_scenes":             "default_n_scenes",
+    # Target video length in minutes (0 = derive from legacy n_scenes)
+    "video_minutes":        "default_video_minutes",
     # Script generation mode: "classic" (direct scenes) or "story" (story-first)
     "script_mode":          "default_script_mode",
     # Burn the cover into the head of the final video after each render
@@ -477,12 +492,15 @@ def _style_from_flat(cfg: dict, name: str) -> dict:
 
 def _norm_size_presets(value) -> dict:
     """Normalize a style's Small/Medium/Large size presets into a complete,
-    valid {bucket: {scenes, resolution}} dict.
+    valid {bucket: {minutes, scenes, resolution}} dict.
 
-    Missing buckets, non-numeric/out-of-range scene counts and unrecognized
+    Minutes are the authoritative length; a preset that predates them (scenes
+    only) gets its minutes derived from the scene count's legacy ~9 s length.
+    Missing buckets, non-numeric/out-of-range values and unrecognized
     resolution names fall back to the built-in defaults, so callers can rely on
     every bucket being present and its resolution being a known name. Always
     returns a fresh dict — never the shared default object."""
+    from pipeline import cadence
     value = value if isinstance(value, dict) else {}
     out = {}
     for bucket in _SIZE_BUCKETS:
@@ -494,10 +512,20 @@ def _norm_size_presets(value) -> dict:
         except (TypeError, ValueError):
             scenes = default["scenes"]
         scenes = max(1, min(MAX_SCENES, scenes))
+        try:
+            minutes = float(raw.get("minutes", 0) or 0)
+        except (TypeError, ValueError):
+            minutes = 0.0
+        if minutes <= 0:
+            # Pre-minutes preset: carry over the length its scenes produced —
+            # unless the bucket is untouched, where the new default applies.
+            minutes = (default["minutes"] if "scenes" not in raw
+                       else cadence.minutes_for_scenes(scenes))
+        minutes = round(max(0.25, min(cadence.MAX_MINUTES, minutes)), 2)
         resolution = raw.get("resolution")
         if resolution not in _RESOLUTIONS:
             resolution = default["resolution"]
-        out[bucket] = {"scenes": scenes, "resolution": resolution}
+        out[bucket] = {"minutes": minutes, "scenes": scenes, "resolution": resolution}
     return out
 
 
@@ -724,6 +752,27 @@ def _norm_tts_sentence_pause(value) -> float:
     return max(0.0, min(5.0, v))
 
 
+def _norm_voice_cadence_wpm(value) -> float:
+    """Clamp the target cadence to a speakable 60..300 words/minute
+    (0 = the voice's natural pace)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if v <= 0 else max(60.0, min(300.0, v))
+
+
+def _norm_video_minutes(value) -> float:
+    """Clamp the target video length to 0.25..40 minutes (0 = derive the
+    length from the legacy n_scenes value)."""
+    from pipeline import cadence
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if v <= 0 else round(max(0.25, min(cadence.MAX_MINUTES, v)), 2)
+
+
 def _norm_script_mode(value) -> str:
     """Coerce a script-generation mode to "classic" or "story"."""
     return "story" if value == "story" else "classic"
@@ -888,6 +937,8 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
+        _coerce(row, "voice_cadence_wpm", _norm_voice_cadence_wpm)
+        _coerce(row, "video_minutes", _norm_video_minutes)
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
@@ -1149,12 +1200,54 @@ def style_settings(cfg: dict, name: str = "") -> dict:
                    extra_instructions="", script_avoid="", description_suffix="",
                    attribution_description="", attribution_hashtags="",
                    attribution_youtube_tags="",
-                   title_style="", voice="", voice_robotic_amount=0.0, voice_speed=1.0)
+                   title_style="", voice="", voice_robotic_amount=0.0, voice_speed=1.0,
+                   voice_cadence_wpm=0)
         out["name"] = NO_STYLE
         out["description"] = ""
         return out
     out["name"] = (target or {}).get("name", "")
     return out
+
+
+def style_video_minutes(ss: dict) -> float:
+    """Effective target length (minutes) for a resolved style-settings dict —
+    the explicit ``video_minutes`` when set, else the length the style's
+    legacy ``n_scenes`` used to produce."""
+    from pipeline import cadence
+    try:
+        m = float(ss.get("video_minutes") or 0)
+    except (TypeError, ValueError):
+        m = 0.0
+    if m > 0:
+        return m
+    try:
+        n = int(ss.get("n_scenes") or 0)
+    except (TypeError, ValueError):
+        n = 0
+    return cadence.minutes_for_scenes(n or int(DEFAULT_CFG["default_n_scenes"]))
+
+
+def style_script_plan(ss: dict, minutes: float | None = None,
+                      n_scenes: int | None = None) -> dict:
+    """Cadence plan (word budget + 10–15 s scene caps) for a resolved
+    style-settings dict. Explicit *minutes* wins; an explicit *n_scenes* pins
+    the scene count (redraft/legacy callers); else the style's own length."""
+    from pipeline import cadence
+    wpm, measured = cadence.effective_wpm(ss)
+    try:
+        pause = float(ss.get("tts_sentence_pause") or 0)
+    except (TypeError, ValueError):
+        pause = 0.0
+    if minutes and float(minutes) > 0:
+        plan = cadence.plan_script(float(minutes), wpm, pause)
+    elif n_scenes and int(n_scenes) > 0:
+        plan = cadence.plan_for_scenes(int(n_scenes), wpm, pause)
+    else:
+        plan = cadence.plan_script(style_video_minutes(ss), wpm, pause)
+    plan["n_scenes"] = min(plan["n_scenes"], MAX_SCENES)
+    plan["wpm_measured"] = measured
+    plan["voice"] = ss.get("voice") or ""
+    return plan
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"
 

@@ -382,7 +382,7 @@ class StoryEndpointTests(TempConfigCase):
                "rewrites": [{"id": 2, "image_prompt": "Chrome robot workers on the line."}]}
         captured = {}
         def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1,
-                 direction="", dup_note=""):
+                 direction="", dup_note="", **kw):
             captured["scenes"] = scenes
             if captured.get("done"):
                 return {"changed": False, "notes": [], "rewrites": [],
@@ -416,7 +416,7 @@ class StoryEndpointTests(TempConfigCase):
             store.close()
         captured = {}
         def fake(scenes, title, video_title=None, avoid_hint=None, pass_num=1,
-                 direction="", dup_note=""):
+                 direction="", dup_note="", **kw):
             captured.update(direction=direction, dup_note=dup_note)
             return {"changed": False, "notes": [], "rewrites": [], "deletes": [],
                     "inserts": [], "order": None}

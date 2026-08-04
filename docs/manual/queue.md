@@ -36,7 +36,7 @@ The waiting queue, in the order it will run. Each row shows:
 - The **title**, with the **source** (`ai_idea`, `comment`, …) and the **style** it will
   render with
 - **Interestingness** stars and a **predicted reach** chip where available
-- The **scene count** and, when the timing table knows, an **estimated render time**
+- The target **length in minutes** and, when the timing table knows, an **estimated render time**
 - The requesting **commenter**, for comment-sourced items
 
 ### Approval state

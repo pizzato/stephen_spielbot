@@ -116,6 +116,7 @@ export default function App() {
     if (id === 'create') setCreateSeed({
       title: payload?.title ?? payload?.topic ?? '',
       description: payload?.description ?? '',
+      minutes: payload?.minutes ?? null,
       scenes: payload?.scenes ?? null,
       resolution: payload?.resolution ?? '',
       styleName: payload?.styleName ?? '',
@@ -170,6 +171,7 @@ export default function App() {
         const r = await api.queueFromJob({
           job_id: nextJob.job_id, work_dir: nextJob.work_dir,
           video_title: nextJob.video_title || nextJob.title || '',
+          minutes: nextJob.create_brief?.minutes || 0,
           n_scenes: nextJob.scenes?.length || 0,
           style: nextJob.style || '', resolution: choices.resolution || '',
           voice: choices.voice || '',
@@ -239,6 +241,7 @@ export default function App() {
     go('create', {
       title: item.final_title || item.title || '',
       description: item.video_prompt || item.comment_text || '',
+      minutes: item.suggested_minutes || null,
       scenes: item.suggested_scene_count || null,
       resolution: item.gen_resolution || '',
       styleName: item.gen_style_name || '',

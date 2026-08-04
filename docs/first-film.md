@@ -32,8 +32,10 @@ you into **Create** with the topic already filled in.
 - **Title** and **Direction** — the direction is optional and steers the angle
   ("focus on the economic decline, not the battles"). The ✨ button next to each label
   rewrites the field with the LLM, and you can tell it *how*.
-- **Scenes** — roughly 20 seconds each. Six scenes ≈ a two-minute film. Start small: your
-  first render is also the one that builds the timing table.
+- **Length** — the video's runtime in minutes. The script is sized to the narrator's
+  cadence (words per minute) and divided into 10–15 second scenes; the hint under the
+  slider shows the estimated words and scenes. Start small: your first render is also the
+  one that builds the timing table.
 - **Resolution** — orientation first, then quality. Portrait makes a Short.
 - **Format** — leave it on **Narration** for a first run. Dialogue needs characters with
   portraits and voices.

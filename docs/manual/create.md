@@ -31,10 +31,12 @@ Both labels carry a regenerate button: it rewrites the field with the LLM, and y
 it a free-text instruction or use the chips — *Shorter*, *Punchier*, *More specific* for
 the title; *Sharper angle*, *More detail*, *Simpler* for the direction.
 
-## Scenes and Resolution
+## Length and Resolution
 
-**Scenes** is a slider, 1–200. Each scene is roughly 20 seconds, so the count is really the
-runtime. Picking a style prefills its default.
+**Length** is a slider in minutes. The script's word budget comes from the narrator's
+cadence (words per minute — measured per voice, see Settings → Voices), and the story is
+divided into scenes of 10–15 seconds each; the hint under the slider shows the estimated
+word count and scene count live. Picking a style prefills its default length.
 
 **Resolution** picks orientation first, then quality — higher is slower. Portrait means the
 film is treated as a Short, which the predictive model weighs differently.

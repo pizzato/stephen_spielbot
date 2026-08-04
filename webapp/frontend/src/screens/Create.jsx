@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -47,9 +47,15 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
 
+  // Legacy scene-count seeds (old queue items / re-drafts) → the length those
+  // scenes used to produce (~9 s each).
+  const legacyMinutes = (n) => Math.round((n * LEGACY_SCENE_SECS / 60) * 100) / 100
+
   const [videoTitle, setVideoTitle] = useState(seed?.title || '')
   const [direction, setDirection] = useState(seed?.description || '')
-  const [scenes, setScenes] = useState(seed?.scenes || profile?.n_scenes || 6)
+  const [minutes, setMinutes] = useState(
+    seed?.minutes || (seed?.scenes ? legacyMinutes(seed.scenes) : 0)
+    || (profile ? styleMinutes(profile) : 1))
   const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
@@ -86,7 +92,8 @@ export default function Create({ seed, meta, onGenerated }) {
     if (!seed) return
     setVideoTitle(seed.title || '')
     setDirection(seed.description || '')
-    if (seed.scenes) setScenes(seed.scenes)
+    if (seed.minutes) setMinutes(seed.minutes)
+    else if (seed.scenes) setMinutes(legacyMinutes(seed.scenes))
     if (seed.resolution) setResolution(seed.resolution)
     if (seed.styleName) setStyleName(seed.styleName)
     // No-style free fields (locked styles re-sync voice/visuals from the profile).
@@ -106,8 +113,8 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [seed, profile])
 
   useEffect(() => {
-    if (!seed?.scenes && profile?.n_scenes) setScenes(profile.n_scenes)
-  }, [profile?.n_scenes, seed?.scenes])
+    if (!seed?.minutes && !seed?.scenes && profile) setMinutes(styleMinutes(profile))
+  }, [profile, profile?.video_minutes, profile?.n_scenes, seed?.minutes, seed?.scenes])
 
   useEffect(() => {
     if (seed?.resolution || !profile) return
@@ -158,7 +165,7 @@ export default function Create({ seed, meta, onGenerated }) {
       const body = {
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
-        n_scenes: Number(scenes),
+        minutes: Number(minutes) || 0,
         visual_style: style.trim() || null,
         auto_approve: autoApprove,
         voice,
@@ -229,8 +236,9 @@ export default function Create({ seed, meta, onGenerated }) {
 
             <div className="row gap-22 row--wrap">
               <div className="grow">
-                <Field label={`Scenes — ${scenes}`} hint="Roughly 20 seconds each.">
-                  <input className="slider" type="range" min={1} max={200} value={scenes} onChange={(e) => setScenes(+e.target.value)} />
+                <Field label={`Length — ${fmtDuration(minutes)}`}
+                  hint={`${lengthEstimateLabel(minutes, effectiveWpm(meta, profile || {}, voice).wpm, profile?.tts_sentence_pause)} at ${voice || 'the narrator'}’s cadence.`}>
+                  <input className="slider" type="range" min={0.5} max={30} step={0.25} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
                 </Field>
               </div>
               <div className="grow">

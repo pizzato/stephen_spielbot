@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
 
@@ -336,13 +336,13 @@ function PlayButton({ src }) {
   )
 }
 
-// Audition the style's narrator voice at the current robotic level and speed.
+// Audition the style's narrator voice at the current robotic level and cadence.
 // F5-TTS runs on the backend (a few seconds for one sentence), so show a
 // "Generating…" state while waiting. Reads the live, unsaved narrator-voice,
-// robotic-level and voice-speed fields so you can dial them in by ear before
+// robotic-level and cadence fields so you can dial them in by ear before
 // saving. Deliberately no voice picker of its own: a second dropdown here
 // looked like the style's voice setting but silently saved nothing.
-function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePause, onError }) {
+function VoiceTester({ voice, roboticAmount, cadenceWpm, engine, language, sentencePause, onError }) {
   const [busy, setBusy] = useState(false)
   const [text, setText] = useState('')
   const audioRef = useRef(null)
@@ -350,7 +350,7 @@ function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePa
   const play = async () => {
     onError(''); setBusy(true)
     try {
-      const r = await api.testVoice({ voice: voice || '', robotic_amount: roboticAmount ?? 0, speed: speed ?? 1, engine: engine || '', language: language || '', text: text.trim(), sentence_pause: sentencePause ?? null })
+      const r = await api.testVoice({ voice: voice || '', robotic_amount: roboticAmount ?? 0, cadence_wpm: cadenceWpm ?? 0, engine: engine || '', language: language || '', text: text.trim(), sentence_pause: sentencePause ?? null })
       const a = audioRef.current
       // Don't await play(): after a long first generation Chrome may block
       // autoplay (the click's activation window expired), and a blocked play()
@@ -363,7 +363,7 @@ function VoiceTester({ voice, roboticAmount, speed, engine, language, sentencePa
   const spoken = voice || 'the default narrator'
   return (
     <Field label="Test voice"
-      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level, voice speed and sentence pause (cached after the first time). Type a custom line to audition a respelling or [pause:1.5] markers.`}>
+      hint={`Plays the narrator voice chosen above — “This is the voice of ${spoken}. What do you think?” at the robotic level, cadence and sentence pause (cached after the first time). Type a custom line to audition a respelling or [pause:1.5] markers.`}>
       <div className="row center gap-10 row--wrap">
         <Button variant="primary" icon="play" disabled={busy} onClick={play}>{busy ? 'Generating…' : 'Play'}</Button>
         <input className="input grow" placeholder="Custom line to speak (optional) — e.g. The lead pipes burst. [pause] Something still lives."
@@ -401,7 +401,7 @@ function VoiceMetaFields({ meta, onChange }) {
   )
 }
 
-function VoicesManager({ voices, busy, ttsLanguages, onAdd, onUpdate, onDelete }) {
+function VoicesManager({ voices, busy, ttsLanguages, cadences: cadencesProp, onAdd, onUpdate, onDelete, onError }) {
   const [name, setName] = useState('')
   const [file, setFile] = useState(null)
   const [addMeta, setAddMeta] = useState({})
@@ -411,6 +411,38 @@ function VoicesManager({ voices, busy, ttsLanguages, onAdd, onUpdate, onDelete }
   const [editMeta, setEditMeta] = useState({})
   const [recOpen, setRecOpen] = useState(false)
   const addRef = useRef(null)
+  // Measured cadence store ("<voice>|<engine>" → {wpm, samples}); calibration
+  // responses refresh it without waiting for a full config refetch.
+  const [cadences, setCadences] = useState(cadencesProp || {})
+  useEffect(() => { setCadences(cadencesProp || {}) }, [cadencesProp])
+  const [calibrating, setCalibrating] = useState('')
+
+  // Best measurement for a voice across engines (most samples wins).
+  const wpmOf = (voiceName) => {
+    let best = null
+    for (const [k, e] of Object.entries(cadences || {})) {
+      if (k.split('|')[0] === (voiceName || '__default__') && Number(e?.wpm) > 0) {
+        if (!best || (e.samples || 0) > (best.samples || 0)) best = e
+      }
+    }
+    return best
+  }
+  const calibrate = async (voiceName) => {
+    setCalibrating(voiceName || '__default__')
+    try {
+      const r = await api.calibrateVoice(voiceName)
+      if (r.voice_cadences) setCadences(r.voice_cadences)
+    } catch (e) { onError && onError(e.message) } finally { setCalibrating('') }
+  }
+  const calibrateAll = async () => {
+    setCalibrating('*')
+    try {
+      for (const v of voices || []) {
+        const r = await api.calibrateVoice(v.name)
+        if (r.voice_cadences) setCadences(r.voice_cadences)
+      }
+    } catch (e) { onError && onError(e.message) } finally { setCalibrating('') }
+  }
 
   const add = async () => {
     try { await onAdd(name.trim(), file, addMeta) } catch { return }
@@ -433,12 +465,18 @@ function VoicesManager({ voices, busy, ttsLanguages, onAdd, onUpdate, onDelete }
     <Card span={12} className="reveal reveal-d2">
       <div className="row center between">
         <span className="label-sm">Voices</span>
-        <span className="muted" style={{ fontSize: 11.5 }}>changes save immediately</span>
+        <div className="row center gap-10">
+          <Button variant="ghost" icon="gauge-high" disabled={busy || !!calibrating}
+            onClick={calibrateAll}>{calibrating === '*' ? 'Calibrating…' : 'Calibrate all cadences'}</Button>
+          <span className="muted" style={{ fontSize: 11.5 }}>changes save immediately</span>
+        </div>
       </div>
       <div className="field__hint" style={{ marginTop: 6 }}>
         Reference clips (15–30s of clear speech) F5-TTS clones for narration and dialogue. Pick each
         style's narrator voice under <strong>Styles</strong>. <strong>Gender + age</strong> let story
         characters be auto-cast with a fitting voice — a voice without a gender is never auto-cast.
+        Each voice's <strong>cadence</strong> (words/minute) sizes scripts to a video length; it is
+        measured by Calibrate (a one-off synthesis) and keeps refining from every real narration.
       </div>
 
       <div className="stack gap-10 mt-16">
@@ -465,7 +503,12 @@ function VoicesManager({ voices, busy, ttsLanguages, onAdd, onUpdate, onDelete }
                 <span style={{ fontWeight: 600 }}>{v.name}</span>
                 {castChips(v) && <span className="muted" style={{ fontSize: 12 }}>{castChips(v)}</span>}
                 {v.library && <span className="muted" style={{ fontSize: 11, border: '1px solid var(--line)', borderRadius: 6, padding: '1px 6px' }}>library</span>}
+                {(() => { const c = wpmOf(v.name); return c
+                  ? <span className="muted" style={{ fontSize: 12 }}>{Math.round(c.wpm)} wpm</span>
+                  : <span className="muted" style={{ fontSize: 12, opacity: 0.6 }}>cadence unmeasured</span> })()}
                 <div className="grow" />
+                <Button variant="ghost" icon="gauge-high" disabled={busy || !!calibrating}
+                  onClick={() => calibrate(v.name)}>{calibrating === v.name ? 'Measuring…' : 'Calibrate'}</Button>
                 <Button variant="ghost" icon="pen" disabled={busy} onClick={() => startEdit(v)}>Edit</Button>
                 <Button variant="danger" icon="trash" disabled={busy} onClick={() => onDelete(v.name)}>Delete</Button>
               </>
@@ -1171,10 +1214,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return String(v || '#FFFFFF')
       case 'voice':
         return v || '(F5-TTS default)'
+      case 'voice_cadence_wpm':
+        return Number(v) > 0 ? `${v} words/min` : 'natural pace'
+      case 'video_minutes':
+        return Number(v) > 0 ? fmtDuration(v) : '(from legacy scene count)'
       case 'size_presets':
         return ['small', 'medium', 'large'].map((b) => {
           const p = (v || {})[b] || {}
-          return `${b}: ${p.scenes ?? '?'} scenes · ${p.resolution || '?'}`
+          const mins = p.minutes || (p.scenes ? p.scenes * LEGACY_SCENE_SECS / 60 : 0)
+          return `${b}: ${mins ? fmtDuration(mins) : '?'} · ${p.resolution || '?'}`
         }).join('  ·  ')
       default:
         if (typeof v === 'boolean') return v ? 'on' : 'off'
@@ -1975,9 +2023,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">Script & content</span>
             <div className="stack gap-22 mt-16">
-              <Field label="Default scenes">
-                <input className="input" type="number" value={eff.n_scenes ?? ''} onChange={(e) => setStyleField('n_scenes', +e.target.value)} style={{ maxWidth: 160 }} />
-                <ParentVal k="n_scenes" />
+              <Field label={`Video length — ${fmtDuration(styleMinutes(eff))}`}
+                hint={`How long this style's videos run. The script's word budget comes from the narrator's cadence, divided into 10–15s scenes — ${lengthEstimateLabel(styleMinutes(eff), effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}.`}>
+                <DurationInput value={eff.video_minutes || styleMinutes(eff)}
+                  onChange={(v) => setStyleField('video_minutes', v)} />
+                <ParentVal k="video_minutes" />
               </Field>
               <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
                 <select className="select" value={eff.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
@@ -2059,13 +2109,28 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select><ParentVal k="voice" /></Field></div>
               </div>
               <div className="row gap-22 row--wrap">
-                <div className="grow"><Field label={`Voice speed — ×${(eff.voice_speed ?? 1).toFixed(2)}`}
-                  hint="Narration pace — ×1.00 is natural, lower is slower, higher is faster.">
-                  <input className="slider" type="range" min={0.5} max={1.5} step={0.05}
-                    value={eff.voice_speed ?? 1}
-                    onChange={(e) => setStyleField('voice_speed', +e.target.value)} />
-                  <ParentVal k="voice_speed" />
-                </Field></div>
+                <div className="grow">{(() => {
+                  const nat = voiceWpm(meta, eff.voice, eff.tts_engine)
+                  const target = Number(eff.voice_cadence_wpm || 0)
+                  // No target → show the pace narration actually plays at
+                  // (natural × any legacy voice_speed multiplier).
+                  const value = target > 0 ? target : Math.round(effectiveWpm(meta, eff).wpm)
+                  const mult = Math.max(0.3, Math.min(2, value / nat.wpm))
+                  return (
+                    <Field label={`Cadence — ${value} words/min${target > 0 ? ` (×${mult.toFixed(2)})` : ' · natural'}`}
+                      hint={`How fast the narrator speaks. This voice's natural pace is ~${Math.round(nat.wpm)} words/min${nat.measured ? '' : ' (estimated — calibrate it under the Voices tab)'}; the cadence also sets the script's word budget for the video length.`}>
+                      <input className="slider" type="range" min={90} max={220} step={5}
+                        value={Math.max(90, Math.min(220, value))}
+                        onChange={(e) => setStyleField('voice_cadence_wpm', +e.target.value)} />
+                      {target > 0 && (
+                        <div className="field__hint">
+                          <a onClick={() => setStyleField('voice_cadence_wpm', 0)} style={{ cursor: 'pointer' }}>Reset to natural pace</a>
+                        </div>
+                      )}
+                      <ParentVal k="voice_cadence_wpm" />
+                    </Field>
+                  )
+                })()}</div>
                 <div className="grow"><Field label={`Robotic level — ${Math.round((eff.voice_robotic_amount ?? 0) * 100)}%`}
                   hint="0% is natural (off); higher is a more synthetic monotone so the voice isn't mistaken for a human.">
                   <input className="slider" type="range" min={0} max={1} step={0.05}
@@ -2081,7 +2146,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="tts_sentence_pause" />
                 </Field></div>
               </div>
-              <VoiceTester voice={eff.voice} roboticAmount={eff.voice_robotic_amount} speed={eff.voice_speed} engine={eff.tts_engine} language={eff.tts_language} sentencePause={eff.tts_sentence_pause} onError={setError} />
+              <VoiceTester voice={eff.voice} roboticAmount={eff.voice_robotic_amount} cadenceWpm={eff.voice_cadence_wpm} engine={eff.tts_engine} language={eff.tts_language} sentencePause={eff.tts_sentence_pause} onError={setError} />
             </div>
           </Card>
 
@@ -2212,19 +2277,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d3">
             <span className="label-sm">Size presets</span>
             <div className="muted" style={{ fontSize: 12.5, marginTop: 4 }}>
-              The Small / Medium / Large one-tap sizes on the AI ideas screen — each sets a scene count and a resolution for this style.
+              The Small / Medium / Large one-tap sizes on the AI ideas screen — each sets a video length (minutes) and a resolution for this style.
             </div>
             <div className="stack gap-22 mt-16">
               {(meta.size_buckets || ['small', 'medium', 'large']).map((bucket) => {
                 const preset = (eff.size_presets || {})[bucket] || (meta.default_size_presets || {})[bucket] || {}
+                const mins = preset.minutes || Math.round(((preset.scenes || 6) * LEGACY_SCENE_SECS / 60) * 100) / 100
                 return (
                   <div key={bucket} className="row gap-22 row--wrap" style={{ alignItems: 'flex-end' }}>
                     <div style={{ minWidth: 78 }}>
                       <span className="label-sm" style={{ textTransform: 'capitalize' }}>{bucket}</span>
                     </div>
-                    <Field label="Scenes">
-                      <input className="input" type="number" min={1} value={preset.scenes ?? ''} style={{ maxWidth: 110 }}
-                        onChange={(e) => setSizePreset(bucket, 'scenes', +e.target.value)} />
+                    <Field label={`Length — ${fmtDuration(mins)}`} hint={lengthEstimateLabel(mins, effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}>
+                      <DurationInput value={mins} onChange={(v) => setSizePreset(bucket, 'minutes', v)} />
                     </Field>
                     <div className="grow"><Field label="Resolution">
                       <ResolutionPicker value={preset.resolution || ''} onChange={(r) => setSizePreset(bucket, 'resolution', r)} meta={meta} />
@@ -2441,6 +2506,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           {/* ── Voices (narrator reference clips) ── */}
           <VoicesManager voices={cfg.voices} busy={vbusy}
             ttsLanguages={(ttsEngineInfo?.engines || []).find((e) => Object.keys(e.languages || {}).length)?.languages}
+            cadences={meta.voice_cadences} onError={setError}
             onAdd={addVoice} onUpdate={updateVoice} onDelete={deleteVoice} />
         </>)}
 

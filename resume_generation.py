@@ -46,6 +46,7 @@ from pipeline.assembler import (
     fit_video_canvas,
     write_silence_wav as _write_silence_wav,
 )
+from pipeline import cadence as _cadence
 from pipeline.tts_text import spoken_source
 from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 from pipeline.orchestrator import (
@@ -387,9 +388,16 @@ def main(work_dir: Path) -> None:
     voice_vol         = cfg.get("voice_vol", 100) / 100.0
     voice_name        = cfg.get("default_voice", "Thomas")
     voice_robotic_amount = resolve_robotic_amount(cfg)  # 0 = natural; legacy toggle honored
-    voice_speed       = float(cfg.get("voice_speed", cfg.get("default_voice_speed", 1.0)) or 1.0)
     tts_engine        = cfg.get("tts_engine", cfg.get("default_tts_engine", "openf5"))
     tts_language      = cfg.get("tts_language", cfg.get("default_tts_language", "en"))
+    # Speed as target cadence ÷ the voice's measured natural pace (pipeline/
+    # cadence.py); legacy jobs without a cadence keep their stored multiplier.
+    voice_speed       = _cadence.resolve_voice_speed({
+        "voice": voice_name,
+        "tts_engine": tts_engine,
+        "voice_cadence_wpm": cfg.get("voice_cadence_wpm", cfg.get("default_voice_cadence_wpm", 0)),
+        "voice_speed": cfg.get("voice_speed", cfg.get("default_voice_speed", 1.0)),
+    })
     # Per-style sentence gap spliced between narration sentences (pipeline/tts_text.py).
     tts_sentence_pause = float(cfg.get("tts_sentence_pause", cfg.get("default_tts_sentence_pause", 0.0)) or 0.0)
     voice_ref_str     = None
@@ -716,7 +724,7 @@ def main(work_dir: Path) -> None:
                     lease_seconds=600,
                     start_message=f"TTS on {host}",
                 ) as run:
-                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, sentence_pause=tts_sentence_pause)
+                    generate_narration(spoken_source(scene.narration, scene.metadata_extra.get("tts_text")), out, reference_wav=ref, host=host, robotic_amount=voice_robotic_amount, speed=voice_speed, tts_engine=tts_engine, language=tts_language, sentence_pause=tts_sentence_pause, cadence_voice=voice_name)
                     dur = _get_duration(out)
                     store.record_artifact(
                         durable_job_id,

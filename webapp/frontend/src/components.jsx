@@ -23,6 +23,91 @@ export function voiceLabel(name, metaMap) {
   return c ? `${name} — ${c}` : name
 }
 
+// ── Voice cadence (words/minute) — mirror of pipeline/cadence.py ─────────────
+// Scenes are 10–15 s of narration (12 s target); legacy scene counts meant
+// ~9 s each; unmeasured voices fall back to the server's default cadence.
+// These are display estimates only — the backend plan is authoritative.
+export const SCENE_TARGET_SECS = 12
+export const LEGACY_SCENE_SECS = 9
+
+// A voice's natural cadence from meta.voice_cadences ("<voice>|<engine>" keys).
+export function voiceWpm(meta, voice, engine) {
+  let name = (voice || '').trim()
+  if (name.toLowerCase() === 'default (f5-tts)') name = ''
+  const key = `${name || '__default__'}|${(engine || 'openf5').trim()}`
+  const entry = (meta?.voice_cadences || {})[key]
+  if (entry && Number(entry.wpm) > 0) return { wpm: Number(entry.wpm), measured: true }
+  return { wpm: Number(meta?.default_wpm) || 150, measured: false }
+}
+
+// The cadence narration will actually play at for a resolved style: the target
+// cadence when set, else the voice's natural pace × any legacy speed multiplier.
+export function effectiveWpm(meta, eff, voiceOverride) {
+  const voice = voiceOverride !== undefined && voiceOverride !== '' ? voiceOverride : (eff?.voice || '')
+  const { wpm: nat, measured } = voiceWpm(meta, voice, eff?.tts_engine)
+  const target = Number(eff?.voice_cadence_wpm || 0)
+  if (target > 0) return { wpm: target, measured }
+  const speed = Number(eff?.voice_speed || 1) || 1
+  return { wpm: Math.round(nat * speed), measured }
+}
+
+// A style's effective target length in minutes (video_minutes, else what its
+// legacy scene count used to produce).
+export function styleMinutes(eff) {
+  const m = Number(eff?.video_minutes || 0)
+  if (m > 0) return m
+  const n = parseInt(eff?.n_scenes, 10) || 6
+  return Math.round((n * LEGACY_SCENE_SECS / 60) * 100) / 100
+}
+
+// minutes × cadence → estimated words + scene count (pause-aware).
+export function lengthEstimate(minutes, wpm, sentencePause = 0) {
+  const mins = Math.max(0.25, Number(minutes) || 0)
+  const rate = Number(wpm) > 0 ? Number(wpm) : 150
+  const gap = Math.max(0, Math.min(Number(sentencePause) || 0, 5))
+  const nScenes = Math.max(1, Math.round(mins * 60 / SCENE_TARGET_SECS))
+  const wordsScene = Math.max(1, Math.round(rate * (SCENE_TARGET_SECS - gap) / 60))
+  return { nScenes, words: nScenes * wordsScene, wordsScene }
+}
+
+// Compact "≈ 300 words · 10 scenes" line for length pickers.
+export function lengthEstimateLabel(minutes, wpm, sentencePause = 0) {
+  const est = lengthEstimate(minutes, wpm, sentencePause)
+  return `≈ ${est.words} words · ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of 10–15s`
+}
+
+// "2 min 30 s" / "2 min" / "45 s" from a float-minutes value — lengths are
+// stored as minutes but always DISPLAYED as a time.
+export function fmtDuration(minutes) {
+  const total = Math.round((Number(minutes) || 0) * 60)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  if (!m) return `${s} s`
+  return s ? `${m} min ${s} s` : `${m} min`
+}
+
+// Minutes + seconds inputs writing a single float-minutes value (the unit the
+// config/API use). Clamped to 15 s .. maxMinutes.
+export function DurationInput({ value, onChange, disabled, maxMinutes = 40 }) {
+  const total = Math.round((Number(value) || 0) * 60)
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  const set = (mins, secs) => {
+    const t = Math.max(15, Math.min(maxMinutes * 60, (Number(mins) || 0) * 60 + (Number(secs) || 0)))
+    onChange(Math.round((t / 60) * 10000) / 10000)
+  }
+  return (
+    <div className="row center gap-6">
+      <input className="input" type="number" min={0} max={maxMinutes} value={m} disabled={disabled}
+        onChange={(e) => set(e.target.value, s)} style={{ width: 74 }} />
+      <span className="muted" style={{ fontSize: 12 }}>min</span>
+      <input className="input" type="number" min={-5} max={60} step={5} value={s} disabled={disabled}
+        onChange={(e) => set(m, e.target.value)} style={{ width: 74 }} />
+      <span className="muted" style={{ fontSize: 12 }}>s</span>
+    </div>
+  )
+}
+
 // Scene-type controls shared by the Script editor and the video edit screen so
 // they stay identical. Renders the Narration | Dialogue | Silent selector and,
 // for dialogue, the shot sequence editor (speaking + silent shots); for silent,

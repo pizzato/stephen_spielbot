@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from pipeline import tts_text
+from pipeline import cadence, tts_text
 
 logger = logging.getLogger("video_gen")
 
@@ -339,6 +339,7 @@ def generate_narration(
     tts_engine: str = "openf5",
     language: str = "en",
     sentence_pause: float | None = None,
+    cadence_voice: str | None = None,
 ) -> Path:
     """Generate narration audio, running F5-TTS on host.
 
@@ -367,6 +368,13 @@ def generate_narration(
     ``[pause:secs]`` markers become real spliced silence, and *sentence_pause*
     seconds of silence are spliced between sentences when set. With neither in
     play the synthesis is a single take, exactly as before.
+
+    *cadence_voice* names the voice-library entry this narration uses ("" for
+    the bundled default narrator). When given, the finished take is fed into
+    the voice's learned cadence (pipeline/cadence.py) — word count against
+    speech duration, with spliced silence and the speed multiplier factored
+    out — so words-per-minute estimates converge on real output. None skips
+    recording (callers that don't know the voice name).
     """
     ref = reference_wav or DEFAULT_REF
     if not ref.exists():
@@ -400,6 +408,7 @@ def generate_narration(
             # junk never lands in the middle of a spliced narration.
             _trim_trailing_artifacts(out)
 
+    injected_silence = 0.0
     if len(chunks) == 1 and chunks[0][0] and chunks[0][1] <= 0:
         _synth(plain, output_path)
     else:
@@ -417,6 +426,7 @@ def generate_narration(
                     else:
                         parts.append((None, gap))
                 _concat_wav_chunks(parts, output_path)
+                injected_silence = sum(gap for _, gap in chunks)
             except Exception as exc:
                 logger.warning("Chunked narration failed (%s) — falling back to a "
                                "single take without pause markers", exc)
@@ -427,4 +437,8 @@ def generate_narration(
                     part.unlink(missing_ok=True)
     if robotic > 0:
         _robotize_wav(output_path, robotic)
+    if cadence_voice is not None:
+        cadence.record_sample(cadence_voice, engine, cadence.word_count(plain),
+                              cadence.wav_seconds(output_path), speed=speed,
+                              silence_secs=injected_silence)
     return output_path

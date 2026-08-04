@@ -69,6 +69,12 @@ export const api = {
   deleteVoice: (name) => req('POST', '/voices/delete', { name }),
   // Synthesize a short sample at a given robotic level (0..1) and return its URL.
   testVoice: (body) => req('POST', '/voices/test', body),
+  // Measure a voice's natural cadence (words/minute) by timing a fixed passage.
+  calibrateVoice: (voice, engine) => req('POST', '/voices/calibrate', { voice: voice || '', engine: engine || '' }),
+  // Target length (minutes) → word budget + scene plan for a style/narrator.
+  lengthEstimate: (styleName, minutes, voice) => req('GET',
+    `/script/length-estimate?style_name=${encodeURIComponent(styleName || '')}` +
+    `&minutes=${encodeURIComponent(minutes || 0)}&voice=${encodeURIComponent(voice || '')}`),
   // Short read-aloud script for the record-a-voice screen (issue #192).
   voiceReadingScript: (language, fresh = false) => req('POST', '/voices/reading-script', { language, fresh }),
   // Character reference images (global character library). `data` is a base64 / data-URL.
@@ -265,7 +271,7 @@ export const api = {
   queueRemove: (id) => req('POST', '/queue/remove', { id }),
   queueAbandon: (id) => req('POST', '/queue/abandon', { id }),
   queueRetryReply: (id) => req('POST', '/queue/retry-reply', { id }),
-  queueAdd: (title, nScenes, prompt, resolution, styleName) => req('POST', '/queue/add', { title, n_scenes: nScenes || 0, prompt: prompt || '', resolution: resolution || '', style_name: styleName || '' }),
+  queueAdd: (title, minutes, prompt, resolution, styleName) => req('POST', '/queue/add', { title, minutes: minutes || 0, prompt: prompt || '', resolution: resolution || '', style_name: styleName || '' }),
   queueUpdate: (id, fields) => req('POST', '/queue/update', { id, ...fields }),
   queueApprove: (id, approved = true) => req('POST', '/queue/approve', { id, approved }),
   queueStart: (id) => req('POST', '/queue/start', { id }),

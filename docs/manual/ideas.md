@@ -32,9 +32,9 @@ Each card carries:
 
 - The **title** and a one-line italic *reason* — why the AI thinks it fits your channel
 - A **star rating** (interestingness) and, when a model exists, a **predicted reach** chip
-- A **size** — Small / Medium / Large — which sets the scene count and resolution from
+- A **size** — Small / Medium / Large — which sets the video length and resolution from
   that style's [size presets](settings.md#size-presets). The line underneath shows exactly
-  what you'll get: *"6 scenes · Portrait"*
+  what you'll get: *"1 min · Portrait"*
 
 Three verdicts:
 

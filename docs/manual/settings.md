@@ -107,7 +107,7 @@ the text variant.
 
 | Field | Effect |
 |---|---|
-| **Default scenes** | Prefilled scene count |
+| **Video length (minutes)** | The style's default runtime. The script's word budget is length × the narrator's cadence, divided into 10–15 s scenes |
 | **Script mode** | Classic or [story-first](create.md#script-mode) |
 | **Visual style** | Appended to every image prompt |
 | **Video / motion style** | Camera and subject movement guidance for video prompts |
@@ -126,6 +126,12 @@ an empty queue. The manual [AI ideas](ideas.md) screen still offers it.
 **Voice model** (the TTS engine), **narration language** — which also drives the script's
 language on multilingual engines — and **narrator voice**. Plus the audio mix.
 
+**Cadence** replaces the old voice-speed multiplier: it is the narrator's speaking pace in
+**words per minute**. Each voice has a measured *natural* cadence (see the Voices tab);
+setting a target cadence speeds the voice up or slows it down (target ÷ natural becomes
+the TTS speed), and the same number sizes every script's word budget for the chosen video
+length. *Reset to natural pace* clears the target.
+
 ### Render quality
 
 **Resolution**, **first-pass steps**, **second-pass steps**. Higher is slower and more
@@ -138,7 +144,7 @@ FLUX.2 Klein for both.
 
 ### Size presets
 
-Three buckets — Small / Medium / Large — each pairing a **scenes** count with a
+Three buckets — Small / Medium / Large — each pairing a video **length in minutes** with a
 **resolution**. [AI ideas](ideas.md) offers these as a one-tap size, so each style's
 "Small" means what that style wants it to mean.
 
@@ -176,6 +182,11 @@ The voice library — the 10 bundled public-domain LibriVox voices plus anything
 - **Record** opens a modal to record a reference clip in the browser, with a reading
   script provided; the clip is re-encoded to WAV client-side
 - Uploaded reference WAVs work the same way
+- **Calibrate** measures a voice's natural **cadence** (words per minute) by timing a
+  fixed passage — **Calibrate all cadences** does the whole library. The number is shown
+  on each row and keeps refining automatically from every real narration render. Cadence
+  drives the [length → word budget](create.md#length-and-resolution) sizing and the
+  per-style cadence control
 
 Voices are cloned from a single reference clip, so a clean 10–20 seconds is worth more than
 a long noisy one.

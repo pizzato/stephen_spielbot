@@ -38,7 +38,7 @@ script_claude_initial:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX image generation. Describe this as a frozen, perfectly composed photograph. Include: exact subjects and their positions, environment and setting details, lighting quality and direction, color palette, textures and materials, atmospheric depth. Do NOT include any motion, camera movement, or action verbs. Written as flowing sentences.
       - "video_prompt": 30-50 word description of HOW the scene moves for the LTX video model. Include: what subjects/objects move and how, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, static wide angle, etc.), pacing and rhythm. Do NOT include style descriptors (those are prepended automatically). Match the action described in the narration. Keep it a SINGLE CONTINUOUS SHOT that animates the still: same location and the same subjects as the image_prompt — no cuts, no scene changes, and no new people, objects, or settings appearing. Only the camera and elements already visible in the still may move; the video model animates that one frame, so anything not in it warps and breaks apart.
-      - "narration": spoken narration — exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace (roughly 18-22 words total). Clear, engaging, educational. Written as part of a coherent flowing story. Never refer to "the narrator" — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).${dialogue_schema}
+      - "narration": spoken narration — about ${scene_words_target} words (hard range ${scene_words_min}-${scene_words_max}; NEVER exceed ${scene_words_max} words), which is ${scene_secs_min}-${scene_secs_max} seconds at the narrator's pace. Prefer ONE flowing sentence, at most two short ones; never a sentence so long it would burst the word cap — shorten it or break it at a natural pause (comma, dash) into the next scene instead. Clear, engaging, educational. Written as part of a coherent flowing story. Never refer to "the narrator" — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).${dialogue_schema}
 
     STRUCTURE RULES — critical for YouTube retention:
     - Scene 1 (introduction): Open with a compelling hook that makes the viewer feel they are about to discover something remarkable. Tease the most surprising or emotionally resonant moment from later in the video — a question left unanswered, a tension not yet resolved, or a revelation hinted at but withheld. The goal is to create an irresistible reason to keep watching.
@@ -63,7 +63,7 @@ script_claude_continuation:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors. Keep it ONE continuous shot that animates the still — same single location and the same subjects, no cuts, no scene changes, and nothing new appearing (the model animates only the first frame, so anything not already in it distorts).
-      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). Must flow naturally from the previous scenes provided as context. Never refer to "the narrator" — the voice tells the story directly.${dialogue_schema}
+      - "narration": about ${scene_words_target} words (hard range ${scene_words_min}-${scene_words_max}; NEVER exceed ${scene_words_max} words) — ${scene_secs_min}-${scene_secs_max} seconds at the narrator's pace. Prefer ONE flowing sentence, at most two short ones. Must flow naturally from the previous scenes provided as context. Never refer to "the narrator" — the voice tells the story directly.${dialogue_schema}
 
     Output only the raw JSON array. No markdown, no code fences, no explanation.
   user: |
@@ -79,10 +79,10 @@ script_claude_fill_narration:
   description: |
     Targeted single-scene Claude call to fill an empty narration after the main pass.
   system: |
-    You are a documentary narrator. Output only the 2-sentence narration, nothing else.
+    You are a documentary narrator. Output only the narration, nothing else.
   user: |
     ${ctx}
-    Write ONLY a 2-sentence spoken narration for this scene (~18-22 words total, ~9 seconds at a calm documentary pace). No JSON, no labels — just the 2 sentences.
+    Write ONLY the spoken narration for this scene: about ${scene_words_target} words (never more than ${scene_words_max}), one flowing sentence or two short ones. No JSON, no labels — just the narration.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -106,9 +106,9 @@ script_local_story:
     CHARACTER_2_ALIASES: [comma-separated other names, or leave blank]
     CHARACTER_2_DESC: [20-40 word fixed visual appearance for the second character]
     TITLE_1: [5-10 word scene title]
-    NARRATION_1: [exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace, roughly 18-22 words total]
+    NARRATION_1: [about ${scene_words_target} words — never more than ${scene_words_max} — i.e. ${scene_secs_min}-${scene_secs_max} seconds read aloud; one flowing sentence, or two short ones]
     TITLE_2: [5-10 word scene title]
-    NARRATION_2: [exactly 2 sentences, approximately 9 seconds when read aloud at a calm documentary pace, roughly 18-22 words total]
+    NARRATION_2: [about ${scene_words_target} words — never more than ${scene_words_max} — i.e. ${scene_secs_min}-${scene_secs_max} seconds read aloud; one flowing sentence, or two short ones]
     ...continue for all N scenes
 
     Rules:
@@ -118,7 +118,7 @@ script_local_story:
     - Write narrations as a single continuous narrative: curiosity ignited → journey deepened → reward delivered.
     - If you listed CHARACTER_* above, refer to those characters BY NAME in the narrations of the scenes where they appear, so the visuals can depict them consistently.
     - NEVER mention "the narrator" in any narration — the voice tells the story directly (exception: the topic explicitly asks the narrator to introduce themselves).
-    - Keep narrations short: exactly 2 sentences, ~9 seconds when spoken calmly.
+    - Keep narrations short: about ${scene_words_target} words each, NEVER more than ${scene_words_max} — a sentence too long for the cap must be shortened or broken at a natural pause (comma, dash) into the next scene.
     - Every value must fit on a single line (no line breaks within a value).
     - No blank lines between entries.
     - No text outside the key: value lines.
@@ -158,7 +158,7 @@ script_local_fill_narration:
     You are a documentary narrator. Output only the narration text, nothing else.
   user: |
     ${ctx}
-    Write ONLY a 2-sentence spoken narration for this scene (~18-22 words, ~9 seconds at a calm documentary pace). No labels, no quotes, no markdown — just the 2 sentences as plain prose.
+    Write ONLY the spoken narration for this scene: about ${scene_words_target} words (never more than ${scene_words_max}), one flowing sentence or two short ones. No labels, no quotes, no markdown — just the narration as plain prose.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -212,7 +212,7 @@ story_chapter:
     Output ONLY the chapter's narration prose — plain text, flowing sentences. No headings, no labels, no markdown, no scene numbers.
 
     Rules:
-    - Approximately ${target_words} words.
+    - Approximately ${target_words} words — this is a HARD budget: never run more than a few words over (slightly under is fine). The chapter is divided into fixed-length scenes afterwards, so extra words stretch the video past its commissioned length.
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
     - Stay strictly within this chapter's summary; later chapters cover the rest of the outline.
@@ -318,7 +318,7 @@ story_redraft_chapter:
     Output ONLY the chapter's narration prose — plain text, flowing sentences. No headings, no labels, no markdown, no scene numbers.
 
     Rules:
-    - Approximately ${target_words} words.
+    - Approximately ${target_words} words — this is a HARD budget: never run more than a few words over (slightly under is fine). The chapter is divided into fixed-length scenes afterwards, so extra words stretch the video past its commissioned length.
     - Retell the SOURCE STORY faithfully: same facts, same arc, same voice. When the target is longer than the source material, elaborate with vivid detail and texture the source implies — never invent new events or facts. When shorter, condense to the strongest beats.
     - Every sentence must be speakable aloud at a calm documentary pace — clear, engaging, educational.
     - Continue seamlessly from the previous chapter's closing words: no re-introductions, no recaps, no repeating anything already told.
@@ -351,9 +351,11 @@ story_divide:
       - "title": 5-10 word scene title
       - "image_prompt": 60-100 word highly detailed STATIC image description for FLUX. Frozen, perfectly composed photograph. Include: subjects and positions, environment, lighting, colour palette, textures, atmosphere. NO motion, camera movement, or action verbs.
       - "video_prompt": 30-50 word motion description for LTX. Subject actions, explicit camera movement (slow dolly forward, aerial descent, gentle pan left, etc.), pacing. No style descriptors. Keep it ONE continuous shot that animates the still — same single location and the same subjects, no cuts, no scene changes, and nothing new appearing (the model animates only the first frame, so anything not already in it distorts).
-      - "narration": exactly 2 sentences, ~9 seconds when read aloud at a calm documentary pace (~18-22 words). The narration MUST be drawn from the STORY TEXT below — condense it faithfully across the scenes, preserving its order, wording and voice as much as possible. Invent nothing that is not in the story text. Never refer to "the narrator" — the voice tells the story directly.
+      - "narration": about ${scene_words_target} words (hard range ${scene_words_min}-${scene_words_max}; NEVER exceed ${scene_words_max} words) — every scene must play ${scene_secs_min}-${scene_secs_max} seconds at the narrator's pace, no more. The narration MUST be drawn from the STORY TEXT below — condense it faithfully across the scenes, preserving its order, wording and voice as much as possible. Invent nothing that is not in the story text. Never refer to "the narrator" — the voice tells the story directly.
 
-    Together the scenes' narrations must cover the ENTIRE story text in order — nothing skipped, nothing repeated, nothing added.
+    Together the scenes' narrations must cover the ENTIRE story's CONTENT in order — every beat, nothing repeated, nothing added. The per-scene word cap OUTRANKS word-for-word coverage: when the story text carries more words than its scenes can hold, CONDENSE the prose — tighter wording, same beats — rather than exceeding ${scene_words_max} words or leaving anything out.
+
+    SCENE BOUNDARIES: a scene is roughly ONE sentence of the story. Prefer cutting at sentence ends. When a story sentence is too long for one scene's word cap, cut it at a NATURAL PAUSE — a comma, semicolon, colon, or dash — so the visuals change mid-sentence where the voice would naturally breathe; never cut mid-clause, and never let a scene exceed ${scene_words_max} words to avoid it.
 
     Every "image_prompt" and "video_prompt" must obey the world rules and constraints in the TOPIC/DIRECTION below — who and what exists in this world, how it looks — in EVERY scene, not just where the story text mentions them.
 
@@ -375,6 +377,20 @@ story_divide:
     Generate scene objects with IDs ${batch_start}–${batch_end}.
 
 
+condense_narration:
+  description: |
+    Rewrites one over-long scene narration down to the cadence word cap so the
+    scene stays 10-15s and the video keeps its planned length (the alternative
+    — splitting the scene in two — changes the scene count and runtime).
+  system: |
+    You are a documentary script editor condensing one scene's narration. Output ONLY the condensed narration text — no labels, no quotes, no explanation.
+  user: |
+    Condense this narration to AT MOST ${scene_words_max} words (aim for about ${scene_words_target}). Keep its meaning, facts, voice, and flow with the surrounding scenes — cut filler and redundancy, not story. One flowing sentence, or two short ones.${lang_note}
+
+    Narration:
+    ${narration}
+
+
 script_critic:
   description: |
     Post-generation quality-control pass over the assembled scene list (any
@@ -392,12 +408,12 @@ script_critic:
      "notes": ["up to 5 short observations about what you fixed or why nothing needed fixing"],
      "rewrites": [{"id": <scene id>, "narration": "<replacement narration>", "title": "<replacement title>", "image_prompt": "<replacement static image description>", "video_prompt": "<replacement motion description>"}],
      "deletes": [<scene ids to remove>],
-     "inserts": [{"after": <scene id to insert after, 0 for the very start>, "title": "<5-10 word title>", "narration": "<2-sentence narration>", "image_prompt": "<60-100 word static image description>", "video_prompt": "<30-50 word motion description>"}],
+     "inserts": [{"after": <scene id to insert after, 0 for the very start>, "title": "<5-10 word title>", "narration": "<~${scene_words_target}-word narration, max ${scene_words_max}>", "image_prompt": "<60-100 word static image description>", "video_prompt": "<30-50 word motion description>"}],
      "order": [<EVERY surviving scene id exactly once, in the new order>]}
 
     Rules:
     - You are also the judge of DONE. An edit is justified ONLY by a real defect in the four categories above — never by taste, wording preference, or marginal polish. A professional script that would ship as-is gets {"changed": false}. Returning no changes is a success, not a failure.
-    - Rewrite ONLY scenes that genuinely need it, and in a rewrite include ONLY the fields you are changing — omit the rest. A rewritten narration keeps the format: exactly 2 sentences, ~18-22 words, ~9 seconds spoken at a calm documentary pace, flowing naturally from the previous scene into the next. Write it in the same language as the existing narrations.
+    - Rewrite ONLY scenes that genuinely need it, and in a rewrite include ONLY the fields you are changing — omit the rest. A rewritten narration keeps the format: about ${scene_words_target} words (never more than ${scene_words_max}), one flowing sentence or two short ones, ${scene_secs_min}-${scene_secs_max} seconds spoken at the narrator's pace, flowing naturally from the previous scene into the next. Write it in the same language as the existing narrations.
     - A rewritten image_prompt stays a 60-100 word STATIC description (no motion words) and KEEPS the scene's leading visual-style prefix sentence intact — change only what must change. A rewritten video_prompt stays a 30-50 word single-continuous-shot motion description of the same subjects. Keep any character NAMES the original prompt mentions — named characters drive appearance consistency downstream — and never replace a name with a description of the character.
     - Do NOT invent new facts or events — rewrites and inserts work only with what the script already contains.
     - Delete a scene ONLY when it adds nothing that another scene doesn't already deliver. Never delete scene 1 or the final scene — when one of them duplicates another scene, act on the OTHER scene, or rewrite scene 1 / the final scene instead.
@@ -487,7 +503,7 @@ heal_local_narration:
     You are a documentary narrator. Output only the narration sentences.
   user: |
     ${ctx}
-    Write exactly 2 sentences of spoken narration for this scene (~18-22 words). Output ONLY the narration text, no labels.
+    Write the spoken narration for this scene — one flowing sentence or two short ones, 25-35 words total. Output ONLY the narration text, no labels.
 
 
 heal_local_image_prompt:
