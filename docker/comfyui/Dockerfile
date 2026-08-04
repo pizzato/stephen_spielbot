@@ -38,7 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
 WORKDIR /opt/ComfyUI
-RUN git checkout "${COMFYUI_REF}"
+# Fetch before checkout: the clone layer above is cache-stable, so a REF newer
+# than the cached clone (e.g. a fresh release tag) would otherwise not exist yet.
+RUN git fetch --tags --force origin && git checkout "${COMFYUI_REF}"
 
 # torch first (ComfyUI's requirements.txt does not pin it), then ComfyUI deps.
 # Versions float by default; pin for reproducible builds, e.g.:

@@ -16,7 +16,8 @@ services:
       dockerfile: docker/comfyui/Dockerfile
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
-        COMFYUI_REF: ${COMFYUI_REF:-master}
+        # v0.30.0 = first ComfyUI release with native MiniMax H3 nodes.
+        COMFYUI_REF: ${COMFYUI_REF:-v0.30.0}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     image: spielbot-comfyui:latest
     ports:
