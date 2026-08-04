@@ -15,7 +15,8 @@ ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 FROM ${BASE_IMAGE}
 
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
-ARG COMFYUI_REF=master
+# v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3).
+ARG COMFYUI_REF=v0.30.0
 # PyTorch wheel index matching the base CUDA. Leave empty if the base image
 # already ships torch (e.g. an NGC PyTorch base).
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
@@ -37,7 +38,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /opt
 RUN git clone https://github.com/comfyanonymous/ComfyUI.git ComfyUI
 WORKDIR /opt/ComfyUI
-RUN git checkout "${COMFYUI_REF}"
+# Fetch before checkout: the clone layer above is cache-stable, so a REF newer
+# than the cached clone (e.g. a fresh release tag) would otherwise not exist yet.
+RUN git fetch --tags --force origin && git checkout "${COMFYUI_REF}"
 
 # torch first (ComfyUI's requirements.txt does not pin it), then ComfyUI deps.
 # Versions float by default; pin for reproducible builds, e.g.:

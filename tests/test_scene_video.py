@@ -25,13 +25,13 @@ class SceneVideoTests(unittest.TestCase):
 
             def fake_generate(*args, **kwargs):
                 durations.append(kwargs["duration_seconds"])
-                Path(args[3]).write_bytes(b"video")
+                Path(args[4]).write_bytes(b"video")
 
             def fake_extract_audio(video_path, output_path, duration=None):
                 output_path.write_bytes(b"audio")
                 return output_path
 
-            with mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_generate), \
+            with mock.patch("pipeline.scene_video.generate_video_with_engine", side_effect=fake_generate), \
                  mock.patch("pipeline.scene_video._get_duration", return_value=31.2), \
                  mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
                 raw, ambient = generate_scene_video(
@@ -75,7 +75,7 @@ class SceneVideoTests(unittest.TestCase):
 
             def fake_video(*args, **kwargs):
                 order.append("video")
-                Path(args[3]).write_bytes(b"video")
+                Path(args[4]).write_bytes(b"video")
 
             def fake_extract_audio(video_path, output_path, duration=None):
                 output_path.write_bytes(b"audio")
@@ -88,7 +88,7 @@ class SceneVideoTests(unittest.TestCase):
                 seen.append(frame)
 
             with mock.patch("pipeline.scene_video.generate_with_engine", side_effect=fake_image), \
-                 mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_video), \
+                 mock.patch("pipeline.scene_video.generate_video_with_engine", side_effect=fake_video), \
                  mock.patch("pipeline.scene_video._get_duration", return_value=31.2), \
                  mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
                 generate_scene_video(
@@ -122,13 +122,13 @@ class SceneVideoTests(unittest.TestCase):
             fired: list[Path] = []
 
             def fake_video(*args, **kwargs):
-                Path(args[3]).write_bytes(b"video")
+                Path(args[4]).write_bytes(b"video")
 
             def fake_extract_audio(video_path, output_path, duration=None):
                 output_path.write_bytes(b"audio")
                 return output_path
 
-            with mock.patch("pipeline.scene_video.generate_video_continuation", side_effect=fake_video), \
+            with mock.patch("pipeline.scene_video.generate_video_with_engine", side_effect=fake_video), \
                  mock.patch("pipeline.scene_video._get_duration", return_value=31.2), \
                  mock.patch("pipeline.scene_video.extract_audio", side_effect=fake_extract_audio):
                 generate_scene_video(

@@ -64,6 +64,42 @@ INSTALL_FLUX1=1 bash scripts/download_models.sh
 make download-flux-cluster     # to the first node, then rsync to all workers
 ```
 
+## Video engines (per style)
+
+Each style picks the model that animates its scenes under **Settings → Styles →
+Video model**; child styles inherit the parent's choice like every other style
+field. Two engines ship:
+
+| Engine | Character | License |
+|---|---|---|
+| **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
+| **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
+
+MiniMax H3 notes:
+
+- **Download** its ~40 GB stack (pruned INT8 transformer, NVFP4 Qwen3-VL 32B text
+  encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
+  it is *not* part of the bulk install.
+- Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.30.0`) if the engine shows
+  "not installed" with the weights already downloaded.
+- Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
+  at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
+- **License restrictions**: not licensed for use in the USA, EU, UK or South
+  Korea; requires machine-generated disclosure and "MiniMax H3" attribution, and
+  separate authorization above US$20M yearly revenue. The picker shows the same
+  note.
+
+Manual download:
+
+```bash
+cd ~/github/ComfyUI
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/MiniMax-H3 text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_video_vae_fp16.safetensors --local-dir models/vae --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_audio_vae_fp32.safetensors --local-dir models/vae --local-dir-use-symlinks False
+```
+
 ## Gated weights
 
 Some Hugging Face repos require accepting a license. Set a **Hugging Face token** in
@@ -87,7 +123,9 @@ original at any time.
 
 The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model — are
 commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
-an opt-in **non-commercial** preview.
+an opt-in **non-commercial** preview. MiniMax H3 is opt-in with its own
+[community license](#video-engines-per-style) — territory-restricted and
+attribution-bearing; review it before switching a publishing style over.
 
 Read [model licensing](tts_licensing.md) and
 [THIRD_PARTY_NOTICES.md](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)

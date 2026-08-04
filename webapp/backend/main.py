@@ -3252,16 +3252,33 @@ def list_engines() -> dict:
     """Engine registry for the Settings picker, plus best-effort availability
     (probed on a representative reachable worker via ComfyUI /object_info)."""
     from pipeline import engines as eng
-    from pipeline.comfyui import engine_model_present
+    from pipeline.comfyui import comfy_node_exists, engine_model_present
     from pipeline.worker_pool import queue_depth
     cfg = gapp.load_config()
     probe_url = next((u for u in (cfg.get("comfy_workers") or []) if queue_depth(u, timeout=3) >= 0), None)
     availability = {k: (engine_model_present(probe_url, e.get("probe")) if probe_url else None)
                     for k, e in eng.ENGINES.items()}
+
+    def _video_avail(e: dict) -> bool | None:
+        """Model file present AND (when the engine needs newer ComfyUI nodes)
+        the node class registered — False pinpoints "worker needs an update"."""
+        if not probe_url:
+            return None
+        ok = engine_model_present(probe_url, e.get("probe"))
+        node = e.get("requires_node")
+        if ok and node:
+            has_node = comfy_node_exists(probe_url, node)
+            if has_node is not True:
+                return has_node
+        return ok
+
     return {
         "engines": eng.public_list(),
         "availability": availability,
         "default_engine": eng.DEFAULT_ENGINE,
+        "video_engines": eng.public_list_video(),
+        "video_availability": {k: _video_avail(e) for k, e in eng.VIDEO_ENGINES.items()},
+        "default_video_engine": eng.DEFAULT_VIDEO_ENGINE,
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }
@@ -3275,7 +3292,7 @@ def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_t
     ENGINE_MODELS mode — piped to `ssh host bash -s`. Long-running (weights are GBs)."""
     import shlex
     from pipeline import engines as eng
-    e = eng.get(engine_key) or {}
+    e = eng.get(engine_key) or eng.get_video(engine_key) or {}
     spec = ";".join(f'{m["repo"]}|{m["remote"]}|{m["dir"]}' for m in e.get("models", []))
     try:
         script_text = (REPO_ROOT / "scripts" / "download_models.sh").read_text()
@@ -3317,9 +3334,11 @@ class EngineInstallBody(BaseModel):
 def install_engine(body: EngineInstallBody) -> dict:
     """Kick off an async download of an engine's models onto every ComfyUI worker."""
     from pipeline import engines as eng
-    e = eng.get(body.engine)
+    e = eng.get(body.engine) or eng.get_video(body.engine)
     if not e:
         raise HTTPException(400, f"Unknown engine: {body.engine!r}")
+    if not e.get("models"):
+        raise HTTPException(400, "This engine's models are part of the bulk worker install.")
     cfg = gapp.load_config()
     hosts = _comfy_hosts(cfg)
     if not hosts:
@@ -3702,6 +3721,8 @@ def start_generation(body: GenerateBody) -> dict:
         # in resume_generation.py (previously those fell back to FLUX.1 via the
         # legacy flux_* keys, breaking installs without the opt-in FLUX.1 models).
         "image_engine": ss.get("image_engine"),
+        # The style's video engine drives the scene I2V model (LTX / MiniMax H3).
+        "video_engine": ss.get("video_engine"),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).
@@ -10423,6 +10444,8 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                 scene_first_frame if scene_first_frame.exists() else None,
                 gapp.engines.resolve(cfg, jc.get("image_engine")
                                      or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
+                video_engine=gapp.engines.resolve_video(cfg, jc.get("video_engine")
+                                     or gapp.style_settings(cfg, jc.get("style_name") or "").get("video_engine")),
             )
         finally:
             pool.release(url)
@@ -10521,6 +10544,8 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
 
         image_engine = gapp.engines.resolve(cfg, jc.get("image_engine")
                                             or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine"))
+        video_engine = gapp.engines.resolve_video(cfg, jc.get("video_engine")
+                                                  or gapp.style_settings(cfg, jc.get("style_name") or "").get("video_engine"))
 
         def silent_video(scene_obj, shot, still, out_clip):
             """A silent shot (people move, no speech) as an LTX i2v clip from its
@@ -10544,6 +10569,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
                     int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
                     url,
                     scene_first_frame=Path(still), image_engine=image_engine,
+                    video_engine=video_engine,
                 )
             finally:
                 pool.release(url)

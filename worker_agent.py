@@ -165,6 +165,11 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
     )
     first_frame = Path(p["first_frame"]).expanduser() if p.get("first_frame") else work_dir / f"scene_{sid:02d}_first_frame.png"
     image_engine = engines.resolve(p, p.get("image_engine"))
+    video_engine = engines.resolve_video(p, p.get("video_engine"))
+    if video_engine.get("lease_seconds"):
+        # Slow engines (MiniMax H3) outlive the agent's claim-time lease; extend
+        # it so the controller doesn't re-lease this scene mid-render.
+        store.heartbeat_task(task.id, lease_seconds=int(video_engine["lease_seconds"]))
     scene_video, ambient = generate_scene_video_task(
         scene,
         work_dir,
@@ -180,6 +185,7 @@ def _execute_scene_video(store: DurableStore, task: TaskRecord, endpoint: str) -
         endpoint,
         first_frame if first_frame.exists() else None,
         image_engine,
+        video_engine=video_engine,
     )
     store.record_artifact(task.job_id, task.id, "scene_video", scene_video, duration_seconds=_get_duration(scene_video))
     if ambient:

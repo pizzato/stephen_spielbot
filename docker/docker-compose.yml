@@ -16,9 +16,14 @@ services:
       dockerfile: docker/comfyui/Dockerfile
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
-        COMFYUI_REF: ${COMFYUI_REF:-master}
+        # v0.30.0 = first ComfyUI release with native MiniMax H3 nodes.
+        COMFYUI_REF: ${COMFYUI_REF:-v0.30.0}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
     image: spielbot-comfyui:latest
+    # fp16 accumulation speeds up bf16 GEMMs on Blackwell (GB10) with no
+    # observed quality cost; part of the H3 speed pass. Overrides the image CMD.
+    command: ["python3", "main.py", "--listen", "0.0.0.0", "--port", "8188",
+              "--fast", "fp16_accumulation"]
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
     environment:

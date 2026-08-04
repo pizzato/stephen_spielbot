@@ -298,6 +298,7 @@ def _check_gpu_idle(host: str) -> bool | None:
 def _wait_for_completion(
     prompt_id: str, client_id: str,
     timeout: int = 900, comfy_url: str = COMFYUI_URL,
+    heartbeat_warmup: int = _HEARTBEAT_INITIAL_DELAY,
 ) -> None:
     """Block until ComfyUI finishes executing prompt_id.
 
@@ -326,7 +327,8 @@ def _wait_for_completion(
     nodes_done       = 0
     # Schedule first heartbeat after the initial warm-up delay so that model-loading
     # time (where the GPU may be at 0 %) doesn't trigger a false stuck detection.
-    last_heartbeat_at = start - _HEARTBEAT_INTERVAL + _HEARTBEAT_INITIAL_DELAY
+    # Engines with much larger cold loads (H3's ~40 GB stack) pass a longer warmup.
+    last_heartbeat_at = start - _HEARTBEAT_INTERVAL + heartbeat_warmup
     consecutive_idle  = 0
     consecutive_ssh_failures = 0
     host              = _hostname_from_url(comfy_url)
@@ -746,6 +748,149 @@ def generate_keyframed_clip(
         raise RuntimeError(f"No output from ComfyUI for keyframe prompt {prompt_id} ({comfy_url})")
     video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
     return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
+# ── MiniMax H3 (Hailuo 3.0) ──────────────────────────────────────────────────
+# 24 fps joint audio+video DiT. The graph is CFG-free (BasicGuider — there is no
+# negative-prompt path) and frame counts must satisfy n % 17 == 5 (temporal
+# latent packing). Native generation is capped at 768×1344 total pixels; larger
+# style resolutions render at the capped size and the caller (scene_video)
+# scales the clip back up so downstream files keep the plan dimensions.
+H3_FPS         = 24
+H3_MAX_PIXELS  = 768 * 1344
+H3_MIN_SECONDS = 4.0     # model's supported clip range is ~4–15 s
+H3_MAX_SECONDS = 15.0
+# Cold-loading the ~40 GB H3 stack (unet + Qwen3-VL 32B encoder + two VAEs)
+# keeps the GPU near 0 % far longer than the standard 120 s heartbeat warm-up.
+_H3_HEARTBEAT_WARMUP = 600
+
+
+def h3_frame_count(duration_seconds: float | None) -> int:
+    """Frames for an H3 clip: clamp seconds to the model's range, then round
+    up to the next frame count satisfying n % 17 == 5 (the graph rejects others)."""
+    secs = H3_MIN_SECONDS if duration_seconds is None else duration_seconds
+    secs = min(max(secs, H3_MIN_SECONDS), H3_MAX_SECONDS)
+    n = max(5, round(secs * H3_FPS))
+    return n + (5 - n % 17) % 17
+
+
+def h3_dimensions(width: int, height: int) -> tuple[int, int]:
+    """Snap to H3's grid: multiples of 32, total pixels ≤ H3_MAX_PIXELS.
+    Oversized requests keep their aspect ratio and scale down to the cap."""
+    scale = min(1.0, (H3_MAX_PIXELS / float(width * height)) ** 0.5)
+    w = max(32, int(width * scale) // 32 * 32)
+    h = max(32, int(height * scale) // 32 * 32)
+    return w, h
+
+
+def _h3_timeout_seconds(width: int, height: int, length: int) -> int:
+    # H3 is far heavier than LTX: budget an hour for a ~5 s 864×480 clip and
+    # scale by pixels × frames. The GPU heartbeat catches hung workers earlier;
+    # this is only the give-up bound.
+    base_px, base_frames = 864 * 480, 124
+    return max(3600, int(3600 * (width * height) / base_px * (length / base_frames)))
+
+
+def generate_video_h3(
+    engine: dict,
+    positive_prompt: str,
+    first_frame_path: Path,
+    output_path: Path,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    steps: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """MiniMax H3 I2V: single CFG-free pass, stereo audio muxed into the mp4.
+
+    *engine* is a video-engine dict from :mod:`pipeline.engines` (family
+    "minimax"); it names the workflow and the four model files so quantisation
+    variants can swap without touching the graph. The clip may come back
+    smaller than requested (H3 pixel cap) — callers re-scale.
+    """
+    gen_w, gen_h = h3_dimensions(width, height)
+    length = h3_frame_count(duration_seconds)
+    steps = int(steps or engine.get("steps") or 20)
+    # H3 models audio jointly with video; only positive steering exists.
+    prompt, _ = _steer_audio_natural(positive_prompt, "")
+
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    image_name = _upload_image(first_frame_path, comfy_url=comfy_url)
+
+    workflow = _fill_template(_load_workflow(engine.get("workflow", "h3_i2v.json")), {
+        "UNET_NAME":       engine["unet"],
+        "CLIP_NAME":       engine["clip"],
+        "VIDEO_VAE":       engine["video_vae"],
+        "AUDIO_VAE":       engine["audio_vae"],
+        "POSITIVE_PROMPT": prompt,
+        "WIDTH":           gen_w,
+        "HEIGHT":          gen_h,
+        "LENGTH":          length,
+        "SEED":            seed,
+        "STEPS":           steps,
+        "IMAGE_NAME":      image_name,
+        "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
+    })
+
+    _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
+    logger.info(
+        "[comfy] generate_video_h3 %dx%d (requested %dx%d) length=%d steps=%d timeout=%ds",
+        gen_w, gen_h, width, height, length, steps, _video_timeout,
+    )
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url,
+                         heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for H3 prompt {prompt_id} ({comfy_url})")
+    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
+def generate_video_with_engine(
+    video_engine: dict | None,
+    positive_prompt: str,
+    negative_prompt: str,
+    first_frame_path: Path,
+    output_path: Path,
+    *,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    lora_strength: float = 0.5,
+    first_pass_cfg: float = 1.0,
+    first_pass_steps: int = 8,
+    second_pass_cfg: float = 1.0,
+    second_pass_steps: int = 6,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """Route a scene's I2V render to the style's video engine.
+
+    None or family "ltx" → the LTX 2.3 two-pass path, unchanged; family
+    "minimax" → MiniMax H3, where the negative prompt and the LTX pass tuning
+    knobs don't apply (H3 is CFG-free single-pass).
+    """
+    if video_engine and video_engine.get("family") == "minimax":
+        return generate_video_h3(
+            video_engine, positive_prompt, first_frame_path, output_path,
+            width=width, height=height, seed=seed,
+            duration_seconds=duration_seconds, comfy_url=comfy_url,
+        )
+    return generate_video_continuation(
+        positive_prompt, negative_prompt, first_frame_path, output_path,
+        width=width, height=height, seed=seed, duration_seconds=duration_seconds,
+        lora_strength=lora_strength, first_pass_cfg=first_pass_cfg,
+        first_pass_steps=first_pass_steps, second_pass_cfg=second_pass_cfg,
+        second_pass_steps=second_pass_steps, comfy_url=comfy_url,
+    )
 
 
 # Lightricks IC-LoRA Pixel Spatial Upscaler LoRAs (models/loras/).
@@ -1232,6 +1377,22 @@ def engine_model_present(comfy_url: str, probe) -> bool | None:
         spec = (inputs.get("required") or {}).get(input_name) or (inputs.get("optional") or {}).get(input_name)
         names = spec[0] if isinstance(spec, list) and spec and isinstance(spec[0], list) else []
         return filename in names
+    except Exception:
+        return None
+
+
+def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
+    """True/False if the worker's ComfyUI registers *node_class*, or None if the
+    check couldn't be evaluated (worker unreachable). Used to distinguish "model
+    file missing" from "ComfyUI too old for this engine's nodes"."""
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/object_info/{node_class}", timeout=8) as r:
+            data = json.loads(r.read())
+        return bool(data.get(node_class))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        return None
     except Exception:
         return None
 
