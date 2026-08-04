@@ -166,7 +166,9 @@ VIDEO_ENGINES: dict[str, dict] = {
                          "Requires machine-generated disclosure and “MiniMax H3” "
                          "attribution; separate authorization above US$20M yearly revenue."),
         "workflow": "h3_i2v.json",
-        "steps": 20,
+        # 15 steps ≈ 25% faster than the ComfyUI template's 20 with little
+        # visible loss (the reference recipe is 50 — 20 was already speed-tuned).
+        "steps": 15,
         # H3 scene renders can far outlive the default 1 h durable-task lease on
         # GB10-class workers; renderers extend the lease to this before starting.
         "lease_seconds": 14400,
