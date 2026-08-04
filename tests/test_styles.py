@@ -947,8 +947,9 @@ class SizePresetsTests(TempConfigCase):
         app.save_config(app.load_config())
         on_disk = app.load_config()
         a = next(s for s in on_disk["styles"] if s["name"] == "A")
+        # legacy scenes-only preset: minutes derived from the ~9 s scene length
         self.assertEqual(a["size_presets"]["small"],
-                         {"scenes": 3, "resolution": "Portrait (480×832)"})
+                         {"minutes": 0.45, "scenes": 3, "resolution": "Portrait (480×832)"})
         # 9999 clamps to MAX_SCENES; an unknown resolution falls back to the default
         self.assertEqual(a["size_presets"]["medium"]["scenes"], app.MAX_SCENES)
         self.assertEqual(a["size_presets"]["medium"]["resolution"],
@@ -965,7 +966,8 @@ class SizePresetsTests(TempConfigCase):
         })
         cfg = app.load_config()
         sp = cfg["styles"][0]["size_presets"]
-        self.assertEqual(sp["small"], {"scenes": 4, "resolution": "Portrait (480×832)"})
+        self.assertEqual(sp["small"], {"minutes": 0.6, "scenes": 4,
+                                       "resolution": "Portrait (480×832)"})
         self.assertEqual(sp["medium"], app._DEFAULT_SIZE_PRESETS["medium"])
         self.assertEqual(sp["large"], app._DEFAULT_SIZE_PRESETS["large"])
 

@@ -32,13 +32,23 @@ from pipeline.llm import (
     _merge_character_note,
     _norm_identified_characters,
     _parse_claude_response,
+    _scene_len_vars,
+    enforce_scene_word_caps,
     narration_language_name,
 )
 
 logger = logging.getLogger("video_gen")
 
 _SCENES_PER_CHAPTER = 10   # one prose chapter per ~10 video scenes
-_WORDS_PER_SCENE = 35      # prose budget: ~2 narration sentences per scene
+_WORDS_PER_SCENE = 35      # legacy prose budget when no cadence plan is given
+
+
+def _words_per_scene(scene_plan: dict | None) -> int:
+    """Per-scene prose budget: the cadence plan's word target (10–15 s of
+    narration at the narrator's pace), or the legacy constant without one."""
+    if scene_plan and scene_plan.get("scene_words_target"):
+        return int(scene_plan["scene_words_target"])
+    return _WORDS_PER_SCENE
 
 
 # ── Prompt-note builders (same wording as the classic generator) ──────────────
@@ -123,10 +133,13 @@ def generate_story(title: str, n_scenes: int,
                    style_hint: str | None = None,
                    video_title: str | None = None,
                    character_sheet: str | None = None,
-                   avoid_hint: str | None = None) -> dict:
+                   avoid_hint: str | None = None,
+                   scene_plan: dict | None = None) -> dict:
     """Draft, judge, and revise the full prose story. Returns the story dict
     persisted as story.json (status "draft"); ``divide_story`` turns it into
-    scenes."""
+    scenes. *scene_plan* (pipeline/cadence.py) sets the prose word budget per
+    scene from the narrator's cadence; without one the legacy 35-word budget
+    applies."""
     cfg = _load_cfg()
     call = _call_fn(cfg)
     # NOTE: a future web-research/fact-check step would run here, feeding
@@ -167,8 +180,9 @@ def generate_story(title: str, n_scenes: int,
         for o in outline
     )
     chapters: list[dict] = []
+    words_per_scene = _words_per_scene(scene_plan)
     for o in outline:
-        target_words = o["scenes"] * _WORDS_PER_SCENE
+        target_words = o["scenes"] * words_per_scene
         prev_tail = (
             f'The previous chapter ends with: "…{_tail_words(chapters[-1]["text"])}"\n'
             if chapters else ""
@@ -180,7 +194,7 @@ def generate_story(title: str, n_scenes: int,
                           chapter_summary=o["summary"], target_words=target_words,
                           prev_tail=prev_tail, avoid_note=avoid_note,
                           character_note=character_note),
-            o["scenes"] * 80 + 300, f'story chapter {o["chapter"]}',
+            o["scenes"] * (words_per_scene * 2 + 30) + 300, f'story chapter {o["chapter"]}',
         ).strip()
         if not text:
             raise RuntimeError(f'Story chapter {o["chapter"]} came back empty')
@@ -195,6 +209,7 @@ def generate_story(title: str, n_scenes: int,
         "topic": title,
         "video_title": (video_title or "").strip(),
         "n_scenes": n_scenes,
+        "scene_plan": scene_plan,
         "outline": outline,
         "chapters": chapters,
         "critique": critique,
@@ -272,7 +287,8 @@ def _critique_and_revise(call, title_context: str, chapters: list[dict],
 
 def redraft_story(story: dict, n_scenes: int,
                   character_sheet: str | None = None,
-                  avoid_hint: str | None = None) -> dict:
+                  avoid_hint: str | None = None,
+                  scene_plan: dict | None = None) -> dict:
     """Re-plan and rewrite an existing prose story for a new scene count —
     expanding (more depth around the same beats) or contracting (keep the
     strongest beats). Returns an updated story dict (status back to "draft");
@@ -280,6 +296,7 @@ def redraft_story(story: dict, n_scenes: int,
     cfg = _load_cfg()
     call = _call_fn(cfg)
     n_scenes = int(n_scenes)
+    scene_plan = scene_plan or story.get("scene_plan")
     old_chapters = [c for c in (story.get("chapters") or [])
                     if isinstance(c, dict) and str(c.get("text") or "").strip()]
     if not old_chapters or n_scenes < 1:
@@ -324,8 +341,9 @@ def redraft_story(story: dict, n_scenes: int,
         for o in outline
     )
     chapters: list[dict] = []
+    words_per_scene = _words_per_scene(scene_plan)
     for o in outline:
-        target_words = o["scenes"] * _WORDS_PER_SCENE
+        target_words = o["scenes"] * words_per_scene
         prev_tail = (
             f'The previous chapter ends with: "…{_tail_words(chapters[-1]["text"])}"\n'
             if chapters else ""
@@ -337,15 +355,16 @@ def redraft_story(story: dict, n_scenes: int,
                           chapter_summary=o["summary"], target_words=target_words,
                           prev_tail=prev_tail, avoid_note=avoid_note,
                           character_note=character_note, story_str=story_str),
-            o["scenes"] * 80 + 300, f'story redraft chapter {o["chapter"]}',
+            o["scenes"] * (words_per_scene * 2 + 30) + 300, f'story redraft chapter {o["chapter"]}',
         ).strip()
         if not text:
             raise RuntimeError(f'Story redraft chapter {o["chapter"]} came back empty')
         chapters.append({**o, "text": text})
 
     critique = _critique_and_revise(call, title_context, chapters, avoid_note, character_note)
-    return {**story, "n_scenes": n_scenes, "outline": outline, "chapters": chapters,
-            "critique": critique, "status": "draft", "updated_at": time.time()}
+    return {**story, "n_scenes": n_scenes, "scene_plan": scene_plan, "outline": outline,
+            "chapters": chapters, "critique": critique, "status": "draft",
+            "updated_at": time.time()}
 
 
 # ── Scene division ────────────────────────────────────────────────────────────
@@ -356,12 +375,17 @@ def divide_story(story: dict, n_scenes: int | None = None,
                  video_style_hint: str | None = None,
                  character_sheet: str | None = None,
                  avoid_hint: str | None = None,
-                 language: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                 language: str | None = None,
+                 scene_plan: dict | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Divide an approved story into scenes. Same return contract as
     ``pipeline.llm.generate_script``: (scenes, music_description, style,
-    characters) — everything downstream of script generation is unchanged."""
+    characters) — everything downstream of script generation is unchanged.
+    *scene_plan* (default: the one stored on the story) sets each scene's
+    10–15 s word caps in the divide prompt and drives the split-at-natural-
+    pause backstop for over-long narrations."""
     cfg = _load_cfg()
     call = _call_fn(cfg)
+    scene_plan = scene_plan or story.get("scene_plan")
     title = str(story.get("topic") or "")
     video_title = video_title if video_title is not None else (story.get("video_title") or None)
     n = int(n_scenes or story.get("n_scenes") or 0)
@@ -397,17 +421,21 @@ def divide_story(story: dict, n_scenes: int | None = None,
             n_scenes=n, topic_ref=topic_ref, ctx_str=ctx_str,
             video_style_note=video_style_note, avoid_note=avoid_note,
             character_note=character_note, language_note=language_note,
-            conclusion_note=conclusion_note,
+            conclusion_note=conclusion_note, scene_plan=scene_plan,
         ))
         batch_start = batch_end + 1
 
     final_scenes = scenes[:n]
-    _fill_empty_narrations(call, final_scenes, title, video_title, language=language)
+    _fill_empty_narrations(call, final_scenes, title, video_title, language=language,
+                           scene_plan=scene_plan)
     # Absolute last-resort safety net: no Scene leaves with empty narration.
     for s in final_scenes:
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after divide fill — used title", s.id)
+    # Enforce the per-scene word cap BEFORE character detection — splitting
+    # renumbers scene ids, which would break the detector's scene references.
+    final_scenes = enforce_scene_word_caps(final_scenes, scene_plan)
     style = style_hint.strip() if style_hint and style_hint.strip() else str(story.get("style") or "")
     identified = _detect_recurring_characters(call, final_scenes, identified,
                                               style_hint=style)
@@ -418,7 +446,8 @@ def divide_story(story: dict, n_scenes: int | None = None,
 def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                   n_scenes: int, topic_ref: str, ctx_str: str,
                   video_style_note: str, avoid_note: str, character_note: str,
-                  language_note: str, conclusion_note: str) -> list[Scene]:
+                  language_note: str, conclusion_note: str,
+                  scene_plan: dict | None = None) -> list[Scene]:
     """One story→scenes JSON call for scenes start..end. On a parse failure the
     chunk is halved and retried (the _translate_batch defense); a single scene
     that still fails becomes a stub the narration-fill pass completes. Always
@@ -426,14 +455,14 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
     count = end - start + 1
     try:
         raw = call(
-            _prompts.system("story_divide"),
+            _prompts.system("story_divide", **_scene_len_vars(scene_plan)),
             _prompts.user("story_divide", n_scenes=n_scenes, topic_ref=topic_ref,
                           topic_full=title,
                           batch_start=start, batch_end=end, chapter_text=text,
                           ctx_str=ctx_str, video_style_note=video_style_note,
                           avoid_note=avoid_note, character_note=character_note,
                           language_note=language_note, conclusion_note=conclusion_note),
-            count * 500 + 400, f"divide scenes {start}–{end}", retries=2,
+            count * 600 + 400, f"divide scenes {start}–{end}", retries=2,
         )
         items = _parse_claude_response(raw, f"divide scenes {start}–{end}")
         if isinstance(items, dict):
@@ -448,7 +477,8 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                            start, end, exc)
             kw = dict(n_scenes=n_scenes, topic_ref=topic_ref, ctx_str=ctx_str,
                       video_style_note=video_style_note, avoid_note=avoid_note,
-                      character_note=character_note, language_note=language_note)
+                      character_note=character_note, language_note=language_note,
+                      scene_plan=scene_plan)
             return (_divide_chunk(call, title, first, start, mid, conclusion_note="", **kw)
                     + _divide_chunk(call, title, second, mid + 1, end,
                                     conclusion_note=conclusion_note, **kw))
@@ -498,7 +528,8 @@ def critique_scenes(scenes: list[dict], title: str,
                     avoid_hint: str | None = None,
                     pass_num: int = 1,
                     direction: str = "",
-                    dup_note: str = "") -> dict:
+                    dup_note: str = "",
+                    scene_plan: dict | None = None) -> dict:
     """One critic pass over an assembled script (classic or story-first): judge
     consistency, repetition, engagement, and instruction adherence (the
     guardrail — narration AND visual prompts must obey the commissioned
@@ -529,7 +560,7 @@ def critique_scenes(scenes: list[dict], title: str,
     )
     raw = _chat_complete(
         cfg,
-        _prompts.system("script_critic"),
+        _prompts.system("script_critic", **_scene_len_vars(scene_plan)),
         _prompts.user("script_critic", topic_ref=topic_ref, n_scenes=n,
                       scene_list=scene_list, avoid_note=_avoid_note(avoid_hint),
                       pass_note=pass_note, direction_note=direction_note,
