@@ -2113,7 +2113,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <div className="grow">{(() => {
                   const nat = voiceWpm(meta, eff.voice, eff.tts_engine)
                   const target = Number(eff.voice_cadence_wpm || 0)
-                  const value = target > 0 ? target : Math.round(nat.wpm)
+                  // No target → show the pace narration actually plays at
+                  // (natural × any legacy voice_speed multiplier).
+                  const value = target > 0 ? target : Math.round(effectiveWpm(meta, eff).wpm)
                   const mult = Math.max(0.3, Math.min(2, value / nat.wpm))
                   return (
                     <Field label={`Cadence — ${value} words/min${target > 0 ? ` (×${mult.toFixed(2)})` : ' · natural'}`}
