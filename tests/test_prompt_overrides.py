@@ -62,10 +62,10 @@ class PromptOverrideTests(unittest.TestCase):
 
     def test_reset_one_prompt_restores_the_original(self):
         _prompts.save(NAME, {"system": CUSTOM})
-        _prompts.save("cover_negative", {"value": "no pirates"})
+        _prompts.save("cover_negative_notext", {"value": "no pirates"})
         _prompts.reset(NAME)
         self.assertEqual(_prompts.system(NAME), _prompts.defaults()[NAME]["system"].rstrip("\n"))
-        self.assertEqual(_prompts.value("cover_negative"), "no pirates")
+        self.assertEqual(_prompts.value("cover_negative_notext"), "no pirates")
 
     def test_reset_all_removes_the_override_file(self):
         _prompts.save(NAME, {"system": CUSTOM})

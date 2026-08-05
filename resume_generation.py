@@ -65,7 +65,6 @@ from pipeline.cover import (
     build_cover_prompt as _cover_prompt,
     burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
-    cover_phrase_for as _cover_phrase_for,
 )
 from pipeline.cover_typography import (
     COVER_BASE_NAME as _COVER_BG_NAME,
@@ -861,7 +860,6 @@ def main(work_dir: Path) -> None:
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
-    cover_base = work_dir / "cover_base.png"
     video_title = cfg.get("video_title", "").strip() or title
     style_clean = cfg.get("style", "").strip()
 
@@ -870,30 +868,24 @@ def main(work_dir: Path) -> None:
         _cover_url: str | None = None
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         # Cover typography: paint a TEXT-FREE background with the style's own
-        # image engine and composite the title with real fonts afterwards.
-        # Legacy mode keeps FLUX.1 schnell (see engines.COVER_ENGINE) — the
-        # model must draw the title itself, and Klein garbles in-image text.
+        # image engine, then composite the title with real fonts on top — the
+        # model never draws (or misspells) a single letter.
         typo = _norm_cover_typography(cfg.get("cover_typography")
                                       or cfg.get("default_cover_typography"))
         try:
             _cover_url = worker_pool.acquire()
             generate_with_engine(
-                _engines.resolve(cfg, cfg.get("image_engine") if typo["enabled"]
-                                 else _engines.COVER_ENGINE),
-                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean,
-                              scenes=scenes, text_free=typo["enabled"],
+                _engines.resolve(cfg, cfg.get("image_engine")),
+                _cover_prompt(style_clean, scenes=scenes,
                               text_position=typo["position"]),
-                work_dir / _COVER_BG_NAME if typo["enabled"] else cover_base,
+                work_dir / _COVER_BG_NAME,
                 width=cover_w,
                 height=cover_h,
                 comfy_url=_cover_url,
             )
             worker_pool.release(_cover_url)
             _cover_url = None
-            if typo["enabled"]:
-                _apply_cover_typography(work_dir, typo, video_title)
-            else:
-                shutil.copy2(cover_base, cover_path)
+            _apply_cover_typography(work_dir, typo, video_title)
             logger.info("Cover image saved: %s", cover_path)
         except Exception as _cover_err:
             logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)
@@ -1225,20 +1217,14 @@ def main(work_dir: Path) -> None:
         # Non-fatal: a finished film without the stamp beats a failed render.
         ff_cover = str(cfg.get("first_frame_cover")
                        or cfg.get("default_first_frame_cover") or "none").strip().lower()
-        if ff_cover in ("image", "text"):
+        if ff_cover in ("image", "text"):  # legacy "text" burns the cover image too
             write_progress(status_file, 97, "Burning cover into the first frame…")
             try:
                 _burn_first_frame(
-                    final_path, ff_cover,
-                    cover_path=cover_path, title=video_title, work_dir=work_dir,
+                    final_path,
+                    cover_path=cover_path,
                     seconds=cfg.get("first_frame_cover_seconds",
                                     cfg.get("default_first_frame_cover_seconds")),
-                    text_font=str(cfg.get("first_frame_text_font",
-                                          cfg.get("default_first_frame_text_font", "")) or ""),
-                    text_size=cfg.get("first_frame_text_size",
-                                      cfg.get("default_first_frame_text_size")),
-                    text_color=str(cfg.get("first_frame_text_color",
-                                           cfg.get("default_first_frame_text_color", "")) or ""),
                 )
             except Exception as ff_err:
                 logger.warning("First-frame cover failed (non-fatal): %s", ff_err)

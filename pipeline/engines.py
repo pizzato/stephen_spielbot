@@ -98,13 +98,10 @@ ENGINES: dict[str, dict] = {
 # FLUX.2 Klein is the default engine (fast, commercial Apache-2.0, much better
 # than schnell) — used for new styles and as the resolve()/normalize fallback.
 # FLUX.1 schnell is opt-in: chosen per style and downloaded on demand.
+# (Covers used to be pinned to it because the model had to render the title
+# text in-image and Klein garbled it; cover typography draws the title with
+# real fonts on a text-free background, so covers now use the style's engine.)
 DEFAULT_ENGINE = "flux2-klein"
-
-# Cover thumbnails are ALWAYS generated with FLUX.1 schnell, regardless of the
-# style's image_engine: the cover must render the title text in-image, and
-# Klein reliably garbles it (tested 2026-07-17; a Klein-tuned prompt didn't
-# help). Applies to both the render-time cover and UI re-generation.
-COVER_ENGINE = "flux1-schnell"
 
 
 def get(key: str) -> dict | None:

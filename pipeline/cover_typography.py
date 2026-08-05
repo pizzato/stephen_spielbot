@@ -2,10 +2,10 @@
 
 Instead of asking the diffusion model to draw the title (it misspells words,
 and every regeneration is a fresh dice roll), the model generates a TEXT-FREE
-background and this module composites the title on top with real fonts. The
-look — font, position, colours, accent words, card — is a per-style setting
-(``cover_typography``), so text is pixel-perfect on every cover and
-regenerating only rerolls the artwork.
+background and this module composites the title on top with real fonts. This
+is the ONLY way covers are made — the look (font, position, colours, accent
+words, card) is a per-style setting (``cover_typography``), so text is
+pixel-perfect on every cover and regenerating only rerolls the artwork.
 
 Accented words ("some words in a different colour and size") come from a rule
 set in the style (first/last word, last line, longest word), overridable per
@@ -27,7 +27,6 @@ CASES = ("keep", "upper", "title")
 ACCENT_RULES = ("none", "first_word", "last_word", "last_line", "longest_word")
 
 DEFAULT_COVER_TYPOGRAPHY = {
-    "enabled": False,
     "font": "Anton",            # bundled font name, or a system font file path
     "position": "bottom",       # top | middle | bottom
     "align": "center",          # left | center | right
@@ -74,7 +73,6 @@ def norm_cover_typography(value) -> dict:
     """Coerce a style's ``cover_typography`` to a full, valid settings dict."""
     src = value if isinstance(value, dict) else {}
     d = dict(DEFAULT_COVER_TYPOGRAPHY)
-    d["enabled"] = bool(src.get("enabled", d["enabled"]))
     font = src.get("font", d["font"])
     d["font"] = str(font).strip() if isinstance(font, (str, Path)) else d["font"]
     for key, allowed in (("position", POSITIONS), ("align", ALIGNS),
@@ -457,13 +455,11 @@ def apply_cover_typography(work_dir: Path | str, typo, title: str = "") -> Path 
     """Composite the film's cover phrase onto its saved text-free background.
 
     ``cover_bg.png`` (written at generation time) + cover_phrase → cover.png.
-    Returns the cover path, or None when typography is disabled or no text-free
-    background exists (legacy covers with baked-in text must be regenerated
-    once before re-texting works).
+    Returns the cover path, or None when no text-free background exists
+    (legacy covers with baked-in text must be regenerated once before
+    re-texting works).
     """
     typo = norm_cover_typography(typo)
-    if not typo["enabled"]:
-        return None
     wd = Path(work_dir)
     base = wd / COVER_BASE_NAME
     if not base.exists() or base.stat().st_size < 1000:

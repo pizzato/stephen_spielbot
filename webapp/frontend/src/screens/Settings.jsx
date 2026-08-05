@@ -538,7 +538,7 @@ function VoicesManager({ voices, busy, ttsLanguages, cadences: cadencesProp, onA
 // Per-style cover typography — defaults mirrored from pipeline/cover_typography.py
 // so the editor shows effective values before the style has its own dict.
 const CT_DEFAULTS = {
-  enabled: false, font: 'Anton', position: 'bottom', align: 'center', case: 'upper',
+  font: 'Anton', position: 'bottom', align: 'center', case: 'upper',
   width_pct: 82, scale: 1.0, color: '#FFFFFF', accent: 'last_word',
   accent_color: '#FFD400', accent_scale: 1.15, outline: true,
   card: false, card_color: '#000000', card_opacity: 0.55,
@@ -556,7 +556,6 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
   const [previewErr, setPreviewErr] = useState('')
   const ctKey = JSON.stringify(ct)
   useEffect(() => {
-    if (!ct.enabled) return undefined
     let gone = false
     const t = setTimeout(() => {
       fetch('/api/cover-typography/preview', {
@@ -578,10 +577,7 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
     || (systemFonts || []).some((f) => f.path === ct.font)
   return (
     <div className="stack gap-16" style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 16 }}>
-      <Check checked={!!ct.enabled} onChange={(v) => set('enabled', v)}
-        label="Real-font cover titles — the artwork is generated TEXT-FREE (with this style's own image engine) and the title is drawn on top, so it can never be misspelled. Regenerating rerolls only the artwork; phrase edits re-apply instantly." />
-      {ct.enabled && (
-        <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-start' }}>
+      <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-start' }}>
           <div className="stack gap-14" style={{ flex: '1 1 340px', minWidth: 300 }}>
             <Field label="Font" hint="Bundled fonts ship with Spielbot (thumbnail-grade display faces); system fonts come from this machine.">
               <select className="select" value={ct.font || ''} onChange={(e) => set('font', e.target.value)} style={{ maxWidth: 320 }}>
@@ -680,8 +676,7 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
             </div>
             {previewErr && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{previewErr}</div>}
           </div>
-        </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -1356,19 +1351,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'script_mode':
         return v === 'story' ? 'Story-first' : 'Classic'
       case 'first_frame_cover':
-        return v === 'image' ? 'Cover image' : v === 'text' ? 'Cover text' : 'off'
+        return v === 'image' || v === 'text' ? 'Cover image' : 'off'
       case 'first_frame_cover_seconds':
         return `${v ?? 1}s`
-      case 'first_frame_text_font':
-        return (fontInfo || []).find((f) => f.path === v)?.name
-          || (v ? v.split('/').pop() : '(automatic)')
-      case 'first_frame_text_size':
-        return `${v ?? 11}% of width`
-      case 'first_frame_text_color':
-        return String(v || '#FFFFFF')
       case 'cover_typography': {
         const t = { ...CT_DEFAULTS, ...(v || {}) }
-        return t.enabled ? `on · ${t.font} · ${t.position}` : 'off'
+        return `${t.font} · ${t.position} · accent ${String(t.accent).replace('_', ' ')}`
       }
       case 'voice':
         return v || '(F5-TTS default)'
@@ -2139,11 +2127,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Check checked={!!eff.made_for_kids} onChange={(v) => setStyleField('made_for_kids', v)}
                 label="Made for Kids — self-declare this style's uploads as directed at children (disables personalized ads, comments and other features per YouTube's policy)" />
               <ParentVal k="made_for_kids" />
-              <Field label="Opening cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
-                <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
+              <Field label="Opening cover" hint="After each render, burn the cover image into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
+                <select className="select" value={eff.first_frame_cover === 'text' ? 'image' : (eff.first_frame_cover || 'none')} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="none">Off — leave the opening as rendered</option>
                   <option value="image">Cover image</option>
-                  <option value="text">Cover text — big title over the video</option>
                 </select>
                 <ParentVal k="first_frame_cover" />
               </Field>
@@ -2152,29 +2139,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(e) => setStyleField('first_frame_cover_seconds', +e.target.value)} style={{ maxWidth: 120 }} />
                 <ParentVal k="first_frame_cover_seconds" />
               </Field>
-              <Field label="Cover text font" hint="Look of the “Cover text” mode (automatic and manual burns). Any font installed on this machine; “Automatic” picks a bold system font.">
-                <select className="select" value={eff.first_frame_text_font || ''} onChange={(e) => setStyleField('first_frame_text_font', e.target.value)} style={{ maxWidth: 320 }}>
-                  <option value="">Automatic — bold system font</option>
-                  {(fontInfo || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
-                  {eff.first_frame_text_font && !(fontInfo || []).some((f) => f.path === eff.first_frame_text_font)
-                    && <option value={eff.first_frame_text_font}>{fontInfo ? `${eff.first_frame_text_font} (not found)` : 'Loading fonts…'}</option>}
-                </select>
-                <ParentVal k="first_frame_text_font" />
-              </Field>
-              <div className="row gap-22 row--wrap">
-                <Field label="Cover text size" hint="% of the video width — 11% is the default big title.">
-                  <input className="input" type="number" min={4} max={30} value={eff.first_frame_text_size ?? 11}
-                    onChange={(e) => setStyleField('first_frame_text_size', +e.target.value)} style={{ maxWidth: 120 }} />
-                  <ParentVal k="first_frame_text_size" />
-                </Field>
-                <Field label="Cover text colour" hint="An outline keeps it readable on any frame.">
-                  <input className="input" type="color" value={eff.first_frame_text_color || '#FFFFFF'}
-                    onChange={(e) => setStyleField('first_frame_text_color', e.target.value)}
-                    style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
-                  <ParentVal k="first_frame_text_color" />
-                </Field>
-              </div>
-              <Field label="Cover typography" hint="Thumbnail titles drawn with real fonts instead of asking the image model to paint them (it misspells words, and every regeneration is a dice roll).">
+              <Field label="Cover typography" hint="How cover titles look. The artwork is always generated TEXT-FREE (with this style's own image engine) and the title is drawn on top with real fonts — it can never be misspelled, regenerating rerolls only the artwork, and phrase edits re-apply instantly.">
                 <CoverTypographyEditor value={eff.cover_typography}
                   onChange={(v) => setStyleField('cover_typography', v)}
                   systemFonts={fontInfo || []} bundledFonts={fontBundled} />

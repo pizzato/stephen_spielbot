@@ -26,18 +26,21 @@ class NormTests(unittest.TestCase):
     def test_defaults_when_missing_or_junk(self):
         for value in (None, "", 42, [], {}):
             d = ct.norm_cover_typography(value)
-            self.assertFalse(d["enabled"])
             self.assertEqual(d["font"], "Anton")
             self.assertEqual(d["position"], "bottom")
 
+    def test_legacy_enabled_key_is_ignored(self):
+        # Typography is the only cover mode now; configs saved when it was a
+        # toggle may still carry "enabled" — it must not survive the coercion.
+        self.assertNotIn("enabled", ct.norm_cover_typography({"enabled": False}))
+
     def test_clamps_and_choices(self):
         d = ct.norm_cover_typography({
-            "enabled": 1, "position": "sideways", "align": "wide", "case": "loud",
+            "position": "sideways", "align": "wide", "case": "loud",
             "accent": "every_word", "width_pct": 300, "scale": 99,
             "accent_scale": 0.1, "card_opacity": 7,
             "color": "#f0a", "accent_color": "junk", "card_color": None,
         })
-        self.assertTrue(d["enabled"])
         self.assertEqual(d["position"], "bottom")
         self.assertEqual(d["align"], "center")
         self.assertEqual(d["case"], "upper")
@@ -163,33 +166,26 @@ class FontTests(unittest.TestCase):
 
 
 class PromptTests(unittest.TestCase):
-    def test_text_free_prompt_omits_title_and_bans_text(self):
-        p = build_cover_prompt("Zebra Quantum Chronicle", style="Gritty 16mm",
-                               text_free=True, text_position="top")
-        self.assertNotIn("Zebra", p)
+    def test_prompt_is_text_free_and_position_aware(self):
+        p = build_cover_prompt("Gritty 16mm", text_position="top")
         self.assertIn("NO text", p)
         self.assertIn("top third", p)
         self.assertIn("Gritty 16mm", p)
-
-    def test_legacy_prompt_keeps_title_and_strips_markup(self):
-        p = build_cover_prompt("The *Secret* War")
-        self.assertIn('"The Secret War"', p)
-        self.assertNotIn("*", p)
+        self.assertIn("bottom third", build_cover_prompt())  # default position
 
 
 class ApplyTests(unittest.TestCase):
     def setUp(self):
         self.wd = Path(tempfile.mkdtemp(prefix="spielbot-apply-"))
 
-    def test_disabled_or_missing_background_is_a_noop(self):
-        self.assertIsNone(ct.apply_cover_typography(self.wd, {"enabled": False}, "T"))
-        self.assertIsNone(ct.apply_cover_typography(self.wd, {"enabled": True}, "T"))
+    def test_missing_background_is_a_noop(self):
+        self.assertIsNone(ct.apply_cover_typography(self.wd, {}, "T"))
         self.assertFalse((self.wd / "cover.png").exists())
 
     def test_composites_phrase_over_background(self):
         ct.preview_background(320, 180).save(self.wd / ct.COVER_BASE_NAME, "PNG")
         (self.wd / "cover_phrase.txt").write_text("Silent *City*", encoding="utf-8")
-        out = ct.apply_cover_typography(self.wd, {"enabled": True}, "Ignored Title")
+        out = ct.apply_cover_typography(self.wd, {}, "Ignored Title")
         self.assertEqual(out, self.wd / "cover.png")
         self.assertTrue(out.exists() and out.stat().st_size > 500)
 
@@ -235,24 +231,22 @@ class HistoryBackgroundTests(unittest.TestCase):
 class StylePlumbingTests(unittest.TestCase):
     def test_ensure_styles_coerces_and_mirrors(self):
         cfg = {"styles": [{"name": "Docs", "cover_typography":
-                           {"enabled": True, "width_pct": 300, "position": "sideways"}}]}
+                           {"width_pct": 300, "position": "sideways"}}]}
         app._ensure_styles(cfg)
         row = cfg["styles"][0]["cover_typography"]
-        self.assertTrue(row["enabled"])
         self.assertEqual(row["width_pct"], 96)
         self.assertEqual(row["position"], "bottom")
         self.assertEqual(row["font"], "Anton")  # filled to a complete dict
         # Flat key mirrors the default style, like every STYLE_FIELD_TO_FLAT entry.
-        self.assertTrue(cfg["default_cover_typography"]["enabled"])
+        self.assertEqual(cfg["default_cover_typography"]["width_pct"], 96)
 
     def test_children_inherit_the_dict(self):
         cfg = {"styles": [
-            {"name": "Docs", "cover_typography": {"enabled": True, "font": "Bangers"}},
+            {"name": "Docs", "cover_typography": {"font": "Bangers"}},
             {"name": "Kids", "parent": "Docs"},
         ], "default_style": "Docs"}
         app._ensure_styles(cfg)
         eff = app.style_settings(cfg, "Kids")["cover_typography"]
-        self.assertTrue(eff["enabled"])
         self.assertEqual(eff["font"], "Bangers")
 
 
@@ -267,18 +261,13 @@ class EndpointTests(unittest.TestCase):
     def test_preview_returns_png_both_orientations(self):
         for orientation in ("landscape", "portrait"):
             r = backend.cover_typography_preview(backend.CoverTypographyPreviewBody(
-                cover_typography={"enabled": True, "card": True}, text="Hi *There*",
+                cover_typography={"card": True}, text="Hi *There*",
                 orientation=orientation))
             self.assertEqual(r.media_type, "image/png")
             self.assertEqual(bytes(r.body)[:8], b"\x89PNG\r\n\x1a\n")
 
-    def test_retext_requires_typography_and_background(self):
-        with self.assertRaises(backend.HTTPException) as e:
-            backend.cover_retext(backend.CoverRetextBody(work_dir=str(self.wd)))
-        self.assertIn("off for this film's style", e.exception.detail)
-        enabled = ct.norm_cover_typography({"enabled": True})
-        with mock.patch.object(backend, "_cover_typography_for", return_value=enabled), \
-             mock.patch.object(backend, "_video_title_for", return_value="The Film"):
+    def test_retext_requires_a_background_then_composites(self):
+        with mock.patch.object(backend, "_video_title_for", return_value="The Film"):
             with self.assertRaises(backend.HTTPException) as e:
                 backend.cover_retext(backend.CoverRetextBody(work_dir=str(self.wd)))
             self.assertIn("no text-free background", e.exception.detail)
@@ -288,11 +277,9 @@ class EndpointTests(unittest.TestCase):
         self.assertTrue((self.wd / "cover.png").exists())
         self.assertIn("cover.png", r["cover_url"])
 
-    def test_phrase_save_retexts_when_enabled(self):
+    def test_phrase_save_retexts_when_background_exists(self):
         ct.preview_background(320, 180).save(self.wd / ct.COVER_BASE_NAME, "PNG")
-        enabled = ct.norm_cover_typography({"enabled": True})
-        with mock.patch.object(backend, "_cover_typography_for", return_value=enabled), \
-             mock.patch.object(backend, "_video_title_for", return_value="The Film"):
+        with mock.patch.object(backend, "_video_title_for", return_value="The Film"):
             r = backend.save_cover_phrase(backend.CoverPhraseBody(
                 work_dir=str(self.wd), phrase="Loud *Words*"))
         self.assertTrue(r["retexted"])

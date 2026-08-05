@@ -3880,10 +3880,6 @@ def start_generation(body: GenerateBody) -> dict:
         "first_frame_cover": gapp._norm_first_frame_cover(ss.get("first_frame_cover")),
         "first_frame_cover_seconds": gapp._norm_first_frame_cover_seconds(
             ss.get("first_frame_cover_seconds")),
-        # Cover-text look (the "text" mode): font file, % of width, colour.
-        "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
-        "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
-        "first_frame_text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
         # Cover typography: text-free background + composited real-font title
         # (pipeline/cover_typography.py). Stamped resolved so the render-time
         # cover uses the style's look without re-resolving the hierarchy.
@@ -4300,9 +4296,8 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # else derived from the title (edit it from the cover card).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
-        # Cover typography (per style): whether it's on for this film, and
-        # whether a text-free background exists so "Re-apply text" can work.
-        "cover_typography_enabled": _cover_typography_for(wd, cfg)["enabled"],
+        # Whether a text-free background exists, so "Re-apply text" can work
+        # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         # Same publish/approval status the Films tab shows, so the review screen
@@ -5479,7 +5474,7 @@ def list_fonts(refresh: bool = Query(False)) -> dict:
 
 
 def _first_frame_burn_opts(wd: Path) -> dict:
-    """Hold duration and cover-text font/size/colour for this film's burns.
+    """Hold duration for this film's burns.
 
     Resolved LIVE from the film's style (so a Settings tweak applies to the
     very next burn, no re-render needed); style_settings falls back to the
@@ -5488,9 +5483,6 @@ def _first_frame_burn_opts(wd: Path) -> dict:
     ss = gapp.style_settings(gapp.load_config(), jc.get("style_name") or "")
     return {
         "seconds": gapp._norm_first_frame_cover_seconds(ss.get("first_frame_cover_seconds")),
-        "text_font": str(ss.get("first_frame_text_font") or ""),
-        "text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
-        "text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
     }
 
 
@@ -5505,14 +5497,12 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
     Best-effort: a rebuilt film without the stamp beats a failed rebuild."""
     try:
         mode = str(_film_job_config(wd).get("first_frame_cover") or "none").strip().lower()
-        if mode not in ("image", "text"):
+        if mode not in ("image", "text"):  # legacy "text" burns the cover image too
             return
         from pipeline.cover import burn_cover_into_first_frame
         burn_cover_into_first_frame(
-            Path(final_path), mode,
+            Path(final_path),
             cover_path=wd / "cover.png",
-            title=_video_title_for(wd),
-            work_dir=wd,
             **_first_frame_burn_opts(wd),
         )
     except Exception as e:
@@ -5521,14 +5511,14 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
 
 class FirstFrameCoverBody(BaseModel):
     work_dir: str
-    mode: str  # "image" (stamp cover.png) | "text" (big title over the video)
+    mode: str = "image"  # legacy field — the cover image is the only burn now
     seconds: float | None = None  # hold; None = the style's setting
 
 
-def _run_first_frame_cover(task_id: str, wd: Path, mode: str, seconds=None) -> None:
-    """Background thread: burn the cover (image or big title text) into the head
-    of the final video — YouTube Shorts ignore uploaded thumbnails and pick
-    their own frame. Keeps the previous cut as a selectable version."""
+def _run_first_frame_cover(task_id: str, wd: Path, seconds=None) -> None:
+    """Background thread: burn the cover image into the head of the final
+    video — YouTube Shorts ignore uploaded thumbnails and pick their own
+    frame. Keeps the previous cut as a selectable version."""
     from pipeline.cover import burn_cover_into_first_frame
 
     started = _film_task_started_at(task_id) or time.time()
@@ -5550,14 +5540,12 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str, seconds=None) -> N
         if seconds is not None:
             opts["seconds"] = gapp._norm_first_frame_cover_seconds(seconds)
         burn_cover_into_first_frame(
-            final_path, mode,
+            final_path,
             cover_path=wd / "cover.png",
-            title=_video_title_for(wd),
-            work_dir=wd,
             **opts,
         )
-        label = "Cover on first frame" if mode == "image" else "Title on first frame"
-        final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="cover")
+        final_video_history.record(wd, final_path, label="Cover on first frame",
+                                   lang=cur_lang, kind="cover")
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -5578,18 +5566,14 @@ def _run_first_frame_cover(task_id: str, wd: Path, mode: str, seconds=None) -> N
 
 @api.post("/api/remix/first-frame-cover")
 def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
-    """Stamp the cover image — or the title in large type — onto the head of the
-    final video (Shorts pick their own frame, not the uploaded thumbnail)."""
+    """Stamp the cover image onto the head of the final video (Shorts pick
+    their own frame, not the uploaded thumbnail)."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
-    mode = (body.mode or "").strip().lower()
-    if mode not in ("image", "text"):
-        raise HTTPException(400, "Choose what to add: the cover image or the cover text.")
-    if mode == "image":
-        cover = wd / "cover.png"
-        if not (cover.exists() and cover.stat().st_size > 1000):
-            raise HTTPException(400, "No cover image found — generate the cover first.")
+    cover = wd / "cover.png"
+    if not (cover.exists() and cover.stat().st_size > 1000):
+        raise HTTPException(400, "No cover image found — generate the cover first.")
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
 
@@ -5601,52 +5585,10 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
     }
     threading.Thread(
         target=_run_first_frame_cover,
-        args=(tid, wd, mode, body.seconds),
+        args=(tid, wd, body.seconds),
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
-
-
-@api.get("/api/films/first-frame-preview")
-def film_first_frame_preview(work_dir: str = Query(...), text: str = Query("")) -> dict:
-    """The "text" cover as it will look: the title card drawn over the film's
-    own first frame. Renders a PNG next to the film — the video is untouched.
-
-    *text* previews an unsaved cover phrase; blank falls back to the saved one.
-    """
-    from PIL import Image
-    from pipeline.assembler import extract_first_frame
-    from pipeline.cover import COVER_PHRASE_MAX_CHARS, render_cover_text_overlay
-
-    wd = Path(work_dir)
-    if not _safe_under(wd, gapp.OUTPUT_DIR):
-        raise HTTPException(400, "Work path is outside the output folder.")
-    final_path = gapp._final_path_for_work_dir(wd)
-    if not final_path.exists():
-        raise HTTPException(404, f"Final video not found for {wd.name}.")
-
-    # The extracted frame only changes when the film does — reuse it so typing
-    # in the phrase box doesn't re-run ffmpeg on every keystroke.
-    base = wd / "first_frame_preview_base.png"
-    try:
-        stale = base.stat().st_mtime < final_path.stat().st_mtime
-    except OSError:
-        stale = True
-    if stale:
-        extract_first_frame(final_path, base)
-
-    phrase = (text or "").strip()[:COVER_PHRASE_MAX_CHARS] \
-        or cover_phrase_for(wd, _video_title_for(wd))
-    look = _first_frame_burn_opts(wd)
-    frame = Image.open(base).convert("RGBA")
-    card = wd / "first_frame_preview_card.png"
-    render_cover_text_overlay(frame.width, frame.height, card, phrase,
-                              font_path=look["text_font"], size_pct=look["text_size"],
-                              color=look["text_color"])
-    preview = wd / "first_frame_preview.png"
-    Image.alpha_composite(frame, Image.open(card).convert("RGBA")) \
-         .convert("RGB").save(str(preview), "PNG")
-    return {"preview_url": _busted_file_url(preview), "phrase": phrase}
 
 
 @api.post("/api/remix/video-select")
@@ -7165,9 +7107,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
-        # Cover typography (per style): drives the *accent* markup hint and
-        # the "Re-apply text" button on the cover card.
-        "cover_typography_enabled": _cover_typography_for(wd)["enabled"],
+        # Whether a text-free background exists — drives "Re-apply title text"
+        # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         # How long a manual burn holds the cover — prefilled from the film's
         # style; the burn controls let you override it for this film.
@@ -7619,17 +7560,12 @@ def yt_cover(body: CoverBody) -> dict:
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
+        # Text-free background + composited title: the style's own image
+        # engine paints the artwork (the old FLUX.1-schnell pin existed only
+        # because the model had to draw the title itself).
         typo = _cover_typography_for(wd, cfg)
-        if typo["enabled"]:
-            # Text-free background + composited title: the style's own image
-            # engine can paint it (the schnell pin below existed only because
-            # the model had to draw the title itself).
-            ss = _cover_style_settings(wd, cfg)
-            engine = gapp.engines.resolve(cfg, ss.get("image_engine"))
-        else:
-            # Legacy covers make the model render the title, which must stay
-            # legible — Klein garbles in-image text, so FLUX.1 schnell it is.
-            engine = gapp.engines.resolve(cfg, gapp.engines.COVER_ENGINE)
+        ss = _cover_style_settings(wd, cfg)
+        engine = gapp.engines.resolve(cfg, ss.get("image_engine"))
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
@@ -7742,17 +7678,26 @@ def inpaint_cover(body: CoverInpaintBody) -> dict:
     image_history.cover_seed_if_empty(wd, cover)
     mask_tmp = wd / "_cover_inpaint_mask.png"
     mask_tmp.write_bytes(mask_bytes)
+    # Edit the TEXT-FREE background when it exists (same dimensions as the
+    # displayed cover, so the drawn mask maps 1:1), then re-composite the
+    # title — inpainting can't smear or bake the typography. Covers that
+    # predate typography have no background; edit the composited file as
+    # before.
+    bg = wd / COVER_BASE_NAME
+    target = bg if bg.exists() and bg.stat().st_size > 1000 else cover
     pool = gapp.WorkerPool(worker_urls)
     url = pool.acquire()
     try:
         with _track_op("Editing cover", f"{engine['key']}"):
-            edit_with_engine(engine, prompt, cover, mask_tmp, cover, denoise=dn, comfy_url=url)
+            edit_with_engine(engine, prompt, target, mask_tmp, target, denoise=dn, comfy_url=url)
     except Exception as e:
         raise HTTPException(503, f"Cover edit failed: {str(e).splitlines()[0][:300]}")
     finally:
         pool.release(url)
         mask_tmp.unlink(missing_ok=True)
 
+    if target is bg:
+        apply_cover_typography(wd, _cover_typography_for(wd), _video_title_for(wd))
     hist = image_history.cover_record(wd, cover)
     return {"ok": True, "cover_url": f"/api/file?path={cover}&t={int(time.time())}", "history": hist}
 
@@ -7816,13 +7761,11 @@ def save_cover_phrase(body: CoverPhraseBody) -> dict:
         path.unlink(missing_ok=True)
     else:
         path.write_text(phrase, encoding="utf-8")
-    # With cover typography on, the new phrase (incl. *accent* markup) is
-    # re-composited onto the saved text-free background right away — no image
-    # regeneration. The stale-final sweep re-burns any first-frame cover.
-    retexted = False
-    typo = _cover_typography_for(wd)
-    if typo["enabled"]:
-        retexted = apply_cover_typography(wd, typo, title) is not None
+    # The new phrase (incl. *accent* markup) is re-composited onto the saved
+    # text-free background right away — no image regeneration. The stale-final
+    # sweep re-burns any first-frame cover. None = no background yet (a film
+    # whose cover predates typography): the phrase applies on the next regen.
+    retexted = apply_cover_typography(wd, _cover_typography_for(wd), title) is not None
     return {
         "ok": True,
         "retexted": retexted,
@@ -7843,15 +7786,11 @@ def cover_retext(body: CoverRetextBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
-    typo = _cover_typography_for(wd)
-    if not typo["enabled"]:
-        raise HTTPException(400, "Cover typography is off for this film's style — "
-                                 "enable it in Settings → Styles first.")
     base = wd / COVER_BASE_NAME
     if not base.exists() or base.stat().st_size < 1000:
         raise HTTPException(400, "This cover has no text-free background yet — "
                                  "regenerate the cover once, then re-text freely.")
-    if apply_cover_typography(wd, typo, _video_title_for(wd)) is None:
+    if apply_cover_typography(wd, _cover_typography_for(wd), _video_title_for(wd)) is None:
         raise HTTPException(500, "Re-text failed — the background image is unreadable.")
     return {"ok": True,
             "cover_url": f"/api/file?path={wd / 'cover.png'}&t={int(time.time())}"}

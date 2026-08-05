@@ -250,13 +250,10 @@ DEFAULT_CFG = {
     "default_first_frame_cover_seconds": 1.0,
     # Look of the "text" first-frame cover: font file ("" = bold system font),
     # size as % of the video width, and text colour. Mirror the default style.
-    "default_first_frame_text_font": "",
-    "default_first_frame_text_size": 11,
-    "default_first_frame_text_color": "#FFFFFF",
-    # Cover typography (pipeline/cover_typography.py): when enabled the cover
-    # background is generated TEXT-FREE (with the style's own image engine) and
-    # the title is composited on top with real fonts — position, colours,
-    # accent words, card are all part of this dict. Mirrors the default style.
+    # Cover typography (pipeline/cover_typography.py): every cover background
+    # is generated TEXT-FREE (with the style's own image engine) and the title
+    # is composited on top with real fonts — position, colours, accent words,
+    # card are all part of this dict. Mirrors the default style.
     "default_cover_typography": dict(DEFAULT_COVER_TYPOGRAPHY),
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
@@ -415,10 +412,6 @@ STYLE_FIELD_TO_FLAT = {
     # uploaded thumbnail — and how long that cover is held (seconds)
     "first_frame_cover":    "default_first_frame_cover",
     "first_frame_cover_seconds": "default_first_frame_cover_seconds",
-    # Cover-text look for the "text" mode: font file, % of width, colour
-    "first_frame_text_font":  "default_first_frame_text_font",
-    "first_frame_text_size":  "default_first_frame_text_size",
-    "first_frame_text_color": "default_first_frame_text_color",
     # Cover typography: text-free background + composited real-font title
     "cover_typography":     "default_cover_typography",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
@@ -803,22 +796,10 @@ def _norm_first_frame_cover_seconds(value) -> float:
     return norm_first_frame_cover_seconds(value)
 
 
-def _norm_first_frame_text_size(value) -> int:
-    """Coerce the cover-text size (% of frame width) to a sane int."""
-    from pipeline.cover import norm_first_frame_text_size
-    return norm_first_frame_text_size(value)
-
-
 def _norm_cover_typography(value) -> dict:
     """Coerce a style's cover_typography dict (see pipeline/cover_typography.py)."""
     from pipeline.cover_typography import norm_cover_typography
     return norm_cover_typography(value)
-
-
-def _norm_first_frame_text_color(value) -> str:
-    """Coerce the cover-text colour to "#RRGGBB"."""
-    from pipeline.cover import norm_first_frame_text_color
-    return norm_first_frame_text_color(value)
 
 
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
@@ -961,9 +942,6 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
-        _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
-        _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
-        _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)
         _coerce(row, "cover_typography", _norm_cover_typography)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
@@ -2085,12 +2063,6 @@ def _save_active_scene(
         _persist_script_snapshot(work_dir, rows)
 
 
-
-
-
-
-# ── YouTube cover image ──────────────────────────────────────────────────────
-# _overlay_title_on_image and _cover_prompt are imported from pipeline.cover
 
 
 

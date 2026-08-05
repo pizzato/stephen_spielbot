@@ -32,7 +32,6 @@ from pipeline import image_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
     cover_dimensions,
-    cover_phrase_for,
 )
 from pipeline.cover_typography import COVER_BASE_NAME, apply_cover_typography  # noqa: E402
 from pipeline.llm import Scene  # noqa: E402
@@ -266,16 +265,21 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
             except Exception:
                 rows = []
 
-    # The film's saved cover phrase (edit/publish screens) wins over the
-    # title-derived default, so the regenerated cover prints the edited text.
-    # With cover typography enabled (payload carries the style's settings), the
-    # model paints a TEXT-FREE background instead and the phrase is composited
-    # on top afterwards — regenerating rerolls only the artwork.
-    typo = p.get("cover_typography") if isinstance(p.get("cover_typography"), dict) else {}
-    text_free = bool(typo.get("enabled"))
-    prompt = build_cover_prompt(cover_phrase_for(work_dir, title), p.get("style") or "", scenes=rows,
+    # Cover typography (the only cover mode): the model paints a TEXT-FREE
+    # background and the film's cover phrase is composited on top with real
+    # fonts — regenerating rerolls only the artwork. The payload carries the
+    # style's settings; tasks queued by a pre-typography backend fall back to
+    # the film's stamped job_config (else the defaults).
+    typo = p.get("cover_typography")
+    if not isinstance(typo, dict) or not typo:
+        import json as _json
+        try:
+            typo = _json.loads((work_dir / "job_config.json").read_text()).get("cover_typography") or {}
+        except Exception:
+            typo = {}
+    prompt = build_cover_prompt(p.get("style") or "", scenes=rows,
                                 instruction=p.get("instruction") or "",
-                                text_free=text_free, text_position=str(typo.get("position") or ""))
+                                text_position=str(typo.get("position") or ""))
 
     cover_path = work_dir / "cover.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
@@ -292,13 +296,11 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # the default engine, with flux1-schnell filename overrides from flux_* keys.
     if not isinstance(engine, dict) or not engine:
         engine = engines.resolve(p, p.get("image_engine"))
-    target = work_dir / COVER_BASE_NAME if text_free else cover_path
     generate_with_engine(
-        engine, prompt, target,
+        engine, prompt, work_dir / COVER_BASE_NAME,
         width=cover_w, height=cover_h, comfy_url=comfy_url,
     )
-    if text_free:
-        apply_cover_typography(work_dir, typo, title)
+    apply_cover_typography(work_dir, typo, title)
     image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")

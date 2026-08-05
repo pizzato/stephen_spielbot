@@ -756,20 +756,11 @@ translate_metadata:
 # Cover image (YouTube thumbnail) — FLUX prompt
 # ═════════════════════════════════════════════════════════════════════════════
 
-cover_image:
-  description: |
-    FLUX prompt for the 1280x720 YouTube cover thumbnail. The `subject_hint` is
-    auto-generated from a sample of scene image_prompts so the cover reflects the
-    actual video content (and is empty when no scenes are provided).
-  user: |
-    Create a high-impact YouTube documentary thumbnail in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Composition: large readable title text dominates the centre, with supporting subject imagery arranged around it in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. Text: include the exact title: "${title}". The title must be spelled correctly, large, clean, bold, and easy to read. Use thick block lettering with strong shadow or outline. Do not add any extra words, fake letters, random symbols, or misspelled text. Visual content: show the key people, objects, places, and elements related to the topic. Make the image feel like a complete visual summary of the story. Layout: avoid clutter, keep the subject clear, make the title readable first, then the background details. Leave safe margins around the edges. No watermark, no logo, no UI elements. Avoid: ${negative}.
-
-
 cover_image_notext:
   description: |
-    Cover prompt used when the style's cover typography is enabled: the model
-    paints a TEXT-FREE background and the title is composited afterwards with
-    real fonts (pipeline/cover_typography.py), so words can never be misspelled.
+    The cover prompt: the model paints a TEXT-FREE background and the title is
+    composited afterwards with real fonts (pipeline/cover_typography.py), so
+    words can never be misspelled and regenerating only rerolls the artwork.
     `space_hint` names where the title will land ("the bottom third of the frame").
   user: |
     Create a high-impact YouTube documentary thumbnail background in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Visual content: show the key people, objects, places, and elements related to the topic in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. CRITICAL: this image must contain absolutely NO text of any kind — no letters, no words, no numbers, no captions, no signs with writing, no posters, no logos, no typography. A title will be added later by software. Composition: keep ${space_hint} calmer and less cluttered so the title can sit there and stay readable; put the main subject in the remaining space. Layout: avoid clutter, keep the subject clear. No watermark, no UI elements. Avoid: ${negative}.
@@ -786,17 +777,9 @@ video_negative:
     low quality, worst quality, blurry, static, frozen frame, no motion, jittery, flickering, strobing, text, watermark, logo, subtitles, distorted, pixelated, overexposed, underexposed, grainy, washed out colors, inconsistent lighting, camera shake, jump cut, unnatural motion, morphing faces, extra limbs, 3D CGI look, cartoon, anime
 
 
-cover_negative:
-  description: |
-    Substituted into the cover_image prompt as ${negative}.
-  value: |
-    blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, random text, watermark, logo, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
-
-
 cover_negative_notext:
   description: |
-    Substituted into the cover_image_notext prompt as ${negative} when cover
-    typography is enabled (the title is composited in afterwards, so ANY text
-    the model paints is unwanted).
+    Substituted into the cover_image_notext prompt as ${negative} (the title
+    is composited in afterwards, so ANY text the model paints is unwanted).
   value: |
     text, letters, words, numbers, writing, captions, subtitles, typography, lettering, signage, poster text, watermark, logo, blurry, low resolution, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
