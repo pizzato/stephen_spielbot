@@ -483,6 +483,7 @@ def upload_video(
     captions_name: str = "English",
     extra_captions: list[dict] | None = None,
     playlist_id: str = "",
+    made_for_kids: bool = False,
 ) -> dict:
     """Upload video to YouTube. Returns {video_id, url, error}.
 
@@ -496,6 +497,7 @@ def upload_video(
     main track).
     ``playlist_id`` (optional) adds the finished video to that playlist (which
     must belong to ``channel``); best-effort, never fails the upload.
+    ``made_for_kids`` sets the required self-declared "Made for Kids" status.
     """
     creds = _load_credentials(client_secrets_path, channel)
     if not creds:
@@ -521,7 +523,7 @@ def upload_video(
             "snippet": snippet,
             "status": {
                 "privacyStatus": privacy_status,
-                "selfDeclaredMadeForKids": False,
+                "selfDeclaredMadeForKids": bool(made_for_kids),
                 "containsSyntheticMedia": True,
             },
         }

@@ -282,6 +282,9 @@ DEFAULT_CFG = {
     # id (PL…) = that playlist; "__auto__" = find-or-create one named after the
     # style on its channel. Flat key mirrors the DEFAULT style (see _ensure_styles).
     "youtube_playlist_id": "",
+    # Per-style "Made for Kids" self-declaration sent on upload. Flat key
+    # mirrors the DEFAULT style (see _ensure_styles).
+    "made_for_kids": False,
     "youtube_auto_fetch_evaluate": False,      # fetch+evaluate on startup and after each post
     "youtube_auto_approve_comments": False,    # auto-approve requests with confidence ≥ threshold
     "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
@@ -416,6 +419,8 @@ STYLE_FIELD_TO_FLAT = {
     "channel":              "youtube_channel",
     # Playlist this style's uploads are added to ("" / PL… id / "__auto__")
     "youtube_playlist_id":  "youtube_playlist_id",
+    # Self-declared "Made for Kids" status sent on upload
+    "made_for_kids":        "made_for_kids",
     # Publishing (issue #107) — which connected X account this style posts to
     "x_account":            "x_account",
     # Image engine selection (generation vs edit) — see pipeline/engines.py
@@ -1125,6 +1130,11 @@ def playlist_for_style(cfg: dict, style_name: str = "") -> str:
     "__auto__" sentinel (find-or-create one named after the style). The sentinel
     is resolved to a real id at upload time, since that needs a YouTube API call."""
     return str(style_settings(cfg, style_name).get("youtube_playlist_id") or "")
+
+
+def made_for_kids_for_style(cfg: dict, style_name: str = "") -> bool:
+    """Whether a style's uploads should be self-declared "Made for Kids"."""
+    return bool(style_settings(cfg, style_name).get("made_for_kids"))
 
 
 def _style_lineage(styles: list[dict], target: dict) -> list[dict]:
