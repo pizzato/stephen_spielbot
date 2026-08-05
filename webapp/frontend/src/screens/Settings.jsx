@@ -1978,6 +1978,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </select>
                 <ParentVal k="x_account" />
               </Field>
+              <Check checked={!!eff.made_for_kids} onChange={(v) => setStyleField('made_for_kids', v)}
+                label="Made for Kids — self-declare this style's uploads as directed at children (disables personalized ads, comments and other features per YouTube's policy)" />
+              <ParentVal k="made_for_kids" />
               <Field label="Opening cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
                 <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="none">Off — leave the opening as rendered</option>

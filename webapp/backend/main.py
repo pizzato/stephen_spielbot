@@ -7987,6 +7987,8 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
         # Per-style playlist the finished video is added to (resolved here so the
         # "__auto__" find-or-create can hit the API off the render path).
         playlist_id = _resolve_upload_playlist(gapp.load_config(), wd, channel)
+        # Per-style "Made for Kids" self-declaration.
+        made_for_kids = gapp.made_for_kids_for_style(gapp.load_config(), _work_dir_style_name(wd))
         # Build subtitle tracks from the known scripts so YouTube shows accurate
         # captions instead of relying on speech recognition: one track in the
         # published cut's spoken language plus one per other language the film
@@ -8022,6 +8024,7 @@ def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb
                 captions_name=audio_lang_name, extra_captions=extra_caps,
                 default_language=language, default_audio_language=audio_lang,
                 playlist_id=playlist_id,
+                made_for_kids=made_for_kids,
             )
     except Exception as e:
         _upload_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:240]}
