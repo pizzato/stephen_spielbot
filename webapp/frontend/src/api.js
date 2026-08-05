@@ -215,6 +215,7 @@ export const api = {
     `/films/first-frame-preview?work_dir=${encodeURIComponent(workDir)}&text=${encodeURIComponent(text || '')}`),
   saveCoverPhrase: (workDir, phrase) => req('POST', '/films/cover-phrase', { work_dir: workDir, phrase }),
   listFonts: () => req('GET', '/fonts'),
+  coverTypographyPreview: (body) => req('POST', '/styles/cover-typography-preview', body),
   localizeFilm: (body) => req('POST', '/remix/localize', body),
   localizeScripts: (workDir) => req('GET', `/remix/localize/scripts?work_dir=${encodeURIComponent(workDir)}`),
   saveLocalizeScript: (body) => req('POST', '/remix/localize/script', body),

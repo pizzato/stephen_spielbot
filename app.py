@@ -252,6 +252,20 @@ DEFAULT_CFG = {
     "default_first_frame_text_font": "",
     "default_first_frame_text_size": 11,
     "default_first_frame_text_color": "#FFFFFF",
+    # Typography for the YouTube cover thumbnail: the title is composited with
+    # PIL onto a text-free generated background (see pipeline/cover.py
+    # render_cover_typography) rather than asked from the diffusion model, so
+    # spelling is always correct. Mirror the default style.
+    "default_cover_text_position": "bottom",
+    "default_cover_text_font": "",
+    "default_cover_text_size": 11,
+    "default_cover_text_color": "#FFFFFF",
+    "default_cover_text_card": True,
+    "default_cover_text_card_color": "#000000",
+    "default_cover_text_card_opacity": 55,
+    "default_cover_text_emphasis": "none",
+    "default_cover_text_emphasis_color": "",
+    "default_cover_text_emphasis_scale": 1.25,
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -410,6 +424,18 @@ STYLE_FIELD_TO_FLAT = {
     "first_frame_text_font":  "default_first_frame_text_font",
     "first_frame_text_size":  "default_first_frame_text_size",
     "first_frame_text_color": "default_first_frame_text_color",
+    # Typography for the YouTube cover thumbnail (composited with PIL onto a
+    # text-free generated background, see pipeline/cover.py render_cover_typography)
+    "cover_text_position":       "default_cover_text_position",
+    "cover_text_font":           "default_cover_text_font",
+    "cover_text_size":           "default_cover_text_size",
+    "cover_text_color":          "default_cover_text_color",
+    "cover_text_card":           "default_cover_text_card",
+    "cover_text_card_color":     "default_cover_text_card_color",
+    "cover_text_card_opacity":   "default_cover_text_card_opacity",
+    "cover_text_emphasis":       "default_cover_text_emphasis",
+    "cover_text_emphasis_color": "default_cover_text_emphasis_color",
+    "cover_text_emphasis_scale": "default_cover_text_emphasis_scale",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -802,6 +828,54 @@ def _norm_first_frame_text_color(value) -> str:
     return norm_first_frame_text_color(value)
 
 
+def _norm_cover_text_position(value) -> str:
+    """Coerce the cover-thumbnail text position to "top"|"center"|"bottom"."""
+    from pipeline.cover import norm_cover_text_position
+    return norm_cover_text_position(value)
+
+
+def _norm_cover_text_size(value) -> int:
+    """Coerce the cover-thumbnail text size (% of image width) to a sane int."""
+    from pipeline.cover import norm_cover_text_size
+    return norm_cover_text_size(value)
+
+
+def _norm_cover_text_color(value) -> str:
+    """Coerce the cover-thumbnail text colour to "#RRGGBB"."""
+    from pipeline.cover import norm_cover_text_color
+    return norm_cover_text_color(value)
+
+
+def _norm_cover_card_color(value) -> str:
+    """Coerce the cover-thumbnail card colour to "#RRGGBB"."""
+    from pipeline.cover import norm_cover_card_color
+    return norm_cover_card_color(value)
+
+
+def _norm_cover_card_opacity(value) -> int:
+    """Coerce the cover-thumbnail card opacity (%) to an int in 0..100."""
+    from pipeline.cover import norm_cover_card_opacity
+    return norm_cover_card_opacity(value)
+
+
+def _norm_cover_emphasis_rule(value) -> str:
+    """Coerce the cover-thumbnail emphasis rule to a known value."""
+    from pipeline.cover import norm_cover_emphasis_rule
+    return norm_cover_emphasis_rule(value)
+
+
+def _norm_cover_emphasis_color(value) -> str:
+    """Coerce the cover-thumbnail emphasis colour ("" inherits the base colour)."""
+    from pipeline.cover import norm_cover_emphasis_color
+    return norm_cover_emphasis_color(value)
+
+
+def _norm_cover_emphasis_scale(value) -> float:
+    """Coerce the cover-thumbnail emphasis size multiplier to 1.0..2.0."""
+    from pipeline.cover import norm_cover_emphasis_scale
+    return norm_cover_emphasis_scale(value)
+
+
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
     """Normalize the style list in place: migrate a pre-styles config, drop
     malformed entries, fill missing fields, dedupe names, validate
@@ -945,6 +1019,15 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
         _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
         _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)
+        _coerce(row, "cover_text_position", _norm_cover_text_position)
+        _coerce(row, "cover_text_font", lambda v: str(v or ""))
+        _coerce(row, "cover_text_size", _norm_cover_text_size)
+        _coerce(row, "cover_text_color", _norm_cover_text_color)
+        _coerce(row, "cover_text_card_color", _norm_cover_card_color)
+        _coerce(row, "cover_text_card_opacity", _norm_cover_card_opacity)
+        _coerce(row, "cover_text_emphasis", _norm_cover_emphasis_rule)
+        _coerce(row, "cover_text_emphasis_color", _norm_cover_emphasis_color)
+        _coerce(row, "cover_text_emphasis_scale", _norm_cover_emphasis_scale)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved. (A child without its own

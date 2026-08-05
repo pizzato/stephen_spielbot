@@ -1145,6 +1145,30 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   // The parent's own resolved settings — what "{parent}" expands to.
   const parentEff = useMemo(() => (st.parent ? resolveStyle(styles, st.parent) : null),
     [styles, st.parent])
+  // Cover thumbnail typography — live preview against a generic placeholder
+  // background (there's no film to preview against on the Styles tab).
+  const [coverPreviewText, setCoverPreviewText] = useState('YOUR VIDEO TITLE HERE')
+  const [coverPreviewUrl, setCoverPreviewUrl] = useState('')
+  useEffect(() => {
+    const t = setTimeout(() => {
+      api.coverTypographyPreview({
+        text: coverPreviewText,
+        font: eff.cover_text_font || '',
+        position: eff.cover_text_position || 'bottom',
+        size: eff.cover_text_size ?? 11,
+        color: eff.cover_text_color || '#FFFFFF',
+        card: eff.cover_text_card !== false,
+        card_color: eff.cover_text_card_color || '#000000',
+        card_opacity: eff.cover_text_card_opacity ?? 55,
+        emphasis_rule: eff.cover_text_emphasis || 'none',
+        emphasis_color: eff.cover_text_emphasis_color || '',
+        emphasis_scale: eff.cover_text_emphasis_scale ?? 1.25,
+      }).then((r) => setCoverPreviewUrl(r.preview_url)).catch(() => {})
+    }, 500)
+    return () => clearTimeout(t)
+  }, [coverPreviewText, eff.cover_text_font, eff.cover_text_position, eff.cover_text_size,
+      eff.cover_text_color, eff.cover_text_card, eff.cover_text_card_color, eff.cover_text_card_opacity,
+      eff.cover_text_emphasis, eff.cover_text_emphasis_color, eff.cover_text_emphasis_scale])
   // TEXT controls on a child show the literal stored text; an inherited field
   // (nothing stored) displays as the bare "{parent}" placeholder. Editing
   // around the placeholder extends the parent's text, replacing it overrides,
@@ -1212,6 +1236,22 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return `${v ?? 11}% of width`
       case 'first_frame_text_color':
         return String(v || '#FFFFFF')
+      case 'cover_text_position':
+        return v === 'top' ? 'Top' : v === 'center' ? 'Center' : 'Bottom'
+      case 'cover_text_font':
+        return (fontInfo || []).find((f) => f.path === v)?.name
+          || (v ? v.split('/').pop() : '(automatic)')
+      case 'cover_text_size':
+        return `${v ?? 11}% of width`
+      case 'cover_text_color':
+      case 'cover_text_card_color':
+        return String(v || (k === 'cover_text_card_color' ? '#000000' : '#FFFFFF'))
+      case 'cover_text_card_opacity':
+        return `${v ?? 55}%`
+      case 'cover_text_emphasis':
+        return { caps: 'ALL-CAPS words', last_word: 'Last word', last_line: 'Last line' }[v] || 'None'
+      case 'cover_text_emphasis_scale':
+        return `${v ?? 1.25}×`
       case 'voice':
         return v || '(F5-TTS default)'
       case 'voice_cadence_wpm':
@@ -2013,6 +2053,100 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="first_frame_text_color" />
                 </Field>
               </div>
+              <div style={{ marginTop: 8, marginBottom: 4, fontWeight: 600 }}>Cover thumbnail typography</div>
+              <div className="muted" style={{ fontSize: 12, marginBottom: 8 }}>
+                How the video title is drawn on the YouTube cover thumbnail. The background is generated without
+                any text, then this typography is composited on top — so spelling is always correct.
+              </div>
+              <Field label="Position">
+                <select className="select" value={eff.cover_text_position || 'bottom'}
+                  onChange={(e) => setStyleField('cover_text_position', e.target.value)} style={{ maxWidth: 200 }}>
+                  <option value="top">Top</option>
+                  <option value="center">Center</option>
+                  <option value="bottom">Bottom</option>
+                </select>
+                <ParentVal k="cover_text_position" />
+              </Field>
+              <Field label="Font" hint="Any font installed on this machine; “Automatic” picks a bold system font.">
+                <select className="select" value={eff.cover_text_font || ''}
+                  onChange={(e) => setStyleField('cover_text_font', e.target.value)} style={{ maxWidth: 320 }}>
+                  <option value="">Automatic — bold system font</option>
+                  {(fontInfo || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
+                  {eff.cover_text_font && !(fontInfo || []).some((f) => f.path === eff.cover_text_font)
+                    && <option value={eff.cover_text_font}>{fontInfo ? `${eff.cover_text_font} (not found)` : 'Loading fonts…'}</option>}
+                </select>
+                <ParentVal k="cover_text_font" />
+              </Field>
+              <div className="row gap-22 row--wrap">
+                <Field label="Size" hint="% of the image width.">
+                  <input className="input" type="number" min={4} max={30} value={eff.cover_text_size ?? 11}
+                    onChange={(e) => setStyleField('cover_text_size', +e.target.value)} style={{ maxWidth: 120 }} />
+                  <ParentVal k="cover_text_size" />
+                </Field>
+                <Field label="Colour">
+                  <input className="input" type="color" value={eff.cover_text_color || '#FFFFFF'}
+                    onChange={(e) => setStyleField('cover_text_color', e.target.value)}
+                    style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
+                  <ParentVal k="cover_text_color" />
+                </Field>
+              </div>
+              <Check checked={eff.cover_text_card !== false} onChange={(v) => setStyleField('cover_text_card', v)}
+                label="Background card behind the text" />
+              <ParentVal k="cover_text_card" />
+              {eff.cover_text_card !== false && (
+                <div className="row gap-22 row--wrap">
+                  <Field label="Card colour">
+                    <input className="input" type="color" value={eff.cover_text_card_color || '#000000'}
+                      onChange={(e) => setStyleField('cover_text_card_color', e.target.value)}
+                      style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
+                    <ParentVal k="cover_text_card_color" />
+                  </Field>
+                  <Field label="Card opacity" hint="%">
+                    <input className="input" type="number" min={0} max={100} value={eff.cover_text_card_opacity ?? 55}
+                      onChange={(e) => setStyleField('cover_text_card_opacity', +e.target.value)} style={{ maxWidth: 120 }} />
+                    <ParentVal k="cover_text_card_opacity" />
+                  </Field>
+                </div>
+              )}
+              <Field label="Emphasize" hint="Which words render larger and in a different colour — matched against the phrase itself (e.g. capitalize a word to emphasize it), so there's nothing extra to author per film.">
+                <select className="select" value={eff.cover_text_emphasis || 'none'}
+                  onChange={(e) => setStyleField('cover_text_emphasis', e.target.value)} style={{ maxWidth: 280 }}>
+                  <option value="none">None — uniform styling</option>
+                  <option value="caps">ALL-CAPS words in the phrase</option>
+                  <option value="last_word">Last word</option>
+                  <option value="last_line">Last line</option>
+                </select>
+                <ParentVal k="cover_text_emphasis" />
+              </Field>
+              {eff.cover_text_emphasis && eff.cover_text_emphasis !== 'none' && (
+                <div className="row gap-22 row--wrap">
+                  <Field label="Emphasis colour" hint="Blank keeps the base colour.">
+                    <input className="input" type="color"
+                      value={eff.cover_text_emphasis_color || eff.cover_text_color || '#FFFFFF'}
+                      onChange={(e) => setStyleField('cover_text_emphasis_color', e.target.value)}
+                      style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
+                    {eff.cover_text_emphasis_color && (
+                      <a role="button" tabIndex={0} style={{ marginLeft: 8, cursor: 'pointer', textDecoration: 'underline', fontSize: 12 }}
+                        onClick={() => setStyleField('cover_text_emphasis_color', '')}>use base colour</a>
+                    )}
+                    <ParentVal k="cover_text_emphasis_color" />
+                  </Field>
+                  <Field label="Emphasis size" hint="× the base size.">
+                    <input className="input" type="number" min={1} max={2} step={0.05}
+                      value={eff.cover_text_emphasis_scale ?? 1.25}
+                      onChange={(e) => setStyleField('cover_text_emphasis_scale', +e.target.value)} style={{ maxWidth: 120 }} />
+                    <ParentVal k="cover_text_emphasis_scale" />
+                  </Field>
+                </div>
+              )}
+              <Field label="Preview">
+                <input className="input" value={coverPreviewText} onChange={(e) => setCoverPreviewText(e.target.value)}
+                  placeholder="Sample title text" style={{ maxWidth: 320, marginBottom: 8, display: 'block' }} />
+                {coverPreviewUrl && (
+                  <img src={coverPreviewUrl} alt="Cover typography preview"
+                    style={{ maxWidth: '100%', width: 480, borderRadius: 'var(--r-md)', display: 'block' }} />
+                )}
+              </Field>
               <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
                 label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
               <ParentVal k="auto_pick_exclude" />

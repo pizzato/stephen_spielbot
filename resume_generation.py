@@ -66,6 +66,7 @@ from pipeline.cover import (
     burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
     cover_phrase_for as _cover_phrase_for,
+    render_cover_typography as _render_cover_typography,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -866,10 +867,10 @@ def main(work_dir: Path) -> None:
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         try:
             _cover_url = worker_pool.acquire()
-            # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE), same as
-            # UI re-generation; resolve() keeps the flat flux_* overrides.
+            # The style's own image engine — same one scenes use — now that the
+            # cover background never needs the model to render text in-image.
             generate_with_engine(
-                _engines.resolve(cfg, _engines.COVER_ENGINE),
+                image_engine,
                 _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean, scenes=scenes),
                 cover_base,
                 width=cover_w,
@@ -878,7 +879,20 @@ def main(work_dir: Path) -> None:
             )
             worker_pool.release(_cover_url)
             _cover_url = None
-            shutil.copy2(cover_base, cover_path)
+            _render_cover_typography(
+                cover_base, cover_path, _cover_phrase_for(work_dir, video_title),
+                font_path=str(cfg.get("cover_text_font", cfg.get("default_cover_text_font", "")) or ""),
+                position=cfg.get("cover_text_position", cfg.get("default_cover_text_position", "bottom")),
+                size_pct=cfg.get("cover_text_size", cfg.get("default_cover_text_size")),
+                color=str(cfg.get("cover_text_color", cfg.get("default_cover_text_color", "")) or ""),
+                card=cfg.get("cover_text_card", cfg.get("default_cover_text_card", True)),
+                card_color=str(cfg.get("cover_text_card_color", cfg.get("default_cover_text_card_color", "")) or ""),
+                card_opacity=cfg.get("cover_text_card_opacity", cfg.get("default_cover_text_card_opacity")),
+                emphasis_rule=cfg.get("cover_text_emphasis", cfg.get("default_cover_text_emphasis", "none")),
+                emphasis_color=str(cfg.get("cover_text_emphasis_color",
+                                           cfg.get("default_cover_text_emphasis_color", "")) or ""),
+                emphasis_scale=cfg.get("cover_text_emphasis_scale", cfg.get("default_cover_text_emphasis_scale")),
+            )
             logger.info("Cover image saved: %s", cover_path)
         except Exception as _cover_err:
             logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)

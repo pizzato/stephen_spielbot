@@ -33,6 +33,7 @@ from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
     cover_dimensions,
     cover_phrase_for,
+    render_cover_typography,
 )
 from pipeline.llm import Scene  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
@@ -271,6 +272,7 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
                                 instruction=p.get("instruction") or "")
 
     cover_path = work_dir / "cover.png"
+    cover_base = work_dir / "cover_base.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
     cover_w, cover_h = cover_dimensions(
         int(p.get("vid_width") or 0), int(p.get("vid_height") or 0)
@@ -286,9 +288,13 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     if not isinstance(engine, dict) or not engine:
         engine = engines.resolve(p, p.get("image_engine"))
     generate_with_engine(
-        engine, prompt, cover_path,
+        engine, prompt, cover_base,
         width=cover_w, height=cover_h, comfy_url=comfy_url,
     )
+    # Composite the title with crisp PIL vector text — the diffusion model
+    # never renders characters, so spelling is always correct.
+    render_cover_typography(cover_base, cover_path, cover_phrase_for(work_dir, title),
+                            **(p.get("cover_text") or {}))
     image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")

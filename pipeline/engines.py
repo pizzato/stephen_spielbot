@@ -100,12 +100,6 @@ ENGINES: dict[str, dict] = {
 # FLUX.1 schnell is opt-in: chosen per style and downloaded on demand.
 DEFAULT_ENGINE = "flux2-klein"
 
-# Cover thumbnails are ALWAYS generated with FLUX.1 schnell, regardless of the
-# style's image_engine: the cover must render the title text in-image, and
-# Klein reliably garbles it (tested 2026-07-17; a Klein-tuned prompt didn't
-# help). Applies to both the render-time cover and UI re-generation.
-COVER_ENGINE = "flux1-schnell"
-
 
 def get(key: str) -> dict | None:
     return ENGINES.get((key or "").strip())

@@ -256,43 +256,256 @@ def norm_first_frame_text_color(value) -> str:
     return FIRST_FRAME_TEXT_COLOR_DEFAULT
 
 
-def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:
-    """Overlay video title text on a cover image using PIL."""
+COVER_TEXT_POSITIONS = ("top", "center", "bottom")
+COVER_TEXT_EMPHASIS_RULES = ("none", "caps", "last_word", "last_line")
+
+COVER_TEXT_POSITION_DEFAULT = "bottom"
+COVER_TEXT_CARD_OPACITY_DEFAULT = 55
+COVER_TEXT_EMPHASIS_SCALE_DEFAULT = 1.25
+
+
+def norm_cover_text_position(value) -> str:
+    """Coerce a cover-text position to "top" | "center" | "bottom"."""
+    v = str(value or "").strip().lower()
+    return v if v in COVER_TEXT_POSITIONS else COVER_TEXT_POSITION_DEFAULT
+
+
+def norm_cover_text_size(value) -> int:
+    """Coerce the cover-text size (% of image width) to an int in 4..30."""
+    return norm_first_frame_text_size(value)
+
+
+def _norm_hex_color(value, default: str) -> str:
+    s = str(value or "").strip()
+    if re.fullmatch(r"#[0-9a-fA-F]{3}", s):
+        s = "#" + "".join(c * 2 for c in s[1:])
+    if re.fullmatch(r"#[0-9a-fA-F]{6}", s):
+        return s.upper()
+    return default
+
+
+def norm_cover_text_color(value) -> str:
+    """Coerce a cover-text colour to "#RRGGBB" (white when invalid/unset)."""
+    return _norm_hex_color(value, "#FFFFFF")
+
+
+def norm_cover_card_color(value) -> str:
+    """Coerce a cover-card colour to "#RRGGBB" (black when invalid/unset)."""
+    return _norm_hex_color(value, "#000000")
+
+
+def norm_cover_emphasis_color(value) -> str:
+    """Coerce a cover-emphasis colour: "" (inherit the base text colour) is
+    valid and left as-is; anything else must be a proper hex colour."""
+    s = str(value or "").strip()
+    if not s:
+        return ""
+    return _norm_hex_color(s, "")
+
+
+def norm_cover_card_opacity(value) -> int:
+    """Coerce the cover-card opacity (%) to an int in 0..100."""
+    try:
+        return max(0, min(100, int(value)))
+    except (TypeError, ValueError):
+        return COVER_TEXT_CARD_OPACITY_DEFAULT
+
+
+def norm_cover_emphasis_rule(value) -> str:
+    """Coerce a cover emphasis rule to one of COVER_TEXT_EMPHASIS_RULES."""
+    v = str(value or "").strip().lower()
+    return v if v in COVER_TEXT_EMPHASIS_RULES else "none"
+
+
+def norm_cover_emphasis_scale(value) -> float:
+    """Coerce the cover emphasis size multiplier to a float in 1.0..2.0."""
+    try:
+        return round(min(2.0, max(1.0, float(value))), 2)
+    except (TypeError, ValueError):
+        return COVER_TEXT_EMPHASIS_SCALE_DEFAULT
+
+
+def _word_is_emphasized_by_caps(word: str) -> bool:
+    letters = [c for c in word if c.isalpha()]
+    return len(letters) >= 2 and word.upper() == word
+
+
+def _wrap_words_uniform(draw, words: list[str], font, max_width: int) -> list[list[str]]:
+    """Greedy word-wrap *words* at a single *font*, for a first pass used only
+    to find which words land on the last line (the "last_line" emphasis rule)."""
+    space_w = draw.textlength(" ", font=font)
+    lines: list[list[str]] = [[]]
+    line_w = 0
+    for word in words:
+        w = draw.textlength(word, font=font)
+        extra = (space_w if line_w else 0) + w
+        if line_w and line_w + extra > max_width:
+            lines.append([word])
+            line_w = w
+        else:
+            lines[-1].append(word)
+            line_w += extra
+    return [ln for ln in lines if ln]
+
+
+def render_cover_typography(
+    base_path: Path,
+    output_path: Path,
+    text: str,
+    *,
+    font_path: str = "",
+    position: str = "bottom",
+    size_pct=None,
+    color: str = "",
+    card: bool = True,
+    card_color: str = "",
+    card_opacity=None,
+    emphasis_rule: str = "none",
+    emphasis_color: str = "",
+    emphasis_scale=None,
+) -> None:
+    """Composite *text* onto an EXISTING (already-generated, text-free) cover
+    background with crisp PIL vector text — the diffusion model never renders
+    characters, so spelling is always correct.
+
+    position anchors the whole text block top/center/bottom (~6% margin).
+    When card=True, a semi-transparent rounded plate is drawn behind the text
+    block first for legibility; otherwise a stroke outline (as used elsewhere
+    in this module) is relied on instead. emphasis_rule picks which words
+    render larger/differently-coloured, matched against the phrase text
+    itself so no separate per-word authoring UI is needed: "caps" emphasizes
+    any word already ALL CAPS in the phrase, "last_word"/"last_line" are
+    positional, "none" renders uniformly.
+    """
     from PIL import Image, ImageDraw
-    import textwrap
 
     img = Image.open(base_path).convert("RGBA")
     width, height = img.size
 
-    # Dark gradient overlay at the bottom half
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw_ov = ImageDraw.Draw(overlay)
-    for y in range(height // 2, height):
-        alpha = int(200 * (y - height // 2) / (height // 2))
-        draw_ov.rectangle([0, y, width, y + 1], fill=(0, 0, 0, alpha))
-    img = Image.alpha_composite(img, overlay)
+    words = (text or "").split()
+    if not words:
+        img.convert("RGB").save(str(output_path), "PNG")
+        return
+
+    font_size = max(16, width * norm_cover_text_size(size_pct) // 100)
+    base_font = _load_font(font_size, font_path)
+    scale = norm_cover_emphasis_scale(emphasis_scale)
+    emph_font = _load_font(int(font_size * scale), font_path) if scale != 1.0 else base_font
+
+    rule = norm_cover_emphasis_rule(emphasis_rule)
+    scratch = ImageDraw.Draw(img)
+    max_width = int(width * 0.88)
+    if rule == "last_line":
+        # First-pass uniform wrap just to find which trailing words end up on
+        # the last line; tracked by index since words may repeat.
+        wrapped = _wrap_words_uniform(scratch, words, base_font, max_width)
+        last_line_set = set(range(len(words) - len(wrapped[-1]), len(words)))
+    else:
+        last_line_set = set()
+
+    def is_emphasized(idx: int, word: str) -> bool:
+        if rule == "caps":
+            return _word_is_emphasized_by_caps(word)
+        if rule == "last_word":
+            return idx == len(words) - 1
+        if rule == "last_line":
+            return idx in last_line_set
+        return False
+
+    base_color = norm_cover_text_color(color)
+    fill = tuple(int(base_color[i:i + 2], 16) for i in (1, 3, 5))
+    emph_hex = norm_cover_emphasis_color(emphasis_color) or base_color
+    emph_fill = tuple(int(emph_hex[i:i + 2], 16) for i in (1, 3, 5))
+    stroke_fill = (255, 255, 255) if sum(fill) < 300 else (0, 0, 0)
+    emph_stroke_fill = (255, 255, 255) if sum(emph_fill) < 300 else (0, 0, 0)
+
+    # Second pass: wrap using each word's ACTUAL font (base or emphasis) so
+    # mixed sizes still fit the line width.
+    runs = [(w, emph_font if is_emphasized(i, w) else base_font,
+             emph_fill if is_emphasized(i, w) else fill,
+             emph_stroke_fill if is_emphasized(i, w) else stroke_fill)
+            for i, w in enumerate(words)]
+    lines: list[list[tuple]] = [[]]
+    line_w = 0
+    for run in runs:
+        word, font, _fill, _stroke = run
+        w = scratch.textlength(word, font=font)
+        space_w = scratch.textlength(" ", font=font)
+        extra = (space_w if line_w else 0) + w
+        if line_w and line_w + extra > max_width:
+            lines.append([run])
+            line_w = w
+        else:
+            lines[-1].append(run)
+            line_w += extra
+    lines = [ln for ln in lines if ln]
+
+    stroke_w = max(2, font_size // 16)
+    line_metrics = []
+    for ln in lines:
+        line_height = max(scratch.textbbox((0, 0), w, font=f, stroke_width=stroke_w)[3]
+                          for w, f, _c, _s in ln)
+        line_w_total = 0
+        for i, (word, font, _c, _s) in enumerate(ln):
+            if i:
+                line_w_total += scratch.textlength(" ", font=font)
+            line_w_total += scratch.textlength(word, font=font)
+        line_metrics.append((line_height, line_w_total))
+    line_gap = int(font_size * 0.25)
+    total_h = sum(h for h, _w in line_metrics) + line_gap * (len(lines) - 1)
+    block_w = max((w for _h, w in line_metrics), default=0)
+
+    margin = int(height * 0.06)
+    pos = norm_cover_text_position(position)
+    if pos == "top":
+        top = margin
+    elif pos == "center":
+        top = (height - total_h) // 2
+    else:
+        top = height - total_h - margin
+
+    if card:
+        pad = int(font_size * 0.6)
+        radius = int(font_size * 0.35)
+        card_hex = norm_cover_card_color(card_color)
+        card_rgb = tuple(int(card_hex[i:i + 2], 16) for i in (1, 3, 5))
+        alpha = int(255 * norm_cover_card_opacity(card_opacity) / 100)
+        overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
+        draw_ov = ImageDraw.Draw(overlay)
+        draw_ov.rounded_rectangle(
+            [(width - block_w) / 2 - pad, top - pad, (width + block_w) / 2 + pad, top + total_h + pad],
+            radius=radius, fill=card_rgb + (alpha,))
+        img = Image.alpha_composite(img, overlay)
 
     draw = ImageDraw.Draw(img)
-    font_size = max(52, width // 18)
-    font = _load_font(font_size)
-
-    max_chars = max(10, int(width / (font_size * 0.55)))
-    lines = textwrap.wrap(title, width=max_chars)
-    line_height = font_size + 12
-    total_h = len(lines) * line_height
-    y = height - total_h - 48
-
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        tw = bbox[2] - bbox[0]
-        x = (width - tw) // 2
-        # Shadow
-        draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 200))
-        # White text
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += line_height
+    y = top
+    for ln, (line_height, line_w_total) in zip(lines, line_metrics):
+        x = (width - line_w_total) / 2
+        for word, font, word_fill, word_stroke in ln:
+            draw.text((x, y), word, font=font, fill=word_fill + (255,),
+                      stroke_width=stroke_w, stroke_fill=word_stroke + (255,))
+            x += scratch.textlength(word, font=font) + scratch.textlength(" ", font=font)
+        y += line_height + line_gap
 
     img.convert("RGB").save(str(output_path), "PNG")
+
+
+def _preview_placeholder_background(width: int, height: int):
+    """A generic dark gradient background for previewing cover typography
+    independent of any real generated cover art (used by the Styles-tab
+    typography editor, which has no film to preview against)."""
+    from PIL import Image
+
+    img = Image.new("RGB", (width, height))
+    px = img.load()
+    top = (28, 32, 46)
+    bottom = (12, 14, 22)
+    for y in range(height):
+        t = y / max(1, height - 1)
+        row = tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3))
+        for x in range(width):
+            px[x, y] = row
+    return img
 
 
 def render_cover_text_overlay(

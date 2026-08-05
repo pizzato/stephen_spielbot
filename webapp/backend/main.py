@@ -3875,6 +3875,19 @@ def start_generation(body: GenerateBody) -> dict:
         "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
         "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
         "first_frame_text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
+        # Cover-thumbnail typography: the title is composited with PIL onto a
+        # text-free generated background (pipeline/cover.py render_cover_typography)
+        # rather than baked in by the diffusion model.
+        "cover_text_position": gapp._norm_cover_text_position(ss.get("cover_text_position")),
+        "cover_text_font": str(ss.get("cover_text_font") or ""),
+        "cover_text_size": gapp._norm_cover_text_size(ss.get("cover_text_size")),
+        "cover_text_color": gapp._norm_cover_text_color(ss.get("cover_text_color")),
+        "cover_text_card": bool(ss.get("cover_text_card", True)),
+        "cover_text_card_color": gapp._norm_cover_card_color(ss.get("cover_text_card_color")),
+        "cover_text_card_opacity": gapp._norm_cover_card_opacity(ss.get("cover_text_card_opacity")),
+        "cover_text_emphasis": gapp._norm_cover_emphasis_rule(ss.get("cover_text_emphasis")),
+        "cover_text_emphasis_color": gapp._norm_cover_emphasis_color(ss.get("cover_text_emphasis_color")),
+        "cover_text_emphasis_scale": gapp._norm_cover_emphasis_scale(ss.get("cover_text_emphasis_scale")),
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
@@ -5459,6 +5472,45 @@ def list_fonts(refresh: bool = Query(False)) -> dict:
     """Fonts installed on this machine, for the per-style cover-text picker."""
     from pipeline.cover import available_fonts
     return {"fonts": available_fonts(refresh=refresh)}
+
+
+class CoverTypographyPreviewBody(BaseModel):
+    text: str = ""
+    font: str = ""
+    position: str = "bottom"
+    size: int = 11
+    color: str = "#FFFFFF"
+    card: bool = True
+    card_color: str = "#000000"
+    card_opacity: int = 55
+    emphasis_rule: str = "none"
+    emphasis_color: str = ""
+    emphasis_scale: float = 1.25
+
+
+@api.post("/api/styles/cover-typography-preview")
+def style_cover_typography_preview(body: CoverTypographyPreviewBody) -> dict:
+    """Cover-thumbnail typography as it will look, previewed against a generic
+    placeholder background (the Styles tab has no film to preview against —
+    this previews unsaved draft settings, not the persisted style)."""
+    from pipeline.cover import COVER_WIDTH, COVER_HEIGHT, _preview_placeholder_background, render_cover_typography
+
+    out_dir = gapp.CONFIG_FILE.parent / "cover_preview"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    base = out_dir / "placeholder.png"
+    if not base.exists():
+        _preview_placeholder_background(COVER_WIDTH, COVER_HEIGHT).save(base)
+
+    text = (body.text or "").strip()[:80] or "YOUR VIDEO TITLE HERE"
+    out = out_dir / "preview.png"
+    render_cover_typography(
+        base, out, text,
+        font_path=body.font, position=body.position, size_pct=body.size, color=body.color,
+        card=body.card, card_color=body.card_color, card_opacity=body.card_opacity,
+        emphasis_rule=body.emphasis_rule, emphasis_color=body.emphasis_color,
+        emphasis_scale=body.emphasis_scale,
+    )
+    return {"preview_url": _busted_file_url(out)}
 
 
 def _first_frame_burn_opts(wd: Path) -> dict:
@@ -7580,9 +7632,24 @@ def yt_cover(body: CoverBody) -> dict:
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
-        # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE): the title
-        # text must render legibly, and Klein garbles it.
-        engine = gapp.engines.resolve(cfg, gapp.engines.COVER_ENGINE)
+        # The film's own style drives the background image (same engine as its
+        # scenes — the cover background never needs the model to render text
+        # in-image, so it's no longer pinned to a weaker text-capable engine).
+        style_name = _film_job_config(wd).get("style_name") or ""
+        ss = gapp.style_settings(cfg, style_name)
+        engine = gapp.engines.resolve(cfg, ss.get("image_engine"))
+        cover_text = {
+            "font_path": str(ss.get("cover_text_font") or ""),
+            "position": gapp._norm_cover_text_position(ss.get("cover_text_position")),
+            "size_pct": gapp._norm_cover_text_size(ss.get("cover_text_size")),
+            "color": gapp._norm_cover_text_color(ss.get("cover_text_color")),
+            "card": bool(ss.get("cover_text_card", True)),
+            "card_color": gapp._norm_cover_card_color(ss.get("cover_text_card_color")),
+            "card_opacity": gapp._norm_cover_card_opacity(ss.get("cover_text_card_opacity")),
+            "emphasis_rule": gapp._norm_cover_emphasis_rule(ss.get("cover_text_emphasis")),
+            "emphasis_color": gapp._norm_cover_emphasis_color(ss.get("cover_text_emphasis_color")),
+            "emphasis_scale": gapp._norm_cover_emphasis_scale(ss.get("cover_text_emphasis_scale")),
+        }
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
@@ -7596,6 +7663,7 @@ def yt_cover(body: CoverBody) -> dict:
                 "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
                 "engine": engine,
+                "cover_text": cover_text,
                 # flux_* kept for back-compat with pre-engine workers.
                 "flux_steps": cfg.get("flux_steps", 4),
                 "flux_model": cfg.get("flux_model", "flux1-schnell-fp8.safetensors"),

@@ -758,11 +758,14 @@ translate_metadata:
 
 cover_image:
   description: |
-    FLUX prompt for the 1280x720 YouTube cover thumbnail. The `subject_hint` is
-    auto-generated from a sample of scene image_prompts so the cover reflects the
-    actual video content (and is empty when no scenes are provided).
+    FLUX prompt for the 1280x720 YouTube cover thumbnail BACKGROUND (no text —
+    the title is composited afterward with PIL, see pipeline/cover.py
+    render_cover_typography, so diffusion never has to render characters).
+    The `subject_hint` is auto-generated from a sample of scene image_prompts
+    so the cover reflects the actual video content (and is empty when no
+    scenes are provided).
   user: |
-    Create a high-impact YouTube documentary thumbnail in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Composition: large readable title text dominates the centre, with supporting subject imagery arranged around it in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. Text: include the exact title: "${title}". The title must be spelled correctly, large, clean, bold, and easy to read. Use thick block lettering with strong shadow or outline. Do not add any extra words, fake letters, random symbols, or misspelled text. Visual content: show the key people, objects, places, and elements related to the topic. Make the image feel like a complete visual summary of the story. Layout: avoid clutter, keep the subject clear, make the title readable first, then the background details. Leave safe margins around the edges. No watermark, no logo, no UI elements. Avoid: ${negative}.
+    Create a high-impact YouTube documentary thumbnail BACKGROUND in 16:9 landscape format, WITHOUT any text, letters, numbers, captions, or writing anywhere in the image. Topic: ${title}. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Composition: show the key people, objects, places, and elements related to the topic as a dramatic collage, leaving a clear, uncluttered area (top, middle, or bottom third) where a title will be added afterward. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. Make the image feel like a complete visual summary of the story. Leave safe margins around the edges. No watermark, no logo, no UI elements, no on-screen text of any kind. Avoid: ${negative}.
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -780,4 +783,4 @@ cover_negative:
   description: |
     Substituted into the cover_image prompt as ${negative}.
   value: |
-    blurry, low resolution, bad text, misspelled words, extra letters, unreadable title, random text, watermark, logo, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
+    text, letters, words, writing, captions, subtitles, typography, blurry, low resolution, watermark, logo, messy layout, too much clutter, distorted faces, deformed hands, boring flat lighting, plain background
