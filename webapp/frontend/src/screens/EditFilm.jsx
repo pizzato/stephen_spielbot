@@ -554,6 +554,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [coverPhrase, setCoverPhrase] = useState('')
   const [coverPhraseSaved, setCoverPhraseSaved] = useState('')
   const [coverPhraseDefault, setCoverPhraseDefault] = useState('')
+  // Cover typography (per style): real-font titles composited on a text-free
+  // background — enables the *accent* markup hint and "Re-apply title text".
+  const [coverTypoOn, setCoverTypoOn] = useState(false)
+  const [coverHasBg, setCoverHasBg] = useState(false)
 
   const onVideoMeta = (e) => {
     const w = e.target.videoWidth, h = e.target.videoHeight
@@ -588,6 +592,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       setCoverPhrase(p.cover_phrase || '')
       setCoverPhraseSaved(p.cover_phrase || '')
       setCoverPhraseDefault(p.cover_phrase_default || '')
+      setCoverTypoOn(!!p.cover_typography_enabled)
+      setCoverHasBg(!!p.cover_has_bg)
       if (p.first_frame_cover_seconds) setFfSeconds(p.first_frame_cover_seconds)
     }).catch(() => {})
     api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
@@ -709,7 +715,20 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       setCoverPhrase(r.cover_phrase || '')
       setCoverPhraseSaved(r.cover_phrase || '')
       setCoverPhraseDefault(r.cover_phrase_default || '')
-      setStatus('Saved the cover phrase — regenerate the cover or burn the opening to use it.')
+      if (r.cover_url) setCoverUrl(r.cover_url)
+      setStatus(r.retexted
+        ? 'Saved — the title was re-applied to the cover instantly.'
+        : 'Saved the cover phrase — regenerate the cover or burn the opening to use it.')
+    } catch (e) { setError(e.message) } finally { setYtBusy('') }
+  }
+
+  // Re-composite the title onto the cover's saved text-free background —
+  // applies phrase or Styles-tab typography changes without regenerating art.
+  const retextCover = async () => {
+    setYtBusy('retext'); setError('')
+    try {
+      const r = await api.coverRetext(workDir)
+      if (r.cover_url) setCoverUrl(r.cover_url)
     } catch (e) { setError(e.message) } finally { setYtBusy('') }
   }
 
@@ -1057,7 +1076,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
           <div className="mt-16">
-            <Field label="Cover phrase" hint="The short text painted on the cover and burned into the film’s opening — follows the title until you edit it.">
+            <Field label="Cover phrase" hint={'The short text painted on the cover and burned into the film’s opening — follows the title until you edit it.'
+              + (coverTypoOn ? ' Wrap a word in *asterisks* to give it the accent colour.' : '')}>
               <input className="input" value={coverPhrase} maxLength={80} disabled={!!ytBusy}
                 onChange={(e) => { setCoverPhrase(e.target.value); setStatus('') }} />
             </Field>
@@ -1084,6 +1104,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             onRegen={regenCover} chips={REGEN_CHIPS.cover} />
           <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!coverUrl || !!ytBusy}
             onClick={() => { setCoverEditErr(''); setCoverEdit(true) }}>Edit cover</Button>
+          {coverTypoOn && coverHasBg && (
+            <Button variant="ghost" block icon="font" disabled={!!ytBusy}
+              onClick={retextCover}>{ytBusy === 'retext' ? 'Re-applying title…' : 'Re-apply title text'}</Button>
+          )}
           <VersionStrip versions={coverHist?.versions} selected={coverHist?.selected}
             onSelect={selectCover} onDelete={deleteCover} aspect={aspect} busy={ytBusy === 'cover' || ytBusy === 'coveredit'} />
           {/* The burn lives with the cover it stamps — Shorts ignore uploaded

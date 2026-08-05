@@ -62,6 +62,7 @@ from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
 from pipeline import engines
+from pipeline.cover_typography import DEFAULT_COVER_TYPOGRAPHY
 from pipeline import tts_engines
 
 MAX_SCENES    = 200
@@ -252,6 +253,11 @@ DEFAULT_CFG = {
     "default_first_frame_text_font": "",
     "default_first_frame_text_size": 11,
     "default_first_frame_text_color": "#FFFFFF",
+    # Cover typography (pipeline/cover_typography.py): when enabled the cover
+    # background is generated TEXT-FREE (with the style's own image engine) and
+    # the title is composited on top with real fonts — position, colours,
+    # accent words, card are all part of this dict. Mirrors the default style.
+    "default_cover_typography": dict(DEFAULT_COVER_TYPOGRAPHY),
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -413,6 +419,8 @@ STYLE_FIELD_TO_FLAT = {
     "first_frame_text_font":  "default_first_frame_text_font",
     "first_frame_text_size":  "default_first_frame_text_size",
     "first_frame_text_color": "default_first_frame_text_color",
+    # Cover typography: text-free background + composited real-font title
+    "cover_typography":     "default_cover_typography",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -801,6 +809,12 @@ def _norm_first_frame_text_size(value) -> int:
     return norm_first_frame_text_size(value)
 
 
+def _norm_cover_typography(value) -> dict:
+    """Coerce a style's cover_typography dict (see pipeline/cover_typography.py)."""
+    from pipeline.cover_typography import norm_cover_typography
+    return norm_cover_typography(value)
+
+
 def _norm_first_frame_text_color(value) -> str:
     """Coerce the cover-text colour to "#RRGGBB"."""
     from pipeline.cover import norm_first_frame_text_color
@@ -950,6 +964,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
         _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
         _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)
+        _coerce(row, "cover_typography", _norm_cover_typography)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved. (A child without its own

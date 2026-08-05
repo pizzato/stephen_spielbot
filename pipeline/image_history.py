@@ -257,6 +257,12 @@ def _add_cover_version(work_dir: Path, image: Path, entry: dict) -> dict:
     vid = int(entry.get("next_id", 1))
     fname = f"cover_v{vid}.png"
     shutil.copy2(image, hist / fname)
+    # Cover-typography covers keep their TEXT-FREE background (cover_bg.png)
+    # next to the composited version, so selecting an old version later still
+    # supports re-texting (phrase/style tweaks without regenerating the art).
+    base = Path(image).with_name("cover_bg.png")
+    if base.exists():
+        shutil.copy2(base, hist / f"cover_v{vid}_bg.png")
     entry.setdefault("versions", []).append({"id": vid, "file": fname})
     entry["selected"] = vid
     entry["next_id"] = vid + 1
@@ -309,6 +315,14 @@ def cover_select(work_dir: Path, version_id: int) -> Path:
         # the stale-final sweep and /api/file cache-busters key off cover.png's
         # mtime, so picking an older version must still read as a fresh change.
         os.utime(cover)
+        # Restore this version's text-free background (or drop the stale one so
+        # re-texting can't composite the phrase onto a different version's art).
+        src_base = _hist_dir(work_dir) / f"cover_v{version_id}_bg.png"
+        wd_base = Path(work_dir) / "cover_bg.png"
+        if src_base.exists():
+            shutil.copy2(src_base, wd_base)
+        else:
+            wd_base.unlink(missing_ok=True)
         entry["selected"] = version_id
         data[_COVER_KEY] = entry
         _save(work_dir, data)
@@ -322,6 +336,7 @@ def cover_delete(work_dir: Path, version_id: int) -> dict:
         data = _load(work_dir)
         entry = data.get(_COVER_KEY) or {"versions": [], "selected": None, "next_id": 1}
         _delete_version(work_dir, entry, version_id, "cover")
+        (_hist_dir(work_dir) / f"cover_v{int(version_id)}_bg.png").unlink(missing_ok=True)
         data[_COVER_KEY] = entry
         _save(work_dir, data)
     return cover_history(work_dir)

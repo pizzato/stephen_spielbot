@@ -67,6 +67,11 @@ from pipeline.cover import (
     cover_dimensions as _cover_dimensions,
     cover_phrase_for as _cover_phrase_for,
 )
+from pipeline.cover_typography import (
+    COVER_BASE_NAME as _COVER_BG_NAME,
+    apply_cover_typography as _apply_cover_typography,
+    norm_cover_typography as _norm_cover_typography,
+)
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
 OUTPUT_DIR  = Path.home() / "videos"
@@ -864,21 +869,31 @@ def main(work_dir: Path) -> None:
         logger.info("Generating YouTube cover image for '%s'", video_title)
         _cover_url: str | None = None
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
+        # Cover typography: paint a TEXT-FREE background with the style's own
+        # image engine and composite the title with real fonts afterwards.
+        # Legacy mode keeps FLUX.1 schnell (see engines.COVER_ENGINE) — the
+        # model must draw the title itself, and Klein garbles in-image text.
+        typo = _norm_cover_typography(cfg.get("cover_typography")
+                                      or cfg.get("default_cover_typography"))
         try:
             _cover_url = worker_pool.acquire()
-            # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE), same as
-            # UI re-generation; resolve() keeps the flat flux_* overrides.
             generate_with_engine(
-                _engines.resolve(cfg, _engines.COVER_ENGINE),
-                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean, scenes=scenes),
-                cover_base,
+                _engines.resolve(cfg, cfg.get("image_engine") if typo["enabled"]
+                                 else _engines.COVER_ENGINE),
+                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean,
+                              scenes=scenes, text_free=typo["enabled"],
+                              text_position=typo["position"]),
+                work_dir / _COVER_BG_NAME if typo["enabled"] else cover_base,
                 width=cover_w,
                 height=cover_h,
                 comfy_url=_cover_url,
             )
             worker_pool.release(_cover_url)
             _cover_url = None
-            shutil.copy2(cover_base, cover_path)
+            if typo["enabled"]:
+                _apply_cover_typography(work_dir, typo, video_title)
+            else:
+                shutil.copy2(cover_base, cover_path)
             logger.info("Cover image saved: %s", cover_path)
         except Exception as _cover_err:
             logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)

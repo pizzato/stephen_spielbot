@@ -64,6 +64,10 @@ export default function Publish({ initialWorkDir, go }) {
   const [coverPhrase, setCoverPhrase] = useState('')
   const [coverPhraseSaved, setCoverPhraseSaved] = useState('')
   const [coverPhraseDefault, setCoverPhraseDefault] = useState('')
+  // Cover typography (per style): real-font titles composited on a text-free
+  // background — enables the *accent* markup hint and "Re-apply title text".
+  const [coverTypoOn, setCoverTypoOn] = useState(false)
+  const [coverHasBg, setCoverHasBg] = useState(false)
   // Opening burn (Shorts pick their own frame, not the uploaded thumbnail).
   const [ffCoverMode, setFfCoverMode] = useState('image')
   const [ffSeconds, setFfSeconds] = useState(1)
@@ -152,6 +156,8 @@ export default function Publish({ initialWorkDir, go }) {
       setCoverPhrase(p.cover_phrase || '')
       setCoverPhraseSaved(p.cover_phrase || '')
       setCoverPhraseDefault(p.cover_phrase_default || '')
+      setCoverTypoOn(!!p.cover_typography_enabled)
+      setCoverHasBg(!!p.cover_has_bg)
       if (p.first_frame_cover_seconds) setFfSeconds(p.first_frame_cover_seconds)
       setFfStatus('')
       setCoverHist(null)
@@ -268,6 +274,17 @@ export default function Publish({ initialWorkDir, go }) {
       setCoverPhrase(r.cover_phrase || '')
       setCoverPhraseSaved(r.cover_phrase || '')
       setCoverPhraseDefault(r.cover_phrase_default || '')
+      if (r.cover_url) setCoverUrl(r.cover_url)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  // Re-composite the title onto the cover's saved text-free background —
+  // applies phrase or Styles-tab typography changes without regenerating art.
+  const retextCover = async () => {
+    setBusy('retext'); setError('')
+    try {
+      const r = await api.coverRetext(workDir)
+      if (r.cover_url) setCoverUrl(r.cover_url)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -518,7 +535,8 @@ export default function Publish({ initialWorkDir, go }) {
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
           <div className="mt-16">
-            <Field label="Cover phrase" hint="The short text painted on the cover and burned into the film’s opening — follows the title until you edit it.">
+            <Field label="Cover phrase" hint={'The short text painted on the cover and burned into the film’s opening — follows the title until you edit it.'
+              + (coverTypoOn ? ' Wrap a word in *asterisks* to give it the accent colour.' : '')}>
               <input className="input" value={coverPhrase} maxLength={80} disabled={!workDir || busy === 'phrase'}
                 onChange={(e) => setCoverPhrase(e.target.value)} />
             </Field>
@@ -549,6 +567,10 @@ export default function Publish({ initialWorkDir, go }) {
               : 'Generating cover…'}
             busy={busy === 'cover'} disabled={busy === 'cover' || !workDir}
             onRegen={regenCover} chips={['Bolder', 'Simpler', 'More dramatic']} />
+          {coverTypoOn && coverHasBg && (
+            <Button variant="ghost" block icon="font" disabled={!workDir || busy === 'retext'}
+              onClick={retextCover}>{busy === 'retext' ? 'Re-applying title…' : 'Re-apply title text'}</Button>
+          )}
           {busy !== 'cover' && uiWorker?.active && !uiWorker.available && uiWorker.eta_text && (
             <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
               Render busy — a worker will be free for covers in {uiWorker.eta_text}.

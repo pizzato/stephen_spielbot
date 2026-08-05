@@ -13,6 +13,7 @@ Run it from the repo root:
 
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -61,8 +62,16 @@ from pipeline import final_video_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     COVER_PHRASE_FILE,
     COVER_PHRASE_MAX_CHARS,
+    cover_dimensions,
     cover_phrase_for,
     shorten_title_for_cover,
+)
+from pipeline.cover_typography import (  # noqa: E402
+    COVER_BASE_NAME,
+    apply_cover_typography,
+    bundled_fonts,
+    preview_background,
+    render_cover_typography,
 )
 
 @asynccontextmanager
@@ -2850,8 +2859,8 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
                 shutil.copy2(sp, new_wd / suffix)
     # story.json keeps a story-mode source's prose draft, so the duplicate still
     # shows the Story tab and can redraft/re-divide.
-    for extra in ("description.txt", "cover.png", "cover_phrase.txt", "characters.json",
-                  "create_brief.json", "story.json"):
+    for extra in ("description.txt", "cover.png", "cover_bg.png", "cover_phrase.txt",
+                  "characters.json", "create_brief.json", "story.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
@@ -3875,6 +3884,10 @@ def start_generation(body: GenerateBody) -> dict:
         "first_frame_text_font": str(ss.get("first_frame_text_font") or ""),
         "first_frame_text_size": gapp._norm_first_frame_text_size(ss.get("first_frame_text_size")),
         "first_frame_text_color": gapp._norm_first_frame_text_color(ss.get("first_frame_text_color")),
+        # Cover typography: text-free background + composited real-font title
+        # (pipeline/cover_typography.py). Stamped resolved so the render-time
+        # cover uses the style's look without re-resolving the hierarchy.
+        "cover_typography": gapp._norm_cover_typography(ss.get("cover_typography")),
         # Resolved per-style LTX video negative (blank → built-in default). Stamped
         # into job_config.json so a resumed render (resume_generation.py) reuses it.
         "video_negative_prompt": video_neg,
@@ -4287,6 +4300,10 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # else derived from the title (edit it from the cover card).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
+        # Cover typography (per style): whether it's on for this film, and
+        # whether a text-free background exists so "Re-apply text" can work.
+        "cover_typography_enabled": _cover_typography_for(wd, cfg)["enabled"],
+        "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
@@ -5458,7 +5475,7 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
 def list_fonts(refresh: bool = Query(False)) -> dict:
     """Fonts installed on this machine, for the per-style cover-text picker."""
     from pipeline.cover import available_fonts
-    return {"fonts": available_fonts(refresh=refresh)}
+    return {"fonts": available_fonts(refresh=refresh), "bundled": bundled_fonts()}
 
 
 def _first_frame_burn_opts(wd: Path) -> dict:
@@ -7148,6 +7165,10 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
+        # Cover typography (per style): drives the *accent* markup hint and
+        # the "Re-apply text" button on the cover card.
+        "cover_typography_enabled": _cover_typography_for(wd)["enabled"],
+        "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         # How long a manual burn holds the cover — prefilled from the film's
         # style; the burn controls let you override it for this film.
         "first_frame_cover_seconds": _first_frame_burn_opts(wd)["seconds"],
@@ -7563,6 +7584,24 @@ def _track_durable_task(tid: str, name: str, detail: str, poll: float = 1.5) -> 
         pass
 
 
+def _cover_style_settings(wd: Path, cfg: dict | None = None) -> dict:
+    """Effective settings of the style that made this film (job_config
+    style_name), resolved LIVE — so Styles-tab typography tweaks apply to
+    cover regens and re-texts without re-rendering the film. Falls back to
+    the film's job_config snapshot when the style no longer exists."""
+    cfg = cfg or gapp.load_config()
+    jc = _film_job_config(wd)
+    name = str(jc.get("style_name") or "")
+    if name and any(s.get("name") == name for s in cfg.get("styles") or []):
+        return gapp.style_settings(cfg, name)
+    return jc
+
+
+def _cover_typography_for(wd: Path, cfg: dict | None = None) -> dict:
+    """The film's live cover-typography settings, normalized."""
+    return gapp._norm_cover_typography(_cover_style_settings(wd, cfg).get("cover_typography"))
+
+
 @api.post("/api/youtube/cover")
 def yt_cover(body: CoverBody) -> dict:
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
@@ -7580,9 +7619,17 @@ def yt_cover(body: CoverBody) -> dict:
     store = DurableStore.default()
     try:
         store.create_or_update_job(job_id, wd, title, status="done")
-        # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE): the title
-        # text must render legibly, and Klein garbles it.
-        engine = gapp.engines.resolve(cfg, gapp.engines.COVER_ENGINE)
+        typo = _cover_typography_for(wd, cfg)
+        if typo["enabled"]:
+            # Text-free background + composited title: the style's own image
+            # engine can paint it (the schnell pin below existed only because
+            # the model had to draw the title itself).
+            ss = _cover_style_settings(wd, cfg)
+            engine = gapp.engines.resolve(cfg, ss.get("image_engine"))
+        else:
+            # Legacy covers make the model render the title, which must stay
+            # legible — Klein garbles in-image text, so FLUX.1 schnell it is.
+            engine = gapp.engines.resolve(cfg, gapp.engines.COVER_ENGINE)
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
@@ -7592,6 +7639,7 @@ def yt_cover(body: CoverBody) -> dict:
                 "title": title,
                 "style": body.style or "",
                 "instruction": body.instruction or "",
+                "cover_typography": typo,
                 "vid_width": vid_width,
                 "vid_height": vid_height,
                 "comfy_url": _best_cover_comfy_url(),
@@ -7768,11 +7816,66 @@ def save_cover_phrase(body: CoverPhraseBody) -> dict:
         path.unlink(missing_ok=True)
     else:
         path.write_text(phrase, encoding="utf-8")
+    # With cover typography on, the new phrase (incl. *accent* markup) is
+    # re-composited onto the saved text-free background right away — no image
+    # regeneration. The stale-final sweep re-burns any first-frame cover.
+    retexted = False
+    typo = _cover_typography_for(wd)
+    if typo["enabled"]:
+        retexted = apply_cover_typography(wd, typo, title) is not None
     return {
         "ok": True,
+        "retexted": retexted,
+        "cover_url": f"/api/file?path={wd / 'cover.png'}&t={int(time.time())}" if retexted else "",
         "cover_phrase": cover_phrase_for(wd, title),
         "cover_phrase_default": shorten_title_for_cover(title),
     }
+
+
+class CoverRetextBody(BaseModel):
+    work_dir: str
+
+
+@api.post("/api/youtube/cover/retext")
+def cover_retext(body: CoverRetextBody) -> dict:
+    """Re-composite the title onto the cover's saved text-free background —
+    apply phrase or Styles-tab typography changes without regenerating art."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    typo = _cover_typography_for(wd)
+    if not typo["enabled"]:
+        raise HTTPException(400, "Cover typography is off for this film's style — "
+                                 "enable it in Settings → Styles first.")
+    base = wd / COVER_BASE_NAME
+    if not base.exists() or base.stat().st_size < 1000:
+        raise HTTPException(400, "This cover has no text-free background yet — "
+                                 "regenerate the cover once, then re-text freely.")
+    if apply_cover_typography(wd, typo, _video_title_for(wd)) is None:
+        raise HTTPException(500, "Re-text failed — the background image is unreadable.")
+    return {"ok": True,
+            "cover_url": f"/api/file?path={wd / 'cover.png'}&t={int(time.time())}"}
+
+
+class CoverTypographyPreviewBody(BaseModel):
+    cover_typography: dict = {}
+    text: str = ""
+    orientation: str = "landscape"  # "landscape" | "portrait"
+
+
+@api.post("/api/cover-typography/preview")
+def cover_typography_preview(body: CoverTypographyPreviewBody) -> Response:
+    """Styles-tab live preview: the draft typography rendered by the exact code
+    that composites real covers, over a stand-in gradient background."""
+    dims = (1080, 1920) if body.orientation == "portrait" else (1920, 1080)
+    cw, ch = cover_dimensions(*dims)
+    # Half resolution keeps the round-trip snappy; the layout scales linearly.
+    w, h = max(2, cw // 2), max(2, ch // 2)
+    text = " ".join((body.text or "").split())[:COVER_PHRASE_MAX_CHARS] or "The Secret Story"
+    buf = io.BytesIO()
+    render_cover_typography(preview_background(w, h), buf, text,
+                            gapp._norm_cover_typography(body.cover_typography))
+    return Response(content=buf.getvalue(), media_type="image/png")
 
 
 class ThumbnailBody(BaseModel):

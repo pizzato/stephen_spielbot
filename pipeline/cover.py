@@ -131,7 +131,8 @@ def _extract_scene_aspects(scenes) -> str:
     return " | ".join(snippets[:3])
 
 
-def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: str = "") -> str:
+def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: str = "",
+                       text_free: bool = False, text_position: str = "") -> str:
     """Build a FLUX prompt for a YouTube documentary cover image.
 
     scenes: optional iterable of Scene objects or dicts with `image_prompt`. When
@@ -139,18 +140,36 @@ def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: st
             actual video content (not random topic-biased imagery).
     instruction: optional one-off user steering from the Re-generate popover
             (e.g. "make it all robots"), appended to the prompt.
+    text_free: cover-typography mode — ask for artwork with NO text at all (the
+            title is composited afterwards with real fonts, so the model never
+            gets a chance to misspell it). text_position ("top"/"middle"/
+            "bottom") asks for calmer space where the title will land.
     """
+    from pipeline.cover_typography import strip_phrase_markup
+
     style_note = style.strip().rstrip(".")
     style_line = f"Video visual style: {style_note}. " if style_note else ""
     aspects = _extract_scene_aspects(scenes)
     subject_hint = f"Key visual elements from the video: {aspects}. " if aspects else ""
-    prompt = _prompts.user(
-        "cover_image",
-        title=title,
-        style_line=style_line,
-        subject_hint=subject_hint,
-        negative=_prompts.value("cover_negative"),
-    )
+    if text_free:
+        pos = text_position if text_position in ("top", "middle", "bottom") else "bottom"
+        space_hint = ("the vertical middle band" if pos == "middle"
+                      else f"the {pos} third") + " of the frame"
+        prompt = _prompts.user(
+            "cover_image_notext",
+            style_line=style_line,
+            subject_hint=subject_hint,
+            space_hint=space_hint,
+            negative=_prompts.value("cover_negative_notext"),
+        )
+    else:
+        prompt = _prompts.user(
+            "cover_image",
+            title=strip_phrase_markup(title),
+            style_line=style_line,
+            subject_hint=subject_hint,
+            negative=_prompts.value("cover_negative"),
+        )
     instruction = (instruction or "").strip()[:500]
     if instruction:
         prompt = f"{prompt}. {instruction}"
@@ -319,6 +338,9 @@ def render_cover_text_overlay(
     from PIL import Image, ImageDraw
     import textwrap
 
+    from pipeline.cover_typography import strip_phrase_markup
+
+    text = strip_phrase_markup(text)  # *accent* markup is cover-typography only
     img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     font_size = max(16, width * norm_first_frame_text_size(size_pct) // 100)

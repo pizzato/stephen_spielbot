@@ -101,3 +101,15 @@ readers are (or were) real people, and several jurisdictions protect a person's
 voice and likeness separately from copyright — that dimension is yours to
 assess for your use. Each voice's source recording is recorded in `config.yaml`
 (`voices[].source`) for transparency.
+
+## Bundled display fonts (cover typography)
+
+`assets/fonts/` ships ten display typefaces used to draw cover titles
+(`pipeline/cover_typography.py`), fetched from the
+[google/fonts](https://github.com/google/fonts) repository. Each family's
+directory includes its own licence file. All are commercial-friendly.
+
+| Font | Licence |
+|---|---|
+| Abril Fatface, Alfa Slab One, Anton, Archivo Black, Bangers, Bebas Neue, Lilita One, Passion One, Titan One | SIL Open Font License 1.1 (`OFL.txt` in each dir) |
+| Luckiest Guy | Apache-2.0 (`LICENSE.txt` in its dir) |

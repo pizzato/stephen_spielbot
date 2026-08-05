@@ -320,6 +320,7 @@ export const api = {
   coverHistory: (workDir) => req('GET', `/youtube/cover/history?work_dir=${encodeURIComponent(workDir || '')}`),
   coverInpaint: (workDir, mask, prompt, denoise) => req('POST', '/youtube/cover/inpaint', { work_dir: workDir, mask, prompt, denoise }),
   coverSelect: (workDir, versionId) => req('POST', '/youtube/cover/select', { work_dir: workDir, version_id: versionId }),
+  coverRetext: (workDir) => req('POST', '/youtube/cover/retext', { work_dir: workDir }),
   coverDelete: (workDir, versionId) => req('POST', '/youtube/cover/delete', { work_dir: workDir, version_id: versionId }),
   ytThumbnail: (body) => req('POST', '/youtube/thumbnail', body),
   ytPost: (body) => req('POST', '/youtube/post', body),

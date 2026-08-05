@@ -103,6 +103,19 @@ picker discards; a second reads as its own shot. `image` freezes the picture for
 costs no motion. Then the **font**, **size** (as a % of video width), and **colour** for
 the text variant.
 
+**Cover typography** — draw thumbnail titles with real fonts instead of asking the image
+model to paint them (diffusion models misspell words, and every regeneration is a fresh
+dice roll). When enabled, the cover background is generated **text-free** — with the
+style's own image engine, so it matches the film's look instead of the legacy
+FLUX.1-schnell pin — and the title is composited on top. Font (a bundled thumbnail-grade
+set plus anything installed on the machine), position, alignment, case, size, colours, an
+optional backdrop card, and an **accent rule** (first/last word, last line, longest word —
+a different colour and size for the words that matter) are all set here, with a live
+preview rendered by the exact code that composites real covers. Per film, wrap words in
+`*asterisks*` in the cover phrase to hand-pick the accented words, and use **Re-apply
+title text** on the cover card to restyle an existing cover instantly — no image
+regeneration needed.
+
 ### Script & content
 
 | Field | Effect |
