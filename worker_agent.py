@@ -278,9 +278,15 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     typo = p.get("cover_typography")
     if not isinstance(typo, dict) or not typo:
         typo = jc.get("cover_typography") or {}
-    prompt = build_cover_prompt(p.get("style") or "", scenes=rows,
-                                instruction=p.get("instruction") or "",
-                                text_position=str(typo.get("position") or ""))
+    # The backend builds the prompt (composed visual style + character
+    # reference notes) and attaches the reference image paths — the cover gets
+    # the same conditioning as scene stills. Payloads from older backends fall
+    # back to a locally built prompt without references.
+    prompt = p.get("prompt") or build_cover_prompt(
+        p.get("style") or "", scenes=rows,
+        instruction=p.get("instruction") or "",
+        text_position=str(typo.get("position") or ""))
+    ref_images = [Path(r) for r in (p.get("reference_images") or []) if r]
 
     cover_path = work_dir / "cover.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
@@ -301,6 +307,7 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     generate_with_engine(
         engine, prompt, work_dir / COVER_BASE_NAME,
         width=cover_w, height=cover_h, comfy_url=comfy_url,
+        reference_images=ref_images or None,
     )
     apply_cover_typography(work_dir, typo, title)
     image_history.cover_record(work_dir, cover_path)

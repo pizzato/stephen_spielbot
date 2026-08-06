@@ -2423,6 +2423,30 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
     return prompt, refs
 
 
+def build_cover_generation(work_dir, cfg: dict, style_name: str, scenes=None,
+                           instruction: str = "", extra_style: str = "",
+                           text_position: str = "",
+                           engine: dict | None = None) -> tuple[str, list]:
+    """Cover-background prompt + character reference images for one film.
+
+    The cover must read as a frame from the SAME production as the scene
+    stills: the composed per-style visual style leads the prompt
+    (_compose_visual_style — the same text the script's image prompts open
+    with), and every character named in the subject hint gets the same
+    canonical-appearance clause, portrait reference image, and exact-match
+    note the scene renders use (_characters_prompt_and_refs). Returns
+    ``(prompt, reference_image_paths)`` — pass the refs to
+    generate_with_engine (engines without reference conditioning ignore them).
+    """
+    from pipeline.cover import build_cover_prompt
+
+    style_text = _compose_visual_style(extra_style, cfg, style_name)
+    prompt = build_cover_prompt(style_text, scenes=scenes, instruction=instruction,
+                                text_position=text_position)
+    wd = Path(work_dir) if work_dir else None
+    return _characters_prompt_and_refs(prompt, {}, cfg, style_name, wd, engine=engine)
+
+
 def _find_character(cfg: dict, char_id: str) -> dict:
     """Return the character with the given id from the global library, raising
     ValueError if unknown. The character must already be persisted (ids are

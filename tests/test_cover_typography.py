@@ -173,6 +173,59 @@ class PromptTests(unittest.TestCase):
         self.assertIn("Gritty 16mm", p)
         self.assertIn("bottom third", build_cover_prompt())  # default position
 
+    def test_prompt_defers_to_the_video_style(self):
+        # The template must not push covers toward a generic photoreal
+        # documentary look — the film's own style has to win.
+        p = build_cover_prompt("Cel-shaded animated graphic novel")
+        self.assertIn("SAME production", p)
+        self.assertNotIn("documentary", p)
+        self.assertNotIn("16:9", p)  # portrait covers use the same template
+
+
+class BuildCoverGenerationTests(unittest.TestCase):
+    """The cover gets the same conditioning as scene stills: the composed
+    visual style leads, matched characters contribute their canonical
+    appearance, and reference-conditioning engines get portraits + notes."""
+
+    def setUp(self):
+        self.portrait = Path(tempfile.mkdtemp(prefix="spielbot-char-")) / "amy.png"
+        ct.preview_background(64, 64).save(self.portrait, "PNG")
+        self.cfg = {"styles": [{"name": "Docs",
+                                "visual_style": "Cel-shaded graphic novel still"}],
+                    "default_style": "Docs"}
+        app._ensure_styles(self.cfg)
+        self.char = {"name": "Amelia", "description": "a girl with a red scarf",
+                     "enabled": True, "ref_image": "amy.png", "_ref_path": self.portrait}
+        self.scenes = [{"image_prompt":
+                        "Amelia stands on a cliff overlooking the storm at dawn, wide shot"}]
+
+    def test_style_leads_and_characters_flow_in(self):
+        engine = {"key": "flux2-klein", "t2i_ref_workflow": "flux2_t2i_ref.json"}
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=self.scenes, engine=engine)
+        self.assertIn("Cel-shaded graphic novel still", prompt)
+        self.assertLess(prompt.index("Cel-shaded"), prompt.index("Amelia"))
+        self.assertIn("a girl with a red scarf", prompt)   # canonical appearance
+        self.assertIn("EXACTLY as the character", prompt)  # reference-match note
+        self.assertEqual(refs, [self.portrait])
+
+    def test_engines_without_reference_support_get_no_note(self):
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs", scenes=self.scenes, engine={"key": "flux1-schnell"})
+        self.assertIn("a girl with a red scarf", prompt)
+        self.assertNotIn("EXACTLY as the character", prompt)
+        self.assertEqual(refs, [self.portrait])  # caller passes; flux1 ignores
+
+    def test_unmentioned_characters_stay_out(self):
+        with mock.patch.object(app, "_job_characters", return_value=[self.char]):
+            prompt, refs = app.build_cover_generation(
+                None, self.cfg, "Docs",
+                scenes=[{"image_prompt": "A lighthouse at night in heavy rain, long exposure"}])
+        self.assertNotIn("red scarf", prompt)
+        self.assertEqual(refs, [])
+
 
 class ApplyTests(unittest.TestCase):
     def setUp(self):

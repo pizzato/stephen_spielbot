@@ -61,8 +61,8 @@ from pipeline import ui_activity
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
 from app import _RESOLUTIONS, _DEFAULT_RESOLUTION, _dialogue_resolvers
+from app import build_cover_generation as _build_cover_generation
 from pipeline.cover import (
-    build_cover_prompt as _cover_prompt,
     burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
 )
@@ -869,21 +869,26 @@ def main(work_dir: Path) -> None:
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
         # Cover typography: paint a TEXT-FREE background, then composite the
         # title with real fonts on top — the model never draws (or misspells)
-        # a single letter. The artwork uses image_engine, the SAME resolved
-        # engine as the scene stills (job key → styles lookup → default), so
-        # the cover always matches the film's look.
+        # a single letter. The artwork uses image_engine — the SAME resolved
+        # engine as the scene stills — plus the same composed visual style and
+        # character reference conditioning, so the cover reads as a frame from
+        # the same production.
         typo = _norm_cover_typography(cfg.get("cover_typography")
                                       or cfg.get("default_cover_typography"))
+        cover_prompt, cover_refs = _build_cover_generation(
+            work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
+            extra_style=style_clean, text_position=typo["position"],
+            engine=image_engine)
         try:
             _cover_url = worker_pool.acquire()
             generate_with_engine(
                 image_engine,
-                _cover_prompt(style_clean, scenes=scenes,
-                              text_position=typo["position"]),
+                cover_prompt,
                 work_dir / _COVER_BG_NAME,
                 width=cover_w,
                 height=cover_h,
                 comfy_url=_cover_url,
+                reference_images=cover_refs or None,
             )
             worker_pool.release(_cover_url)
             _cover_url = None

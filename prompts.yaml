@@ -761,9 +761,12 @@ cover_image_notext:
     The cover prompt: the model paints a TEXT-FREE background and the title is
     composited afterwards with real fonts (pipeline/cover_typography.py), so
     words can never be misspelled and regenerating only rerolls the artwork.
-    `space_hint` names where the title will land ("the bottom third of the frame").
+    `style_line` carries the film's composed visual style and LEADS the prompt —
+    the cover must look like a frame from the same production as the scenes,
+    not a generic photoreal "thumbnail". `space_hint` names where the title
+    will land ("the bottom third of the frame").
   user: |
-    Create a high-impact YouTube documentary thumbnail background in 16:9 landscape format. ${style_line}${subject_hint}Thumbnail style: cinematic montage, dramatic lighting, ultra-detailed, bold contrast, rich colors, professional YouTube thumbnail design, epic documentary poster look, sharp focus, high resolution. Visual content: show the key people, objects, places, and elements related to the topic in a dramatic collage. Use depth, smoke, light rays, clouds, sparks, maps, symbols, or atmosphere where appropriate. The image should look exciting, educational, and clickable at small YouTube size. CRITICAL: this image must contain absolutely NO text of any kind — no letters, no words, no numbers, no captions, no signs with writing, no posters, no logos, no typography. A title will be added later by software. Composition: keep ${space_hint} calmer and less cluttered so the title can sit there and stay readable; put the main subject in the remaining space. Layout: avoid clutter, keep the subject clear. No watermark, no UI elements. Avoid: ${negative}.
+    Create a high-impact YouTube thumbnail background for a video. ${style_line}${subject_hint}The artwork must look like it comes from the SAME production as the video's scenes: match the stated visual style exactly — the same rendering technique, medium, colour palette, and character designs — and never drift toward a generic photorealistic thumbnail look unless that is the stated style. Composition: one clear focal subject with supporting elements arranged around it; use depth, atmosphere, light and shadow for drama; bold contrast, rich colours, sharp focus; exciting and clickable at small YouTube size. CRITICAL: this image must contain absolutely NO text of any kind — no letters, no words, no numbers, no captions, no signs with writing, no posters, no logos, no typography. A title will be added later by software. Composition space: keep ${space_hint} calmer and less cluttered so the title can sit there and stay readable; put the main subject in the remaining space. Layout: avoid clutter, keep the subject clear. No watermark, no UI elements. Avoid: ${negative}.
 
 
 # ═════════════════════════════════════════════════════════════════════════════

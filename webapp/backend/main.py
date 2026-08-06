@@ -7566,6 +7566,20 @@ def yt_cover(body: CoverBody) -> dict:
         typo = _cover_typography_for(wd, cfg)
         ss = _cover_style_settings(wd, cfg)
         engine = gapp.engines.resolve(cfg, ss.get("image_engine"))
+        # Build the prompt HERE (not in the worker) so the cover carries the
+        # film's composed visual style and its characters' reference images —
+        # the same conditioning as the scene stills. Scene rows feed the
+        # subject hint; the worker just executes what the payload says.
+        try:
+            _sdata = json.loads((wd / "script.json").read_text())
+            scene_rows = _sdata if isinstance(_sdata, list) else (_sdata.get("scenes") or [])
+        except Exception:
+            scene_rows = []
+        style_name = str(_film_job_config(wd).get("style_name") or "")
+        prompt, refs = gapp.build_cover_generation(
+            wd, cfg, style_name, scenes=scene_rows,
+            instruction=body.instruction or "", extra_style=body.style or "",
+            text_position=typo["position"], engine=engine)
         tid = make_task_id(job_id, "ui.cover.generate", int(time.time()))
         store.create_task(
             tid, job_id, "ui.cover.generate", f"Cover: {title}",
@@ -7573,7 +7587,10 @@ def yt_cover(body: CoverBody) -> dict:
             payload={
                 "work_dir": str(wd),
                 "title": title,
-                "style": body.style or "",
+                "prompt": prompt,
+                "reference_images": [str(p) for p in refs],
+                # Composed style kept for workers that predate payload prompts.
+                "style": gapp._compose_visual_style(body.style or "", cfg, style_name),
                 "instruction": body.instruction or "",
                 "cover_typography": typo,
                 "vid_width": vid_width,
