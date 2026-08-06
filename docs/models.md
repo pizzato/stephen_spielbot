@@ -75,7 +75,7 @@ field. Three engines ship:
 |---|---|---|
 | **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
-| **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (8 steps instead of 15) on the full non-pruned transformer; softer detail at this early checkpoint | MiniMax H3 Community License (LoRA itself Apache-2.0) |
+| **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 
 MiniMax H3 notes:
 
@@ -97,9 +97,10 @@ Turbo variant notes:
 - The [Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) only
   fits the **non-pruned** transformer, so the turbo engine downloads the full
   **31 GB** int8 DiT instead of the 19 GB pruned one (encoder and VAEs are
-  shared with the base H3 engine). Because each step runs the bigger model and
-  the base engine already renders 15 steps with EasyCache, expect roughly a
-  **1.5–2× wall-clock win**, not the LoRA card's headline 5×.
+  shared with the base H3 engine). Each step runs the bigger model, so the
+  speedup only materializes at low step counts. Measured on a GB10 worker
+  (704×1280, 12 s scene) against the base engine's 23 min: **4 steps = 12.1 min
+  (~1.9×, the default)**, 8 steps = 22.6 min (parity, but non-pruned fidelity).
 - It needs the **ComfyUI-MiniMax-H3-Turbo** custom nodes (the LoRA is sampled on
   dual video/audio flow schedules) — they are baked into the worker image, so
   rebuild the containers if the engine shows "not installed".

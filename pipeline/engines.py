@@ -205,9 +205,11 @@ VIDEO_ENGINES: dict[str, dict] = {
                          "Requires machine-generated disclosure and “MiniMax H3” "
                          "attribution; separate authorization above US$20M yearly revenue."),
         "workflow": "h3_turbo_i2v.json",
-        # The distillation targets 4 steps but the current checkpoint is
-        # under-trained — its author's "comfort zone for sharpness is 6–8".
-        "steps": 8,
+        # Measured on s1 (704×1280, 294 frames): 4 steps = 12.1 min vs the base
+        # engine's 23 min, with no visible motion smear; 8 steps = 22.6 min
+        # (parity — the non-pruned unet eats the step savings). Raise toward
+        # 6–8 only if content shows softness.
+        "steps": 4,
         "lease_seconds": 14400,
         # The turbo LoRA only fits the NON-pruned DiT (the pruned variants use a
         # different time-conditioning layer), so this engine swaps the 19 GB
