@@ -69,12 +69,13 @@ make download-flux-cluster     # to the first node, then rsync to all workers
 
 Each style picks the model that animates its scenes under **Settings → Styles →
 Video model**; child styles inherit the parent's choice like every other style
-field. Two engines ship:
+field. Three engines ship:
 
 | Engine | Character | License |
 |---|---|---|
 | **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
+| **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (8 steps instead of 15) on the full non-pruned transformer; softer detail at this early checkpoint | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 
 MiniMax H3 notes:
 
@@ -91,6 +92,22 @@ MiniMax H3 notes:
   separate authorization above US$20M yearly revenue. The picker shows the same
   note.
 
+Turbo variant notes:
+
+- The [Turbo LoRA](https://huggingface.co/larryvrh/MiniMax-H3-Turbo-Lora) only
+  fits the **non-pruned** transformer, so the turbo engine downloads the full
+  **31 GB** int8 DiT instead of the 19 GB pruned one (encoder and VAEs are
+  shared with the base H3 engine). Because each step runs the bigger model and
+  the base engine already renders 15 steps with EasyCache, expect roughly a
+  **1.5–2× wall-clock win**, not the LoRA card's headline 5×.
+- It needs the **ComfyUI-MiniMax-H3-Turbo** custom nodes (the LoRA is sampled on
+  dual video/audio flow schedules) — they are baked into the worker image, so
+  rebuild the containers if the engine shows "not installed".
+- The current checkpoint is an **early, under-trained preview**: output is
+  softer than the base engine, especially below 8 steps. Newer checkpoints are
+  expected upstream; swap the `lora` filename in `pipeline/engines.py` to pick
+  one up.
+
 Manual download:
 
 ```bash
@@ -99,6 +116,10 @@ huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_
 huggingface-cli download Comfy-Org/MiniMax-H3 text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_video_vae_fp16.safetensors --local-dir models/vae --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_audio_vae_fp32.safetensors --local-dir models/vae --local-dir-use-symlinks False
+
+# minimax-h3-turbo extras (full non-pruned DiT + distillation LoRA):
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download larryvrh/MiniMax-H3-Turbo-Lora minimax_h3_turbo_4step_ckpt500.safetensors --local-dir models/loras --local-dir-use-symlinks False
 ```
 
 ## Gated weights

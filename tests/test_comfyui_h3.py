@@ -30,8 +30,8 @@ class H3MathTests(unittest.TestCase):
 
 
 class H3WorkflowTests(unittest.TestCase):
-    def _generate(self):
-        eng = engines.resolve_video({}, "minimax-h3")
+    def _generate(self, engine_key="minimax-h3"):
+        eng = engines.resolve_video({}, engine_key)
         captured = {}
 
         def fake_queue(workflow, client_id, comfy_url=None):
@@ -85,6 +85,23 @@ class H3WorkflowTests(unittest.TestCase):
         _, cap = self._generate()
         self.assertEqual(cap["wait_kwargs"]["heartbeat_warmup"],
                          comfyui._H3_HEARTBEAT_WARMUP)
+
+    def test_turbo_workflow(self):
+        eng, cap = self._generate("minimax-h3-turbo")
+        wf = cap["workflow"]
+        # The distillation LoRA replaces EasyCache in the model chain: both the
+        # scheduler and the guider must see the patched model.
+        self.assertEqual(wf["17"]["class_type"], "MiniMaxH3TurboLoRA")
+        self.assertEqual(wf["17"]["inputs"]["model"], ["1", 0])
+        self.assertEqual(wf["17"]["inputs"]["lora_name"], eng["lora"])
+        self.assertEqual(wf["9"]["inputs"]["model"], ["17", 0])
+        self.assertEqual(wf["11"]["inputs"]["model"], ["17", 0])
+        self.assertNotIn("EasyCache", {n["class_type"] for n in wf.values()})
+        # Video and audio ride different flow schedules — the few-step render
+        # only works through the custom dual-clock sampler.
+        self.assertEqual(wf["8"]["class_type"], "MiniMaxH3TurboSampler")
+        self.assertEqual(wf["9"]["inputs"]["steps"], eng["steps"])
+        self.assertEqual(wf["1"]["inputs"]["unet_name"], eng["unet"])
 
 
 class VideoDispatchTests(unittest.TestCase):

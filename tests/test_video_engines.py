@@ -25,6 +25,17 @@ class VideoEngineRegistryTests(unittest.TestCase):
         for key in ("unet", "clip", "video_vae", "audio_vae"):
             self.assertIn(eng[key], files)
 
+    def test_resolve_video_minimax_turbo(self):
+        eng = engines.resolve_video({}, "minimax-h3-turbo")
+        self.assertEqual(eng["family"], "minimax")
+        self.assertEqual(eng["workflow"], "h3_turbo_i2v.json")
+        # The turbo LoRA is incompatible with the pruned DiT variants (different
+        # time-conditioning layer) — this engine must stay on the full unet.
+        self.assertNotIn("pruned", eng["unet"])
+        files = {m["file"] for m in eng["models"]}
+        for key in ("unet", "clip", "video_vae", "audio_vae", "lora"):
+            self.assertIn(eng[key], files)
+
     def test_public_list_video_has_license_info(self):
         entries = {e["key"]: e for e in engines.public_list_video()}
         self.assertIn("ltx23", entries)
