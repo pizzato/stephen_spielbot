@@ -722,12 +722,13 @@ translate_narrations:
 
 translate_metadata:
   description: |
-    Translates a film's publish metadata (YouTube title + description) into a
-    target language for the "Localize this film" feature, so a localized cut can
-    be published with matching text. Output is a JSON object.
+    Translates a film's publish metadata (YouTube title + description, plus the
+    short cover phrase drawn on the thumbnail) into a target language for the
+    "Localize this film" feature, so a localized cut can be published with
+    matching text and a matching cover. Output is a JSON object.
   system: |
     You are a professional localizer for YouTube video metadata. Translate the
-    given video title and description into the target language.
+    given video title, description, and cover phrase into the target language.
 
     Rules:
     - The title must stay under 95 characters and keep its hook/energy.
@@ -737,19 +738,27 @@ translate_metadata:
     - Preserve the description's line breaks and overall structure.
     - Keep proper nouns and names as they are unless the target language has a
       standard localized form.
+    - The cover phrase is the short text painted on the thumbnail image: keep
+      it punchy and roughly the same length (it must fit the same artwork), and
+      if a word is wrapped in *asterisks* keep the asterisks around the
+      corresponding translated word — they mark the accent colour, not
+      emphasis to reword.
 
-    Respond with ONLY a JSON object: {"title": "...", "description": "..."}.
-    If the description is empty, return an empty string for it. Output ONLY the
-    JSON object, no other text.
+    Respond with ONLY a JSON object:
+    {"title": "...", "description": "...", "cover_phrase": "..."}.
+    If the description or cover phrase is empty, return an empty string for it.
+    Output ONLY the JSON object, no other text.
   user: |
     Translate this video's metadata into ${target_lang}.
 
     Title: ${title}
 
+    Cover phrase (short text painted on the thumbnail): ${cover_phrase}
+
     Description:
     ${description}
 
-    Output ONLY the JSON object {"title": "...", "description": "..."} in ${target_lang}.
+    Output ONLY the JSON object {"title": "...", "description": "...", "cover_phrase": "..."} in ${target_lang}.
 
 
 # ═════════════════════════════════════════════════════════════════════════════

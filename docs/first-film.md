@@ -123,8 +123,8 @@ from a new prompt, upscale the final cut, or add a translated
 
 Open **Publishing → Publish a film** (or hit **Publish** on the film card).
 
-- Pick the **film** and which **version** — a localized cut swaps in its translated title
-  and description.
+- Pick the **film** and which **version** — a localized cut swaps in its translated title,
+  description, and cover.
 - Choose where: **YouTube**, **X**, or both.
 - The **title** is editable with its own regenerate button; **Generate** writes the
   description.

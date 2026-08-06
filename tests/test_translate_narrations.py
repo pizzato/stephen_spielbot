@@ -66,6 +66,18 @@ class TranslateNarrationsTests(unittest.TestCase):
         self.assertEqual(len(out["title"]), 100)  # YouTube's hard cap
         self.assertEqual(out["description"], "Uma descrição.")
 
+    def test_translate_metadata_carries_cover_phrase(self):
+        def fake(cfg, system, user_msg, max_tokens, label):
+            self.assertIn("A *Cover* Phrase", user_msg)  # source phrase in prompt
+            return json.dumps({"title": "Um Título", "description": "",
+                               "cover_phrase": "Uma *Frase* " + "x" * 100})
+
+        with mock.patch.object(llm, "_chat_complete", side_effect=fake):
+            out = llm.translate_metadata("A Title", "", "Portuguese", cfg={},
+                                         cover_phrase="A *Cover* Phrase")
+        self.assertTrue(out["cover_phrase"].startswith("Uma *Frase*"))
+        self.assertEqual(len(out["cover_phrase"]), 80)  # cover-phrase hard cap
+
     def test_translate_metadata_missing_title_raises(self):
         with mock.patch.object(llm, "_chat_complete", return_value='{"description": "x"}'):
             with self.assertRaises(RuntimeError):

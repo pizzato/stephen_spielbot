@@ -4694,6 +4694,16 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
         ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
     )
     staged_final.replace(final_path)
+    # Styles that auto-stamp the cover into the opening get the stamp on the
+    # localized cut too — with the localized cover (re-titled in *lang*) when
+    # one can be rendered, so the burned frame matches the published language.
+    loc_cover = None
+    try:
+        loc_cover = _render_localized_cover(wd, lang)
+    except Exception as exc:
+        gapp.logger.warning("Localized cover for %s failed (burning the original): %s",
+                            lang, exc)
+    _maybe_burn_first_frame_cover(wd, final_path, cover_path=loc_cover)
     history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang,
                                          kind="localize")
     return history, len(scene_finals)
@@ -4860,9 +4870,10 @@ def localize_script_save(body: LocalizeScriptBody) -> dict:
 
 
 def _localize_metadata(wd: Path, lang: str) -> dict[str, str]:
-    """Localized publish metadata (title + description) for *lang*, translating
-    and caching into localize_scripts/{lang}.json on first use. The source is
-    the film's canonical title and cached description at call time."""
+    """Localized publish metadata (title + description + cover phrase) for
+    *lang*, translating and caching into localize_scripts/{lang}.json on first
+    use. The source is the film's canonical title, cached description, and
+    cover phrase at call time."""
     from pipeline.chatterbox import LANGUAGES
     from pipeline.llm import translate_metadata
 
@@ -4871,12 +4882,16 @@ def _localize_metadata(wd: Path, lang: str) -> dict[str, str]:
         raise FileNotFoundError(f"No {LANGUAGES.get(lang, lang)} localization exists for this film.")
     data = json.loads(script_path.read_text())
     if (data.get("title") or "").strip():
-        return {"title": data["title"], "description": data.get("description") or ""}
+        return {"title": data["title"], "description": data.get("description") or "",
+                "cover_phrase": data.get("cover_phrase") or ""}
+    title = _video_title_for(wd)
     translated = translate_metadata(
-        _video_title_for(wd), _cached_description(wd), LANGUAGES.get(lang, lang),
+        title, _cached_description(wd), LANGUAGES.get(lang, lang),
+        cover_phrase=cover_phrase_for(wd, title),
     )
     data["title"] = translated["title"]
     data["description"] = translated["description"]
+    data["cover_phrase"] = translated.get("cover_phrase") or ""
     script_path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
     return translated
 
@@ -4904,7 +4919,16 @@ def localize_metadata(body: LocalizeMetadataBody) -> dict:
         raise HTTPException(404, str(e))
     except Exception as e:
         raise HTTPException(500, f"Metadata translation failed: {str(e).splitlines()[0][:200]}")
-    return {"ok": True, **out}
+    # Localized cover (the same art re-titled with the translated phrase), so
+    # the Publish screen's thumbnail preview follows the version switch.
+    cover_url = ""
+    try:
+        loc = _render_localized_cover(wd, body.language)
+        if loc and loc.stat().st_size > 1000:
+            cover_url = _busted_file_url(loc)
+    except Exception as exc:
+        gapp.logger.warning("Localized cover for %s failed: %s", body.language, exc)
+    return {"ok": True, **out, "cover_url": cover_url}
 
 
 class LocalizeAudioBody(BaseModel):
@@ -5486,7 +5510,8 @@ def _first_frame_burn_opts(wd: Path) -> dict:
     }
 
 
-def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
+def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str,
+                                  cover_path: Path | None = None) -> None:
     """Re-apply the job's standing first-frame cover after a final rebuild.
 
     The burned frame lives only in the published final — any flow that
@@ -5494,6 +5519,8 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
     reassemble) would silently drop the cover of a style that auto-stamps
     every render (job_config "first_frame_cover"). One-off manual stamps
     (the edit-screen button) set no config key, so rebuilds stay pristine.
+    *cover_path* overrides the image to stamp (a localized rebuild passes its
+    localized cover); default is the film's cover.png.
     Best-effort: a rebuilt film without the stamp beats a failed rebuild."""
     try:
         mode = str(_film_job_config(wd).get("first_frame_cover") or "none").strip().lower()
@@ -5502,7 +5529,7 @@ def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str) -> None:
         from pipeline.cover import burn_cover_into_first_frame
         burn_cover_into_first_frame(
             Path(final_path),
-            cover_path=wd / "cover.png",
+            cover_path=cover_path or wd / "cover.png",
             **_first_frame_burn_opts(wd),
         )
     except Exception as e:
@@ -5541,7 +5568,8 @@ def _run_first_frame_cover(task_id: str, wd: Path, seconds=None) -> None:
             opts["seconds"] = gapp._norm_first_frame_cover_seconds(seconds)
         burn_cover_into_first_frame(
             final_path,
-            cover_path=wd / "cover.png",
+            # A localized cut is stamped with its localized (re-titled) cover.
+            cover_path=_publish_cover_path(wd),
             **opts,
         )
         final_video_history.record(wd, final_path, label="Cover on first frame",
@@ -7076,7 +7104,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
     if wd is None or not wd.exists():
         raise HTTPException(404, "No finished film found.")
     final = gapp._final_path_for_work_dir(wd)
-    cover = wd / "cover.png"
+    # Cut-aware: a selected localized cut previews its localized cover.
+    cover = _publish_cover_path(wd)
+    orig_cover = wd / "cover.png"
     meta = {}
     try:
         job_json = wd / "job.json"
@@ -7104,6 +7134,9 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         "title": _title,
         "final_url": _busted_file_url(final) if final.exists() and final.stat().st_size > 10_000 else "",
         "cover_url": _busted_file_url(cover) if cover.exists() and cover.stat().st_size > 1000 else "",
+        # The plain cover.png, so the UI can swap back when the user selects
+        # the original cut in the Version picker.
+        "original_cover_url": _busted_file_url(orig_cover) if orig_cover.exists() and orig_cover.stat().st_size > 1000 else "",
         # Short text on the cover image + first-frame burn (editable per film).
         "cover_phrase": cover_phrase_for(wd, _title),
         "cover_phrase_default": shorten_title_for_cover(_title),
@@ -7543,6 +7576,53 @@ def _cover_typography_for(wd: Path, cfg: dict | None = None) -> dict:
     return gapp._norm_cover_typography(_cover_style_settings(wd, cfg).get("cover_typography"))
 
 
+def _render_localized_cover(wd: Path, lang: str) -> Path | None:
+    """Localized cover for *lang*: the film's text-free background re-titled
+    with the translated cover phrase, written to localize/{lang}/cover.png.
+
+    Re-rendered on every call (cheap, PIL-only, no GPU) so later cover-art
+    regens, typography tweaks, and phrase edits are always reflected. Returns
+    None when the film has no text-free background (legacy covers) or the
+    localization has no cached translation to draw — no LLM call is made here,
+    the phrase was cached by _localize_metadata."""
+    base = wd / COVER_BASE_NAME
+    if not base.exists() or base.stat().st_size < 1000:
+        return None
+    try:
+        data = json.loads((wd / "localize_scripts" / f"{lang}.json").read_text())
+    except Exception:
+        return None
+    phrase = (data.get("cover_phrase") or "").strip() \
+        or shorten_title_for_cover((data.get("title") or "").strip())
+    if not phrase:
+        return None
+    out = wd / "localize" / lang / "cover.png"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    render_cover_typography(base, out, phrase, _cover_typography_for(wd))
+    return out
+
+
+def _publish_cover_path(wd: Path) -> Path:
+    """The cover to publish for the film's currently selected final cut: a
+    localized cut gets its re-titled localized cover when one can be rendered;
+    everything else (the original cut, legacy covers without a text-free
+    background, localizations without cached metadata) uses cover.png."""
+    jc = _film_job_config(wd)
+    raw = jc.get("tts_language")
+    orig = gapp._norm_tts_language(raw) if raw else "en"
+    lang = _published_cut_language(wd, orig)
+    if lang != orig:
+        try:
+            loc = _render_localized_cover(wd, lang)
+            if loc and loc.exists() and loc.stat().st_size > 1000:
+                return loc
+        except Exception as exc:
+            gapp.logger.warning(
+                "Localized cover for %s failed (falling back to the original): %s",
+                lang, exc)
+    return wd / "cover.png"
+
+
 @api.post("/api/youtube/cover")
 def yt_cover(body: CoverBody) -> dict:
     wd = Path(body.work_dir) if body.work_dir else gapp._latest_work_dir()
@@ -7783,6 +7863,17 @@ def save_cover_phrase(body: CoverPhraseBody) -> dict:
     # sweep re-burns any first-frame cover. None = no background yet (a film
     # whose cover predates typography): the phrase applies on the next regen.
     retexted = apply_cover_typography(wd, _cover_typography_for(wd), title) is not None
+    # The old phrase's translations no longer apply — drop them so localized
+    # covers fall back to each localization's title-derived phrase instead of
+    # keeping a translation of text that's gone. Best-effort.
+    scripts_dir = wd / "localize_scripts"
+    for sp in (scripts_dir.glob("*.json") if scripts_dir.exists() else ()):
+        try:
+            data = json.loads(sp.read_text())
+            if data.pop("cover_phrase", None) is not None:
+                sp.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+        except Exception:
+            pass
     return {
         "ok": True,
         "retexted": retexted,
@@ -7841,13 +7932,14 @@ class ThumbnailBody(BaseModel):
 
 @api.post("/api/youtube/thumbnail")
 def yt_thumbnail(body: ThumbnailBody) -> dict:
-    """Push the current cover.png to an already-uploaded video's thumbnail."""
+    """Push the current cover to an already-uploaded video's thumbnail (a
+    localized cut pushes its localized, re-titled cover)."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
-    cover = wd / "cover.png"
+    cover = _publish_cover_path(wd)
     if not (cover.exists() and cover.stat().st_size > 1000):
         raise HTTPException(400, "No cover image found for this film.")
     video_id = body.video_id
@@ -8156,7 +8248,8 @@ def yt_post(body: PostBody) -> dict:
     final = gapp._final_path_for_work_dir(wd)
     if not (final.exists() and final.stat().st_size > 10_000):
         raise HTTPException(400, "No final video found for this film.")
-    cover = wd / "cover.png"
+    # A localized cut publishes with its localized (re-titled) cover.
+    cover = _publish_cover_path(wd)
     thumb = (str(cover) if body.include_thumbnail
              and cover.exists() and cover.stat().st_size > 1000 else None)
 

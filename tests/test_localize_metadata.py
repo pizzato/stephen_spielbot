@@ -22,7 +22,8 @@ def _film_with_localization(lang="pt"):
 class LocalizeMetadataTests(unittest.TestCase):
     def test_translates_and_caches_on_first_use(self):
         wd = _film_with_localization()
-        translated = {"title": "Título PT", "description": "Descrição PT"}
+        translated = {"title": "Título PT", "description": "Descrição PT",
+                      "cover_phrase": "Frase *PT*"}
         with mock.patch("pipeline.llm.translate_metadata", return_value=translated) as tm, \
              mock.patch.object(backend, "_video_title_for", return_value="Original Title"), \
              mock.patch.object(backend, "_cached_description", return_value="Original description."):
@@ -30,9 +31,14 @@ class LocalizeMetadataTests(unittest.TestCase):
             second = backend._localize_metadata(wd, "pt")
         self.assertEqual(first, translated)
         self.assertEqual(second["title"], "Título PT")
+        self.assertEqual(second["cover_phrase"], "Frase *PT*")
         self.assertEqual(tm.call_count, 1)  # second hit served from the cache
+        # The film's cover phrase rides along so the localized cover can be
+        # re-titled with its translation.
+        self.assertEqual(tm.call_args.kwargs["cover_phrase"], "Original Title")
         stored = json.loads((wd / "localize_scripts" / "pt.json").read_text())
         self.assertEqual(stored["title"], "Título PT")
+        self.assertEqual(stored["cover_phrase"], "Frase *PT*")
         self.assertEqual(stored["scenes"]["1"], "Primeira cena.")  # scenes untouched
 
     def test_missing_localization_raises(self):
