@@ -107,7 +107,7 @@ assess for your use. Each voice's source recording is recorded in `config.yaml`
 
 ## Bundled display fonts (cover typography)
 
-`assets/fonts/` ships ten display typefaces used to draw cover titles
+`assets/fonts/` ships eleven display typefaces used to draw cover titles
 (`pipeline/cover_typography.py`), fetched from the
 [google/fonts](https://github.com/google/fonts) repository. Each family's
 directory includes its own licence file. All are commercial-friendly.
@@ -116,3 +116,12 @@ directory includes its own licence file. All are commercial-friendly.
 |---|---|
 | Abril Fatface, Alfa Slab One, Anton, Archivo Black, Bangers, Bebas Neue, Lilita One, Passion One, Titan One | SIL Open Font License 1.1 (`OFL.txt` in each dir) |
 | Luckiest Guy | Apache-2.0 (`LICENSE.txt` in its dir) |
+| Noto Sans SC Black | SIL Open Font License 1.1 (`OFL.txt` in its dir) |
+
+`notosanssc/NotoSansSC-Black.ttf` is the Chinese/Japanese fallback face — the
+other ten are Latin-only, so titles in those scripts would otherwise draw as
+empty boxes. It is not the upstream file: the variable
+`ofl/notosanssc/NotoSansSC[wght].ttf` was instanced at `wght=900` and subset to
+the GB 2312 and JIS X 0208 character sets plus kana, Latin and punctuation
+(10,780 characters, 3.5 MB instead of 17 MB) with `fontTools`. The OFL permits
+this; the licence file is shipped unchanged alongside it.
