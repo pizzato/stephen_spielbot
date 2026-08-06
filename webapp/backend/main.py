@@ -4182,7 +4182,10 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
 
 @api.get("/api/jobs")
 def list_jobs() -> dict:
-    finished_rows = gapp._list_recent_jobs(max_results=50)
+    # The Library lists every finished film (it filters client-side, no paging),
+    # so the cap is only a runaway guard — a 50-film cut silently hid older ones
+    # that were still live in the publish queue.
+    finished_rows = gapp._list_recent_jobs(max_results=1000)
     cfg = gapp.load_config()
     def _cover_url(work_dir: str) -> str:
         cover = Path(work_dir) / "cover.png"
@@ -11853,6 +11856,19 @@ def _reconcile_publish_queue() -> None:
                     sub.update(status="error", error="work dir missing")
                     changed = True
             continue
+        # The publish target is resolved live at upload time (_claim_and_post_*),
+        # so re-resolve it here while the release is still ahead of us. An entry
+        # enqueued before its style had its own channel froze the first-channel
+        # fallback, and would otherwise show — and pace against — the wrong
+        # channel forever.
+        for sub, keyf, resolve in ((yt_sub, "channel", _channel_for_work_dir),
+                                   (x_sub, "account", _x_account_for_work_dir)):
+            if not (sub.get("enabled") and sub.get("status") in ("pending", "publishing")):
+                continue
+            live = resolve(p)
+            if live and live != (sub.get(keyf) or ""):
+                sub[keyf] = live
+                changed = True
         if yt_sub.get("status") in ("pending", "publishing") and meta.get("youtube_video_id"):
             yt_sub.update(status="done", video_id=meta.get("youtube_video_id"),
                           url=meta.get("youtube_url"),
