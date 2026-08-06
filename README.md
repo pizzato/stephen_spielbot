@@ -29,7 +29,9 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation, AI-suggested video ideas, per-scene editing with image
-inpainting and version history, publishing to **YouTube** (multi-channel, with
+inpainting and version history, misspelling-proof cover thumbnails (text-free
+artwork in the style's own engine + real-font typography with per-style fonts,
+colours, and accent words), publishing to **YouTube** (multi-channel, with
 playlists, captions, and tags) and **X**, a publish scheduler with per-channel
 cadence, comment fetching / AI replies / community engagement, a predictive
 engagement model, and C2PA "AI-generated" content credentials on published

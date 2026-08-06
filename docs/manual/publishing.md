@@ -29,7 +29,7 @@ The manual upload form.
 - **Category** and **Privacy** — privacy defaults to `private`; raise it deliberately
 - **Thumbnail** and **cover phrase** — the phrase is the short text painted on the cover
   and burned into the opening frames
-- **Opening cover** — the burn mode and hold for this film, same control as
+- **Opening cover** — the burn hold for this film, same control as
   [Edit film](edit-film.md#opening-cover)
 
 ### What happens automatically
