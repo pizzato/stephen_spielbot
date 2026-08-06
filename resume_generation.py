@@ -867,15 +867,17 @@ def main(work_dir: Path) -> None:
         logger.info("Generating YouTube cover image for '%s'", video_title)
         _cover_url: str | None = None
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
-        # Cover typography: paint a TEXT-FREE background with the style's own
-        # image engine, then composite the title with real fonts on top — the
-        # model never draws (or misspells) a single letter.
+        # Cover typography: paint a TEXT-FREE background, then composite the
+        # title with real fonts on top — the model never draws (or misspells)
+        # a single letter. The artwork uses image_engine, the SAME resolved
+        # engine as the scene stills (job key → styles lookup → default), so
+        # the cover always matches the film's look.
         typo = _norm_cover_typography(cfg.get("cover_typography")
                                       or cfg.get("default_cover_typography"))
         try:
             _cover_url = worker_pool.acquire()
             generate_with_engine(
-                _engines.resolve(cfg, cfg.get("image_engine")),
+                image_engine,
                 _cover_prompt(style_clean, scenes=scenes,
                               text_position=typo["position"]),
                 work_dir / _COVER_BG_NAME,

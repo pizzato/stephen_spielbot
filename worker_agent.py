@@ -268,15 +268,16 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # Cover typography (the only cover mode): the model paints a TEXT-FREE
     # background and the film's cover phrase is composited on top with real
     # fonts — regenerating rerolls only the artwork. The payload carries the
-    # style's settings; tasks queued by a pre-typography backend fall back to
-    # the film's stamped job_config (else the defaults).
+    # style's settings and engine; tasks queued by an older backend fall back
+    # to the film's stamped job_config (else the defaults).
+    import json as _json
+    try:
+        jc = _json.loads((work_dir / "job_config.json").read_text())
+    except Exception:
+        jc = {}
     typo = p.get("cover_typography")
     if not isinstance(typo, dict) or not typo:
-        import json as _json
-        try:
-            typo = _json.loads((work_dir / "job_config.json").read_text()).get("cover_typography") or {}
-        except Exception:
-            typo = {}
+        typo = jc.get("cover_typography") or {}
     prompt = build_cover_prompt(p.get("style") or "", scenes=rows,
                                 instruction=p.get("instruction") or "",
                                 text_position=str(typo.get("position") or ""))
@@ -292,10 +293,11 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # Keep the previous cover so the user can return to it (same as scenes).
     image_history.cover_seed_if_empty(work_dir, cover_path)
     engine = p.get("engine")
-    # Engine-less payloads (tasks queued before per-style engines) resolve to
-    # the default engine, with flux1-schnell filename overrides from flux_* keys.
+    # Engine-less payloads (tasks queued before per-style engines) resolve the
+    # film's stamped image engine — the cover must match the scenes' model —
+    # with flux1-schnell filename overrides from the flux_* keys.
     if not isinstance(engine, dict) or not engine:
-        engine = engines.resolve(p, p.get("image_engine"))
+        engine = engines.resolve(p, p.get("image_engine") or jc.get("image_engine"))
     generate_with_engine(
         engine, prompt, work_dir / COVER_BASE_NAME,
         width=cover_w, height=cover_h, comfy_url=comfy_url,
