@@ -194,6 +194,52 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
         ],
     },
+    "minimax-h3-turbo": {
+        "key": "minimax-h3-turbo",
+        "label": "MiniMax H3 33B Turbo",
+        "sub": "Faster H3 · distilled few-step LoRA · early preview · restricted license",
+        "family": "minimax",
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        "workflow": "h3_turbo_i2v.json",
+        # Measured on s1 (704×1280, 294 frames): 4 steps = 12.1 min vs the base
+        # engine's 23 min, with no visible motion smear; 8 steps = 22.6 min
+        # (parity — the non-pruned unet eats the step savings). Raise toward
+        # 6–8 only if content shows softness.
+        "steps": 4,
+        "lease_seconds": 14400,
+        # The turbo LoRA only fits the NON-pruned DiT (the pruned variants use a
+        # different time-conditioning layer), so this engine swaps the 19 GB
+        # pruned unet for the full 31 GB int8 one; encoder and VAEs are shared
+        # with minimax-h3.
+        "unet": "minimax_h3_fl2va_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "lora": "minimax_h3_turbo_4step_ckpt500.safetensors",
+        # Video and audio ride different flow schedules; the custom sampler
+        # steps each on its own clock (a stock sampler breaks the audio at few
+        # steps). Shipped by docker/comfyui (ComfyUI-MiniMax-H3-Turbo).
+        "requires_node": "MiniMaxH3TurboSampler",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_fl2va_int8_convrot.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+            _model("larryvrh/MiniMax-H3-Turbo-Lora",
+                   "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
+        ],
+    },
 }
 
 DEFAULT_VIDEO_ENGINE = "ltx23"
@@ -205,8 +251,19 @@ def get_video(key: str) -> dict | None:
 
 def resolve_video(cfg: dict, key: str) -> dict:
     """Return the video-engine dict for *key*, falling back to the default.
-    *cfg* is unused today but kept for symmetry with :func:`resolve`."""
-    return dict(get_video(key) or VIDEO_ENGINES[DEFAULT_VIDEO_ENGINE])
+
+    *cfg* (a style/job settings dict) may carry ``video_steps`` — a per-style
+    steps override for single-pass engines (the MiniMax family; entries with a
+    ``steps`` field). 0/absent keeps the engine default; LTX has no ``steps``
+    and ignores it."""
+    eng = dict(get_video(key) or VIDEO_ENGINES[DEFAULT_VIDEO_ENGINE])
+    try:
+        steps = int(cfg.get("video_steps") or 0) if isinstance(cfg, dict) else 0
+    except (TypeError, ValueError):
+        steps = 0
+    if steps > 0 and eng.get("steps"):
+        eng["steps"] = steps
+    return eng
 
 
 def public_list_video() -> list[dict]:

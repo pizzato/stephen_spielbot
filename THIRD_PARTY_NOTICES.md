@@ -28,6 +28,8 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | LTX-Video 2.3 (checkpoint, distilled LoRA, spatial upscaler) | `Lightricks/LTX-2.3-fp8`, `Lightricks/LTX-2.3` | **LTX-2 Community License Agreement** (not an OSI license) | ✅ Free commercial use for entities under **US$10M annual revenue** (all affiliates combined); above that, a paid Commercial Use Agreement with Lightricks is required |
 | LTX-2.3 IC-LoRA Pixel Spatial Upscaler (2×/4×) | `Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler` | **LTX-2 Community License Agreement** | Same terms as above |
 | Gemma 3 text encoder (required by the LTX graph) | `Comfy-Org/ltx-2` (`gemma_3_12B_it_fp4_mixed`) | Google **Gemma Terms of Use** + Prohibited Use Policy (not an OSI license) | Allowed under Gemma terms; you must comply with the Prohibited Use Policy |
+| MiniMax H3 33B (opt-in engine: DiT, Qwen3-VL text encoder, video/audio VAEs) | `Comfy-Org/MiniMax-H3` | **MiniMax H3 Community License** (not an OSI license) | ⚠️ Territory-restricted (not licensed in the USA, EU, UK, South Korea); machine-generated disclosure + "MiniMax H3" attribution required; separate authorization above US$20M yearly revenue |
+| MiniMax H3 Turbo LoRA (opt-in few-step distillation) | `larryvrh/MiniMax-H3-Turbo-Lora` | Apache-2.0 (the base H3 weights it patches keep the MiniMax H3 Community License) | ✅ LoRA itself yes; output remains bound by the H3 terms above |
 
 ## Audio models
 
@@ -75,6 +77,7 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI](https://github.com/comfyanonymous/ComfyUI) | `docker/comfyui` | GPL-3.0 |
 | [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | `docker/comfyui` | GPL-3.0 |
 | [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `docker/comfyui` (cloned + patched at build time) | LTX-2 Community License Agreement |
+| [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) | `docker/comfyui` | Apache-2.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
 | [echomimic_v3](https://github.com/antgroup/echomimic_v3) | `docker/echomimic` | Apache-2.0 |

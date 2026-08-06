@@ -121,6 +121,11 @@ if hard in it and "except ImportError" not in it:
     print("softened pyramid_blending import in __init__.py")
 PY
 
+# MiniMax-H3 Turbo nodes (MiniMaxH3TurboLoRA + the dual-schedule few-step
+# sampler) for the opt-in minimax-h3-turbo engine. Pure-Python, no extra deps.
+RUN git clone --depth=1 https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
+        custom_nodes/ComfyUI-MiniMax-H3-Turbo
+
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~49 GB).

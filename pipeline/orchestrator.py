@@ -480,6 +480,7 @@ class DurableStore:
             "second_pass_steps": config.get("second_pass_steps"),
             "image_engine": config.get("image_engine"),
             "video_engine": config.get("video_engine"),
+            "video_steps": config.get("video_steps"),
             # flux_* kept for flux1-schnell's legacy filename overrides.
             "flux_model": config.get("flux_model"),
             "flux_clip_t5": config.get("flux_clip_t5"),
