@@ -63,6 +63,33 @@ class TrimTrailingArtifactsTests(unittest.TestCase):
         _trim_trailing_artifacts(p)
         self.assertAlmostEqual(_duration(p), 3.4, delta=0.15)  # speech + 0.4s pad
 
+    def test_eof_thump_after_short_gap_is_cut(self):
+        # The warm-milk pt scene-1/7 shape: speech, a ~0.3s dip, then a
+        # speech-loud rumble running to EOF. The gap is far too short for the
+        # swell rule, and the thump is loud, so the quiet-tail rule keeps it —
+        # the EOF-swell rule must cut just before the thump.
+        p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
+        _write_wav(p, [(3.0, 0.2), (0.3, 0.002), (0.3, 0.15)])
+        _trim_trailing_artifacts(p)
+        self.assertAlmostEqual(_duration(p), 3.3, delta=0.15)  # cut at thump start
+
+    def test_eof_hiss_with_blip_is_cut(self):
+        # The warm-milk es scene-1 shape: speech, then a long quiet hiss with
+        # one loud blip near EOF that anchors the quiet-tail rule past it.
+        p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
+        _write_wav(p, [(3.0, 0.2), (0.7, 0.004), (0.1, 0.1), (0.1, 0.004)])
+        _trim_trailing_artifacts(p)
+        self.assertAlmostEqual(_duration(p), 3.4, delta=0.15)  # speech + 0.4s pad
+
+    def test_short_final_word_after_pause_survives(self):
+        # A real trailing word (0.4s+ of speech) after a short dramatic pause
+        # must NOT read as an EOF thump.
+        p = Path(tempfile.mkdtemp(prefix="spielbot-trim-")) / "n.wav"
+        _write_wav(p, [(3.0, 0.2), (0.3, 0.002), (0.5, 0.2)])
+        before = _duration(p)
+        _trim_trailing_artifacts(p)
+        self.assertEqual(_duration(p), before)
+
     def test_long_pause_resumed_by_narration_survives(self):
         # Chatterbox renders real pauses past 2s (measured 2.3s in the wild).
         # A long pause followed by several seconds of actual narration is NOT
