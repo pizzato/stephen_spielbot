@@ -56,7 +56,8 @@ If you'd rather fetch them yourself:
     huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/text_encoders/qwen_4b_ace15.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
     ```
 
-The legacy FLUX.1 schnell engine (also used for cover images) is optional:
+The legacy FLUX.1 schnell engine is optional (covers use the style's own image
+engine — their titles are drawn with real fonts, not by the model):
 
 ```bash
 make download-flux             # locally

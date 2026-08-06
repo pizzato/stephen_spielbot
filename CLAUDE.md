@@ -66,6 +66,19 @@ Make sure to always commit your changes to git and push often.
 If changes are large and could potentially break things, make sure to create branches and only request to that to be 
 pulled/merged back when tests or the user confirms that it works properly.
 
+## 6. Keep Documentation in Sync
+
+**A change isn't done until the docs describe what the app now does.**
+
+Any change that alters user-visible behaviour must update the documentation in the same branch/PR:
+- `docs/` (the MkDocs site) is the canonical documentation — update every page that
+  describes the changed screens, settings, or pipeline behaviour.
+- `README.md` is the front door — update it when features are added, removed, or renamed
+  at the level it describes.
+- Removals count double: deleting a mode, setting, or endpoint must also delete its
+  documentation — never leave a page describing a control that no longer exists.
+- New bundled assets, models, or dependencies also get an entry in `THIRD_PARTY_NOTICES.md`.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
