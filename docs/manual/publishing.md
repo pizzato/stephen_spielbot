@@ -17,7 +17,8 @@ The manual upload form.
 
 - **Film** — pick any finished film
 - **Version** — which final cut. A [localized](edit-film.md#localizations) version swaps in
-  its translated title and description; an upscale swaps in the upscaled cut
+  its translated title, description, and cover (the same art re-titled in that language);
+  an upscale swaps in the upscaled cut
 - **Publish to** — YouTube, X, or both. YouTube uploads go to the channel prefilled from
   the film's style, overridable here
 

@@ -1719,9 +1719,10 @@ def translate_narrations(
 
 
 def translate_metadata(title: str, description: str, target_lang_name: str,
-                       cfg: dict | None = None) -> dict[str, str]:
-    """Translate a film's publish metadata (YouTube title + description) into
-    *target_lang_name*. Returns {"title": ..., "description": ...}. Raises on
+                       cfg: dict | None = None, cover_phrase: str = "") -> dict[str, str]:
+    """Translate a film's publish metadata (YouTube title + description, plus
+    the short cover phrase drawn on the thumbnail) into *target_lang_name*.
+    Returns {"title": ..., "description": ..., "cover_phrase": ...}. Raises on
     failure — the caller decides whether localized metadata is best-effort."""
     cfg = cfg or _load_cfg()
     sys_msg = _prompts.system("translate_metadata")
@@ -1730,9 +1731,10 @@ def translate_metadata(title: str, description: str, target_lang_name: str,
         target_lang=target_lang_name,
         title=(title or "").strip(),
         description=(description or "").strip(),
+        cover_phrase=(cover_phrase or "").strip(),
     )
     # Same sizing rationale as narration: output ≈ input, budget 2× + overhead.
-    src_tokens = (len(title) + len(description)) // 3
+    src_tokens = (len(title) + len(description) + len(cover_phrase)) // 3
     text = _chat_complete(cfg, sys_msg, user_msg,
                           max_tokens=600 + 2 * src_tokens, label="translate_metadata")
     m = re.search(r"\{.*\}", text, re.DOTALL)
@@ -1742,8 +1744,10 @@ def translate_metadata(title: str, description: str, target_lang_name: str,
     out_title = str(raw.get("title") or "").strip()
     if not out_title:
         raise RuntimeError("Metadata translation was missing the title.")
+    from pipeline.cover import COVER_PHRASE_MAX_CHARS
     return {"title": out_title[:100],
-            "description": str(raw.get("description") or "").strip()}
+            "description": str(raw.get("description") or "").strip(),
+            "cover_phrase": str(raw.get("cover_phrase") or "").strip()[:COVER_PHRASE_MAX_CHARS]}
 
 
 # ── Video topic suggestions ───────────────────────────────────────────────────

@@ -66,8 +66,12 @@ same music, no re-rendering. Pick a **target language** and **Localize film**.
 #### Localizations
 
 Each localization is kept as a **switchable version** of the film, with its own translated
-title, description, and captions. [Publishing](publishing.md) lets you pick which version
-to post, so one film can serve several channels.
+title, description, captions, and **cover**: the same cover art is re-titled with the
+translated cover phrase (no image regeneration), and that localized cover is what gets
+uploaded as the thumbnail and burned into the opening when the localized cut publishes.
+Covers that predate text-free backgrounds need one regeneration before this works.
+[Publishing](publishing.md) lets you pick which version to post, so one film can serve
+several channels.
 
 Dialogue and silent scenes keep their original language.
 

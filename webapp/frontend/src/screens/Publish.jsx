@@ -59,6 +59,10 @@ export default function Publish({ initialWorkDir, go }) {
   const [category, setCategory] = useState('22')
   const [privacy, setPrivacy] = useState('private')
   const [coverUrl, setCoverUrl] = useState('')
+  // The original-language cover, kept so the preview can swap back when the
+  // Version picker returns to the original cut (localized cuts preview their
+  // re-titled localized cover).
+  const [origCoverUrl, setOrigCoverUrl] = useState('')
   const [coverHist, setCoverHist] = useState(null)
   // Cover phrase: the short text on the cover + the opening burn (per film).
   const [coverPhrase, setCoverPhrase] = useState('')
@@ -138,6 +142,7 @@ export default function Publish({ initialWorkDir, go }) {
       setOriginalLang(p.original_lang || 'en')
       setLangNames(p.lang_names || {})
       setCoverUrl(p.cover_url || '')
+      setOrigCoverUrl(p.original_cover_url || p.cover_url || '')
       setCoverPhrase(p.cover_phrase || '')
       setCoverPhraseSaved(p.cover_phrase || '')
       setCoverPhraseDefault(p.cover_phrase_default || '')
@@ -187,13 +192,30 @@ export default function Publish({ initialWorkDir, go }) {
         const m = await api.localizeMetadata({ work_dir: workDir, language: lang })
         setTitle(m.title || origMeta.title)
         setDescription(m.description || origMeta.description)
-        setStatus(`Publishing the ${langNames[lang] || lang} version — title & description localized.`)
+        // The thumbnail preview follows too: same art, re-titled in `lang`
+        // (empty when the film predates text-free cover backgrounds).
+        setCoverUrl(m.cover_url || origCoverUrl)
+        setStatus(`Publishing the ${langNames[lang] || lang} version — title & description localized${m.cover_url ? ', cover re-titled' : ''}.`)
       } else {
         setTitle(origMeta.title)
         setDescription(origMeta.description)
+        setCoverUrl(origCoverUrl)
         setStatus('Publishing the original version.')
       }
     } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  // After any cover change (regen, take select, phrase save, re-text) the
+  // handlers set coverUrl to the original-language cover. When a localized cut
+  // is selected, swap the preview to its re-titled cover (re-rendered from the
+  // fresh art; cheap and cached server-side). No-op on the original cut.
+  const refreshCutCover = async () => {
+    const selV = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected)
+    if (!selV?.lang || selV.lang === originalLang) return
+    try {
+      const m = await api.localizeMetadata({ work_dir: workDir, language: selV.lang })
+      if (m.cover_url) setCoverUrl(m.cover_url)
+    } catch { /* keep the original-cover preview */ }
   }
 
   const genDescription = async () => {
@@ -221,7 +243,7 @@ export default function Publish({ initialWorkDir, go }) {
         const check = async () => {
           try {
             const s = await api.ytCoverStatus(tid)
-            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); if (s.history) setCoverHist(s.history); resolve() }
+            if (s.status === 'succeeded') { setCoverUrl(s.cover_url || ''); setOrigCoverUrl(s.cover_url || ''); if (s.history) setCoverHist(s.history); refreshCutCover(); resolve() }
             else if (s.status === 'failed_terminal') reject(new Error(s.error || 'Cover generation failed'))
             else pollTimer = setTimeout(check, 2000)
           } catch (e) { reject(e) }
@@ -239,7 +261,8 @@ export default function Publish({ initialWorkDir, go }) {
     setBusy('cover'); setError('')
     try {
       const r = await api.coverSelect(workDir, versionId)
-      setCoverUrl(r.cover_url || ''); setCoverHist(r.history)
+      setCoverUrl(r.cover_url || ''); setOrigCoverUrl(r.cover_url || ''); setCoverHist(r.history)
+      await refreshCutCover()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -258,7 +281,8 @@ export default function Publish({ initialWorkDir, go }) {
       setCoverPhrase(r.cover_phrase || '')
       setCoverPhraseSaved(r.cover_phrase || '')
       setCoverPhraseDefault(r.cover_phrase_default || '')
-      if (r.cover_url) setCoverUrl(r.cover_url)
+      if (r.cover_url) { setCoverUrl(r.cover_url); setOrigCoverUrl(r.cover_url) }
+      await refreshCutCover()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -268,7 +292,8 @@ export default function Publish({ initialWorkDir, go }) {
     setBusy('retext'); setError('')
     try {
       const r = await api.coverRetext(workDir)
-      if (r.cover_url) setCoverUrl(r.cover_url)
+      if (r.cover_url) { setCoverUrl(r.cover_url); setOrigCoverUrl(r.cover_url) }
+      await refreshCutCover()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
@@ -563,9 +588,13 @@ export default function Publish({ initialWorkDir, go }) {
             const selV = videoHistory?.versions?.find((v) => v.id === videoHistory?.selected)
             return selV?.lang && selV.lang !== originalLang ? (
               <div className="muted" style={{ fontSize: 11.5, marginTop: 6 }}>
-                Publishing the {langNames[selV.lang] || selV.lang} version — the cover may
-                still show the original title. Regenerate it to render the localized one,
-                or pick an earlier take below.
+                {coverHasBg
+                  ? <>Publishing the {langNames[selV.lang] || selV.lang} version — the
+                      thumbnail above is the cover re-titled in {langNames[selV.lang] || selV.lang},
+                      and it's what gets uploaded.</>
+                  : <>Publishing the {langNames[selV.lang] || selV.lang} version — this cover
+                      predates text-free backgrounds, so it still shows the original title.
+                      Regenerate it once to enable localized covers.</>}
               </div>
             ) : null
           })()}
