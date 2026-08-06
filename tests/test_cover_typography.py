@@ -87,6 +87,95 @@ class AccentRuleTests(unittest.TestCase):
         self.assertEqual(ct._accent_set(self.WORDS, "first_word", {3}), ({3}, False))
 
 
+class CJKTests(unittest.TestCase):
+    """Chinese and Japanese titles: the Latin display faces have no glyphs for
+    them (they print as .notdef boxes) and the phrases carry no spaces to wrap
+    on, so the renderer falls back to the bundled CJK face and breaks the
+    phrase between characters."""
+
+    TITLE = "人工智能如何改变世界"
+    LONG = "为什么火山会在夜里唱歌，科学家终于找到了答案"
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="spielbot-cjk-"))
+        self.bg = ct.preview_background(320, 180)
+
+    def _render(self, name, phrase, cfg=None):
+        out = self.tmp / name
+        return out, ct.render_cover_typography(self.bg, out, phrase, cfg or {})
+
+    def test_latin_tokenising_is_unchanged(self):
+        tokens, spaced = ct.tokenize_phrase("The Silent City")
+        self.assertEqual(tokens, "The Silent City".split())
+        self.assertEqual(spaced, [True, True, True])
+
+    def test_cjk_splits_per_character_with_no_spaces(self):
+        tokens, spaced = ct.tokenize_phrase(self.TITLE)
+        self.assertEqual(tokens, list(self.TITLE))
+        self.assertEqual(spaced, [True] + [False] * 9)
+
+    def test_closing_punctuation_never_starts_a_token(self):
+        tokens, _ = ct.tokenize_phrase("你好，世界")
+        self.assertEqual(tokens, ["你", "好，", "世", "界"])
+
+    def test_mixed_script_keeps_real_spaces_only(self):
+        tokens, spaced = ct.tokenize_phrase("AI 如何改变")
+        self.assertEqual(tokens, ["AI", "如", "何", "改", "变"])
+        self.assertEqual(spaced, [True, True, False, False, False])
+
+    def test_markup_accents_characters(self):
+        clean, acc = ct.split_phrase_markup("*人工智能*如何改变世界")
+        self.assertEqual(clean, self.TITLE)
+        self.assertEqual(acc, {0, 1, 2, 3})
+
+    def test_bundled_cjk_face_ships_and_covers_the_title(self):
+        from PIL import ImageFont
+
+        path = ct.resolve_font_path(ct.CJK_FALLBACK_FONT)
+        self.assertTrue(path and Path(path).is_file())
+        face = ImageFont.truetype(path, 40)
+        self.assertEqual(ct._missing_chars(face, self.TITLE + self.LONG + "ABC"), set())
+
+    def test_latin_font_is_swapped_only_when_it_lacks_the_glyphs(self):
+        anton = ct.resolve_font_path("Anton")
+        self.assertEqual(ct.resolve_font_for_text("Anton", "The Silent City"), anton)
+        picked = ct.resolve_font_for_text("Anton", self.TITLE)
+        self.assertEqual(picked, ct.resolve_font_path(ct.CJK_FALLBACK_FONT))
+
+    def test_render_draws_real_glyphs_not_tofu(self):
+        from PIL import ImageFont
+
+        _, meta = self._render("cn.png", self.TITLE)
+        face = ImageFont.truetype(ct.resolve_font_for_text("Anton", self.TITLE),
+                                  meta["font_size"])
+        self.assertEqual(ct._missing_chars(face, self.TITLE), set())
+
+    def test_long_title_wraps_between_characters(self):
+        _, meta = self._render("long.png", self.LONG)
+        self.assertGreater(len(meta["lines"]), 1)
+        self.assertEqual(sum(len("".join(line)) for line in meta["lines"]), len(self.LONG))
+        for line in meta["lines"][1:]:
+            self.assertNotIn(line[0][0], "，。、")  # never starts on punctuation
+
+    def test_wrapping_beats_the_single_unbreakable_line(self):
+        # The point of per-character tokens: the title no longer has to fit on
+        # one line, so it is set far bigger than 82% of the width over 21 chars.
+        _, meta = self._render("w.png", self.LONG)
+        one_line = 320 * 0.82 / len(self.LONG)
+        self.assertGreater(meta["font_size"], one_line * 1.5)
+
+    def test_word_accent_rules_fall_back_to_the_last_line(self):
+        _, one = self._render("a1.png", self.TITLE, {"accent": "last_word"})
+        self.assertEqual(one["accents"], [])           # single line: nothing to accent
+        _, many = self._render("a2.png", self.LONG, {"accent": "last_word"})
+        self.assertEqual(len(many["accents"]), len(many["lines"][-1]))
+
+    def test_japanese_renders_too(self):
+        _, meta = self._render("ja.png", "日本の火山はなぜ夜に歌うのか")
+        self.assertGreater(meta["font_size"], 0)
+        self.assertEqual(sum(len(l) for l in meta["lines"]), 14)
+
+
 class RenderTests(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="spielbot-covertypo-"))

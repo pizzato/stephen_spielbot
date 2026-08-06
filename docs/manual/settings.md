@@ -115,6 +115,19 @@ and use **Re-apply title text** on the cover card to restyle an existing cover i
 — no image regeneration needed. Regenerating a cover rerolls only the artwork; the words
 are always pixel-perfect.
 
+**Non-Latin titles** — the bundled display faces are Latin-only, so a Chinese or Japanese
+title set in one of them would come out as a row of empty boxes. When the chosen font has
+no glyphs for the phrase, the renderer silently swaps in a face that does: the bundled
+**Noto Sans SC Black** (Simplified Chinese, Japanese kanji and kana — so those covers look
+the same on every machine), or, for scripts it does not carry (Korean, Arabic, Hebrew,
+Devanagari), the first installed font that covers the phrase. Only the fallback changes;
+every other typography setting still applies. Chinese and Japanese are written without
+spaces, so their titles break **between characters** instead — a long title fills two or
+three big lines rather than one small one, and never starts a line on closing punctuation.
+Accent rules that pick a word (first/last/longest) have nothing word-shaped to grab in
+those scripts, so they accent the last line instead — nothing when the title fits on one.
+`*Asterisks*` still work, and mark the exact characters they wrap.
+
 ### Script & content
 
 | Field | Effect |

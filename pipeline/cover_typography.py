@@ -21,6 +21,11 @@ from pathlib import Path
 # the font NAME for these (checkout-relative), and a full path for system fonts.
 BUNDLED_FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
+# The display faces above are Latin-only: a Chinese or Japanese title drawn in
+# one of them comes out as a row of empty .notdef boxes. This bundled face is
+# the fallback for phrases they cannot draw (see resolve_font_for_text).
+CJK_FALLBACK_FONT = "Noto Sans SC Black"
+
 POSITIONS = ("top", "middle", "bottom")
 ALIGNS = ("left", "center", "right")
 CASES = ("keep", "upper", "title")
@@ -91,17 +96,76 @@ def norm_cover_typography(value) -> dict:
     return d
 
 
+# ── tokens ────────────────────────────────────────────────────────────────────
+# Chinese and Japanese are written without spaces, so str.split() sees a whole
+# title as ONE word: unwrappable (one small line instead of two big ones) and
+# nothing word-shaped for the accent rules to pick. Runs of those scripts are
+# tokenised per CHARACTER instead and drawn with no space between them, which
+# lets the fitter break them across lines like an English phrase.
+
+_CJK_RANGES = (
+    (0x3040, 0x30FF),    # hiragana + katakana
+    (0x3400, 0x4DBF),    # CJK ideographs, extension A
+    (0x4E00, 0x9FFF),    # CJK unified ideographs
+    (0xF900, 0xFAFF),    # CJK compatibility ideographs
+    (0xFF66, 0xFF9F),    # halfwidth katakana
+    (0x20000, 0x2A6DF),  # CJK ideographs, extension B
+)
+# Never allowed to start a line: CJK closing punctuation, and the small kana
+# and marks that belong to the character in front of them.
+_NO_BREAK_BEFORE = set("、。，．！？：；’”）〕］｝〉》」』】·ー"
+                       "ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶ"
+                       "!?,.:;)]}…")
+
+
+def is_cjk(ch: str) -> bool:
+    """True for characters of scripts written without spaces (Han, kana)."""
+    cp = ord(ch)
+    return any(lo <= cp <= hi for lo, hi in _CJK_RANGES)
+
+
+def _tokenize(chars, flags: list[bool]) -> tuple[list[str], list[bool], set[int]]:
+    """``(tokens, space-before flags, accented token indices)`` for parallel
+    sequences of characters and their accent flags."""
+    tokens: list[str] = []
+    spaced: list[bool] = []
+    accents: set[int] = set()
+    prev_space = True
+    for ch, accented in zip(chars, flags):
+        if ch.isspace():
+            prev_space = True
+            continue
+        join = bool(tokens) and not prev_space and (
+            ch in _NO_BREAK_BEFORE or not (is_cjk(ch) or is_cjk(tokens[-1][-1])))
+        if join:
+            tokens[-1] += ch
+        else:
+            tokens.append(ch)
+            spaced.append(prev_space)
+        if accented:
+            accents.add(len(tokens) - 1)
+        prev_space = False
+    return tokens, spaced, accents
+
+
+def tokenize_phrase(clean: str) -> tuple[list[str], list[bool]]:
+    """Drawable tokens of a clean phrase, plus whether a space precedes each:
+    one token per word for spaced scripts, one per character inside a CJK run."""
+    return _tokenize(clean, [False] * len(clean))[:2]
+
+
 # ── phrase markup ─────────────────────────────────────────────────────────────
 # Per-video accent override: words wrapped in asterisks in cover_phrase.txt
 # ("The *Secret* War") are accented, overriding the style's accent rule.
 
 
 def split_phrase_markup(phrase: str) -> tuple[str, set[int]]:
-    """Return ``(clean_phrase, accented_word_indices)`` from ``*word*`` markup.
+    """Return ``(clean_phrase, accented_token_indices)`` from ``*word*`` markup.
 
-    Indices refer to ``clean_phrase.split()``. A word is accented when any of
-    its characters sat inside an asterisk span. Asterisks never survive into
-    the clean phrase (an unpaired one just accents the rest of the phrase).
+    Indices refer to ``tokenize_phrase(clean_phrase)`` — one per word, or one
+    per character inside a CJK run. A token is accented when any of its
+    characters sat inside an asterisk span. Asterisks never survive into the
+    clean phrase (an unpaired one just accents the rest of the phrase).
     """
     clean_chars: list[str] = []
     flags: list[bool] = []
@@ -112,18 +176,7 @@ def split_phrase_markup(phrase: str) -> tuple[str, set[int]]:
             continue
         clean_chars.append(ch)
         flags.append(in_span)
-    accents: set[int] = set()
-    word_i = 0
-    in_word = False
-    for ch, accented in zip(clean_chars, flags):
-        if ch.isspace():
-            if in_word:
-                word_i += 1
-            in_word = False
-        else:
-            in_word = True
-            if accented:
-                accents.add(word_i)
+    accents = _tokenize(clean_chars, flags)[2]
     return " ".join("".join(clean_chars).split()), accents
 
 
@@ -182,6 +235,81 @@ def resolve_font_path(font: str) -> str:
     return ""
 
 
+# A permanent Unicode noncharacter: no font maps it, so it always draws the
+# face's .notdef box — the yardstick for "this face has no glyph for that char".
+_NOTDEF_PROBE = "￿"
+
+_COVERING_CACHE: dict[frozenset, str] = {}
+
+
+def _glyph(font, ch: str) -> tuple:
+    mask = font.getmask(ch)
+    return mask.size, bytes(mask)
+
+
+def _missing_chars(font, text: str) -> set[str]:
+    """The characters *font* would draw as .notdef tofu boxes."""
+    try:
+        notdef = _glyph(font, _NOTDEF_PROBE)
+    except Exception:
+        return set()
+    missing = set()
+    for ch in set(text):
+        if ch.isspace():
+            continue
+        try:
+            if _glyph(font, ch) == notdef:
+                missing.add(ch)
+        except Exception:
+            missing.add(ch)
+    return missing
+
+
+def _covering_font(text: str) -> str:
+    """A font file with glyphs for every character of *text* ("" if none has).
+
+    The bundled CJK face is tried first so Chinese and Japanese covers look the
+    same on every host; installed fonts (which cover the scripts the bundle
+    does not, e.g. Korean or Arabic) come after, heavy weights first because
+    they read better at thumbnail size. Cached — the scan loads every font.
+    """
+    key = frozenset(text)
+    if key in _COVERING_CACHE:
+        return _COVERING_CACHE[key]
+    from PIL import ImageFont
+
+    from pipeline.cover import available_fonts
+
+    candidates = [resolve_font_path(CJK_FALLBACK_FONT)]
+    candidates += [f["path"] for f in sorted(
+        available_fonts(), key=lambda f: not re.search(r"black|heavy|bold", f["name"], re.I))]
+    best = ""
+    for cand in candidates:
+        if not cand:
+            continue
+        try:
+            face = ImageFont.truetype(cand, _PROBE)
+        except Exception:
+            continue
+        if not _missing_chars(face, text):
+            best = cand
+            break
+    _COVERING_CACHE[key] = best
+    return best
+
+
+def resolve_font_for_text(font: str, text: str) -> str:
+    """The font file used to draw *text*: the style's font whenever it has the
+    glyphs, else one that does. Without this a Chinese title set in a Latin
+    display face prints as a row of empty boxes."""
+    from pipeline.cover import _load_font
+
+    path = resolve_font_path(font)
+    if not _missing_chars(_load_font(_PROBE, path), text):
+        return path
+    return _covering_font(text) or path
+
+
 # ── layout + render ───────────────────────────────────────────────────────────
 
 
@@ -193,12 +321,17 @@ def _apply_case(word: str, mode: str) -> str:
     return word
 
 
-def _accent_set(words: list[str], rule: str, markup: set[int]) -> tuple[set[int], bool]:
+def _accent_set(words: list[str], rule: str, markup: set[int],
+                cjk: bool = False) -> tuple[set[int], bool]:
     """Word indices to accent, plus a last-line flag resolved after wrapping."""
     if markup:
         return {i for i in markup if i < len(words)}, False
     if not words or rule == "none":
         return set(), False
+    if cjk:
+        # Nothing word-shaped for a word rule to pick inside a run of
+        # characters — accent the last line instead (nothing when it fits one).
+        return set(), True
     if rule == "first_word":
         return {0}, False
     if rule == "last_word":
@@ -218,22 +351,23 @@ def _partitions(count: int, lines: int):
             yield [first] + rest
 
 
-def _line_lists(words: list[str], sizes: list[int]) -> list[list[int]]:
-    """Word-index lines for the best 1..3-line layout.
+def _line_lists(sizes: list[int], spaced: list[bool]) -> list[list[int]]:
+    """Token-index lines for the best 1..3-line layout.
 
     Every viable line count is measured (character-width proxy at this stage);
     the layout that yields the largest fitted font wins in ``_fit`` — here we
     just produce, per line count, the split minimising the widest line.
     """
     out = []
-    for n in range(1, min(_MAX_LINES, len(words)) + 1):
+    for n in range(1, min(_MAX_LINES, len(sizes)) + 1):
         best, best_w = None, None
-        for split in _partitions(len(words), n):
+        for split in _partitions(len(sizes), n):
             rows, i = [], 0
             for c in split:
                 rows.append(list(range(i, i + c)))
                 i += c
-            widest = max(sum(sizes[j] for j in row) + (len(row) - 1) for row in rows)
+            widest = max(sum(sizes[j] for j in row) + sum(spaced[j] for j in row[1:])
+                         for row in rows)
             if best_w is None or widest < best_w:
                 best, best_w = rows, widest
         out.append(best)
@@ -262,15 +396,17 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
             out_path if hasattr(out_path, "write") else str(out_path), "PNG")
 
     clean, markup = split_phrase_markup(phrase)
-    words = [_apply_case(w, cfg["case"]) for w in clean.split()]
+    tokens, spaced = tokenize_phrase(clean)
+    words = [_apply_case(w, cfg["case"]) for w in tokens]
     meta = {"font_size": 0, "lines": [], "accents": [], "block": None}
     if not words:
         save(img)
         return meta
 
-    accents, accent_last_line = _accent_set(words, cfg["accent"], markup)
+    cjk = any(is_cjk(ch) for ch in clean)
+    accents, accent_last_line = _accent_set(words, cfg["accent"], markup, cjk=cjk)
 
-    font_file = resolve_font_path(cfg["font"])
+    font_file = resolve_font_for_text(cfg["font"], "".join(words))
     from pipeline.cover import _load_font
 
     fonts: dict[int, object] = {}
@@ -290,13 +426,14 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
         widest, height = 0.0, 0.0
         for li, row in enumerate(line_rows):
             w_line, asc_line, desc_line = 0.0, 0.0, 0.0
-            for wi in row:
+            for k, wi in enumerate(row):
                 scale = cfg["accent_scale"] if (wi in accents or li in accent_rows) else 1.0
                 f = font_at(round(_PROBE * scale))
                 w_line += draw_probe.textlength(words[wi], font=f)
+                if k and spaced[wi]:
+                    w_line += space
                 asc, desc = f.getmetrics()
                 asc_line, desc_line = max(asc_line, asc), max(desc_line, desc)
-            w_line += space * (len(row) - 1)
             widest = max(widest, w_line)
             height += asc_line + desc_line
         height += _PROBE * 0.10 * (len(line_rows) - 1)  # inter-line gap
@@ -305,9 +442,10 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
     # Pick the line count whose balanced split fits the LARGEST font.
     max_w_px = W * cfg["width_pct"] / 100.0
     max_h_px = H * _MAX_BLOCK_FRAC
-    char_sizes = [len(w) for w in words]
+    # CJK characters are full-width, so they count double in the width proxy.
+    char_sizes = [sum(2 if is_cjk(c) else 1 for c in w) for w in words]
     best_rows, best_size = [[i for i in range(len(words))]], 0.0
-    for rows in _line_lists(words, char_sizes):
+    for rows in _line_lists(char_sizes, spaced):
         acc_rows = {len(rows) - 1} if (accent_last_line and len(rows) > 1) else set()
         w, h = measure(rows, acc_rows)
         size = _PROBE * min(max_w_px / w, max_h_px / h)
@@ -315,7 +453,7 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
             best_rows, best_size = rows, size
     rows = best_rows
     accent_rows = {len(rows) - 1} if accent_last_line and len(rows) > 1 else set()
-    if accent_last_line and len(rows) == 1:
+    if accent_last_line and len(rows) == 1 and not cjk:
         accents = {len(words) - 1}  # single-line phrase: degrade to last word
 
     base = int(best_size * cfg["scale"] * 0.98)  # 2% slack for metric nonlinearity
@@ -331,12 +469,13 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
         line_dims = []  # (width, ascent, descent) per line
         for li, row in enumerate(rows):
             w_line, asc_line, desc_line = 0.0, 0, 0
-            for wi in row:
+            for k, wi in enumerate(row):
                 f = font_at(round(base * word_scale(li, wi)))
                 w_line += draw.textlength(words[wi], font=f)
+                if k and spaced[wi]:
+                    w_line += space_w
                 asc, desc = f.getmetrics()
                 asc_line, desc_line = max(asc_line, asc), max(desc_line, desc)
-            w_line += space_w * (len(row) - 1)
             line_dims.append((w_line, asc_line, desc_line))
         widest = max(d[0] for d in line_dims)
         if widest <= max_w_px or base <= 10:
@@ -386,11 +525,13 @@ def render_cover_typography(bg_path: Path | str, out_path: Path | str,
         else:
             x = block_x + (block_w - w_line) / 2
         baseline = y + asc_line
-        for wi in row:
+        for k, wi in enumerate(row):
             f = font_at(round(base * word_scale(li, wi)))
             accented = wi in accents or li in accent_rows
+            if k and spaced[wi]:
+                x += space_w
             placed.append((words[wi], x, baseline, f, accented))
-            x += draw.textlength(words[wi], font=f) + space_w
+            x += draw.textlength(words[wi], font=f)
         y += asc_line + desc_line + gap
 
     if cfg["outline"]:
