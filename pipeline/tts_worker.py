@@ -206,7 +206,9 @@ def worker_alive(host: str, timeout: int = 3) -> bool:
 def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
                              window_secs: float = 0.1, pad_secs: float = 0.4,
                              min_gap_secs: float = 1.2,
-                             max_babble_secs: float = 3.5) -> None:
+                             max_babble_secs: float = 3.5,
+                             swell_gap_secs: float = 0.2,
+                             max_swell_secs: float = 0.35) -> None:
     """Cut Chatterbox's post-speech junk off the end of a narration WAV.
 
     Chatterbox Multilingual often appends junk after the last word: quiet
@@ -221,7 +223,7 @@ def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
     silence and shreds it. A window within *rel_loud_db* of the speech level
     counts as loud.
 
-    Two junk shapes are cut:
+    Three junk shapes are cut:
       * a tail with no loud window in it (quiet babble/clicks) — cut
         *pad_secs* after the last loud window, keeping the natural decay;
       * a babble swell separated from the narration by a quiet stretch of
@@ -229,7 +231,14 @@ def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
         stretch). Real pauses can run past 2 s, but they resume with several
         seconds of actual narration, while trailing babble is short — so a
         stretch only counts as the junk boundary when less than
-        *max_babble_secs* of loud audio remains after it.
+        *max_babble_secs* of loud audio remains after it;
+      * a speech-loud thump right at EOF: at most *max_swell_secs* of loud
+        audio after a quiet stretch of *swell_gap_secs* or more (measured on
+        the warm-milk pt/es localizations: a low rumble ~0.2-0.3 s long,
+        0.2-0.3 s after the last word — the gap is far too short for the
+        rule above). A real trailing word runs 0.4 s or longer, so only
+        sub-*max_swell_secs* remnants are cut, and never past the swell's
+        first loud window so no decay of actual speech is lost.
     Best-effort — on anything unexpected the file is left untouched.
     """
     import array
@@ -273,16 +282,28 @@ def _trim_trailing_artifacts(wav_path: Path, rel_loud_db: float = 12.0,
                 stretches.append((i, j))
             i = j
         cut_win = max(k for k in range(n) if loud[k])  # default: quiet-tail cut
+        keep_cap = None  # EOF-swell cut: never keep into the swell itself
         gap_wins = max(1, int(min_gap_secs / window_secs))
+        swell_gap_wins = max(1, int(swell_gap_secs / window_secs))
+        max_swell_wins = max(1, int(max_swell_secs / window_secs))
         for a, b in stretches:
-            if a == 0 or b - a < gap_wins:
+            if a == 0:
                 continue
             loud_after = sum(1 for k in range(a, n) if loud[k])
-            if loud_after * window_secs < max_babble_secs:
+            if b - a >= gap_wins and loud_after * window_secs < max_babble_secs:
                 cut_win = max(k for k in range(a) if loud[k])
                 break
+            if b - a >= swell_gap_wins and 1 <= loud_after <= max_swell_wins:
+                cut_win = max(k for k in range(a) if loud[k])
+                keep_cap = min(k for k in range(a, n) if loud[k])
+                break
         keep = min(len(samples), (cut_win + 1) * win + int(rate * pad_secs) * channels)
-        if len(samples) - keep < int(rate * 0.25) * channels:
+        if keep_cap is not None:
+            keep = min(keep, keep_cap * win)
+        # A quiet tail isn't worth a rewrite unless it saves a real stretch;
+        # an EOF thump is loud, so even a short cut is.
+        min_save = 0.1 if keep_cap is not None else 0.25
+        if len(samples) - keep < int(rate * min_save) * channels:
             return  # tail already tight — nothing worth rewriting
         trimmed = samples[:keep]
         tmp = wav_path.with_suffix(".trim.wav")
