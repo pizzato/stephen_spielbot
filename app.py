@@ -188,6 +188,9 @@ DEFAULT_CFG = {
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
     # model animates each scene. Default = the incumbent LTX 2.3 path.
     "default_video_engine": "ltx23",
+    # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
+    # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
+    "default_video_steps":  0,
     # TTS engine per style (see pipeline/tts_engines.py): which narration model
     # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
     "default_tts_engine":   "openf5",
@@ -429,6 +432,8 @@ STYLE_FIELD_TO_FLAT = {
     "edit_engine":          "default_edit_engine",
     # Video engine selection (scene I2V) — see pipeline/engines.py VIDEO_ENGINES
     "video_engine":         "default_video_engine",
+    # Optional steps override for the MiniMax engines (0 = engine default)
+    "video_steps":          "default_video_steps",
     # TTS narration model selection — see pipeline/tts_engines.py
     "tts_engine":           "default_tts_engine",
     # Narration language (multilingual TTS engines only)
@@ -738,6 +743,15 @@ def _norm_video_engine(value) -> str:
     return value if engines.get_video(value) else engines.DEFAULT_VIDEO_ENGINE
 
 
+def _norm_video_steps(value) -> int:
+    """Clamp the per-style video steps override to 0..50 (0 = engine default)."""
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(50, v))
+
+
 def _norm_tts_engine(value) -> str:
     """Coerce a TTS engine key to a known one (see pipeline/tts_engines.py)."""
     return tts_engines.norm(value)
@@ -934,6 +948,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "image_engine", lambda v: _norm_engine(v, "generate"))
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
+        _coerce(row, "video_steps", _norm_video_steps)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)

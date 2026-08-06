@@ -104,10 +104,13 @@ Turbo variant notes:
 - It needs the **ComfyUI-MiniMax-H3-Turbo** custom nodes (the LoRA is sampled on
   dual video/audio flow schedules) — they are baked into the worker image, so
   rebuild the containers if the engine shows "not installed".
-- The current checkpoint is an **early, under-trained preview**: output is
-  softer than the base engine, especially below 8 steps. Newer checkpoints are
-  expected upstream; swap the `lora` filename in `pipeline/engines.py` to pick
-  one up.
+- **Steps are tunable per style** (Settings → Styles → Sampling steps, shown for
+  the MiniMax engines; 0 = engine default). Each step costs ~2.5 min per scene
+  on a GB10, so 4 → 12 min and 8 → 23 min; raise it only if content shows
+  softness.
+- The current checkpoint is an **early, under-trained preview**. Newer
+  checkpoints are expected upstream; swap the `lora` filename in
+  `pipeline/engines.py` to pick one up.
 
 Manual download:
 

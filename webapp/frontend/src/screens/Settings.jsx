@@ -2389,6 +2389,15 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   })()}
                 </Field>
               )}
+              {engineInfo && String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax') && (
+                <Field label="Sampling steps"
+                  hint="0 = the engine's default (Turbo: 4, base H3: 15). More steps = sharper but slower — each step is ~2.5 min per scene on a GB10; Turbo stays usable down to 4.">
+                  <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
+                    value={eff.video_steps ?? 0}
+                    onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />
+                  <ParentVal k="video_steps" />
+                </Field>
+              )}
             </div>
           </Card>
 

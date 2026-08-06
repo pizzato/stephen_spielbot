@@ -10588,6 +10588,16 @@ def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
         return False
 
 
+def _resolve_video_for_job(cfg: dict, jc: dict) -> dict:
+    """Video engine for a work-dir job: the job-config snapshot wins, then the
+    style's current settings — including the optional per-style ``video_steps``
+    override (0 = engine default)."""
+    ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+    return gapp.engines.resolve_video(
+        {"video_steps": jc.get("video_steps") or ss.get("video_steps")},
+        jc.get("video_engine") or ss.get("video_engine"))
+
+
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                         instruction: str = "") -> None:
     """Background thread: re-render video from the existing first frame → mux.
@@ -10700,8 +10710,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                 scene_first_frame if scene_first_frame.exists() else None,
                 gapp.engines.resolve(cfg, jc.get("image_engine")
                                      or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
-                video_engine=gapp.engines.resolve_video(cfg, jc.get("video_engine")
-                                     or gapp.style_settings(cfg, jc.get("style_name") or "").get("video_engine")),
+                video_engine=_resolve_video_for_job(cfg, jc),
             )
         finally:
             pool.release(url)
@@ -10800,8 +10809,7 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
 
         image_engine = gapp.engines.resolve(cfg, jc.get("image_engine")
                                             or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine"))
-        video_engine = gapp.engines.resolve_video(cfg, jc.get("video_engine")
-                                                  or gapp.style_settings(cfg, jc.get("style_name") or "").get("video_engine"))
+        video_engine = _resolve_video_for_job(cfg, jc)
 
         def silent_video(scene_obj, shot, still, out_clip):
             """A silent shot (people move, no speech) as an LTX i2v clip from its

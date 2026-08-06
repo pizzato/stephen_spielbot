@@ -76,6 +76,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + a narration language that also drives the script), or the non-commercial `f5-original` preview |
 | Image engine | Per-style generate and edit engines; default FLUX.2 Klein |
 | Video engine | Per-style scene I2V model — `ltx23` (default) or the opt-in `minimax-h3` / `minimax-h3-turbo` (see [Models → Video engines](models.md#video-engines-per-style)) |
+| Sampling steps | MiniMax engines only: overrides the engine's step count (0 = engine default — Turbo 4, base H3 15). More steps = sharper but slower |
 | Resolution | Portrait FHD (1080×1920) by default; landscape / portrait / square presets from 512×288 to 1920×1080 |
 | Render quality | First-pass and second-pass steps — higher is slower and more detailed |
 

@@ -251,8 +251,19 @@ def get_video(key: str) -> dict | None:
 
 def resolve_video(cfg: dict, key: str) -> dict:
     """Return the video-engine dict for *key*, falling back to the default.
-    *cfg* is unused today but kept for symmetry with :func:`resolve`."""
-    return dict(get_video(key) or VIDEO_ENGINES[DEFAULT_VIDEO_ENGINE])
+
+    *cfg* (a style/job settings dict) may carry ``video_steps`` — a per-style
+    steps override for single-pass engines (the MiniMax family; entries with a
+    ``steps`` field). 0/absent keeps the engine default; LTX has no ``steps``
+    and ignores it."""
+    eng = dict(get_video(key) or VIDEO_ENGINES[DEFAULT_VIDEO_ENGINE])
+    try:
+        steps = int(cfg.get("video_steps") or 0) if isinstance(cfg, dict) else 0
+    except (TypeError, ValueError):
+        steps = 0
+    if steps > 0 and eng.get("steps"):
+        eng["steps"] = steps
+    return eng
 
 
 def public_list_video() -> list[dict]:
