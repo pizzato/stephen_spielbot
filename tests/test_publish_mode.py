@@ -384,5 +384,51 @@ class ClockResetTests(TempConfigCase):
         self.assertTrue(out["channels"]["chan"]["reset_pending"])
 
 
+class StalePublishTargetTests(TempConfigCase):
+    """A queued entry re-resolves its publish target until it's actually released.
+
+    The target is frozen at enqueue time, but the upload resolves it live from the
+    film's style. A film queued before its style had its own channel froze the
+    first-channel fallback, and then showed — and paced against — that unrelated
+    channel while the upload went somewhere else entirely.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.pq_path = Path(self._tmp.name) / "publish_queue.json"
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH", self.pq_path)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        (self.wd / "job.json").write_text('{"status": "done"}')
+
+    def _queue(self, yt_status="pending", enabled=True):
+        backend.pq.save_queue([{
+            "id": "e1", "work_dir": str(self.wd), "title": "T", "source": "manual",
+            "created_at": 1.0,
+            "youtube": {"enabled": enabled, "channel": "old", "status": yt_status},
+            "x": {"enabled": False, "account": "", "status": "skipped"},
+        }])
+
+    def test_pending_entry_picks_up_the_styles_new_channel(self):
+        self._queue()
+        with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
+            backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "new")
+
+    def test_released_entry_keeps_the_channel_it_published_on(self):
+        self._queue(yt_status="done")
+        with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
+            backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "old")
+
+    def test_untargeted_platform_is_left_alone(self):
+        self._queue(enabled=False, yt_status="skipped")
+        with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
+            backend._reconcile_publish_queue()
+        self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "old")
+
+
 if __name__ == "__main__":
     unittest.main()

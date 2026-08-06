@@ -85,6 +85,10 @@ The queue in release order — top first, as each cadence allows.
 - **Publish now** releases an entry immediately, ignoring the cadence
 - **Remove** drops it from the queue
 
+Each line shows the channel or account the film will publish to — its style's, looked up
+fresh each time the queue loads. Reassign a style to a different channel and everything
+still waiting moves with it; already-published entries keep the channel they went out on.
+
 **Scan for unpublished** pulls in the backlog — every finished film that never made it into
 the queue. **Cadence settings** jumps to Settings.
 
