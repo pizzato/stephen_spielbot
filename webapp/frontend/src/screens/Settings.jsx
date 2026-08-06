@@ -535,6 +535,152 @@ function VoicesManager({ voices, busy, ttsLanguages, cadences: cadencesProp, onA
   )
 }
 
+// Per-style cover typography — defaults mirrored from pipeline/cover_typography.py
+// so the editor shows effective values before the style has its own dict.
+const CT_DEFAULTS = {
+  font: 'Anton', position: 'bottom', align: 'center', case: 'upper',
+  width_pct: 82, scale: 1.0, color: '#FFFFFF', accent: 'last_word',
+  accent_color: '#FFD400', accent_scale: 1.15, outline: true,
+  card: false, card_color: '#000000', card_opacity: 0.55,
+}
+
+// Editor for a style's cover_typography: controls beside a live preview
+// rendered server-side by the exact code that composites real covers, so
+// what you see here is what gets burned onto thumbnails.
+function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
+  const ct = { ...CT_DEFAULTS, ...(value || {}) }
+  const set = (k, v) => onChange({ ...ct, [k]: v })
+  const [sample, setSample] = useState('The *Secret* Life of Deep Sea Giants')
+  const [portrait, setPortrait] = useState(false)
+  const [preview, setPreview] = useState('')
+  const [previewErr, setPreviewErr] = useState('')
+  const ctKey = JSON.stringify(ct)
+  useEffect(() => {
+    let gone = false
+    const t = setTimeout(() => {
+      fetch('/api/cover-typography/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cover_typography: ct, text: sample, orientation: portrait ? 'portrait' : 'landscape' }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`Preview failed (${res.status})`)
+        return res.blob()
+      }).then((blob) => {
+        if (gone) return
+        setPreview((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob) })
+        setPreviewErr('')
+      }).catch((e) => { if (!gone) setPreviewErr(e.message) })
+    }, 300)
+    return () => { gone = true; clearTimeout(t) }
+  }, [ctKey, sample, portrait])  // eslint-disable-line react-hooks/exhaustive-deps
+  const fontKnown = (bundledFonts || []).some((f) => f.name === ct.font)
+    || (systemFonts || []).some((f) => f.path === ct.font)
+  return (
+    <div className="stack gap-16" style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 16 }}>
+      <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-start' }}>
+          <div className="stack gap-14" style={{ flex: '1 1 340px', minWidth: 300 }}>
+            <Field label="Font" hint="Bundled fonts ship with Spielbot (thumbnail-grade display faces); system fonts come from this machine.">
+              <select className="select" value={ct.font || ''} onChange={(e) => set('font', e.target.value)} style={{ maxWidth: 320 }}>
+                {(bundledFonts || []).length > 0 && (
+                  <optgroup label="Bundled">
+                    {(bundledFonts || []).map((f) => <option key={f.path} value={f.name}>{f.name}</option>)}
+                  </optgroup>
+                )}
+                <optgroup label="System">
+                  {(systemFonts || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
+                </optgroup>
+                {ct.font && !fontKnown && <option value={ct.font}>{ct.font} (not found)</option>}
+              </select>
+            </Field>
+            <div className="row gap-14 row--wrap">
+              <Field label="Position">
+                <select className="select" value={ct.position} onChange={(e) => set('position', e.target.value)}>
+                  <option value="top">Top</option>
+                  <option value="middle">Middle</option>
+                  <option value="bottom">Bottom</option>
+                </select>
+              </Field>
+              <Field label="Alignment">
+                <select className="select" value={ct.align} onChange={(e) => set('align', e.target.value)}>
+                  <option value="left">Left</option>
+                  <option value="center">Centre</option>
+                  <option value="right">Right</option>
+                </select>
+              </Field>
+              <Field label="Case">
+                <select className="select" value={ct.case} onChange={(e) => set('case', e.target.value)}>
+                  <option value="upper">UPPERCASE</option>
+                  <option value="title">Title Case</option>
+                  <option value="keep">As typed</option>
+                </select>
+              </Field>
+            </div>
+            <div className="row gap-14 row--wrap">
+              <Field label="Text size" hint="Multiplier on the auto-fitted size.">
+                <input className="input" type="number" min={0.5} max={1.6} step={0.05} value={ct.scale}
+                  onChange={(e) => set('scale', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+              <Field label="Block width" hint="% of the image the text may fill.">
+                <input className="input" type="number" min={40} max={96} value={ct.width_pct}
+                  onChange={(e) => set('width_pct', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+              <Field label="Text colour">
+                <input className="input" type="color" value={ct.color}
+                  onChange={(e) => set('color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+              </Field>
+            </div>
+            <div className="row gap-14 row--wrap">
+              <Field label="Accent words" hint="Which words get the accent colour and size — override per film by wrapping words in *asterisks* in its cover phrase.">
+                <select className="select" value={ct.accent} onChange={(e) => set('accent', e.target.value)}>
+                  <option value="none">None</option>
+                  <option value="first_word">First word</option>
+                  <option value="last_word">Last word</option>
+                  <option value="last_line">Last line</option>
+                  <option value="longest_word">Longest word</option>
+                </select>
+              </Field>
+              <Field label="Accent colour">
+                <input className="input" type="color" value={ct.accent_color}
+                  onChange={(e) => set('accent_color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+              </Field>
+              <Field label="Accent size" hint="Accented words relative to the rest.">
+                <input className="input" type="number" min={1} max={1.8} step={0.05} value={ct.accent_scale}
+                  onChange={(e) => set('accent_scale', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+            </div>
+            <Check checked={!!ct.outline} onChange={(v) => set('outline', v)}
+              label="Outline + soft shadow — keeps the title readable on any artwork" />
+            <Check checked={!!ct.card} onChange={(v) => set('card', v)}
+              label="Backdrop card — rounded panel behind the text" />
+            {ct.card && (
+              <div className="row gap-14 row--wrap">
+                <Field label="Card colour">
+                  <input className="input" type="color" value={ct.card_color}
+                    onChange={(e) => set('card_color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+                </Field>
+                <Field label="Card opacity">
+                  <input className="input" type="number" min={0.05} max={0.95} step={0.05} value={ct.card_opacity}
+                    onChange={(e) => set('card_opacity', +e.target.value)} style={{ maxWidth: 100 }} />
+                </Field>
+              </div>
+            )}
+          </div>
+          <div className="stack gap-8" style={{ flex: '0 1 380px', minWidth: 260 }}>
+            <Field label="Preview text" hint="Sample only — real covers use each film's phrase.">
+              <input className="input" value={sample} maxLength={80} onChange={(e) => setSample(e.target.value)} />
+            </Field>
+            <Check checked={portrait} onChange={setPortrait} label="Portrait (Shorts)" />
+            <div style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: '#15171a', alignSelf: portrait ? 'center' : 'stretch', width: portrait ? 236 : undefined, aspectRatio: portrait ? '9 / 16' : '16 / 9' }}>
+              {preview && <img src={preview} alt="Cover typography preview"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />}
+            </div>
+            {previewErr && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{previewErr}</div>}
+          </div>
+      </div>
+    </div>
+  )
+}
+
 const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
@@ -977,6 +1123,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [engineInfo, setEngineInfo] = useState(null)  // {engines, availability, hf_token_set, default_engine}
   const [ttsEngineInfo, setTtsEngineInfo] = useState(null)  // {engines, availability, default_engine}
   const [fontInfo, setFontInfo] = useState(null)  // [{path, name}] — host fonts for cover text
+  const [fontBundled, setFontBundled] = useState([])  // [{path, name}] — fonts shipped in assets/fonts
   const [engInstall, setEngInstall] = useState({})    // engine key -> install status payload
   const [tab, setTab] = useState('infra')
   const [styleIdx, setStyleIdx] = useState(0)  // selected style in the Styles tab
@@ -1020,8 +1167,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     }
   }
 
-  // Fonts installed on this machine, for the per-style cover-text font picker.
-  useEffect(() => { api.listFonts().then((r) => setFontInfo(r.fonts || [])).catch(() => {}) }, [])
+  // Fonts installed on this machine (+ bundled), for the cover-text pickers.
+  useEffect(() => {
+    api.listFonts().then((r) => { setFontInfo(r.fonts || []); setFontBundled(r.bundled || []) }).catch(() => {})
+  }, [])
 
   // TTS narration models: registry + per-worker availability + download buttons.
   // Mirrors the image-engine flow; reuses the shared engInstall status map (keys
@@ -1202,16 +1351,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'script_mode':
         return v === 'story' ? 'Story-first' : 'Classic'
       case 'first_frame_cover':
-        return v === 'image' ? 'Cover image' : v === 'text' ? 'Cover text' : 'off'
+        return v === 'image' || v === 'text' ? 'Cover image' : 'off'
       case 'first_frame_cover_seconds':
         return `${v ?? 1}s`
-      case 'first_frame_text_font':
-        return (fontInfo || []).find((f) => f.path === v)?.name
-          || (v ? v.split('/').pop() : '(automatic)')
-      case 'first_frame_text_size':
-        return `${v ?? 11}% of width`
-      case 'first_frame_text_color':
-        return String(v || '#FFFFFF')
+      case 'cover_typography': {
+        const t = { ...CT_DEFAULTS, ...(v || {}) }
+        return `${t.font} · ${t.position} · accent ${String(t.accent).replace('_', ' ')}`
+      }
       case 'voice':
         return v || '(F5-TTS default)'
       case 'voice_cadence_wpm':
@@ -1981,11 +2127,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Check checked={!!eff.made_for_kids} onChange={(v) => setStyleField('made_for_kids', v)}
                 label="Made for Kids — self-declare this style's uploads as directed at children (disables personalized ads, comments and other features per YouTube's policy)" />
               <ParentVal k="made_for_kids" />
-              <Field label="Opening cover" hint="After each render, burn the cover into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
-                <select className="select" value={eff.first_frame_cover || 'none'} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
+              <Field label="Opening cover" hint="After each render, burn the cover image into the opening of the video — YouTube Shorts ignore uploaded thumbnails and pick their own frame. Nothing is prepended, so timing and captions are unchanged. Finished films can also be stamped from their edit screen.">
+                <select className="select" value={eff.first_frame_cover === 'text' ? 'image' : (eff.first_frame_cover || 'none')} onChange={(e) => setStyleField('first_frame_cover', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="none">Off — leave the opening as rendered</option>
                   <option value="image">Cover image</option>
-                  <option value="text">Cover text — big title over the video</option>
                 </select>
                 <ParentVal k="first_frame_cover" />
               </Field>
@@ -1994,28 +2139,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(e) => setStyleField('first_frame_cover_seconds', +e.target.value)} style={{ maxWidth: 120 }} />
                 <ParentVal k="first_frame_cover_seconds" />
               </Field>
-              <Field label="Cover text font" hint="Look of the “Cover text” mode (automatic and manual burns). Any font installed on this machine; “Automatic” picks a bold system font.">
-                <select className="select" value={eff.first_frame_text_font || ''} onChange={(e) => setStyleField('first_frame_text_font', e.target.value)} style={{ maxWidth: 320 }}>
-                  <option value="">Automatic — bold system font</option>
-                  {(fontInfo || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
-                  {eff.first_frame_text_font && !(fontInfo || []).some((f) => f.path === eff.first_frame_text_font)
-                    && <option value={eff.first_frame_text_font}>{fontInfo ? `${eff.first_frame_text_font} (not found)` : 'Loading fonts…'}</option>}
-                </select>
-                <ParentVal k="first_frame_text_font" />
+              <Field label="Cover typography" hint="How cover titles look. The artwork is always generated TEXT-FREE (with this style's own image engine) and the title is drawn on top with real fonts — it can never be misspelled, regenerating rerolls only the artwork, and phrase edits re-apply instantly.">
+                <CoverTypographyEditor value={eff.cover_typography}
+                  onChange={(v) => setStyleField('cover_typography', v)}
+                  systemFonts={fontInfo || []} bundledFonts={fontBundled} />
+                <ParentVal k="cover_typography" />
               </Field>
-              <div className="row gap-22 row--wrap">
-                <Field label="Cover text size" hint="% of the video width — 11% is the default big title.">
-                  <input className="input" type="number" min={4} max={30} value={eff.first_frame_text_size ?? 11}
-                    onChange={(e) => setStyleField('first_frame_text_size', +e.target.value)} style={{ maxWidth: 120 }} />
-                  <ParentVal k="first_frame_text_size" />
-                </Field>
-                <Field label="Cover text colour" hint="An outline keeps it readable on any frame.">
-                  <input className="input" type="color" value={eff.first_frame_text_color || '#FFFFFF'}
-                    onChange={(e) => setStyleField('first_frame_text_color', e.target.value)}
-                    style={{ maxWidth: 120, height: 38, padding: 4, cursor: 'pointer' }} />
-                  <ParentVal k="first_frame_text_color" />
-                </Field>
-              </div>
               <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
                 label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
               <ParentVal k="auto_pick_exclude" />

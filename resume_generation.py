@@ -61,11 +61,15 @@ from pipeline import ui_activity
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
 from app import _RESOLUTIONS, _DEFAULT_RESOLUTION, _dialogue_resolvers
+from app import build_cover_generation as _build_cover_generation
 from pipeline.cover import (
-    build_cover_prompt as _cover_prompt,
     burn_cover_into_first_frame as _burn_first_frame,
     cover_dimensions as _cover_dimensions,
-    cover_phrase_for as _cover_phrase_for,
+)
+from pipeline.cover_typography import (
+    COVER_BASE_NAME as _COVER_BG_NAME,
+    apply_cover_typography as _apply_cover_typography,
+    norm_cover_typography as _norm_cover_typography,
 )
 
 CONFIG_FILE = Path.home() / ".config" / "video-generator" / "config.yaml"
@@ -856,7 +860,6 @@ def main(work_dir: Path) -> None:
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
-    cover_base = work_dir / "cover_base.png"
     video_title = cfg.get("video_title", "").strip() or title
     style_clean = cfg.get("style", "").strip()
 
@@ -864,21 +867,32 @@ def main(work_dir: Path) -> None:
         logger.info("Generating YouTube cover image for '%s'", video_title)
         _cover_url: str | None = None
         cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
+        # Cover typography: paint a TEXT-FREE background, then composite the
+        # title with real fonts on top — the model never draws (or misspells)
+        # a single letter. The artwork uses image_engine — the SAME resolved
+        # engine as the scene stills — plus the same composed visual style and
+        # character reference conditioning, so the cover reads as a frame from
+        # the same production.
+        typo = _norm_cover_typography(cfg.get("cover_typography")
+                                      or cfg.get("default_cover_typography"))
+        cover_prompt, cover_refs = _build_cover_generation(
+            work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
+            extra_style=style_clean, text_position=typo["position"],
+            engine=image_engine)
         try:
             _cover_url = worker_pool.acquire()
-            # Covers always use FLUX.1 schnell (see engines.COVER_ENGINE), same as
-            # UI re-generation; resolve() keeps the flat flux_* overrides.
             generate_with_engine(
-                _engines.resolve(cfg, _engines.COVER_ENGINE),
-                _cover_prompt(_cover_phrase_for(work_dir, video_title), style_clean, scenes=scenes),
-                cover_base,
+                image_engine,
+                cover_prompt,
+                work_dir / _COVER_BG_NAME,
                 width=cover_w,
                 height=cover_h,
                 comfy_url=_cover_url,
+                reference_images=cover_refs or None,
             )
             worker_pool.release(_cover_url)
             _cover_url = None
-            shutil.copy2(cover_base, cover_path)
+            _apply_cover_typography(work_dir, typo, video_title)
             logger.info("Cover image saved: %s", cover_path)
         except Exception as _cover_err:
             logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)
@@ -1210,20 +1224,14 @@ def main(work_dir: Path) -> None:
         # Non-fatal: a finished film without the stamp beats a failed render.
         ff_cover = str(cfg.get("first_frame_cover")
                        or cfg.get("default_first_frame_cover") or "none").strip().lower()
-        if ff_cover in ("image", "text"):
+        if ff_cover in ("image", "text"):  # legacy "text" burns the cover image too
             write_progress(status_file, 97, "Burning cover into the first frame…")
             try:
                 _burn_first_frame(
-                    final_path, ff_cover,
-                    cover_path=cover_path, title=video_title, work_dir=work_dir,
+                    final_path,
+                    cover_path=cover_path,
                     seconds=cfg.get("first_frame_cover_seconds",
                                     cfg.get("default_first_frame_cover_seconds")),
-                    text_font=str(cfg.get("first_frame_text_font",
-                                          cfg.get("default_first_frame_text_font", "")) or ""),
-                    text_size=cfg.get("first_frame_text_size",
-                                      cfg.get("default_first_frame_text_size")),
-                    text_color=str(cfg.get("first_frame_text_color",
-                                           cfg.get("default_first_frame_text_color", "")) or ""),
                 )
             except Exception as ff_err:
                 logger.warning("First-frame cover failed (non-fatal): %s", ff_err)

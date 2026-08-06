@@ -491,8 +491,8 @@ class InstructionSteeringTests(unittest.TestCase):
 
     def test_build_cover_prompt_appends_instruction(self):
         from pipeline.cover import build_cover_prompt
-        base = build_cover_prompt("My Title", "cinematic")
-        steered = build_cover_prompt("My Title", "cinematic", instruction="make it all robots")
+        base = build_cover_prompt("cinematic")
+        steered = build_cover_prompt("cinematic", instruction="make it all robots")
         self.assertNotIn("make it all robots", base)
         self.assertTrue(steered.rstrip().endswith("make it all robots"))
 

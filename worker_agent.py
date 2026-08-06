@@ -32,8 +32,8 @@ from pipeline import image_history  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     build_cover_prompt,
     cover_dimensions,
-    cover_phrase_for,
 )
+from pipeline.cover_typography import COVER_BASE_NAME, apply_cover_typography  # noqa: E402
 from pipeline.llm import Scene  # noqa: E402
 from pipeline.orchestrator import (  # noqa: E402
     DurableStore,
@@ -265,10 +265,28 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
             except Exception:
                 rows = []
 
-    # The film's saved cover phrase (edit/publish screens) wins over the
-    # title-derived default, so the regenerated cover prints the edited text.
-    prompt = build_cover_prompt(cover_phrase_for(work_dir, title), p.get("style") or "", scenes=rows,
-                                instruction=p.get("instruction") or "")
+    # Cover typography (the only cover mode): the model paints a TEXT-FREE
+    # background and the film's cover phrase is composited on top with real
+    # fonts — regenerating rerolls only the artwork. The payload carries the
+    # style's settings and engine; tasks queued by an older backend fall back
+    # to the film's stamped job_config (else the defaults).
+    import json as _json
+    try:
+        jc = _json.loads((work_dir / "job_config.json").read_text())
+    except Exception:
+        jc = {}
+    typo = p.get("cover_typography")
+    if not isinstance(typo, dict) or not typo:
+        typo = jc.get("cover_typography") or {}
+    # The backend builds the prompt (composed visual style + character
+    # reference notes) and attaches the reference image paths — the cover gets
+    # the same conditioning as scene stills. Payloads from older backends fall
+    # back to a locally built prompt without references.
+    prompt = p.get("prompt") or build_cover_prompt(
+        p.get("style") or "", scenes=rows,
+        instruction=p.get("instruction") or "",
+        text_position=str(typo.get("position") or ""))
+    ref_images = [Path(r) for r in (p.get("reference_images") or []) if r]
 
     cover_path = work_dir / "cover.png"
     # Match the cover orientation to the rendered video (portrait/landscape/square).
@@ -281,14 +299,17 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # Keep the previous cover so the user can return to it (same as scenes).
     image_history.cover_seed_if_empty(work_dir, cover_path)
     engine = p.get("engine")
-    # Engine-less payloads (tasks queued before per-style engines) resolve to
-    # the default engine, with flux1-schnell filename overrides from flux_* keys.
+    # Engine-less payloads (tasks queued before per-style engines) resolve the
+    # film's stamped image engine — the cover must match the scenes' model —
+    # with flux1-schnell filename overrides from the flux_* keys.
     if not isinstance(engine, dict) or not engine:
-        engine = engines.resolve(p, p.get("image_engine"))
+        engine = engines.resolve(p, p.get("image_engine") or jc.get("image_engine"))
     generate_with_engine(
-        engine, prompt, cover_path,
+        engine, prompt, work_dir / COVER_BASE_NAME,
         width=cover_w, height=cover_h, comfy_url=comfy_url,
+        reference_images=ref_images or None,
     )
+    apply_cover_typography(work_dir, typo, title)
     image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
     store.complete_task(task.id, result={"path": str(cover_path)}, message="cover ready")

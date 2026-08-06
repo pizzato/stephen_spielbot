@@ -62,6 +62,7 @@ from pipeline.worker_pool import WorkerPool, idle_workers
 from pipeline import ui_activity
 from pipeline import image_history
 from pipeline import engines
+from pipeline.cover_typography import DEFAULT_COVER_TYPOGRAPHY
 from pipeline import tts_engines
 
 MAX_SCENES    = 200
@@ -249,9 +250,11 @@ DEFAULT_CFG = {
     "default_first_frame_cover_seconds": 1.0,
     # Look of the "text" first-frame cover: font file ("" = bold system font),
     # size as % of the video width, and text colour. Mirror the default style.
-    "default_first_frame_text_font": "",
-    "default_first_frame_text_size": 11,
-    "default_first_frame_text_color": "#FFFFFF",
+    # Cover typography (pipeline/cover_typography.py): every cover background
+    # is generated TEXT-FREE (with the style's own image engine) and the title
+    # is composited on top with real fonts — position, colours, accent words,
+    # card are all part of this dict. Mirrors the default style.
+    "default_cover_typography": dict(DEFAULT_COVER_TYPOGRAPHY),
     # When True, automation never invents AI ideas in this style while topping up
     # an empty queue (the AI-ideas auto-pick rotation skips it). Opt-out only —
     # the manual AI ideas screen still offers the style. Mirrors the default style.
@@ -409,10 +412,8 @@ STYLE_FIELD_TO_FLAT = {
     # uploaded thumbnail — and how long that cover is held (seconds)
     "first_frame_cover":    "default_first_frame_cover",
     "first_frame_cover_seconds": "default_first_frame_cover_seconds",
-    # Cover-text look for the "text" mode: font file, % of width, colour
-    "first_frame_text_font":  "default_first_frame_text_font",
-    "first_frame_text_size":  "default_first_frame_text_size",
-    "first_frame_text_color": "default_first_frame_text_color",
+    # Cover typography: text-free background + composited real-font title
+    "cover_typography":     "default_cover_typography",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
     "auto_pick_exclude":    "default_auto_pick_exclude",
     # Publishing (issue #22) — which connected YouTube channel this style posts to
@@ -795,16 +796,10 @@ def _norm_first_frame_cover_seconds(value) -> float:
     return norm_first_frame_cover_seconds(value)
 
 
-def _norm_first_frame_text_size(value) -> int:
-    """Coerce the cover-text size (% of frame width) to a sane int."""
-    from pipeline.cover import norm_first_frame_text_size
-    return norm_first_frame_text_size(value)
-
-
-def _norm_first_frame_text_color(value) -> str:
-    """Coerce the cover-text colour to "#RRGGBB"."""
-    from pipeline.cover import norm_first_frame_text_color
-    return norm_first_frame_text_color(value)
+def _norm_cover_typography(value) -> dict:
+    """Coerce a style's cover_typography dict (see pipeline/cover_typography.py)."""
+    from pipeline.cover_typography import norm_cover_typography
+    return norm_cover_typography(value)
 
 
 def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
@@ -947,9 +942,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
-        _coerce(row, "first_frame_text_font", lambda v: str(v or ""))
-        _coerce(row, "first_frame_text_size", _norm_first_frame_text_size)
-        _coerce(row, "first_frame_text_color", _norm_first_frame_text_color)
+        _coerce(row, "cover_typography", _norm_cover_typography)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
     # later flux1-schnell choice is preserved. (A child without its own
@@ -2074,12 +2067,6 @@ def _save_active_scene(
 
 
 
-# ── YouTube cover image ──────────────────────────────────────────────────────
-# _overlay_title_on_image and _cover_prompt are imported from pipeline.cover
-
-
-
-
 # ── TTS wrapper ──────────────────────────────────────────────────────────────
 
 
@@ -2434,6 +2421,30 @@ def _characters_prompt_and_refs(base_prompt: str, scene: dict, cfg: dict, style_
             sep = " " if prompt.rstrip().endswith((".", "!", "?")) else ". "
             prompt = f"{prompt.rstrip()}{sep}{notes}"
     return prompt, refs
+
+
+def build_cover_generation(work_dir, cfg: dict, style_name: str, scenes=None,
+                           instruction: str = "", extra_style: str = "",
+                           text_position: str = "",
+                           engine: dict | None = None) -> tuple[str, list]:
+    """Cover-background prompt + character reference images for one film.
+
+    The cover must read as a frame from the SAME production as the scene
+    stills: the composed per-style visual style leads the prompt
+    (_compose_visual_style — the same text the script's image prompts open
+    with), and every character named in the subject hint gets the same
+    canonical-appearance clause, portrait reference image, and exact-match
+    note the scene renders use (_characters_prompt_and_refs). Returns
+    ``(prompt, reference_image_paths)`` — pass the refs to
+    generate_with_engine (engines without reference conditioning ignore them).
+    """
+    from pipeline.cover import build_cover_prompt
+
+    style_text = _compose_visual_style(extra_style, cfg, style_name)
+    prompt = build_cover_prompt(style_text, scenes=scenes, instruction=instruction,
+                                text_position=text_position)
+    wd = Path(work_dir) if work_dir else None
+    return _characters_prompt_and_refs(prompt, {}, cfg, style_name, wd, engine=engine)
 
 
 def _find_character(cfg: dict, char_id: str) -> dict:

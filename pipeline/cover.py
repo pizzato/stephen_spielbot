@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from pathlib import Path
 
 from pipeline import prompts as _prompts
@@ -131,25 +130,35 @@ def _extract_scene_aspects(scenes) -> str:
     return " | ".join(snippets[:3])
 
 
-def build_cover_prompt(title: str, style: str = "", scenes=None, instruction: str = "") -> str:
-    """Build a FLUX prompt for a YouTube documentary cover image.
+def build_cover_prompt(style: str = "", scenes=None, instruction: str = "",
+                       text_position: str = "") -> str:
+    """Build the prompt for a TEXT-FREE cover background.
+
+    The title is never part of the prompt — it is composited afterwards with
+    real fonts (pipeline/cover_typography.py), so the model never gets a
+    chance to misspell it.
 
     scenes: optional iterable of Scene objects or dicts with `image_prompt`. When
             provided, a short subject hint is appended so the cover reflects the
             actual video content (not random topic-biased imagery).
     instruction: optional one-off user steering from the Re-generate popover
             (e.g. "make it all robots"), appended to the prompt.
+    text_position: where the title will land ("top"/"middle"/"bottom") — asks
+            the model for calmer space there.
     """
     style_note = style.strip().rstrip(".")
     style_line = f"Video visual style: {style_note}. " if style_note else ""
     aspects = _extract_scene_aspects(scenes)
     subject_hint = f"Key visual elements from the video: {aspects}. " if aspects else ""
+    pos = text_position if text_position in ("top", "middle", "bottom") else "bottom"
+    space_hint = ("the vertical middle band" if pos == "middle"
+                  else f"the {pos} third") + " of the frame"
     prompt = _prompts.user(
-        "cover_image",
-        title=title,
+        "cover_image_notext",
         style_line=style_line,
         subject_hint=subject_hint,
-        negative=_prompts.value("cover_negative"),
+        space_hint=space_hint,
+        negative=_prompts.value("cover_negative_notext"),
     )
     instruction = (instruction or "").strip()[:500]
     if instruction:
@@ -234,132 +243,7 @@ def available_fonts(refresh: bool = False) -> list[dict]:
     return fonts
 
 
-FIRST_FRAME_TEXT_SIZE_DEFAULT = 11   # % of the video width per line of text
-FIRST_FRAME_TEXT_COLOR_DEFAULT = "#FFFFFF"
-
-
-def norm_first_frame_text_size(value) -> int:
-    """Coerce the cover-text size (% of frame width) to an int in 4..30."""
-    try:
-        return max(4, min(30, int(value)))
-    except (TypeError, ValueError):
-        return FIRST_FRAME_TEXT_SIZE_DEFAULT
-
-
-def norm_first_frame_text_color(value) -> str:
-    """Coerce a cover-text colour to "#RRGGBB" (white when invalid)."""
-    s = str(value or "").strip()
-    if re.fullmatch(r"#[0-9a-fA-F]{3}", s):
-        s = "#" + "".join(c * 2 for c in s[1:])
-    if re.fullmatch(r"#[0-9a-fA-F]{6}", s):
-        return s.upper()
-    return FIRST_FRAME_TEXT_COLOR_DEFAULT
-
-
-def overlay_title_on_image(base_path: Path, output_path: Path, title: str) -> None:
-    """Overlay video title text on a cover image using PIL."""
-    from PIL import Image, ImageDraw
-    import textwrap
-
-    img = Image.open(base_path).convert("RGBA")
-    width, height = img.size
-
-    # Dark gradient overlay at the bottom half
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw_ov = ImageDraw.Draw(overlay)
-    for y in range(height // 2, height):
-        alpha = int(200 * (y - height // 2) / (height // 2))
-        draw_ov.rectangle([0, y, width, y + 1], fill=(0, 0, 0, alpha))
-    img = Image.alpha_composite(img, overlay)
-
-    draw = ImageDraw.Draw(img)
-    font_size = max(52, width // 18)
-    font = _load_font(font_size)
-
-    max_chars = max(10, int(width / (font_size * 0.55)))
-    lines = textwrap.wrap(title, width=max_chars)
-    line_height = font_size + 12
-    total_h = len(lines) * line_height
-    y = height - total_h - 48
-
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font)
-        tw = bbox[2] - bbox[0]
-        x = (width - tw) // 2
-        # Shadow
-        draw.text((x + 3, y + 3), line, font=font, fill=(0, 0, 0, 200))
-        # White text
-        draw.text((x, y), line, font=font, fill=(255, 255, 255, 255))
-        y += line_height
-
-    img.convert("RGB").save(str(output_path), "PNG")
-
-
-def render_cover_text_overlay(
-    width: int,
-    height: int,
-    output_path: Path,
-    text: str,
-    *,
-    font_path: str = "",
-    size_pct=None,
-    color: str = "",
-) -> None:
-    """Draw the cover phrase in large type across the top of a TRANSPARENT
-    canvas, ready to composite over the video.
-
-    Used by the "text" first-frame cover mode: the shortened title is drawn
-    top-center in big letters (with a dark scrim from the top edge) so the
-    opening reads as a thumbnail in the Shorts feed. The canvas is transparent
-    so ffmpeg lays it over the moving video — the title card costs no motion,
-    however long it is held. Font, size (% of frame width) and colour come from
-    the style's cover-text settings; defaults reproduce the original look (bold
-    system font, 11%, white).
-    """
-    from PIL import Image, ImageDraw
-    import textwrap
-
-    img = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-
-    font_size = max(16, width * norm_first_frame_text_size(size_pct) // 100)
-    font = _load_font(font_size, font_path)
-    fill = tuple(int(norm_first_frame_text_color(color)[i:i + 2], 16) for i in (1, 3, 5))
-    # Keep the outline readable whatever colour is picked: dark text gets a
-    # light stroke (the scrim below is dark), light text keeps the dark one.
-    stroke_fill = (255, 255, 255) if sum(fill) < 300 else (0, 0, 0)
-    max_chars = max(8, int(width / (font_size * 0.55)))
-    lines = textwrap.wrap(text, width=max_chars)
-    line_height = int(font_size * 1.18)
-    top = int(height * 0.08)
-    total_h = len(lines) * line_height
-
-    # Dark gradient scrim fading down from the top edge, sized to the text
-    # block, so the text stays readable over any frame underneath.
-    overlay = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    draw_ov = ImageDraw.Draw(overlay)
-    scrim_h = min(height, top + total_h + int(height * 0.06))
-    for y in range(scrim_h):
-        alpha = int(190 * (1 - y / scrim_h))
-        draw_ov.rectangle([0, y, width, y + 1], fill=(0, 0, 0, alpha))
-    img = Image.alpha_composite(img, overlay)
-
-    draw = ImageDraw.Draw(img)
-    stroke = max(2, font_size // 16)
-    y = top
-    for line in lines:
-        bbox = draw.textbbox((0, 0), line, font=font, stroke_width=stroke)
-        tw = bbox[2] - bbox[0]
-        x = (width - tw) // 2
-        draw.text((x + 4, y + 4), line, font=font, fill=(0, 0, 0, 200),
-                  stroke_width=stroke, stroke_fill=(0, 0, 0, 200))
-        draw.text((x, y), line, font=font, fill=fill + (255,),
-                  stroke_width=stroke, stroke_fill=stroke_fill + (255,))
-        y += line_height
-
-    img.save(str(output_path), "PNG")
-
-
-FIRST_FRAME_COVER_MODES = ("none", "image", "text")
+FIRST_FRAME_COVER_MODES = ("none", "image")
 
 # How long the burned cover is held at the head of the film. YouTube Shorts
 # ignore uploaded thumbnails and pick their own frame; a single stamped frame
@@ -382,54 +266,35 @@ def norm_first_frame_cover_seconds(value) -> float:
 
 
 def norm_first_frame_cover(value) -> str:
-    """Coerce a first-frame cover mode to "none" | "image" | "text"."""
-    return value if value in ("image", "text") else "none"
+    """Coerce a first-frame cover mode to "none" | "image".
+
+    Legacy "text" (the big-title overlay mode) burns the cover image instead —
+    with cover typography the cover IS the title, so the two modes collapsed."""
+    return "image" if value in ("image", "text") else "none"
 
 
 def burn_cover_into_first_frame(
     video_path: Path,
-    mode: str,
     *,
-    cover_path: Path | None = None,
-    title: str = "",
-    work_dir: Path | None = None,
+    cover_path: Path,
     seconds=None,
-    text_font: str = "",
-    text_size=None,
-    text_color: str = "",
 ) -> Path:
-    """Burn a cover into the head of the final video, in place.
+    """Burn the cover image into the head of the final video, in place.
 
     YouTube Shorts ignore uploaded thumbnails and pick their own frame from the
     video, so the cover is stamped onto the opening frames themselves — held
     *seconds* long (default 1s) so YouTube's frame picker sees a shot rather
-    than a one-frame flash. mode "image" covers the video with the job's cover
-    image; mode "text" lays the shortened title in large type OVER the running
-    video, so the title card costs no motion. Frames are overlaid, never
-    prepended, so duration, audio, and caption timing all stay valid. Working
-    PNGs land in *work_dir* (defaults to the video's folder).
+    than a one-frame flash. Frames are overlaid, never prepended, so duration,
+    audio, and caption timing all stay valid.
     """
-    from pipeline.assembler import _FILM_FPS, _get_video_dimensions, replace_first_frame
+    from pipeline.assembler import _FILM_FPS, replace_first_frame
 
-    mode = (mode or "").strip().lower()
-    if mode not in ("image", "text"):
-        raise ValueError(f"Unknown first-frame cover mode: {mode!r}")
-    wd = Path(work_dir) if work_dir else video_path.parent
+    if not (cover_path and cover_path.exists() and cover_path.stat().st_size > 1000):
+        raise FileNotFoundError("No cover image for this film — generate the cover first.")
     frames = max(1, round(norm_first_frame_cover_seconds(seconds) * _FILM_FPS))
-    if mode == "image":
-        if not (cover_path and cover_path.exists() and cover_path.stat().st_size > 1000):
-            raise FileNotFoundError("No cover image for this film — generate the cover first.")
-        frame_src = cover_path
-    else:
-        text = cover_phrase_for(wd, (title or "").strip() or video_path.stem)
-        width, height = _get_video_dimensions(video_path)
-        frame_src = wd / "first_frame_text.png"
-        render_cover_text_overlay(width, height, frame_src, text,
-                                  font_path=text_font, size_pct=text_size, color=text_color)
-
     staged = video_path.with_name(f"{video_path.stem}.firstframe.tmp{video_path.suffix}")
     try:
-        replace_first_frame(video_path, frame_src, staged, frames=frames)
+        replace_first_frame(video_path, cover_path, staged, frames=frames)
         staged.replace(video_path)
     finally:
         staged.unlink(missing_ok=True)

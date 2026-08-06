@@ -96,12 +96,24 @@ scenes".
 
 ### Cover & first frame
 
-**Opening cover** (`none` / `image` / `text`) and **cover hold** — how long the cover
-stays on screen, in seconds (0.04–3, default 1). A single frame is a flash YouTube's frame
-picker discards; a second reads as its own shot. `image` freezes the picture for that long
-(audio keeps running), while `text` lays the title over the moving video, so holding it
-costs no motion. Then the **font**, **size** (as a % of video width), and **colour** for
-the text variant.
+**Opening cover** (`none` / `image`) and **cover hold** — how long the cover stays on
+screen, in seconds (0.04–3, default 1). A single frame is a flash YouTube's frame picker
+discards; a second reads as its own shot. The burn freezes the picture for that long
+while the audio keeps running; the cover already carries the title, so the old
+big-title-overlay mode is gone (legacy `text` configs burn the cover image).
+
+**Cover typography** — how cover titles look. Diffusion models misspell in-image text,
+so covers are never asked to paint it: the background is always generated **text-free**,
+with the style's own image engine (it matches the film's look instead of the legacy
+FLUX.1-schnell pin), and the title is drawn on top with real fonts. Font (a bundled
+thumbnail-grade set plus anything installed on the machine), position, alignment, case,
+size, colours, an optional backdrop card, and an **accent rule** (first/last word, last
+line, longest word — a different colour and size for the words that matter) are all set
+here, with a live preview rendered by the exact code that composites real covers. Per
+film, wrap words in `*asterisks*` in the cover phrase to hand-pick the accented words,
+and use **Re-apply title text** on the cover card to restyle an existing cover instantly
+— no image regeneration needed. Regenerating a cover rerolls only the artwork; the words
+are always pixel-perfect.
 
 ### Script & content
 

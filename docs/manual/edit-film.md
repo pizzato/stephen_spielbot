@@ -21,10 +21,14 @@ Also **Approve** when the film is held by the [approval gate](settings.md#publis
 
 ### Cover image
 
-The thumbnail, plus the **cover phrase** — the short text painted on the cover and burned
-into the first frame. It follows the title until you edit it, then stays put.
+The thumbnail, plus the **cover phrase** — the short text drawn on the cover with the
+style's [cover typography](settings.md#cover-first-frame). It follows the title until you
+edit it, then stays put; wrap a word in `*asterisks*` to give it the accent colour.
+Saving the phrase re-draws the title on the cover instantly (the artwork is untouched),
+and **Re-apply title text** does the same after a typography tweak in Settings.
 
-**Edit cover** opens a masked inpaint on the cover image.
+**Edit cover** opens a masked inpaint. The edit runs on the cover's text-free background
+and the title is re-drawn on top, so inpainting can't smear the lettering.
 
 Regenerated and edited covers are kept as **versions** — click one to make it the film's
 cover. For styles whose opening burn is `image`, picking a different cover also marks the
@@ -33,20 +37,16 @@ quiet minutes later.
 
 ### Opening cover
 
-**Add to the opening** burns the cover into the start of the final video — `image` (the
-cover picture) or `text` (the cover phrase in big type). YouTube Shorts ignore uploaded
-thumbnails and pick their own frame, which is what this is for.
+**Burn into the opening** stamps the cover image onto the start of the final video —
+YouTube Shorts ignore uploaded thumbnails and pick their own frame, which is what this
+is for. The cover already carries the title (cover typography), so there is nothing to
+choose: the burn is always the cover image.
 
 **Hold for (seconds)** is how long it stays on screen, prefilled from the style's
 [cover hold](settings.md#cover-first-frame) and overridable for this one burn. A single
 frame is a 40ms flash that YouTube's frame picker throws away; a second reads as its own
-shot. Nothing is prepended, so the timing never shifts: `image` covers the picture while
-the audio keeps running, and `text` lays the title over the moving video — so holding a
-title card costs no motion.
-
-In `text` mode a **preview** shows the phrase drawn over this film's own first frame, and
-follows the cover phrase box as you type. Font, size, and colour come from the style's
-settings; re-renders re-apply the burn automatically.
+shot. Nothing is prepended, so the timing never shifts — the cover freezes the picture
+while the audio keeps running. Re-renders re-apply the burn automatically.
 
 ### Re-mix audio
 
