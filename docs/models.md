@@ -76,6 +76,8 @@ field. Three engines ship:
 | **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
 | **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
+| **MiniMax H3 33B Ref2VA** (opt-in) | Not a scene I2V engine: takes character portraits and voice clips instead of a first frame and generates picture + spoken dialogue together. Only [performance films](performance_films.md) use it | MiniMax H3 Community License |
+| **MiniMax H3 33B Ref2VA Turbo** (opt-in) | The same, with the distilled few-step LoRA — measured ~2.3× faster (10.2 min vs 22.9 min for a 10 s scene at 704×1280 on a GB10) | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 
 MiniMax H3 notes:
 
@@ -112,6 +114,18 @@ Turbo variant notes:
   checkpoints are expected upstream; swap the `lora` filename in
   `pipeline/engines.py` to pick one up.
 
+Ref2VA notes ([performance films](performance_films.md)):
+
+- The Ref2VA checkpoints are siblings of the I2V ones at the same sizes and
+  quantisation, sharing the encoder and both VAEs — so adding them costs one
+  21 GB download (or 34 GB for the turbo variant), not a second full stack.
+- Turbo needs the **non-pruned** checkpoint for the same reason the I2V turbo
+  does: the pruned files drop `time_embedder` entirely and bake
+  `adaln_proj.linear.weight` to F16, and `adaln_proj` is exactly what the LoRA
+  adapts.
+- The graph needs `MiniMaxH3ReferenceToVideo`, present since ComfyUI v0.30.0
+  (the pinned worker ref), so no image rebuild is required for the base engine.
+
 Manual download:
 
 ```bash
@@ -124,6 +138,10 @@ huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_audio_vae_fp32.safe
 # minimax-h3-turbo extras (full non-pruned DiT + distillation LoRA):
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download larryvrh/MiniMax-H3-Turbo-Lora minimax_h3_turbo_4step_ckpt500.safetensors --local-dir models/loras --local-dir-use-symlinks False
+
+# performance films — minimax-h3-ref (pruned) and minimax-h3-ref-turbo (full):
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 ```
 
 ## Gated weights

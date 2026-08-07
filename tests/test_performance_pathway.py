@@ -144,9 +144,6 @@ class ModeResolutionTests(unittest.TestCase):
                          "classic")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 
 class RenderWiringTests(TempConfigCase):
     """The renderer must cite exactly the references it actually wires up."""
@@ -250,3 +247,74 @@ class RenderWiringTests(TempConfigCase):
         cap = self._render(self._meta())
         self.assertTrue(cap["engine"]["reference"])
         self.assertEqual(cap["kwargs"]["duration_seconds"], 10.0)
+
+
+class WorkerFailoverTests(unittest.TestCase):
+    """A worker that can't run the engine must not sink the film."""
+
+    def _film(self, fail_urls, n_scenes=2):
+        import resume_generation as rg
+        from pipeline.llm import Scene
+        from pipeline.worker_pool import WorkerPool
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        work_dir = Path(tmp.name) / "film"
+        work_dir.mkdir()
+        attempts = []
+
+        def fake_render(scene, wd, cfg, *, comfy_url, vid_width, vid_height, style_name=""):
+            attempts.append((scene.id, comfy_url))
+            if comfy_url in fail_urls:
+                raise RuntimeError(
+                    "Value not in list: unet_name: 'minimax_h3_ref2va_int8_convrot.safetensors' "
+                    "not in ['flux1-schnell-fp8.safetensors']")
+            out = wd / f"scene_{scene.id:02d}_final.mp4"
+            out.write_bytes(b"mp4")
+            return out
+
+        scenes = [Scene(id=i, title=f"S{i}", image_prompt="", video_prompt="p",
+                        narration="", mode="performance",
+                        metadata_extra={"mode": "performance", "cast": ["X"], "seconds": 10})
+                  for i in range(1, n_scenes + 1)]
+        store = mock.MagicMock()
+        pool = WorkerPool(["http://a:8188", "http://b:8188"])
+        with mock.patch.object(rg, "render_performance_scene", side_effect=fake_render), \
+             mock.patch.object(rg, "TaskRun"), \
+             mock.patch.object(rg, "_get_duration", return_value=10.0), \
+             mock.patch.object(rg, "concatenate_scenes") as concat, \
+             mock.patch.object(rg, "ensure_video_resolution"), \
+             mock.patch.object(rg, "write_progress"), \
+             mock.patch.object(rg.time, "sleep"):
+            rg._run_performance_film(
+                work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
+                store=store, durable_job_id="job", worker_pool=pool,
+                status_file=work_dir / "progress.json",
+                vid_width=704, vid_height=1280,
+                final_path=work_dir / "final.mp4", cover_path=work_dir / "cover.png")
+        return attempts, concat
+
+    def test_scene_retries_on_a_worker_that_has_the_model(self):
+        attempts, concat = self._film(fail_urls={"http://a:8188"})
+        # Every scene still landed, and the bad worker was dropped rather than
+        # retried three times.
+        self.assertEqual(sorted(a[0] for a in attempts if a[1] == "http://b:8188"), [1, 2])
+        self.assertEqual(len([a for a in attempts if a[1] == "http://a:8188"]), 1)
+        clips = concat.call_args[0][0]
+        self.assertEqual(len(clips), 2)
+
+    def test_scene_order_is_preserved_after_a_failover(self):
+        _, concat = self._film(fail_urls={"http://a:8188"}, n_scenes=3)
+        names = [Path(p).name for p in concat.call_args[0][0]]
+        self.assertEqual(names, ["scene_01_final.mp4", "scene_02_final.mp4",
+                                 "scene_03_final.mp4"])
+
+    def test_all_workers_missing_the_model_is_a_clear_error(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._film(fail_urls={"http://a:8188", "http://b:8188"})
+        # Whichever thread loses the race reports it, but the film must stop
+        # with a worker-level message rather than a bare ComfyUI validation dump.
+        self.assertRegex(str(ctx.exception), r"(?i)workers? (failed|remaining)")
+
+if __name__ == "__main__":
+    unittest.main()

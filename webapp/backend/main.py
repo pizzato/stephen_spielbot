@@ -3898,14 +3898,19 @@ def start_generation(body: GenerateBody) -> dict:
     # blocking HTTP request). No-op when the job has no characters, and a no-op
     # fast path when previews already exist (the interactive editor already made
     # them). Best-effort: any failure falls back to the normal first-frame path.
+    # A performance film conditions on the portraits themselves and renders no
+    # first frame, so it needs the character looks but never the scene previews.
+    performance_film = bool(scenes) and all(
+        performance_mode.is_performance(s) for s in scenes)
     try:
         if gapp._job_characters(cfg, ss["name"], work_dir):
             (work_dir / "progress.json").write_text(json.dumps(
                 {"pct": 0, "msg": "Building character looks…", "ts": time.time()}))
             gapp.generate_all_script_portraits(work_dir, ss["name"])
-            (work_dir / "progress.json").write_text(json.dumps(
-                {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
-            generate_all_previews(job_id, resolution, body.style or "")
+            if not performance_film:
+                (work_dir / "progress.json").write_text(json.dumps(
+                    {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
+                generate_all_previews(job_id, resolution, body.style or "")
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
 

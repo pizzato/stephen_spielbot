@@ -40,6 +40,7 @@ at the top is the documented key set.
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
 | `story.py` | Story-first script mode — draft, critique, then divide into scenes |
+| `performance.py` | Performance films — acted script shape and the Ref2VA prompt assembly |
 | `engines.py` | Image engine bundles (FLUX.2 Klein, FLUX.1 schnell) for generate and edit |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission and per-scene video rendering |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |

@@ -27,6 +27,11 @@ An AI video generator that turns a topic into a fully produced short film — co
 6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
 
+A style can instead make [**performance films**](docs/performance_films.md): acted scenes
+where the characters speak on screen and MiniMax H3 Ref2VA generates picture and voice
+together from their portraits — no narrator, no first frames, no music. That pathway forks
+at script creation and leaves the narrated one above untouched.
+
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation, AI-suggested video ideas, per-scene editing with image
 inpainting and version history, misspelling-proof cover thumbnails (text-free
@@ -86,6 +91,7 @@ Guides that also read well on GitHub:
 
 - [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
 - [`docs/dialogue_scenes.md`](docs/dialogue_scenes.md) — dialogue, silent, and narration scene modes; the EchoMimic worker
+- [`docs/performance_films.md`](docs/performance_films.md) — acted films: portraits + dialogue straight to video, no TTS or music
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
 - [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
 - [`docs/x_setup.md`](docs/x_setup.md) — X (Twitter) developer app setup for posting

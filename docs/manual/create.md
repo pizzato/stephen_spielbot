@@ -68,10 +68,16 @@ See [dialogue scenes](../dialogue_scenes.md) for what the modes actually render.
 |---|---|
 | **Classic** | Scenes are generated directly, in batches |
 | **Story-first** | The LLM drafts and critiques the whole story as prose, shows it to you for review, then divides it into scenes |
+| **Performance** | Acted scenes: the characters speak on screen and the video model generates picture and voice together. See [performance films](../performance_films.md) |
 
 Story-first keeps long videos coherent — it's the mode to reach for above ten or so scenes.
 It's narration-only for now: Dialogue and Mixed always run Classic, and the backend enforces
 the same rule.
+
+Performance is a different kind of film rather than a different way of writing the same
+one — no narrator, no music, no first frames — so it ignores the Format switch above (an
+acted film *is* dialogue). Scenes are one acted clip each, about ten seconds, so the scene
+count comes from the clip length rather than a word budget.
 
 Like the voice and visuals, script mode is owned by the style unless you're on *No style*.
 

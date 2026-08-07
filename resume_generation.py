@@ -87,6 +87,8 @@ def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
 
 _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                         "ConnectionRefused", "RemoteDisconnected")
+# Per-scene render attempts, each on a freshly acquired worker.
+_MAX_SCENE_ATTEMPTS = 3
 _PROGRESS_STORE: DurableStore | None = None
 _PROGRESS_JOB_ID: str | None = None
 
@@ -436,26 +438,55 @@ def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
             return scene.id, clip
         lease_secs = int(_engines.resolve_reference(
             cfg, cfg.get("reference_engine")).get("lease_seconds") or 14400)
-        comfy_url = worker_pool.acquire()
-        try:
-            with TaskRun(store, t_id, worker_id_value=worker_id("comfy", comfy_url),
-                         lease_seconds=lease_secs,
-                         start_message=f"performance scene {scene.id}") as run:
+
+        last_err: Exception | None = None
+        for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
+            if not worker_pool.has_healthy():
+                raise RuntimeError(f"All workers failed — last error: {last_err}")
+            comfy_url = worker_pool.acquire()
+            store.register_worker(worker_id("comfy", comfy_url), "comfy", comfy_url)
+            try:
+                with TaskRun(store, t_id, worker_id_value=worker_id("comfy", comfy_url),
+                             lease_seconds=lease_secs, retryable=True,
+                             start_message=f"performance scene {scene.id}") as run:
+                    with lock:
+                        write_progress(status_file, _progress(),
+                                       f"Performance · scene {scene.id} of {len(scenes)} "
+                                       f"({done[0]} done)")
+                    out = render_performance_scene(
+                        scene, work_dir, cfg, comfy_url=comfy_url,
+                        vid_width=vid_width, vid_height=vid_height, style_name=style_name)
+                    store.record_artifact(durable_job_id, t_id, "scene_final", out,
+                                          duration_seconds=_get_duration(out))
+                    run.complete({"path": str(out)}, "performance scene rendered")
                 with lock:
-                    write_progress(status_file, _progress(),
-                                   f"Performance · scene {scene.id} of {len(scenes)} "
-                                   f"({done[0]} done)")
-                out = render_performance_scene(
-                    scene, work_dir, cfg, comfy_url=comfy_url,
-                    vid_width=vid_width, vid_height=vid_height, style_name=style_name)
-                store.record_artifact(durable_job_id, t_id, "scene_final", out,
-                                      duration_seconds=_get_duration(out))
-                run.complete({"path": str(out)}, "performance scene rendered")
-        finally:
-            worker_pool.release(comfy_url)
-        with lock:
-            done[0] += 1
-        return scene.id, out
+                    done[0] += 1
+                return scene.id, out
+            except Exception as e:
+                last_err = e
+                # A worker that can't run this engine at all (model not
+                # downloaded there) fails instantly and would fail again — drop
+                # it from the pool so the scene retries on a worker that can,
+                # exactly like an unreachable one.
+                is_worker_fault = (
+                    isinstance(e, StuckJobError)
+                    or any(kw in str(e) for kw in _WORKER_ERR_KEYWORDS)
+                    or "not in list" in str(e))
+                if is_worker_fault:
+                    logger.warning("Worker %s cannot render scene %d (attempt %d/%d): %s "
+                                   "— removing from the pool", comfy_url, scene.id,
+                                   attempt, _MAX_SCENE_ATTEMPTS, str(e)[:300])
+                    worker_pool.mark_failed(comfy_url)
+                else:
+                    logger.warning("Scene %d failed on %s (attempt %d/%d): %s — retrying",
+                                   scene.id, comfy_url, attempt, _MAX_SCENE_ATTEMPTS,
+                                   str(e)[:300])
+                    if attempt < _MAX_SCENE_ATTEMPTS:
+                        time.sleep(5)
+            finally:
+                worker_pool.release(comfy_url)
+        raise RuntimeError(
+            f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
 
     # One scene per available worker; the pool honours the UI reservation.
     workers = max(1, len(worker_pool.urls))
@@ -1080,7 +1111,6 @@ def main(work_dir: Path) -> None:
     # ── Video generation (35–90%) ────────────────────────────────────────────
     scene_raws_map: dict[int, Path] = {}
     scene_ambient_map: dict[int, Path | None] = {}
-    _MAX_SCENE_ATTEMPTS = 3
 
     def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
         existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
