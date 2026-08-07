@@ -2922,6 +2922,84 @@ def _cast_member(wd: Path, cfg: dict, style_name: str, name: str) -> dict:
             "has_image": False, "image_url": "", "scope": "missing", "editable": False}
 
 
+# ── per-script visuals: locations and wardrobe ───────────────────────────────
+
+class VisualCreate(BaseModel):
+    name: str = ""
+    kind: str = "location"
+    description: str = ""
+    character: str = ""
+
+
+class VisualUpdate(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    description: str | None = None
+    character: str | None = None
+    scenes: list[int] | None = None
+    enabled: bool | None = None
+
+
+class VisualImageBody(BaseModel):
+    extra_prompt: str = ""
+
+
+def _visual_to_json(wd: Path, v: dict) -> dict:
+    img = gapp._script_visual_image_path(wd, v.get("ref_image"))
+    has_image = bool(img and img.exists() and img.stat().st_size > 0)
+    return {**v, "has_image": has_image,
+            "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                          if has_image else "")}
+
+
+def _visuals_ok(wd: Path) -> dict:
+    return {"ok": True, "visuals": [_visual_to_json(wd, v)
+                                    for v in gapp.read_script_visuals(wd)]}
+
+
+@api.get("/api/jobs/{job_id}/visuals")
+def list_script_visuals(job_id: str) -> dict:
+    return _visuals_ok(_job_wd_or_404(job_id))
+
+
+@api.post("/api/jobs/{job_id}/visuals")
+def create_script_visual(job_id: str, body: VisualCreate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character)
+    return _visuals_ok(wd)
+
+
+@api.put("/api/jobs/{job_id}/visuals/{visual_id}")
+def edit_script_visual(job_id: str, visual_id: str, body: VisualUpdate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.update_script_visual(wd, visual_id, **body.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _visuals_ok(wd)
+
+
+@api.delete("/api/jobs/{job_id}/visuals/{visual_id}")
+def remove_script_visual(job_id: str, visual_id: str) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.delete_script_visual(wd, visual_id)
+    return _visuals_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/image")
+def generate_script_visual_image(job_id: str, visual_id: str, body: VisualImageBody) -> dict:
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
+    try:
+        with _track_op("Painting a reference image", wd.name):
+            gapp.generate_script_visual_image(wd, visual_id, style_name, body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
+    return _visuals_ok(wd)
+
+
 @api.get("/api/scripts/performance")
 def load_performance_script(work_dir: str = Query("")) -> dict:
     """Everything the performance view needs for a whole film, in one payload.
@@ -2947,7 +3025,8 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         meta = dict(row.get("metadata") or {})
         if meta.get("mode") != "performance":
             continue
-        refs = gapp.resolve_performance_references(meta, cfg, wd, style_name)
+        refs = gapp.resolve_performance_references(meta, cfg, wd, style_name,
+                                                   scene_id=int(row.get("id") or 0))
         lines = performance_mode.norm_lines(meta.get("lines"))
         # Every cast member, whether or not a reference resolved, so the screen
         # can offer the look/voice controls in place. Per-script characters are
@@ -2983,7 +3062,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             # The exact text the model receives, rebuilt from the resolved slots.
             "prompt": performance_mode.build_h3_prompt(
                 {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
-                picture_names=[p["name"] for p in refs["pictures"]],
+                picture_names=refs["pictures"],
                 audio_names=[a["name"] for a in refs["audios"]]),
             "pictures": refs["pictures"],
             "audios": refs["audios"],

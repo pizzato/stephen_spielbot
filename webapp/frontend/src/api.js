@@ -169,6 +169,13 @@ export const api = {
   // Performance films: every scene with its references already resolved into
   // numbered <Picture N>/<Audio N> slots (see /api/scripts/performance).
   loadPerformanceScript: (workDir) => req('GET', `/scripts/performance?work_dir=${encodeURIComponent(workDir || '')}`),
+  // Per-script visuals: locations and wardrobe, the reference images that pin
+  // where a scene happens and what people wear.
+  listVisuals: (jobId) => req('GET', `/jobs/${jobId}/visuals`),
+  addVisual: (jobId, body) => req('POST', `/jobs/${jobId}/visuals`, body),
+  updateVisual: (jobId, id, body) => req('PUT', `/jobs/${jobId}/visuals/${id}`, body),
+  deleteVisual: (jobId, id) => req('DELETE', `/jobs/${jobId}/visuals/${id}`),
+  generateVisualImage: (jobId, id, extraPrompt) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '' }),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),

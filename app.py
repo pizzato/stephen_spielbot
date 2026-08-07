@@ -2331,6 +2331,170 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
     return _script_characters_dir(work_dir) / name if name else None
 
 
+# ── Per-script visuals: locations and wardrobe ───────────────────────────────
+# A performance film drifts between scenes because nothing but words pins the
+# place or the clothes. A "visual" is a reference image with a job: a LOCATION
+# the scene happens in, or WARDROBE a character wears. They ride the same
+# <Picture N> slots as the cast (H3 takes nine), after it.
+VISUAL_KINDS = ("location", "wardrobe")
+
+
+def _script_visuals_path(work_dir: Path) -> Path:
+    return Path(work_dir) / "visuals.json"
+
+
+def _script_visuals_dir(work_dir: Path) -> Path:
+    return Path(work_dir) / "visuals"
+
+
+def _norm_visuals(raw) -> list[dict]:
+    out: list[dict] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        kind = str(item.get("kind") or "location").strip().lower()
+        scenes = []
+        for sid in item.get("scenes") or []:
+            try:
+                scenes.append(int(sid))
+            except (TypeError, ValueError):
+                continue
+        out.append({
+            "id": str(item.get("id") or f"vis_{uuid.uuid4().hex[:8]}"),
+            "name": name,
+            "kind": kind if kind in VISUAL_KINDS else "location",
+            "description": str(item.get("description") or "").strip(),
+            # Wardrobe belongs to someone; a location belongs to the scene.
+            "character": str(item.get("character") or "").strip(),
+            "ref_image": str(item.get("ref_image") or "").strip(),
+            # Empty = every scene. The common case (one studio for the whole
+            # film) then needs no per-scene bookkeeping at all.
+            "scenes": scenes,
+            "enabled": bool(item.get("enabled", True)),
+        })
+    return out
+
+
+def read_script_visuals(work_dir) -> list[dict]:
+    try:
+        return _norm_visuals(json.loads(_script_visuals_path(Path(work_dir)).read_text()))
+    except (OSError, ValueError):
+        return []
+
+
+def write_script_visuals(work_dir, visuals) -> list[dict]:
+    norm = _norm_visuals(visuals)
+    path = _script_visuals_path(Path(work_dir))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(norm, indent=2))
+    return norm
+
+
+def add_script_visual(work_dir, name: str = "", kind: str = "location",
+                      description: str = "", character: str = "") -> list[dict]:
+    """Append a visual; blank name gets a placeholder so the row survives
+    normalization and shows as an editable card (same rule as characters)."""
+    visuals = read_script_visuals(work_dir)
+    visuals.append({"name": name.strip() or ("New location" if kind == "location" else "New outfit"),
+                    "kind": kind, "description": description, "character": character})
+    return write_script_visuals(work_dir, visuals)
+
+
+def update_script_visual(work_dir, visual_id: str, **fields) -> list[dict]:
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    for key in ("name", "kind", "description", "character", "scenes", "enabled"):
+        if key in fields and fields[key] is not None:
+            vis[key] = fields[key]
+    return write_script_visuals(work_dir, visuals)
+
+
+def delete_script_visual(work_dir, visual_id: str) -> list[dict]:
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis and vis.get("ref_image"):
+        img = _script_visual_image_path(work_dir, vis["ref_image"])
+        if img and img.exists():
+            img.unlink(missing_ok=True)
+    return write_script_visuals(work_dir, [v for v in visuals if v.get("id") != visual_id])
+
+
+def _script_visual_image_path(work_dir, filename: str) -> Path | None:
+    name = Path(str(filename or "")).name
+    return _script_visuals_dir(Path(work_dir)) / name if name else None
+
+
+def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
+                                 extra_prompt: str = "") -> list[dict]:
+    """Render a visual's reference image in the film's own look.
+
+    A location is painted as an empty establishing shot — no people — so it
+    conditions the SPACE rather than smuggling in a second cast. Wardrobe is
+    painted as the garments themselves for the same reason.
+    """
+    work_dir = Path(work_dir)
+    cfg = load_config()
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+
+    if vis["kind"] == "wardrobe":
+        subject = f"{vis['name']}: {vis.get('description') or 'an outfit'}"
+        framing = ("full-length view of the outfit on a plain neutral background, "
+                   "no person's face, no other clothing")
+    else:
+        subject = f"{vis['name']}: {vis.get('description') or 'a location'}"
+        framing = ("wide establishing shot of the empty space, no people, "
+                   "no text, natural lighting")
+    parts = [p for p in (subject, framing, (extra_prompt or "").strip()) if p]
+    prompt = ", ".join(parts)
+    combined = _compose_visual_style("", cfg, style_name)
+    full = f"{combined}. {prompt}" if combined else prompt
+
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{vis['id']}.png"
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        pool.release(url)
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def scene_visuals(work_dir, scene_id: int, cast: list | None = None) -> list[dict]:
+    """The visuals that apply to one scene, in slot order: locations first
+    (the space), then wardrobe. A visual with no scene list applies to every
+    scene; wardrobe only applies when its character is in the scene."""
+    names = {str(n).strip().lower() for n in (cast or [])}
+    out = []
+    for kind in ("location", "wardrobe"):
+        for v in read_script_visuals(work_dir):
+            if not v.get("enabled", True) or v["kind"] != kind:
+                continue
+            if v["scenes"] and int(scene_id) not in v["scenes"]:
+                continue
+            if kind == "wardrobe" and v.get("character") and \
+                    v["character"].strip().lower() not in names:
+                continue
+            img = _script_visual_image_path(work_dir, v.get("ref_image"))
+            if img and img.exists():
+                out.append({**v, "_ref_path": str(img)})
+    return out
+
+
 def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:
     """The characters a single job can use: the catalogue characters visible
     to the style (global pool + its lineage) plus the script's own
@@ -2992,7 +3156,7 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
 
 
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
-                                   style_name: str = "") -> dict:
+                                   style_name: str = "", scene_id: int = 0) -> dict:
     """Which references a performance scene will actually be rendered with.
 
     Returns ``{"pictures": [...], "audios": [...]}`` where each entry carries its
@@ -3012,7 +3176,15 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
             continue
         path = portrait_for(name)
         if path is not None:
-            pictures.append({"slot": len(pictures) + 1, "name": name, "path": str(path)})
+            pictures.append({"slot": len(pictures) + 1, "name": name,
+                             "kind": "character", "path": str(path)})
+    # Locations and wardrobe take the slots after the cast: identity first, then
+    # the space, then the clothes — so trimming to H3's nine-image cap drops the
+    # least identity-critical references rather than a face.
+    for vis in scene_visuals(work_dir, scene_id, meta.get("cast")):
+        pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
+                         "kind": vis["kind"], "character": vis.get("character", ""),
+                         "id": vis["id"], "path": vis["_ref_path"]})
     speakers = _perf.speakers_in(_perf.norm_lines(meta.get("lines")))
     for name in speakers[:_perf.MAX_SPEAKERS_PER_SCENE]:
         path = voice_for(name)

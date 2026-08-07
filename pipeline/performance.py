@@ -111,15 +111,38 @@ def speakers_in(lines: list[dict]) -> list[str]:
     return seen
 
 
+def picture_role(pic) -> str:
+    """The job a <Picture N> reference is given in the prompt.
+
+    Every reference needs an explicit one or H3 blends them — and a location
+    or an outfit needs a DIFFERENT instruction from a face: keep the space,
+    keep the garments, rather than keep the person.
+    """
+    if isinstance(pic, str):
+        return f"is {pic}"
+    name, kind = pic.get("name", ""), pic.get("kind", "character")
+    if kind == "location":
+        return (f"is {name} — the place this scene happens in; keep the space, "
+                f"layout, furnishings and lighting exactly as shown, and put "
+                f"nobody in it who is not named below")
+    if kind == "wardrobe":
+        owner = (pic.get("character") or "").strip()
+        who = f"{owner} is wearing" if owner else "the wardrobe is"
+        return (f"is {name} — what {who}; keep those exact garments, colours "
+                f"and details")
+    return f"is {name}"
+
+
 def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
-                    picture_names: list[str] | None = None,
+                    picture_names: list | None = None,
                     audio_names: list[str] | None = None) -> str:
     """Assemble the six-block H3 prompt for one performance scene.
 
-    *picture_names* are the characters whose portraits are wired to
-    ``<Picture 1..N>`` and *audio_names* the speakers wired to ``<Audio 1..N>``,
-    both in reference order — the render passes the same order to ComfyUI, so
-    the tags in the prompt and the slots in the graph always agree.
+    *picture_names* are the references wired to ``<Picture 1..N>`` — plain names
+    for characters, or dicts carrying a ``kind`` for a location or wardrobe —
+    and *audio_names* the speakers wired to ``<Audio 1..N>``. Both are in
+    reference order: the render passes the same order to ComfyUI, so the tags in
+    the prompt and the slots in the graph always agree.
     """
     seconds = _clamp_seconds(scene_meta.get("seconds"))
     lines = norm_lines(scene_meta.get("lines"))
@@ -127,7 +150,8 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     blocks: list[str] = []
 
     # 1 — reference roles. Every reference gets an explicit job or H3 blends them.
-    roles = [f"<Picture {i + 1}> is {name}" for i, name in enumerate(picture_names or [])]
+    roles = [f"<Picture {i + 1}> {picture_role(pic)}"
+             for i, pic in enumerate(picture_names or [])]
     roles += [f"<Audio {i + 1}> is {name}'s voice — {name} must speak in exactly that voice"
               for i, name in enumerate(audio_names or [])]
     if roles:

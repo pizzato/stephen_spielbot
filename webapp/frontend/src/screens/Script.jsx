@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
+import ScriptVisuals from './ScriptVisuals.jsx'
 import { styleLineage } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -809,7 +810,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
-          {view === 'performance' && job && (
+          {view === 'characters' && job && isPerformance && (
+        <ScriptVisuals jobId={job.job_id}
+          sceneIds={(job.scenes || []).map((s) => s.id)}
+          castNames={[...new Set((job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
+          settingHint={(job.scenes || [])[0]?.metadata?.setting || ''} />
+      )}
+
+      {view === 'performance' && job && (
             <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
               onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? 'Save to queue slot' : 'Approve → render'}</Button>
           )}

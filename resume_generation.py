@@ -367,8 +367,10 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     meta = _performance.scene_meta(scene)
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
-    refs = resolve_performance_references(meta, cfg, work_dir, style_name)
-    picture_names = [p["name"] for p in refs["pictures"]]
+    refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    # Passed whole: build_h3_prompt reads each reference's kind to give it the
+    # right job (keep the face / keep the space / keep the garments).
+    picture_names = refs["pictures"]
     ref_images = [Path(p["path"]) for p in refs["pictures"]]
     audio_names = [a["name"] for a in refs["audios"]]
     ref_audios = [Path(a["path"]) for a in refs["audios"]]

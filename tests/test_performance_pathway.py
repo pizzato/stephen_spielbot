@@ -497,3 +497,84 @@ class FilmScreenTests(TempConfigCase):
         with self.assertRaises(backend.HTTPException) as ctx:
             backend.remix_load(work_dir=str(self.wd))
         self.assertEqual(ctx.exception.status_code, 404)
+
+
+class VisualsTests(TempConfigCase):
+    """Locations and wardrobe: reference images that pin the place and the
+    clothes across scenes."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({"styles": [_style("Acted")], "default_style": "Acted",
+                           "voices": [], "characters": [], "characters_migrated_v2": True})
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        self.addCleanup(mock.patch.stopall)
+        self.wd = self.output_dir / "film-20260808-120000"
+        (self.wd / "characters").mkdir(parents=True)
+        (self.wd / "characters" / "c1.png").write_bytes(b"png")
+        (self.wd / "characters.json").write_text(json.dumps([
+            {"id": "c1", "name": "JOE", "description": "host", "ref_image": "c1.png",
+             "voice": "", "enabled": True}]))
+        (self.wd / "visuals").mkdir()
+
+    def _visual(self, **over):
+        v = {"name": "The studio", "kind": "location", "description": "a podcast studio"}
+        v.update(over)
+        backend.gapp.add_script_visual(self.wd, v["name"], v["kind"],
+                                       v["description"], v.get("character", ""))
+        saved = backend.gapp.read_script_visuals(self.wd)[-1]
+        img = self.wd / "visuals" / f"{saved['id']}.png"
+        img.write_bytes(b"png")
+        backend.gapp.update_script_visual(self.wd, saved["id"], **{
+            k: v[k] for k in ("scenes",) if k in v})
+        visuals = backend.gapp.read_script_visuals(self.wd)
+        for x in visuals:
+            if x["id"] == saved["id"]:
+                x["ref_image"] = img.name
+        backend.gapp.write_script_visuals(self.wd, visuals)
+        return saved["id"]
+
+    def _refs(self, scene_id=1, cast=("JOE",)):
+        meta = {"mode": "performance", "cast": list(cast), "seconds": 10,
+                "lines": [{"speaker": "JOE", "text": "hi"}]}
+        cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
+        return meta, backend.gapp.resolve_performance_references(
+            meta, cfg, self.wd, "Acted", scene_id=scene_id)
+
+    def test_location_takes_a_slot_after_the_cast(self):
+        self._visual()
+        _, refs = self._refs()
+        self.assertEqual([(p["slot"], p["name"], p["kind"]) for p in refs["pictures"]],
+                         [(1, "JOE", "character"), (2, "The studio", "location")])
+
+    def test_scene_scoped_visual_only_applies_there(self):
+        self._visual(scenes=[2])
+        self.assertEqual(len(self._refs(scene_id=1)[1]["pictures"]), 1)
+        self.assertEqual(len(self._refs(scene_id=2)[1]["pictures"]), 2)
+
+    def test_wardrobe_follows_its_character(self):
+        self._visual(name="Blue henley", kind="wardrobe", character="JOE")
+        self.assertEqual(len(self._refs(cast=("JOE",))[1]["pictures"]), 2)
+        # A scene JOE is not in gets no JOE portrait and no JOE wardrobe.
+        self.assertEqual(len(self._refs(cast=("KINHO",))[1]["pictures"]), 0)
+
+    def test_prompt_gives_each_kind_its_own_job(self):
+        self._visual()
+        self._visual(name="Blue henley", kind="wardrobe", character="JOE")
+        meta, refs = self._refs()
+        prompt = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
+        self.assertIn("<Picture 1> is JOE.", prompt)
+        self.assertIn("<Picture 2> is The studio — the place this scene happens in", prompt)
+        self.assertIn("<Picture 3> is Blue henley — what JOE is wearing", prompt)
+
+    def test_locations_come_before_wardrobe(self):
+        self._visual(name="Coat", kind="wardrobe")
+        self._visual(name="The studio", kind="location")
+        _, refs = self._refs()
+        self.assertEqual([p["kind"] for p in refs["pictures"]],
+                         ["character", "location", "wardrobe"])
+
+    def test_visual_without_an_image_is_ignored(self):
+        backend.gapp.add_script_visual(self.wd, "Imagined place", "location", "somewhere")
+        _, refs = self._refs()
+        self.assertEqual([p["kind"] for p in refs["pictures"]], ["character"])
