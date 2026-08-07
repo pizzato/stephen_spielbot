@@ -1125,6 +1125,18 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
         </Card>
 
+        {data.can_remix === false && (
+          <Card span={4} padLg className="reveal reveal-d2">
+            <span className="label-sm">Audio</span>
+            <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              This film's voices and ambience were generated with the picture, in the
+              same pass — there is no separate music or narration track to re-balance,
+              re-voice or translate. Re-render a scene to change how it sounds.
+            </p>
+          </Card>
+        )}
+
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm">Re-mix audio</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Balance the levels and re-mux without re-rendering the video.</p>
@@ -1137,7 +1149,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
           <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={anyBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
         </Card>
+        )}
 
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narrator</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
@@ -1155,7 +1169,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </Button>
           </div>
         </Card>
+        )}
 
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="language" style={{ color: 'var(--ink-3)', width: 16 }} /> Localize this film</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
@@ -1207,6 +1223,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </div>
           )}
         </Card>
+        )}
 
         {editingLoc && (
           <Card span={12} padLg className="reveal reveal-d2">

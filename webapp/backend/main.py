@@ -4466,8 +4466,13 @@ def remix_load(work_dir: str = Query("")) -> dict:
         raise HTTPException(404, "No job available.")
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
-    if not combined.exists() or not music.exists():
+    # A performance film has no score and no separate narration track — its
+    # audio comes out of the video model with the picture — so a missing music
+    # track is normal there, not a broken film. The mixer is reported as
+    # unavailable instead of 404ing the whole screen.
+    if not combined.exists():
         raise HTTPException(404, f"Required files not found in {wd.name}.")
+    can_remix = music.exists()
     # Preview the actual published final (full voice/music/ambient mix) — the
     # same file Publish reads. Globbing the work dir returned combined.mp4
     # (narration only, no music) before any remix existed. See issue #14.
@@ -4484,6 +4489,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
     return {
         "work_dir": str(wd),
         "final_url": _busted_file_url(final_vid),
+        # False for performance films: there is no music or narration stem to
+        # re-balance, so the mix controls have nothing to act on.
+        "can_remix": can_remix,
         "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
@@ -4514,6 +4522,9 @@ def remix_apply(body: RemixBody) -> dict:
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
+    if not music.exists():
+        raise HTTPException(400, "This film has no music or narration track to re-mix — "
+                                 "its audio was generated with the picture.")
     with _track_op("Remixing audio", wd.name):
         final_path, message = gapp.on_remix(
             str(combined), str(music),

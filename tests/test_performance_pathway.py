@@ -459,3 +459,41 @@ class ScenePersistenceTests(unittest.TestCase):
         # Narrated/dialogue scripts must stay byte-identical.
         cleaned = backend._clean_lines([{"speaker": "A", "text": "hi", "shot": "medium"}])
         self.assertEqual(cleaned, [{"speaker": "A", "text": "hi", "shot": "medium"}])
+
+
+class FilmScreenTests(TempConfigCase):
+    """The film screen must open for a film that legitimately has no music."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({"styles": [_style("Acted")], "default_style": "Acted",
+                           "characters": [], "characters_migrated_v2": True})
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        self.addCleanup(mock.patch.stopall)
+        self.wd = self.output_dir / "film-20260808-100000"
+        self.wd.mkdir()
+        (self.wd / "combined.mp4").write_bytes(b"mp4" * 4000)
+        (self.output_dir / "film-20260808-100000.mp4").write_bytes(b"mp4" * 4000)
+
+    def test_missing_music_does_not_404_the_screen(self):
+        # A performance film has no background_music.wav — requiring it made the
+        # whole screen fail with "Required files not found".
+        data = backend.remix_load(work_dir=str(self.wd))
+        self.assertFalse(data["can_remix"])
+        self.assertTrue(data["final_url"])
+
+    def test_music_present_still_offers_the_mixer(self):
+        (self.wd / "background_music.wav").write_bytes(b"wav")
+        self.assertTrue(backend.remix_load(work_dir=str(self.wd))["can_remix"])
+
+    def test_remixing_a_film_with_no_stems_is_refused_clearly(self):
+        with self.assertRaises(backend.HTTPException) as ctx:
+            backend.remix_apply(backend.RemixBody(work_dir=str(self.wd)))
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("generated with the picture", str(ctx.exception.detail))
+
+    def test_missing_combined_still_404s(self):
+        (self.wd / "combined.mp4").unlink()
+        with self.assertRaises(backend.HTTPException) as ctx:
+            backend.remix_load(work_dir=str(self.wd))
+        self.assertEqual(ctx.exception.status_code, 404)
