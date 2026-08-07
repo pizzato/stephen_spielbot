@@ -511,8 +511,16 @@ def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
                  lease_seconds=900, start_message="assembling final video") as final_run:
         # The clips already carry voice and ambience from the same forward pass,
         # so assembly keeps their audio untouched — no music, no mixing.
-        concatenate_scenes(ordered, final_path)
-        ensure_video_resolution(final_path, vid_width, vid_height)
+        #
+        # Still write combined.mp4 (the narrated path's pre-mix artifact) and
+        # copy it to the final: the backend treats its existence as "this film
+        # finished" and the film editor, re-render and publish paths all read
+        # it. Concatenating straight to the final left every performance film
+        # showing 99% forever.
+        combined = Path(work_dir) / "combined.mp4"
+        concatenate_scenes(ordered, combined)
+        ensure_video_resolution(combined, vid_width, vid_height)
+        shutil.copy2(combined, final_path)
         ff_cover = str(cfg.get("first_frame_cover")
                        or cfg.get("default_first_frame_cover") or "none").strip().lower()
         if ff_cover in ("image", "text"):

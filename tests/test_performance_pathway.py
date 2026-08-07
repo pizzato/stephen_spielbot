@@ -249,6 +249,13 @@ class RenderWiringTests(TempConfigCase):
         self.assertEqual(cap["kwargs"]["duration_seconds"], 10.0)
 
 
+def _write_concat(clips, out):
+    """Stand-in for concatenate_scenes that actually produces the file, so the
+    assembly step's copy to the final video behaves as it does in production."""
+    Path(out).write_bytes(b"concatenated")
+    return Path(out)
+
+
 class WorkerFailoverTests(unittest.TestCase):
     """A worker that can't run the engine must not sink the film."""
 
@@ -282,7 +289,8 @@ class WorkerFailoverTests(unittest.TestCase):
         with mock.patch.object(rg, "render_performance_scene", side_effect=fake_render), \
              mock.patch.object(rg, "TaskRun"), \
              mock.patch.object(rg, "_get_duration", return_value=10.0), \
-             mock.patch.object(rg, "concatenate_scenes") as concat, \
+             mock.patch.object(rg, "concatenate_scenes",
+                               side_effect=_write_concat) as concat, \
              mock.patch.object(rg, "ensure_video_resolution"), \
              mock.patch.object(rg, "write_progress"), \
              mock.patch.object(rg.time, "sleep"):
@@ -318,3 +326,53 @@ class WorkerFailoverTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AssemblyArtifactTests(unittest.TestCase):
+    """Assembly must leave the artifacts the rest of the app keys off."""
+
+    def test_combined_mp4_is_written_next_to_the_final(self):
+        # The backend reads combined.mp4's existence as "this film finished"
+        # (Activity %, film editor, re-render, publish). Concatenating straight
+        # to the final left performance films pinned at 99% forever.
+        import resume_generation as rg
+        from pipeline.llm import Scene
+
+        with tempfile.TemporaryDirectory() as tmp:
+            work_dir = Path(tmp) / "film"
+            work_dir.mkdir()
+            final_path = Path(tmp) / "film.mp4"
+            scenes = [Scene(id=1, title="S", image_prompt="", video_prompt="p",
+                            narration="", mode="performance",
+                            metadata_extra={"mode": "performance", "cast": ["X"],
+                                            "seconds": 10})]
+
+            def fake_render(scene, wd, cfg, **kw):
+                out = wd / f"scene_{scene.id:02d}_final.mp4"
+                out.write_bytes(b"mp4")
+                return out
+
+            def fake_concat(clips, out):
+                Path(out).write_bytes(b"concatenated")
+                return Path(out)
+
+            pool = mock.MagicMock()
+            pool.urls = ["http://a:8188"]
+            pool.acquire.return_value = "http://a:8188"
+            pool.has_healthy.return_value = True
+            with mock.patch.object(rg, "render_performance_scene", side_effect=fake_render), \
+                 mock.patch.object(rg, "TaskRun"), \
+                 mock.patch.object(rg, "_get_duration", return_value=10.0), \
+                 mock.patch.object(rg, "concatenate_scenes", side_effect=fake_concat), \
+                 mock.patch.object(rg, "ensure_video_resolution"), \
+                 mock.patch.object(rg, "write_progress"):
+                rg._run_performance_film(
+                    work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
+                    store=mock.MagicMock(), durable_job_id="job", worker_pool=pool,
+                    status_file=work_dir / "progress.json",
+                    vid_width=704, vid_height=1280,
+                    final_path=final_path, cover_path=work_dir / "cover.png")
+
+            self.assertTrue((work_dir / "combined.mp4").exists(), "combined.mp4 missing")
+            self.assertTrue(final_path.exists(), "final video missing")
+            self.assertEqual(final_path.read_bytes(), (work_dir / "combined.mp4").read_bytes())
