@@ -171,18 +171,24 @@ def _poll_completion(prompt_id: str, deadline: float, comfy_url: str = COMFYUI_U
 
 
 def _check_queue(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
-    """Return 'running', 'pending', or 'absent' for prompt_id in ComfyUI's queue."""
+    """Return 'running', 'pending', 'absent', or 'unknown' for prompt_id.
+
+    'unknown' means the worker did not answer — NOT that the job is gone. A
+    ComfyUI busy loading a large model (H3's 20-34 GB checkpoints) stops serving
+    HTTP for minutes at a time; counting that as 'absent' declared healthy jobs
+    dropped and queued duplicate renders behind them.
+    """
     try:
         with urllib.request.urlopen(f"{comfy_url}/queue", timeout=10) as resp:
             queue = json.loads(resp.read())
-        for item in queue.get("queue_running", []):
-            if len(item) > 1 and item[1] == prompt_id:
-                return "running"
-        for item in queue.get("queue_pending", []):
-            if len(item) > 1 and item[1] == prompt_id:
-                return "pending"
     except Exception:
-        pass
+        return "unknown"
+    for item in queue.get("queue_running", []):
+        if len(item) > 1 and item[1] == prompt_id:
+            return "running"
+    for item in queue.get("queue_pending", []):
+        if len(item) > 1 and item[1] == prompt_id:
+            return "pending"
     return "absent"
 
 
@@ -346,6 +352,12 @@ def _wait_for_completion(
                     "[comfy] job %s… queue=%s nodes_done=%d elapsed=%.0fs",
                     prompt_id[:8], q_status, nodes_done, now - start,
                 )
+
+                # Unreachable worker: no evidence either way, so change nothing
+                # (an absence timer already running keeps its start time). The
+                # overall deadline and the GPU heartbeat still bound this.
+                if q_status == "unknown":
+                    continue
 
                 if q_status == "absent":
                     h_status = _check_history(prompt_id, comfy_url)

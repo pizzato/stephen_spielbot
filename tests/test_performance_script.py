@@ -79,6 +79,24 @@ class NormalizationTests(unittest.TestCase):
         self.assertGreater(beats[1]["t1"], beats[1]["t0"])
         self.assertLessEqual(beats[1]["t1"], 10.0)
 
+    def test_beat_starting_past_the_clip_never_inverts(self):
+        # Seen from a real generation: a beat at [18s-14s] on a 14 s clip.
+        # Clamping only the end leaves t1 < t0, which reaches the model as a
+        # backwards time window.
+        for raw in ({"t0": 18, "t1": 14, "action": "x"},
+                    {"t0": 99, "t1": 0, "action": "x"},
+                    {"t0": 14, "t1": 14, "action": "x"}):
+            beat = performance.norm_beats([raw], 14.0)[0]
+            self.assertLess(beat["t0"], beat["t1"], beat)
+            self.assertLessEqual(beat["t1"], 14.0)
+            self.assertGreaterEqual(beat["t0"], 0.0)
+
+    def test_beats_never_invert_for_any_input(self):
+        for t0 in (-5, 0, 3, 9.5, 10, 40):
+            for t1 in (-5, 0, 1, 9.5, 10, 40):
+                beat = performance.norm_beats([{"t0": t0, "t1": t1, "action": "x"}], 10.0)[0]
+                self.assertLess(beat["t0"], beat["t1"], f"{t0},{t1} -> {beat}")
+
     def test_speakers_in_first_spoken_order(self):
         lines = performance.norm_lines([
             {"speaker": "B", "text": "1"}, {"speaker": "A", "text": "2"},

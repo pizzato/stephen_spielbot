@@ -225,3 +225,41 @@ class H3ReferenceWorkflowTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaises(ValueError):
                 comfyui.generate_video_h3_ref(eng, "x", [], Path(tmp) / "o.mp4")
+
+
+class QueueHealthTests(unittest.TestCase):
+    """An unreachable worker must never be read as "the job is gone"."""
+
+    def _check(self, side_effect):
+        with mock.patch.object(comfyui.urllib.request, "urlopen", side_effect=side_effect):
+            return comfyui._check_queue("pid", "http://w:8188")
+
+    def _resp(self, payload):
+        class _Ctx:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *a):
+                return False
+
+            def read(self_inner):
+                import json as _json
+                return _json.dumps(payload).encode()
+        return lambda *a, **k: _Ctx()
+
+    def test_running_and_pending(self):
+        self.assertEqual(self._check(self._resp({"queue_running": [[0, "pid"]],
+                                                 "queue_pending": []})), "running")
+        self.assertEqual(self._check(self._resp({"queue_running": [],
+                                                 "queue_pending": [[0, "pid"]]})), "pending")
+
+    def test_answered_but_not_listed_is_absent(self):
+        self.assertEqual(self._check(self._resp({"queue_running": [[0, "other"]],
+                                                 "queue_pending": []})), "absent")
+
+    def test_unreachable_worker_is_unknown_not_absent(self):
+        # H3 stops serving HTTP while it loads a 20-34 GB checkpoint. Reading
+        # that as "absent" declared healthy jobs dropped and queued a duplicate
+        # render behind the one still loading.
+        self.assertEqual(self._check(TimeoutError("timed out")), "unknown")
+        self.assertEqual(self._check(OSError("connection refused")), "unknown")

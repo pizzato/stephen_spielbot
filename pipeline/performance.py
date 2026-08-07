@@ -79,12 +79,15 @@ def norm_beats(raw, seconds: float) -> list[dict]:
         if not action:
             continue
         try:
-            t0 = max(0.0, float(item.get("t0") or 0))
-            t1 = min(seconds, float(item.get("t1") or seconds))
+            t0 = float(item.get("t0") or 0)
+            t1 = float(item.get("t1") or seconds)
         except (TypeError, ValueError):
             t0, t1 = 0.0, seconds
-        if t1 <= t0:
-            t1 = min(seconds, t0 + 2.0)
+        # The LLM does overrun and occasionally inverts a pair. Clamp the START
+        # into the clip first — clamping only the end can leave t1 < t0, which
+        # reaches the model as a nonsense window like "[18s-14s]".
+        t0 = min(max(0.0, t0), max(0.0, seconds - 1.0))
+        t1 = min(max(t1, t0 + 1.0), seconds)
         out.append({"t0": round(t0, 1), "t1": round(t1, 1), "action": action})
     return out
 
