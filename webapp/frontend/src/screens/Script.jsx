@@ -809,6 +809,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
+          {view === 'performance' && job && (
+            <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
+              onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? 'Save to queue slot' : 'Approve → render'}</Button>
+          )}
           {view === 'characters' && job && (
             <Button variant="primary" icon="user-plus" disabled={!!charBusy} onClick={addCharacter}>
               {charBusy === 'add' ? 'Adding…' : 'Add character'}

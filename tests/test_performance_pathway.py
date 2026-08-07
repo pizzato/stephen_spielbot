@@ -437,3 +437,23 @@ class UnvoicedCharacterTests(TempConfigCase):
         unvoiced = [n for n in performance.speakers_in(performance.norm_lines(meta["lines"]))
                     if n not in voiced]
         self.assertEqual(unvoiced, ["MUTE"])
+
+
+class ScenePersistenceTests(unittest.TestCase):
+    """Saving a scene (which "Approve → render" does first) must not quietly
+    strip the performance fields."""
+
+    def test_delivery_survives_a_save(self):
+        # _clean_lines rebuilt each line as {speaker, text, shot}, so approving
+        # a performance script dropped every delivery direction.
+        cleaned = backend._clean_lines([
+            {"speaker": "JOE", "text": "Welcome to the show.", "delivery": "warm, upbeat"},
+            {"speaker": "KINHO", "text": "Thanks Joe.", "delivery": ""},
+        ])
+        self.assertEqual(cleaned[0]["delivery"], "warm, upbeat")
+        self.assertNotIn("delivery", cleaned[1])  # blank stays absent
+
+    def test_dialogue_lines_are_unchanged(self):
+        # Narrated/dialogue scripts must stay byte-identical.
+        cleaned = backend._clean_lines([{"speaker": "A", "text": "hi", "shot": "medium"}])
+        self.assertEqual(cleaned, [{"speaker": "A", "text": "hi", "shot": "medium"}])

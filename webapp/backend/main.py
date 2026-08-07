@@ -1727,6 +1727,12 @@ def _clean_lines(raw_lines) -> list[dict]:
         row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
         if shot:
             row["shot"] = shot
+        # Performance lines carry a delivery direction ("low, flat, unhurried")
+        # that shapes the read. Only set when present, so dialogue scripts stay
+        # byte-identical.
+        delivery = str(ln.get("delivery") or "").strip()
+        if delivery:
+            row["delivery"] = delivery
         out.append(row)
     return out
 
