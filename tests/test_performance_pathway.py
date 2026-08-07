@@ -376,3 +376,64 @@ class AssemblyArtifactTests(unittest.TestCase):
             self.assertTrue((work_dir / "combined.mp4").exists(), "combined.mp4 missing")
             self.assertTrue(final_path.exists(), "final video missing")
             self.assertEqual(final_path.read_bytes(), (work_dir / "combined.mp4").read_bytes())
+
+
+class UnvoicedCharacterTests(TempConfigCase):
+    """A character with no cast voice is legal: no <Audio N> slot is wired and
+    the model invents the voice. The remaining slots must not be renumbered."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({
+            "styles": [_style("Acted", n_scenes=2, voice="Narrator")],
+            "default_style": "Acted",
+            "voices": [{"name": "Kara", "path": str(self.output_dir / "kara.wav"),
+                        "gender": "female", "age": "adult"}],
+            "characters": [],
+            "characters_migrated_v2": True,
+        })
+        (self.output_dir / "kara.wav").write_bytes(b"wav")
+        self.work_dir = self.output_dir / "film-20260807-120000"
+        (self.work_dir / "characters").mkdir(parents=True)
+        for cid in ("char_a", "char_b"):
+            (self.work_dir / "characters" / f"{cid}.png").write_bytes(b"png")
+        # MUTE has a portrait but deliberately no voice.
+        (self.work_dir / "characters.json").write_text(json.dumps([
+            {"id": "char_a", "name": "MUTE", "description": "x", "ref_image": "char_a.png",
+             "voice": "", "enabled": True},
+            {"id": "char_b", "name": "VOICED", "description": "y", "ref_image": "char_b.png",
+             "voice": "Kara", "enabled": True},
+        ]))
+
+    def _refs(self, lines):
+        meta = {"mode": "performance", "cast": ["MUTE", "VOICED"], "seconds": 10,
+                "lines": lines}
+        cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
+        return meta, backend.gapp.resolve_performance_references(
+            meta, cfg, self.work_dir, "Acted")
+
+    def test_unvoiced_speaker_gets_no_audio_slot(self):
+        _, refs = self._refs([{"speaker": "MUTE", "text": "one"},
+                              {"speaker": "VOICED", "text": "two"}])
+        # Both appear as pictures; only the voiced one takes an audio slot.
+        self.assertEqual([p["name"] for p in refs["pictures"]], ["MUTE", "VOICED"])
+        self.assertEqual([(a["slot"], a["name"]) for a in refs["audios"]], [(1, "VOICED")])
+
+    def test_prompt_only_claims_the_voice_it_supplies(self):
+        meta, refs = self._refs([{"speaker": "MUTE", "text": "one"},
+                                 {"speaker": "VOICED", "text": "two"}])
+        prompt = performance.build_h3_prompt(
+            meta, picture_names=[p["name"] for p in refs["pictures"]],
+            audio_names=[a["name"] for a in refs["audios"]])
+        # MUTE still acts and speaks — the model just picks their voice.
+        self.assertIn("<Audio 1> is VOICED's voice", prompt)
+        self.assertNotIn("MUTE's voice", prompt)
+        self.assertIn('MUTE says exactly', prompt)
+
+    def test_editor_flags_the_unvoiced_speaker(self):
+        # The performance view surfaces this so it is a choice, not a surprise.
+        meta, refs = self._refs([{"speaker": "MUTE", "text": "one"}])
+        voiced = {a["name"] for a in refs["audios"]}
+        unvoiced = [n for n in performance.speakers_in(performance.norm_lines(meta["lines"]))
+                    if n not in voiced]
+        self.assertEqual(unvoiced, ["MUTE"])

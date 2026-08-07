@@ -847,7 +847,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
           ...(isPerformance
-            ? [{ value: 'performance', label: 'Performance' }]
+            ? [{ value: 'performance', label: 'Performance' },
+               { value: 'characters', label: 'Characters' }]
             : [{ value: 'characters', label: 'Characters' },
                { value: 'scenes', label: 'Scenes' }]),
         ]} />
@@ -1324,10 +1325,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                         onChange={(e) => setCharField(c.id, 'description', e.target.value)}
                         onBlur={() => saveCharacter(c)} />
                     </Field>
-                    <Field label="Voice" hint="Cloned voice this character speaks with in dialogue scenes.">
+                    <Field label="Voice" hint={isPerformance
+                      ? 'Passed to the video model as this character\u2019s <Audio N> reference so they sound the same in every scene. Leave it unset and the model invents a voice \u2014 which will drift between scenes.'
+                      : 'Cloned voice this character speaks with in dialogue scenes.'}>
                       <select className="input" value={c.voice || ''} disabled={b}
                         onChange={(e) => setCharVoice(c, e.target.value)}>
-                        <option value="">Style narrator (default)</option>
+                        <option value="">{isPerformance
+                          ? 'Let the model invent the voice (no reference)'
+                          : 'Style narrator (default)'}</option>
                         {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
                       </select>
                     </Field>
