@@ -3152,7 +3152,18 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
         c = _find(name)
         return (c or {}).get("voice") or ""
 
-    return portrait_for, voice_for, voice_name_for
+    def looks_like(name: str) -> str:
+        """A few words of the character's appearance, for the reference-role line.
+
+        Not a full description — the portrait carries the look. This is the
+        HOOK that lets the model bind "<Picture 2>" to the right name: with
+        bare names and two same-kind references it swaps them, putting one
+        character's face on the other's part."""
+        c = _find(name) or {}
+        words = re.split(r"[,.]", (c.get("description") or "").strip())
+        return (words[0].strip() if words else "")[:80]
+
+    return portrait_for, voice_for, voice_name_for, looks_like
 
 
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
@@ -3169,7 +3180,8 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     screen shows is what the model receives."""
     from pipeline import performance as _perf
 
-    portrait_for, voice_for, voice_name_for = _performance_refs(cfg, work_dir, style_name)
+    portrait_for, voice_for, voice_name_for, looks_like = _performance_refs(
+        cfg, work_dir, style_name)
     pictures, audios = [], []
     for name in (meta.get("cast") or []):
         if not name:
@@ -3177,7 +3189,8 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
         path = portrait_for(name)
         if path is not None:
             pictures.append({"slot": len(pictures) + 1, "name": name,
-                             "kind": "character", "path": str(path)})
+                             "kind": "character", "hint": looks_like(name),
+                             "path": str(path)})
     # Locations and wardrobe take the slots after the cast: identity first, then
     # the space, then the clothes — so trimming to H3's nine-image cap drops the
     # least identity-critical references rather than a face.

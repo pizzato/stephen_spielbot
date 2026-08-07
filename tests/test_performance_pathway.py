@@ -563,7 +563,8 @@ class VisualsTests(TempConfigCase):
         self._visual(name="Blue henley", kind="wardrobe", character="JOE")
         meta, refs = self._refs()
         prompt = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
-        self.assertIn("<Picture 1> is JOE.", prompt)
+        # The character's slot now carries a short identity hint too.
+        self.assertIn("<Picture 1> is JOE (host).", prompt)
         self.assertIn("<Picture 2> is The studio — the place this scene happens in", prompt)
         self.assertIn("<Picture 3> is Blue henley — what JOE is wearing", prompt)
 

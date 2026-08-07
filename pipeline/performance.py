@@ -111,6 +111,10 @@ def speakers_in(lines: list[dict]) -> list[str]:
     return seen
 
 
+def _picture_label(pic) -> str:
+    return pic if isinstance(pic, str) else str(pic.get("name") or "")
+
+
 def picture_role(pic) -> str:
     """The job a <Picture N> reference is given in the prompt.
 
@@ -121,6 +125,7 @@ def picture_role(pic) -> str:
     if isinstance(pic, str):
         return f"is {pic}"
     name, kind = pic.get("name", ""), pic.get("kind", "character")
+    hint = _clean(pic.get("hint"))
     if kind == "location":
         return (f"is {name} — the place this scene happens in; keep the space, "
                 f"layout, furnishings and lighting exactly as shown, and put "
@@ -130,7 +135,10 @@ def picture_role(pic) -> str:
         who = f"{owner} is wearing" if owner else "the wardrobe is"
         return (f"is {name} — what {who}; keep those exact garments, colours "
                 f"and details")
-    return f"is {name}"
+    # A bare name gives the model nothing to match a face against, and with two
+    # same-kind references it swaps them — one character ends up playing the
+    # other's part. The portrait still carries the look; this is just the hook.
+    return f"is {name} ({hint})" if hint else f"is {name}"
 
 
 def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
@@ -155,8 +163,18 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     roles += [f"<Audio {i + 1}> is {name}'s voice — {name} must speak in exactly that voice"
               for i, name in enumerate(audio_names or [])]
     if roles:
-        blocks.append(". ".join(roles) +
-                      ". Keep every face, wardrobe and body exactly as in the references.")
+        line = (". ".join(roles) +
+                ". Keep every face, wardrobe and body exactly as in the references.")
+        # With two people on screen the model does swap them — one character
+        # ends up in the other's seat, with the other's voice. An explicit
+        # refusal binds harder than the tags alone (H3 is CFG-free: refusals
+        # are plain sentences, not a negative prompt).
+        people = [_picture_label(p) for p in (picture_names or [])
+                  if (not isinstance(p, dict)) or p.get("kind", "character") == "character"]
+        if len(people) > 1:
+            line += (f" {' and '.join(people)} are different people: keep each one's own "
+                     f"face, body and voice, and never swap them or exchange their places.")
+        blocks.append(line)
 
     # 2 — style contract.
     setting = _clean(scene_meta.get("setting"))

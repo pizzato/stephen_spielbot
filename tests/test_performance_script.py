@@ -207,3 +207,40 @@ class PunctuationTests(unittest.TestCase):
         self.assertNotIn("..", p)
         self.assertIn("Camera: Slow steady walk, holding him centre-frame.", p)
         self.assertIn("seagulls at second 4, no music of any kind.", p)
+
+
+class IdentityBindingTests(unittest.TestCase):
+    """Two people on screen: the model swapped them — one character appearing
+    in the other's seat, with the other's voice."""
+
+    def _prompt(self, pics, audios=("Joe", "Kinho")):
+        return performance.build_h3_prompt(
+            {"lines": [{"speaker": "Joe", "text": "hi"}]},
+            picture_names=pics, audio_names=list(audios))
+
+    def test_hint_gives_each_name_something_to_bind_to(self):
+        p = self._prompt([{"name": "Joe", "kind": "character", "hint": "Bald, broad build"},
+                          {"name": "Kinho", "kind": "character", "hint": "Younger, dark hair"}])
+        self.assertIn("<Picture 1> is Joe (Bald, broad build)", p)
+        self.assertIn("<Picture 2> is Kinho (Younger, dark hair)", p)
+
+    def test_missing_hint_still_names_the_character(self):
+        p = self._prompt([{"name": "Joe", "kind": "character"},
+                          {"name": "Kinho", "kind": "character"}])
+        self.assertIn("<Picture 1> is Joe.", p)
+        self.assertNotIn("()", p)
+
+    def test_two_people_get_an_explicit_no_swap_instruction(self):
+        p = self._prompt([{"name": "Joe", "kind": "character"},
+                          {"name": "Kinho", "kind": "character"}])
+        self.assertIn("Joe and Kinho are different people", p)
+        self.assertIn("never swap them", p)
+
+    def test_a_lone_character_gets_no_swap_line(self):
+        p = self._prompt([{"name": "Joe", "kind": "character"}], audios=("Joe",))
+        self.assertNotIn("different people", p)
+
+    def test_a_location_is_not_counted_as_a_person(self):
+        p = self._prompt([{"name": "Joe", "kind": "character"},
+                          {"name": "The studio", "kind": "location"}], audios=("Joe",))
+        self.assertNotIn("different people", p)
