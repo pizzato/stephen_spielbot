@@ -398,11 +398,61 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     return clip
 
 
+def generate_cover_image(work_dir: Path, cfg: dict, scenes: list, *, image_engine: dict,
+                        worker_pool: WorkerPool, vid_width: int, vid_height: int,
+                        title: str) -> Path | None:
+    """Paint the film's cover, or return None if it already exists / fails.
+
+    Extracted from the narrated flow so performance films get one too: without
+    a cover the film shows up blank in Films and has no thumbnail to publish.
+    Non-fatal by design — a finished film with no cover beats a failed render.
+    """
+    cover_path = work_dir / "cover.png"
+    video_title = cfg.get("video_title", "").strip() or title
+    style_clean = cfg.get("style", "").strip()
+    if cover_path.exists():
+        logger.info("Cover image already exists, skipping: %s", cover_path)
+        return cover_path
+
+    logger.info("Generating YouTube cover image for %r", video_title)
+    _cover_url: str | None = None
+    cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
+    # Cover typography: paint a TEXT-FREE background, then composite the title
+    # with real fonts on top — the model never draws (or misspells) a letter.
+    typo = _norm_cover_typography(cfg.get("cover_typography")
+                                  or cfg.get("default_cover_typography"))
+    cover_prompt, cover_refs = _build_cover_generation(
+        work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
+        extra_style=style_clean, text_position=typo["position"],
+        engine=image_engine)
+    try:
+        _cover_url = worker_pool.acquire()
+        generate_with_engine(
+            image_engine, cover_prompt, work_dir / _COVER_BG_NAME,
+            width=cover_w, height=cover_h, comfy_url=_cover_url,
+            reference_images=cover_refs or None,
+        )
+        worker_pool.release(_cover_url)
+        _cover_url = None
+        _apply_cover_typography(work_dir, typo, video_title)
+        logger.info("Cover image saved: %s", cover_path)
+        return cover_path
+    except Exception as cover_err:
+        logger.warning("Cover image generation failed (non-fatal): %s", cover_err)
+        if _cover_url is not None:
+            try:
+                worker_pool.release(_cover_url)
+            except Exception:
+                pass
+        return None
+
+
 def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
                           store: DurableStore, durable_job_id: str,
                           worker_pool: WorkerPool, status_file: Path,
                           vid_width: int, vid_height: int,
-                          final_path: Path, cover_path: Path) -> Path:
+                          final_path: Path, cover_path: Path,
+                          image_engine: dict | None = None) -> Path:
     """Render a performance film end to end.
 
     Nothing here overlaps the narrated pipeline: no first frames, no TTS, no
@@ -414,6 +464,8 @@ def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
     done = [0]
     lock = threading.Lock()
     style_name = cfg.get("style_name") or ""
+    # Only used to paint the cover — performance scenes render no stills.
+    image_engine = image_engine or _engines.resolve(cfg, cfg.get("image_engine"))
 
     def _progress() -> float:
         return 2 + 88.0 * (done[0] / max(1, len(scenes)))
@@ -488,6 +540,14 @@ def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
     ordered = [scene_finals[s.id] for s in scenes if s.id in scene_finals]
     if len(ordered) != len(scenes):
         raise RuntimeError(f"Performance render produced {len(ordered)}/{len(scenes)} scenes")
+
+    # A film with no cover shows up blank in Films and has no thumbnail to
+    # publish, so performance films paint one too (same engine and typography
+    # as a narrated film's).
+    write_progress(status_file, 90, "Generating the cover image…")
+    generate_cover_image(work_dir, cfg, scenes, image_engine=image_engine,
+                         worker_pool=worker_pool, vid_width=vid_width,
+                         vid_height=vid_height, title=cfg.get("title") or work_dir.name)
 
     final_task = task_id(durable_job_id, "final")
     store.update_task_payload(final_task, {
@@ -669,7 +729,8 @@ def main(work_dir: Path) -> None:
                 work_dir, scenes, plan_cfg, store=store, durable_job_id=durable_job_id,
                 worker_pool=worker_pool, status_file=status_file,
                 vid_width=vid_width, vid_height=vid_height,
-                final_path=perf_final, cover_path=work_dir / "cover.png")
+                final_path=perf_final, cover_path=work_dir / "cover.png",
+                image_engine=image_engine)
         finally:
             worker_pool.shutdown()
         size_mb = perf_final.stat().st_size / 1024 / 1024
@@ -1058,49 +1119,9 @@ def main(work_dir: Path) -> None:
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
-    video_title = cfg.get("video_title", "").strip() or title
-    style_clean = cfg.get("style", "").strip()
-
-    if not cover_path.exists():
-        logger.info("Generating YouTube cover image for '%s'", video_title)
-        _cover_url: str | None = None
-        cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
-        # Cover typography: paint a TEXT-FREE background, then composite the
-        # title with real fonts on top — the model never draws (or misspells)
-        # a single letter. The artwork uses image_engine — the SAME resolved
-        # engine as the scene stills — plus the same composed visual style and
-        # character reference conditioning, so the cover reads as a frame from
-        # the same production.
-        typo = _norm_cover_typography(cfg.get("cover_typography")
-                                      or cfg.get("default_cover_typography"))
-        cover_prompt, cover_refs = _build_cover_generation(
-            work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
-            extra_style=style_clean, text_position=typo["position"],
-            engine=image_engine)
-        try:
-            _cover_url = worker_pool.acquire()
-            generate_with_engine(
-                image_engine,
-                cover_prompt,
-                work_dir / _COVER_BG_NAME,
-                width=cover_w,
-                height=cover_h,
-                comfy_url=_cover_url,
-                reference_images=cover_refs or None,
-            )
-            worker_pool.release(_cover_url)
-            _cover_url = None
-            _apply_cover_typography(work_dir, typo, video_title)
-            logger.info("Cover image saved: %s", cover_path)
-        except Exception as _cover_err:
-            logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)
-            if _cover_url is not None:
-                try:
-                    worker_pool.release(_cover_url)
-                except Exception:
-                    pass
-    else:
-        logger.info("Cover image already exists, skipping: %s", cover_path)
+    generate_cover_image(work_dir, cfg, scenes, image_engine=image_engine,
+                         worker_pool=worker_pool, vid_width=vid_width,
+                         vid_height=vid_height, title=title)
 
     write_progress(status_file, video_band[0], "Music ready. Generating scene videos…")
 

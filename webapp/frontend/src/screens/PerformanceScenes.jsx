@@ -85,6 +85,11 @@ function SceneCard({ scene, seconds, jobId, voiceOpts, voiceMeta, onChanged }) {
         </span>
       </div>
 
+      {scene.has_video && (
+        <video controls preload="metadata" src={scene.video_url}
+          style={{ width: '100%', maxWidth: 360, borderRadius: 10, background: '#000' }} />
+      )}
+
       {/* ── Cast: each numbered slot IS the portrait / the voice clip, and the
              look and voice are set right here rather than in another tab. ── */}
       <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>

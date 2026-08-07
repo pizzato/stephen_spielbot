@@ -293,6 +293,7 @@ class WorkerFailoverTests(unittest.TestCase):
                                side_effect=_write_concat) as concat, \
              mock.patch.object(rg, "ensure_video_resolution"), \
              mock.patch.object(rg, "write_progress"), \
+             mock.patch.object(rg, "generate_cover_image"), \
              mock.patch.object(rg.time, "sleep"):
             rg._run_performance_film(
                 work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
@@ -365,7 +366,8 @@ class AssemblyArtifactTests(unittest.TestCase):
                  mock.patch.object(rg, "_get_duration", return_value=10.0), \
                  mock.patch.object(rg, "concatenate_scenes", side_effect=fake_concat), \
                  mock.patch.object(rg, "ensure_video_resolution"), \
-                 mock.patch.object(rg, "write_progress"):
+                 mock.patch.object(rg, "write_progress"), \
+                 mock.patch.object(rg, "generate_cover_image"):
                 rg._run_performance_film(
                     work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
                     store=mock.MagicMock(), durable_job_id="job", worker_pool=pool,

@@ -851,8 +851,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
           ...(isPerformance
-            ? [{ value: 'performance', label: 'Performance' },
-               { value: 'characters', label: 'Characters' }]
+            ? [{ value: 'characters', label: 'Characters & visuals' },
+               { value: 'performance', label: 'Performance' }]
             : [{ value: 'characters', label: 'Characters' },
                { value: 'scenes', label: 'Scenes' }]),
         ]} />

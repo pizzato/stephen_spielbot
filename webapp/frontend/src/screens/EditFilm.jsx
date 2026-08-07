@@ -4,6 +4,7 @@ import {
   VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import PerformanceScenes from './PerformanceScenes.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -1875,17 +1876,21 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
 
 // ── Unified Edit Film screen ──────────────────────────────────────────────────
 
-const EDIT_TABS = new Set(['film', 'characters', 'scenes'])
+const EDIT_TABS = new Set(['film', 'characters', 'scenes', 'performance'])
 
 export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
+  const [isPerformance, setIsPerformance] = useState(false)
 
-  // Prefill page title from film scenes (lightweight enough for the head).
+  // Prefill page title from film scenes (lightweight enough for the head), and
+  // note whether this is a performance film — its scenes have no stills or
+  // narration, so they get the performance view instead.
   useEffect(() => {
     if (!workDir) return
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
+      setIsPerformance((r.scenes || []).some((s) => (s.mode || s.metadata?.mode) === 'performance'))
     }).catch(() => {})
   }, [workDir])
 
@@ -1912,10 +1917,17 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
           { value: 'characters', label: 'Characters' },
-          { value: 'scenes', label: 'Scenes' },
+          // A performance film has no stills, narration or per-scene re-voice,
+          // so the narration-shaped Scenes editor is replaced by the same view
+          // the script uses — with each scene's rendered clip in it.
+          ...(isPerformance ? [{ value: 'performance', label: 'Scenes' }]
+            : [{ value: 'scenes', label: 'Scenes' }]),
         ]} />
       </div>
 
+      {tab === 'performance' && (
+        <PerformanceScenes workDir={workDir} />
+      )}
       {tab === 'film' && (
         <FilmTab
           workDir={workDir}

@@ -2964,9 +2964,14 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             entry["audio_slot"] = aud["slot"] if aud else None
             entry["speaks"] = name in performance_mode.speakers_in(lines)
             cast.append(entry)
+        # The rendered clip, when there is one: the performance view doubles as
+        # the film view, so the same screen shows either the plan or the result.
+        media = _film_scene_files(wd, int(row.get("id") or 0))
         scenes.append({
             "id": row.get("id"),
             "title": row.get("title") or "",
+            "video_url": media.get("video_url") or "",
+            "has_video": bool(media.get("has_video") or media.get("has_final")),
             "seconds": meta.get("seconds") or performance_mode.SCENE_SECONDS,
             "setting": meta.get("setting") or "",
             "camera": meta.get("camera") or "",
