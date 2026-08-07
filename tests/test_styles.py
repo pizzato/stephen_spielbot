@@ -1148,15 +1148,36 @@ class CharacterTests(TempConfigCase):
         # An entry already carrying a scope is never re-scoped by the migration.
         self.assertEqual(cfg["characters"][0]["style"], "Villain")
 
-    def test_no_style_imposes_no_characters(self):
+    def test_no_style_imposes_no_style_cast_but_keeps_the_global_pool(self):
+        # Global characters belong to the library, not to a style: asking for
+        # one by name in experiment mode must reuse it, not invent a duplicate
+        # with a fresh look and a randomly cast voice.
         self.write_config({
-            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"}],
+            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"},
+                           {"id": "char_vil", "name": "Villain", "description": "bad",
+                            "style": "Hero"}],
             "styles": [_style("Hero")],
             "default_style": "Hero",
             "characters_migrated_v2": True, "characters_scoped_v3": True,
         })
         cfg = app.load_config()
-        self.assertEqual(app._style_characters(cfg, app.NO_STYLE), [])
+        visible = [c["name"] for c in app._style_characters(cfg, app.NO_STYLE)]
+        self.assertEqual(visible, ["Bob"])
+
+    def test_no_style_reuses_a_global_character_instead_of_duplicating_it(self):
+        self.write_config({
+            "characters": [{"id": "char_k", "name": "Kinho", "description": "a man",
+                            "enabled": True}],
+            "styles": [_style("Hero")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        cfg = app.load_config()
+        kept = app._filter_identified_against_style(
+            [{"name": "Kinho", "description": "reinvented"},
+             {"name": "Newcomer", "description": "genuinely new"}],
+            cfg, app.NO_STYLE)
+        self.assertEqual([c["name"] for c in kept], ["Newcomer"])
 
     def test_character_sheet_lists_enabled_described_only(self):
         sheet = app._character_sheet([

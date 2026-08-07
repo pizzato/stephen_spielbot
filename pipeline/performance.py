@@ -54,6 +54,15 @@ def _clean(text) -> str:
     return re.sub(r"\s+", " ", str(text or "")).strip()
 
 
+def _unterminated(text: str) -> str:
+    """Drop a trailing full stop so the assembled block reads as one sentence.
+
+    The LLM ends most fields with a period; the camera/audio blocks append their
+    own punctuation, which produced "no push, no zoom.." and "...at second 10.,
+    no music of any kind."."""
+    return _clean(text).rstrip(".").strip()
+
+
 def norm_lines(raw) -> list[dict]:
     """Normalize the LLM's dialogue lines to [{speaker, delivery, text}]."""
     out: list[dict] = []
@@ -143,10 +152,12 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
             f"the line ends.")
 
     # 4 — camera.
-    blocks.append(f"Camera: {_clean(scene_meta.get('camera')) or 'locked off at chest height, slight handheld drift, no push, no zoom'}.")
+    camera = _unterminated(scene_meta.get("camera")) or \
+        "locked off at chest height, slight handheld drift, no push, no zoom"
+    blocks.append(f"Camera: {camera}.")
 
     # 5 — audio as its own track (never music: performance films carry no score).
-    soundscape = _clean(scene_meta.get("soundscape")) or "quiet room tone throughout"
+    soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
     blocks.append(f"Audio: {soundscape}, no music of any kind.")
 
     # 6 — refusals. Plain sentences: H3 is CFG-free, there is no negative field.

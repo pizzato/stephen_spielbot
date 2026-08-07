@@ -2234,11 +2234,16 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     Every style automatically inherits the GLOBAL pool (characters with no
     "style" scope). A character scoped to a style is visible to that style and
     every style below it in the hierarchy — children inherit the parent's cast.
-    An empty/unknown name resolves like style_settings (the default style);
-    the "(none)" experiment style imposes nothing, so it sees no characters."""
+    An empty/unknown name resolves like style_settings (the default style).
+
+    The "(none)" experiment style imposes no STYLE cast, but it still sees the
+    global pool: those characters belong to the library, not to a style, so
+    asking for one by name in experiment mode must reuse its look and voice
+    rather than inventing a duplicate."""
     requested = (style_name or "").strip()
     if requested == NO_STYLE:
-        return []
+        return [c for c in (cfg.get("characters") or [])
+                if isinstance(c, dict) and not c.get("style")]
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
     target = next((s for s in styles if s.get("name") == requested), None)
     if target is None:
@@ -2979,7 +2984,42 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
         logger.info("  performance: no cast voice for %r — H3 will invent the voice", name)
         return None
 
-    return portrait_for, voice_for
+    def voice_name_for(name: str) -> str:
+        c = _find(name)
+        return (c or {}).get("voice") or ""
+
+    return portrait_for, voice_for, voice_name_for
+
+
+def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
+                                   style_name: str = "") -> dict:
+    """Which references a performance scene will actually be rendered with.
+
+    Returns ``{"pictures": [...], "audios": [...]}`` where each entry carries its
+    one-based ``slot`` — the ``<Picture N>`` / ``<Audio N>`` number cited in the
+    prompt — the character it belongs to, and the file on disk. Only references
+    that resolved are listed, so the numbering always matches the slots wired
+    into the graph.
+
+    The renderer AND the editor's performance view both call this, so what the
+    screen shows is what the model receives."""
+    from pipeline import performance as _perf
+
+    portrait_for, voice_for, voice_name_for = _performance_refs(cfg, work_dir, style_name)
+    pictures, audios = [], []
+    for name in (meta.get("cast") or []):
+        if not name:
+            continue
+        path = portrait_for(name)
+        if path is not None:
+            pictures.append({"slot": len(pictures) + 1, "name": name, "path": str(path)})
+    speakers = _perf.speakers_in(_perf.norm_lines(meta.get("lines")))
+    for name in speakers[:_perf.MAX_SPEAKERS_PER_SCENE]:
+        path = voice_for(name)
+        if path is not None:
+            audios.append({"slot": len(audios) + 1, "name": name,
+                           "voice": voice_name_for(name), "path": str(path)})
+    return {"pictures": pictures, "audios": audios}
 
 
 def generate_dialogue_shot_stills(job_id: str, style_name: str = "",

@@ -166,6 +166,9 @@ export const api = {
   improveBrief: (field, title, direction, styleName, instruction) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '', instruction: instruction || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
+  // Performance films: every scene with its references already resolved into
+  // numbered <Picture N>/<Audio N> slots (see /api/scripts/performance).
+  loadPerformanceScript: (workDir) => req('GET', `/scripts/performance?work_dir=${encodeURIComponent(workDir || '')}`),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),

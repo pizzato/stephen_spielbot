@@ -194,3 +194,16 @@ class GenerationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PunctuationTests(unittest.TestCase):
+    def test_camera_and_audio_blocks_do_not_double_punctuate(self):
+        # The LLM ends these fields with a period and the blocks append their
+        # own, which read as "no push, no zoom.." and "…second 10., no music".
+        p = performance.build_h3_prompt({
+            "camera": "Slow steady walk, holding him centre-frame.",
+            "soundscape": "Light breeze; seagulls at second 4.",
+        })
+        self.assertNotIn("..", p)
+        self.assertIn("Camera: Slow steady walk, holding him centre-frame.", p)
+        self.assertIn("seagulls at second 4, no music of any kind.", p)

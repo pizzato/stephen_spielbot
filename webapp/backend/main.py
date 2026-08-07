@@ -2885,6 +2885,65 @@ def load_script(work_dir: str = Query("")) -> dict:
                                  create_brief=create_brief)
 
 
+@api.get("/api/scripts/performance")
+def load_performance_script(work_dir: str = Query("")) -> dict:
+    """Everything the performance view needs for a whole film, in one payload.
+
+    Each scene comes back with its references already resolved into numbered
+    slots — <Picture 1> is this portrait, <Audio 1> is that voice clip — because
+    the prompt cites slot numbers and a screen that only showed the prompt would
+    leave you guessing which reference is which. Resolved by the same function
+    the renderer uses, so the screen and the render never disagree."""
+    if not work_dir:
+        raise HTTPException(400, "Choose a saved script.")
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Script path is outside the output folder.")
+    rows = _read_script_scenes(wd)
+    cfg = gapp.load_config()
+    _, _, _, style_name, _ = _script_source_meta(
+        job_id_from_work_dir(wd), wd.name.replace("-", " ").title())
+    ss = gapp.style_settings(cfg, style_name)
+
+    scenes = []
+    for row in rows:
+        meta = dict(row.get("metadata") or {})
+        if meta.get("mode") != "performance":
+            continue
+        refs = gapp.resolve_performance_references(meta, cfg, wd, style_name)
+        lines = performance_mode.norm_lines(meta.get("lines"))
+        scenes.append({
+            "id": row.get("id"),
+            "title": row.get("title") or "",
+            "seconds": meta.get("seconds") or performance_mode.SCENE_SECONDS,
+            "setting": meta.get("setting") or "",
+            "camera": meta.get("camera") or "",
+            "soundscape": meta.get("soundscape") or "",
+            "cast": meta.get("cast") or [],
+            "beats": performance_mode.norm_beats(
+                meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
+            "lines": lines,
+            # The exact text the model receives, rebuilt from the resolved slots.
+            "prompt": performance_mode.build_h3_prompt(
+                {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
+                picture_names=[p["name"] for p in refs["pictures"]],
+                audio_names=[a["name"] for a in refs["audios"]]),
+            "pictures": refs["pictures"],
+            "audios": refs["audios"],
+            # Speakers with no cast voice: H3 invents one, and it drifts between
+            # scenes. Surfaced so it is fixable before rendering.
+            "unvoiced": [n for n in performance_mode.speakers_in(lines)
+                         if n not in {a["name"] for a in refs["audios"]}],
+            "missing_portraits": [n for n in (meta.get("cast") or [])
+                                  if n not in {p["name"] for p in refs["pictures"]}],
+        })
+    from pipeline import engines as eng
+    engine = eng.resolve_reference(ss, ss.get("reference_engine"))
+    return {"work_dir": str(wd), "style_name": style_name,
+            "engine": {"key": engine["key"], "label": engine["label"]},
+            "scenes": scenes}
+
+
 class DuplicateScriptBody(BaseModel):
     work_dir: str
     title: str = ""

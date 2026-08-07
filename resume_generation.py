@@ -362,34 +362,22 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     needs as arguments and touches no module state.
     """
     from pipeline.comfyui import generate_video_h3_ref
-    from app import _performance_refs
+    from app import resolve_performance_references
 
     meta = _performance.scene_meta(scene)
-    portrait_for, voice_for = _performance_refs(cfg, work_dir, style_name)
-
-    # <Picture N> order = the scene's cast order; <Audio N> order = first-spoken
-    # order. Only references that actually resolved are cited, so the numbering
-    # in the prompt always matches the slots wired into the graph.
-    cast = [n for n in (meta.get("cast") or []) if n]
-    speakers = _performance.speakers_in(_performance.norm_lines(meta.get("lines")))
-    picture_names, ref_images = [], []
-    for name in cast:
-        path = portrait_for(name)
-        if path is not None:
-            picture_names.append(name)
-            ref_images.append(path)
-    audio_names, ref_audios = [], []
-    for name in speakers[:_performance.MAX_SPEAKERS_PER_SCENE]:
-        path = voice_for(name)
-        if path is not None:
-            audio_names.append(name)
-            ref_audios.append(path)
+    # The SAME resolver the editor's performance view calls, so the slots shown
+    # on screen are the slots wired into the graph.
+    refs = resolve_performance_references(meta, cfg, work_dir, style_name)
+    picture_names = [p["name"] for p in refs["pictures"]]
+    ref_images = [Path(p["path"]) for p in refs["pictures"]]
+    audio_names = [a["name"] for a in refs["audios"]]
+    ref_audios = [Path(a["path"]) for a in refs["audios"]]
 
     if not ref_images:
         raise RuntimeError(
-            f"Scene {scene.id}: no character portrait resolved for cast {cast} — "
-            "Ref2VA needs at least one reference image (generate the character "
-            "look images first)")
+            f"Scene {scene.id}: no character portrait resolved for cast "
+            f"{meta.get('cast')} — Ref2VA needs at least one reference image "
+            "(generate the character look images first)")
 
     prompt = _performance.build_h3_prompt(
         meta, style_note=cfg.get("style", ""),

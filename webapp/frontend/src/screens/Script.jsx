@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import PerformanceScenes from './PerformanceScenes.jsx'
 import { styleLineage } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
@@ -32,6 +33,10 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
 })
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
+  // Performance films are a different kind of script: no narration, no scene
+  // stills, and references cited by slot number. They get their own view
+  // instead of the narration-shaped Scenes/Characters tabs.
+  const isPerformance = (job?.scenes || []).some((s) => s.mode === 'performance')
   const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -235,7 +240,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCoverMsg('')
     // A story draft (no scenes yet) opens straight into the Story view for
     // review + division; anything with scenes lands on Cover as before.
-    if (job?.job_id) setView((job.scenes || []).length ? 'cover' : 'story')
+    if (!job?.job_id) return
+    const hasScenes = (job.scenes || []).length
+    const performance = (job.scenes || []).some((s) => s.mode === 'performance')
+    setView(performance ? 'performance' : hasScenes ? 'cover' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -838,10 +846,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           { value: 'scripts', label: 'Scripts' },
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
-          { value: 'characters', label: 'Characters' },
-          { value: 'scenes', label: 'Scenes' },
+          ...(isPerformance
+            ? [{ value: 'performance', label: 'Performance' }]
+            : [{ value: 'characters', label: 'Characters' },
+               { value: 'scenes', label: 'Scenes' }]),
         ]} />
       </div>
+
+      {/* ── Performance tab: scenes, their numbered references, and the prompt ── */}
+      {view === 'performance' && job && <PerformanceScenes workDir={job.work_dir} />}
 
       {/* ── Story tab (story-first scripts): the prose behind the scenes ─────── */}
       {view === 'story' && !story && (
