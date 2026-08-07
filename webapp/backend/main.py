@@ -50,6 +50,7 @@ import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
+import pipeline.performance as performance_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import cadence  # noqa: E402
@@ -1813,6 +1814,12 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
 
+    # Performance films fork the WHOLE pathway right here: a different script
+    # shape (cast + beats + quoted dialogue), and downstream no first frames,
+    # no TTS and no music. Nothing below this branch runs for one.
+    if _effective_script_mode(body, ss) == "performance":
+        return _do_performance_generate(body, cfg, ss, user_topic)
+
     # Story-first mode (per-style script_mode, or a body override): draft and
     # judge the prose story, then divide it into scenes — chained inline so
     # automation callers run the whole thing headless with no review pause.
@@ -2021,13 +2028,19 @@ class DivideStoryBody(BaseModel):
     auto_critic: bool = False
 
 
+SCRIPT_MODES = ("classic", "story", "performance")
+
+
 def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
     """The mode this generation runs with: an explicit body override wins, else
     the style's script_mode. Dialogue/mixed formats always run classic — story
-    mode writes narration-only prose (v1)."""
+    mode writes narration-only prose (v1). Performance mode is a whole
+    different film (acted scenes, no narrator) and ignores the format."""
     mode = (body.script_mode or "").strip().lower()
-    if mode not in ("classic", "story"):
+    if mode not in SCRIPT_MODES:
         mode = ss.get("script_mode") or "classic"
+    if mode not in SCRIPT_MODES:
+        mode = "classic"
     if mode == "story" and (body.format or "narration").strip().lower() != "narration":
         gapp.logger.warning("Story mode requested with format=%r — falling back to classic",
                             body.format)
@@ -2059,6 +2072,63 @@ def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
         target = by_id.get(edit.chapter)
         if target is not None and (edit.text or "").strip():
             target["text"] = edit.text.strip()
+
+
+def _performance_scene_count(body: GenerateScriptBody, ss: dict) -> int:
+    """How many scenes a performance film gets.
+
+    Not the narration cadence plan: performance scenes are acted clips capped
+    by the video model (~10 s each), not a word budget. An explicit scene count
+    wins, then the requested minutes at one scene per clip, then the style's
+    own length."""
+    try:
+        n = int(body.n_scenes or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n
+    try:
+        minutes = float(body.minutes or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes > 0:
+        return max(1, round(minutes * 60.0 / performance_mode.SCENE_SECONDS))
+    return int(_plan_for_generate(body, ss)["n_scenes"])
+
+
+def _do_performance_generate(body: GenerateScriptBody, cfg: dict, ss: dict,
+                             user_topic: str) -> dict:
+    """Performance films: write acted, spoken scenes and persist them.
+
+    Same persistence as every other script (so the editor, queue, characters
+    and portraits all work unchanged) — but the scenes carry mode
+    "performance", which is what makes the render fork later."""
+    extra = (ss.get("extra_instructions") or "").strip()
+    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
+    style_hint = body.visual_style or ss.get("visual_style", "") or None
+    avoid_hint = (ss.get("script_avoid") or "").strip() or None
+    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    language = gapp._norm_tts_language(ss.get("tts_language"))
+    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    n_scenes = _performance_scene_count(body, ss)
+    try:
+        with _track_op("Writing performance", display_topic):
+            scenes, style, characters = performance_mode.generate_performance_script(
+                llm_topic, n_scenes,
+                style_hint=style_hint,
+                video_title=(body.video_title or "").strip() or None,
+                character_sheet=character_sheet, avoid_hint=avoid_hint,
+                language=language, cfg=cfg,
+            )
+    except Exception as e:  # surface a clean message to the client
+        raise HTTPException(500, f"Performance script generation failed: "
+                                 f"{str(e).splitlines()[0][:300]}")
+
+    # The script critic rewrites narration for a narrated film — it has nothing
+    # to say about acted scenes, so it never runs here.
+    quiet = body.model_copy(update={"auto_critic": False})
+    return _persist_generated_script(quiet, cfg, ss, user_topic,
+                                     scenes, "", style, characters)
 
 
 def _do_story_generate(body: GenerateScriptBody) -> dict:
@@ -3413,6 +3483,9 @@ def list_engines() -> dict:
         "video_engines": eng.public_list_video(),
         "video_availability": {k: _video_avail(e) for k, e in eng.VIDEO_ENGINES.items()},
         "default_video_engine": eng.DEFAULT_VIDEO_ENGINE,
+        # Ref2VA models (performance films) — same availability map above.
+        "reference_engines": eng.public_list_reference(),
+        "default_reference_engine": eng.DEFAULT_REFERENCE_ENGINE,
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }
@@ -3874,6 +3947,9 @@ def start_generation(body: GenerateBody) -> dict:
         "image_engine": ss.get("image_engine"),
         # The style's video engine drives the scene I2V model (LTX / MiniMax H3).
         "video_engine": ss.get("video_engine"),
+        # Ref2VA model for performance films (portraits + dialogue, no first
+        # frame). Ignored by every narrated render.
+        "reference_engine": ss.get("reference_engine"),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).

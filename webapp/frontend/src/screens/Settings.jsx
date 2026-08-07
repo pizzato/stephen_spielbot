@@ -1349,7 +1349,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'tts_engine':
         return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'script_mode':
-        return v === 'story' ? 'Story-first' : 'Classic'
+        return v === 'story' ? 'Story-first' : v === 'performance' ? 'Performance' : 'Classic'
+      case 'reference_engine':
+        return (engineInfo?.reference_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'first_frame_cover':
         return v === 'image' || v === 'text' ? 'Cover image' : 'off'
       case 'first_frame_cover_seconds':
@@ -2161,13 +2163,27 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(v) => setStyleField('video_minutes', v)} />
                 <ParentVal k="video_minutes" />
               </Field>
-              <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
+              <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Performance makes a different kind of film entirely: characters act and speak on screen, with no narrator, no music and no first frames — the video model generates picture and voice together from the character portraits. Dialogue/Mixed formats always use Classic.">
                 <select className="select" value={eff.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
                   <option value="classic">Classic — scenes directly</option>
                   <option value="story">Story-first — draft, judge, then divide</option>
+                  <option value="performance">Performance — acted scenes, characters speak</option>
                 </select>
                 <ParentVal k="script_mode" />
               </Field>
+              {eff.script_mode === 'performance' && (
+                <Field label="Performance video model" hint="Generates each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices. No first frame is rendered.">
+                  <select className="select" value={eff.reference_engine || ''} onChange={(e) => setStyleField('reference_engine', e.target.value)} style={{ maxWidth: 420 }}>
+                    {(engineInfo?.reference_engines || []).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label} — {e.sub}</option>
+                    ))}
+                  </select>
+                  {(engineInfo?.reference_engines || []).find((e) => e.key === eff.reference_engine)?.license_note && (
+                    <div className="hint mt-8">{(engineInfo.reference_engines).find((e) => e.key === eff.reference_engine).license_note}</div>
+                  )}
+                  <ParentVal k="reference_engine" />
+                </Field>
+              )}
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
                 <ParentPreview k="visual_style" />

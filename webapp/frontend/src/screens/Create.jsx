@@ -80,7 +80,7 @@ export default function Create({ seed, meta, onGenerated }) {
     if (!profile) return
     setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
     setStyle(profile.visual_style || '')
-    setScriptMode(profile.script_mode === 'story' ? 'story' : 'classic')
+    setScriptMode(['story', 'performance'].includes(profile.script_mode) ? profile.script_mode : 'classic')
   }, [profile, voiceChoices])
 
   // In No-style mode, keep a manually chosen voice valid if the voice list changes.
@@ -157,7 +157,9 @@ export default function Create({ seed, meta, onGenerated }) {
 
   // The mode this Create run uses: the (style-synced) selection, except that
   // non-narration formats force classic (mirrors the backend rule).
-  const effMode = format !== 'narration' ? 'classic' : (scriptMode || 'classic')
+  const effMode = scriptMode === 'performance'
+    ? 'performance'
+    : (format !== 'narration' ? 'classic' : (scriptMode || 'classic'))
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -271,16 +273,19 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Script mode"
-              hint={format !== 'narration'
-                ? 'Dialogue and Mixed formats always use Classic (story-first is narration-only for now).'
-                : locked
-                  ? 'Set by the style — pick “No style” to experiment.'
-                  : 'Story-first writes and judges the whole story as prose, shows it for review, then divides it into scenes — keeps long videos coherent.'}>
+              hint={scriptMode === 'performance'
+                ? 'The characters act and speak on screen: no narrator, no music, and no first frames — the video model generates picture and voice together from your characters\u2019 portraits.'
+                : format !== 'narration'
+                  ? 'Dialogue and Mixed formats always use Classic (story-first is narration-only for now).'
+                  : locked
+                    ? 'Set by the style — pick “No style” to experiment.'
+                    : 'Story-first writes and judges the whole story as prose, shows it for review, then divides it into scenes — keeps long videos coherent.'}>
               <select className="select" value={scriptMode}
-                disabled={locked || format !== 'narration'}
+                disabled={locked || (format !== 'narration' && scriptMode !== 'performance')}
                 onChange={(e) => setScriptMode(e.target.value)} style={{ maxWidth: 380 }}>
                 <option value="classic">Classic — scenes directly</option>
                 <option value="story">Story-first — draft, review, then divide</option>
+                <option value="performance">Performance — acted scenes, characters speak</option>
               </select>
             </Field>
 
@@ -288,6 +293,9 @@ export default function Create({ seed, meta, onGenerated }) {
               {effMode === 'story'
                 ? <span className="muted" style={{ fontSize: 12.5 }}>You'll review the story next, then divide it into scenes.</span>
                 : <Check checked={autoApprove} onChange={setAutoApprove} label="Auto-approve the script → send straight to the queue" />}
+              {effMode === 'performance' && (
+                <span className="muted" style={{ fontSize: 12.5 }}>Each scene is one acted clip of about 10 seconds.</span>
+              )}
               <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                 disabled={!videoTitle.trim() || busy}
                 onClick={generate}>

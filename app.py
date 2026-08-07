@@ -188,6 +188,9 @@ DEFAULT_CFG = {
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
     # model animates each scene. Default = the incumbent LTX 2.3 path.
     "default_video_engine": "ltx23",
+    # Ref2VA model for performance films (script_mode = "performance"): portraits
+    # and dialogue instead of a first frame. Narrated films never use it.
+    "default_reference_engine": "minimax-h3-ref-turbo",
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,
@@ -434,6 +437,8 @@ STYLE_FIELD_TO_FLAT = {
     "video_engine":         "default_video_engine",
     # Optional steps override for the MiniMax engines (0 = engine default)
     "video_steps":          "default_video_steps",
+    # Ref2VA engine for performance films — see pipeline/engines.py
+    "reference_engine":     "default_reference_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
     "tts_engine":           "default_tts_engine",
     # Narration language (multilingual TTS engines only)
@@ -794,8 +799,13 @@ def _norm_video_minutes(value) -> float:
 
 
 def _norm_script_mode(value) -> str:
-    """Coerce a script-generation mode to "classic" or "story"."""
-    return "story" if value == "story" else "classic"
+    """Coerce a script-generation mode to "classic", "story" or "performance"."""
+    return value if value in ("story", "performance") else "classic"
+
+
+def _norm_reference_engine(value) -> str:
+    """Coerce a Ref2VA engine key (performance films) to a known one."""
+    return engines.resolve_reference({}, value)["key"]
 
 
 def _norm_first_frame_cover(value) -> str:
@@ -949,6 +959,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
+        _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
