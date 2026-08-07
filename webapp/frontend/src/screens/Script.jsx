@@ -855,7 +855,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       </div>
 
       {/* ── Performance tab: scenes, their numbered references, and the prompt ── */}
-      {view === 'performance' && job && <PerformanceScenes workDir={job.work_dir} />}
+      {view === 'performance' && job && (
+        <PerformanceScenes workDir={job.work_dir} jobId={job.job_id}
+          voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
+      )}
 
       {/* ── Story tab (story-first scripts): the prose behind the scenes ─────── */}
       {view === 'story' && !story && (

@@ -2885,6 +2885,37 @@ def load_script(work_dir: str = Query("")) -> dict:
                                  create_brief=create_brief)
 
 
+def _cast_member(wd: Path, cfg: dict, style_name: str, name: str) -> dict:
+    """One cast member for the performance view: who they are, whether their
+    look and voice are pinned, and whether this film can edit them.
+
+    A per-script character is this film's own, so its look and voice are edited
+    in place. A catalogue character is shared with every other film that uses
+    it, so it is reported read-only rather than silently rewritten from here."""
+    key = (name or "").strip().lower()
+
+    def _matches(c: dict) -> bool:
+        names = [c.get("name", ""), *(c.get("aliases") or [])]
+        return any(key == str(n).strip().lower() for n in names if str(n).strip())
+
+    for c in gapp._read_script_characters(wd):
+        if _matches(c):
+            return {**_character_to_json(wd, c), "name": name, "scope": "script",
+                    "editable": True}
+    for c in gapp._style_characters(cfg, style_name):
+        if _matches(c):
+            img = gapp._character_image_path(c.get("ref_image"))
+            has_image = bool(img and img.exists() and img.stat().st_size > 0)
+            return {"id": c.get("id", ""), "name": name,
+                    "description": c.get("description", ""),
+                    "voice": c.get("voice", ""), "has_image": has_image,
+                    "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                                  if has_image else ""),
+                    "scope": "catalogue", "editable": False}
+    return {"id": "", "name": name, "description": "", "voice": "",
+            "has_image": False, "image_url": "", "scope": "missing", "editable": False}
+
+
 @api.get("/api/scripts/performance")
 def load_performance_script(work_dir: str = Query("")) -> dict:
     """Everything the performance view needs for a whole film, in one payload.
@@ -2912,6 +2943,21 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             continue
         refs = gapp.resolve_performance_references(meta, cfg, wd, style_name)
         lines = performance_mode.norm_lines(meta.get("lines"))
+        # Every cast member, whether or not a reference resolved, so the screen
+        # can offer the look/voice controls in place. Per-script characters are
+        # editable here; catalogue ones are shared with other films, so those
+        # are shown read-only with a pointer to Settings.
+        picture_slot = {p["name"]: p["slot"] for p in refs["pictures"]}
+        audio_slot = {a["slot"]: a for a in refs["audios"]}
+        audio_by_name = {a["name"]: a for a in refs["audios"]}
+        cast = []
+        for name in (meta.get("cast") or []):
+            entry = _cast_member(wd, cfg, style_name, name)
+            entry["picture_slot"] = picture_slot.get(name)
+            aud = audio_by_name.get(name)
+            entry["audio_slot"] = aud["slot"] if aud else None
+            entry["speaks"] = name in performance_mode.speakers_in(lines)
+            cast.append(entry)
         scenes.append({
             "id": row.get("id"),
             "title": row.get("title") or "",
@@ -2919,7 +2965,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "setting": meta.get("setting") or "",
             "camera": meta.get("camera") or "",
             "soundscape": meta.get("soundscape") or "",
-            "cast": meta.get("cast") or [],
+            "cast": cast,
             "beats": performance_mode.norm_beats(
                 meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
             "lines": lines,
