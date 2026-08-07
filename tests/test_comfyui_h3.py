@@ -263,3 +263,45 @@ class QueueHealthTests(unittest.TestCase):
         # render behind the one still loading.
         self.assertEqual(self._check(TimeoutError("timed out")), "unknown")
         self.assertEqual(self._check(OSError("connection refused")), "unknown")
+
+
+class FallbackPollTests(unittest.TestCase):
+    """When the websocket drops, the history poll must not wait out a 6-hour
+    deadline for a job the worker has forgotten."""
+
+    def _run(self, history_seq, queue_status, seconds=3600):
+        calls = {"n": 0}
+
+        class _Ctx:
+            def __enter__(self_i): return self_i
+            def __exit__(self_i, *a): return False
+            def read(self_i):
+                import json as _json
+                i = min(calls["n"], len(history_seq) - 1)
+                calls["n"] += 1
+                return _json.dumps(history_seq[i]).encode()
+
+        # The absence grace is wall-clock; shrink it so the test is instant.
+        with mock.patch.object(comfyui.urllib.request, "urlopen", side_effect=lambda *a, **k: _Ctx()), \
+             mock.patch.object(comfyui, "_check_queue", return_value=queue_status), \
+             mock.patch.object(comfyui, "_QUEUE_ABSENT_GRACE", 0), \
+             mock.patch.object(comfyui.time, "sleep"):
+            comfyui._poll_completion("pid", deadline=comfyui.time.time() + seconds,
+                                     comfy_url="http://w:8188")
+
+    def test_completed_job_returns(self):
+        self._run([{"pid": {"status": {"completed": True}}}], "absent")
+
+    def test_forgotten_job_gives_up_instead_of_waiting_out_the_deadline(self):
+        # Worker answers, knows nothing about the job, and its queue is empty:
+        # it restarted. Raise so the scene re-dispatches to another worker.
+        with self.assertRaises(comfyui.DroppedJobError):
+            self._run([{}], "absent")
+
+    def test_still_queued_job_keeps_waiting(self):
+        # In the queue but not yet in history: keep waiting (bounded by the
+        # deadline) rather than treating it as forgotten.
+        # Sleep is mocked, so give it a deadline it reaches immediately.
+        with self.assertRaises(RuntimeError) as ctx:
+            self._run([{}], "running", seconds=0.05)
+        self.assertNotIsInstance(ctx.exception, comfyui.DroppedJobError)

@@ -150,22 +150,46 @@ def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) 
 
 
 def _poll_completion(prompt_id: str, deadline: float, comfy_url: str = COMFYUI_URL) -> None:
-    """Poll /history until the prompt completes or deadline passes."""
+    """Poll /history until the prompt completes, vanishes, or the deadline passes.
+
+    Reached when the WebSocket drops mid-job. By then the job may be GONE — a
+    restarted worker forgets both its queue and its history — and waiting out
+    the deadline for one that will never appear is indistinguishable from a hung
+    render: an H3 deadline is ~6 hours, and this loop used to spend it silent.
+    So give up as soon as the worker ANSWERS and knows nothing about the job,
+    and log while waiting so a stall is visible in the film's log.
+    """
+    absent_since: float | None = None
+    last_log = 0.0
+    started = time.time()
     while time.time() < deadline:
-        url = f"{comfy_url}/history/{prompt_id}"
+        now = time.time()
+        reachable = True
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with urllib.request.urlopen(f"{comfy_url}/history/{prompt_id}", timeout=10) as resp:
                 history = json.loads(resp.read())
             if prompt_id in history:
-                entry  = history[prompt_id]
-                status = entry.get("status", {})
+                status = history[prompt_id].get("status", {})
                 if status.get("completed"):
                     return
                 if status.get("status_str") == "error":
-                    msgs = status.get("messages", [])
-                    raise RuntimeError(f"ComfyUI job failed: {msgs}")
+                    raise RuntimeError(f"ComfyUI job failed: {status.get('messages', [])}")
+                absent_since = None
+            elif _check_queue(prompt_id, comfy_url) in ("running", "pending"):
+                absent_since = None      # still queued, just not in history yet
+            else:
+                absent_since = absent_since or now
+                if now - absent_since >= _QUEUE_ABSENT_GRACE:
+                    raise DroppedJobError(
+                        f"Job {prompt_id} is in neither the queue nor the history on "
+                        f"{comfy_url} — the worker forgot it (restart?), will re-submit")
         except urllib.error.URLError:
-            pass
+            reachable = False            # unreachable is not evidence of absence
+        if now - last_log >= _QUEUE_CHECK_INTERVAL:
+            last_log = now
+            logger.info("[comfy] job %s… history poll (websocket gone, worker %s) elapsed=%.0fs",
+                        prompt_id[:8], "reachable" if reachable else "unreachable",
+                        now - started)
         time.sleep(5)
     raise RuntimeError(f"ComfyUI timed out polling history for {prompt_id} ({comfy_url})")
 
