@@ -37,6 +37,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT, narration_language_name
 from pipeline import engines as _engines
+from pipeline import performance as _performance
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
@@ -349,6 +350,154 @@ _SILENT_DEFAULT_SECS = 5.0
 # the web backend's per-scene dialogue re-render shares them (imported above).
 
 
+def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
+                             comfy_url: str, vid_width: int, vid_height: int,
+                             style_name: str = "") -> Path:
+    """Render ONE performance scene: character portraits + dialogue → a clip that
+    already contains its own speech. Returns the finished scene_NN_final.mp4.
+
+    Shared with the backend's per-scene re-render, so it takes everything it
+    needs as arguments and touches no module state.
+    """
+    from pipeline.comfyui import generate_video_h3_ref
+    from app import _performance_refs
+
+    meta = _performance.scene_meta(scene)
+    portrait_for, voice_for = _performance_refs(cfg, work_dir, style_name)
+
+    # <Picture N> order = the scene's cast order; <Audio N> order = first-spoken
+    # order. Only references that actually resolved are cited, so the numbering
+    # in the prompt always matches the slots wired into the graph.
+    cast = [n for n in (meta.get("cast") or []) if n]
+    speakers = _performance.speakers_in(_performance.norm_lines(meta.get("lines")))
+    picture_names, ref_images = [], []
+    for name in cast:
+        path = portrait_for(name)
+        if path is not None:
+            picture_names.append(name)
+            ref_images.append(path)
+    audio_names, ref_audios = [], []
+    for name in speakers[:_performance.MAX_SPEAKERS_PER_SCENE]:
+        path = voice_for(name)
+        if path is not None:
+            audio_names.append(name)
+            ref_audios.append(path)
+
+    if not ref_images:
+        raise RuntimeError(
+            f"Scene {scene.id}: no character portrait resolved for cast {cast} — "
+            "Ref2VA needs at least one reference image (generate the character "
+            "look images first)")
+
+    prompt = _performance.build_h3_prompt(
+        meta, style_note=cfg.get("style", ""),
+        picture_names=picture_names, audio_names=audio_names)
+    engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
+    clip = work_dir / f"scene_{scene.id:02d}_final.mp4"
+    logger.info("Scene %d: performance render (%s) — %d portraits, %d voices",
+                scene.id, engine["key"], len(ref_images), len(ref_audios))
+    generate_video_h3_ref(
+        engine, prompt, ref_images, clip,
+        ref_audios=ref_audios,
+        width=vid_width, height=vid_height,
+        duration_seconds=float(meta.get("seconds") or _performance.SCENE_SECONDS),
+        comfy_url=comfy_url,
+    )
+    # H3 renders under its own pixel cap; bring the clip back to the film's frame.
+    ensure_video_resolution(clip, vid_width, vid_height)
+    return clip
+
+
+def _run_performance_film(work_dir: Path, scenes: list[Scene], cfg: dict, *,
+                          store: DurableStore, durable_job_id: str,
+                          worker_pool: WorkerPool, status_file: Path,
+                          vid_width: int, vid_height: int,
+                          final_path: Path, cover_path: Path) -> Path:
+    """Render a performance film end to end.
+
+    Nothing here overlaps the narrated pipeline: no first frames, no TTS, no
+    music, no per-scene mux. Each scene is one Ref2VA generation that already
+    contains its dialogue, and assembly is a straight concat that keeps the
+    clips' own audio.
+    """
+    scene_finals: dict[int, Path] = {}
+    done = [0]
+    lock = threading.Lock()
+    style_name = cfg.get("style_name") or ""
+
+    def _progress() -> float:
+        return 2 + 88.0 * (done[0] / max(1, len(scenes)))
+
+    def _render(scene: Scene) -> tuple[int, Path]:
+        t_id = task_id(durable_job_id, "scene", scene.id, "performance")
+        clip = work_dir / f"scene_{scene.id:02d}_final.mp4"
+        if clip.exists() and clip.stat().st_size > 10_000:
+            logger.info("Scene %d: performance clip already rendered — skipping", scene.id)
+            return scene.id, clip
+        lease_secs = int(_engines.resolve_reference(
+            cfg, cfg.get("reference_engine")).get("lease_seconds") or 14400)
+        comfy_url = worker_pool.acquire()
+        try:
+            with TaskRun(store, t_id, worker_id_value=worker_id("comfy", comfy_url),
+                         lease_seconds=lease_secs,
+                         start_message=f"performance scene {scene.id}") as run:
+                with lock:
+                    write_progress(status_file, _progress(),
+                                   f"Performance · scene {scene.id} of {len(scenes)} "
+                                   f"({done[0]} done)")
+                out = render_performance_scene(
+                    scene, work_dir, cfg, comfy_url=comfy_url,
+                    vid_width=vid_width, vid_height=vid_height, style_name=style_name)
+                store.record_artifact(durable_job_id, t_id, "scene_final", out,
+                                      duration_seconds=_get_duration(out))
+                run.complete({"path": str(out)}, "performance scene rendered")
+        finally:
+            worker_pool.release(comfy_url)
+        with lock:
+            done[0] += 1
+        return scene.id, out
+
+    # One scene per available worker; the pool honours the UI reservation.
+    workers = max(1, len(worker_pool.urls))
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(workers, len(scenes)))
+    try:
+        for sid, clip in pool.map(_render, scenes):
+            scene_finals[sid] = clip
+    finally:
+        pool.shutdown(wait=True)
+
+    ordered = [scene_finals[s.id] for s in scenes if s.id in scene_finals]
+    if len(ordered) != len(scenes):
+        raise RuntimeError(f"Performance render produced {len(ordered)}/{len(scenes)} scenes")
+
+    final_task = task_id(durable_job_id, "final")
+    store.update_task_payload(final_task, {
+        "scene_count": len(scenes), "final_path": str(final_path),
+        "vid_width": vid_width, "vid_height": vid_height,
+    })
+    write_progress(status_file, 92, "Concatenating scenes…")
+    with TaskRun(store, final_task, worker_id_value=worker_id("local", "assembler"),
+                 lease_seconds=900, start_message="assembling final video") as final_run:
+        # The clips already carry voice and ambience from the same forward pass,
+        # so assembly keeps their audio untouched — no music, no mixing.
+        concatenate_scenes(ordered, final_path)
+        ensure_video_resolution(final_path, vid_width, vid_height)
+        ff_cover = str(cfg.get("first_frame_cover")
+                       or cfg.get("default_first_frame_cover") or "none").strip().lower()
+        if ff_cover in ("image", "text"):
+            write_progress(status_file, 97, "Burning cover into the first frame…")
+            try:
+                _burn_first_frame(final_path, cover_path=cover_path,
+                                  seconds=cfg.get("first_frame_cover_seconds",
+                                                  cfg.get("default_first_frame_cover_seconds")))
+            except Exception as ff_err:
+                logger.warning("First-frame cover failed (non-fatal): %s", ff_err)
+        store.record_artifact(durable_job_id, final_task, "final_video", final_path,
+                              duration_seconds=_get_duration(final_path))
+        final_run.complete({"path": str(final_path)}, "final video ready")
+    return final_path
+
+
 def main(work_dir: Path) -> None:
     global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
@@ -481,6 +630,28 @@ def main(work_dir: Path) -> None:
         slug, stamp = dir_name, "resumed"
 
     write_progress(status_file, 0, "Resume: starting…")
+
+    # ── Performance films (script_mode = "performance") ─────────────────────
+    # A wholly different pipeline: character portraits + dialogue → Ref2VA clips
+    # that already carry their own speech. No first frames, no TTS, no music, no
+    # mux. Handled here and returned so none of the narrated flow below runs.
+    if scenes and all(_performance.is_performance(s) for s in scenes):
+        perf_final = OUTPUT_DIR / f"{slug}-{stamp}.mp4"
+        try:
+            _run_performance_film(
+                work_dir, scenes, plan_cfg, store=store, durable_job_id=durable_job_id,
+                worker_pool=worker_pool, status_file=status_file,
+                vid_width=vid_width, vid_height=vid_height,
+                final_path=perf_final, cover_path=work_dir / "cover.png")
+        finally:
+            worker_pool.shutdown()
+        size_mb = perf_final.stat().st_size / 1024 / 1024
+        logger.info("DONE — %s (%.1f MB)", perf_final.name, size_mb)
+        write_progress(status_file, 100, f"✅ Done — {perf_final.name} ({size_mb:.1f} MB)")
+        store.update_job(durable_job_id, status=JOB_DONE, progress_pct=100,
+                         progress_message=f"Done - {perf_final.name}", final_path=perf_final)
+        print(f"\n✅ DONE: {perf_final}")
+        return
 
     # ── Dialogue/performance scenes (talking-head via EchoMimic) ─────────────
     # Rendered up front to scene_NN_final.mp4; the narration/video/mux phases then

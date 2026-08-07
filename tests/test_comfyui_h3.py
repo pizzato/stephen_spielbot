@@ -127,3 +127,101 @@ class VideoDispatchTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class H3ReferenceWorkflowTests(unittest.TestCase):
+    """Ref2VA: portraits + voice clips instead of a first frame."""
+
+    def _generate(self, engine_key="minimax-h3-ref", n_images=2, n_audios=1, **kwargs):
+        eng = engines.resolve_reference({}, engine_key)
+        captured = {}
+
+        def fake_queue(workflow, client_id, comfy_url=None):
+            captured["workflow"] = workflow
+            return "pid"
+
+        outputs = [{"filename": "h3ref.mp4", "type": "output"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            imgs = []
+            for i in range(n_images):
+                p = Path(tmp) / f"char{i}.png"
+                p.write_bytes(b"png")
+                imgs.append(p)
+            auds = []
+            for i in range(n_audios):
+                p = Path(tmp) / f"voice{i}.wav"
+                p.write_bytes(b"wav")
+                auds.append(p)
+            out = Path(tmp) / "out.mp4"
+            with mock.patch.object(comfyui, "_upload_image", side_effect=lambda p, comfy_url=None: p.name), \
+                 mock.patch.object(comfyui, "_upload_audio", side_effect=lambda p, comfy_url=None: p.name), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=outputs), \
+                 mock.patch.object(comfyui, "_download_output",
+                                   side_effect=lambda item, dest, comfy_url=None: dest):
+                comfyui.generate_video_h3_ref(
+                    eng, "CHICO says exactly: \"hello\"", imgs, out,
+                    ref_audios=auds, width=704, height=1280, seed=7,
+                    duration_seconds=10.0, **kwargs)
+        return eng, captured["workflow"]
+
+    def _ref_inputs(self, workflow):
+        node = next(n for n in workflow.values()
+                    if n["class_type"] == "MiniMaxH3ReferenceToVideo")
+        return node["inputs"]
+
+    def test_references_use_the_dotted_autogrow_keys(self):
+        # A flat "ref_image_0" is silently ignored by ComfyUI (finalize_prefix
+        # looks up "<group>.<prefix><n>") — that bug renders with NO references
+        # and no error, so pin the exact key shape.
+        _, wf = self._generate()
+        inputs = self._ref_inputs(wf)
+        self.assertIn("ref_images.ref_image_0", inputs)
+        self.assertIn("ref_images.ref_image_1", inputs)
+        self.assertIn("ref_audios.ref_audio_0", inputs)
+        self.assertNotIn("ref_image_0", inputs)
+        self.assertNotIn("first_frame", inputs)
+        # Each reference points at a real loader node of the right class.
+        for key, cls in (("ref_images.ref_image_0", "LoadImage"),
+                         ("ref_audios.ref_audio_0", "LoadAudio")):
+            node_id = inputs[key][0]
+            self.assertEqual(wf[node_id]["class_type"], cls)
+
+    def test_reference_order_is_preserved(self):
+        # <Picture 1>/<Picture 2> in the prompt refer to slots 0/1 in order.
+        _, wf = self._generate(n_images=3, n_audios=0)
+        inputs = self._ref_inputs(wf)
+        names = [wf[inputs[f"ref_images.ref_image_{i}"][0]]["inputs"]["image"]
+                 for i in range(3)]
+        self.assertEqual(names, ["char0.png", "char1.png", "char2.png"])
+
+    def test_reference_caps(self):
+        _, wf = self._generate(n_images=12, n_audios=5)
+        inputs = self._ref_inputs(wf)
+        imgs = [k for k in inputs if k.startswith("ref_images.")]
+        auds = [k for k in inputs if k.startswith("ref_audios.")]
+        self.assertEqual(len(imgs), comfyui.H3_MAX_REF_IMAGES)
+        self.assertEqual(len(auds), comfyui.H3_MAX_REF_AUDIOS)
+
+    def test_loader_ids_never_collide_with_graph_nodes(self):
+        _, wf = self._generate(n_images=9, n_audios=3)
+        self.assertEqual(len(wf), len(set(wf)))
+        inputs = self._ref_inputs(wf)
+        targets = [inputs[k][0] for k in inputs if k.startswith(("ref_images.", "ref_audios."))]
+        self.assertEqual(len(targets), len(set(targets)))
+
+    def test_turbo_reference_graph(self):
+        eng, wf = self._generate(engine_key="minimax-h3-ref-turbo")
+        lora = next(n for n in wf.values() if n["class_type"] == "MiniMaxH3TurboLoRA")
+        self.assertEqual(lora["inputs"]["lora_name"], eng["lora"])
+        self.assertTrue(any(n["class_type"] == "MiniMaxH3TurboSampler" for n in wf.values()))
+        unet = next(n for n in wf.values() if n["class_type"] == "UNETLoader")
+        self.assertEqual(unet["inputs"]["unet_name"], eng["unet"])
+
+    def test_refuses_without_an_image_reference(self):
+        # H3 rejects audio-only conditioning; fail before queueing.
+        eng = engines.resolve_reference({}, "minimax-h3-ref")
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(ValueError):
+                comfyui.generate_video_h3_ref(eng, "x", [], Path(tmp) / "o.mp4")

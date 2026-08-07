@@ -855,6 +855,114 @@ def generate_video_h3(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
+# H3 Ref2VA reference limits (comfy_extras/nodes_minimax_h3.py).
+H3_MAX_REF_IMAGES = 9
+H3_MAX_REF_AUDIOS = 3
+
+
+def _upload_audio(audio_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Upload a wav to ComfyUI input (LoadAudio reads it by name)."""
+    return _upload_input_file(audio_path, content_type="audio/wav", comfy_url=comfy_url)
+
+
+def _ref_node_id(workflow: dict) -> str:
+    for node_id, node in workflow.items():
+        if node.get("class_type") == "MiniMaxH3ReferenceToVideo":
+            return node_id
+    raise RuntimeError("Ref2VA workflow has no MiniMaxH3ReferenceToVideo node")
+
+
+def generate_video_h3_ref(
+    engine: dict,
+    positive_prompt: str,
+    ref_images: list[Path],
+    output_path: Path,
+    ref_audios: list[Path] | None = None,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    steps: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """MiniMax H3 Ref2VA: character portraits (and optional voice clips) → a clip
+    with its own spoken dialogue. No first frame and no TTS — the model writes
+    picture and audio in one pass.
+
+    *ref_images* are character portraits, cited in the prompt as ``<Picture N>``
+    in the SAME order; *ref_audios* are voice references cited as ``<Audio N>``.
+    Both are capped at the model's limits. H3 requires at least one image or
+    video reference — audio alone is rejected.
+    """
+    if not ref_images:
+        raise ValueError("Ref2VA needs at least one reference image")
+
+    gen_w, gen_h = h3_dimensions(width, height)
+    length = h3_frame_count(duration_seconds)
+    steps = int(steps or engine.get("steps") or 20)
+    # H3 models audio jointly with video; only positive steering exists.
+    prompt, _ = _steer_audio_natural(positive_prompt, "")
+
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    images = list(ref_images)[:H3_MAX_REF_IMAGES]
+    audios = list(ref_audios or [])[:H3_MAX_REF_AUDIOS]
+    if len(ref_images) > H3_MAX_REF_IMAGES or len(ref_audios or []) > H3_MAX_REF_AUDIOS:
+        logger.warning("[comfy] Ref2VA: trimmed references to %d images / %d audios (model cap)",
+                       len(images), len(audios))
+    image_names = [_upload_image(p, comfy_url=comfy_url) for p in images]
+    audio_names = [_upload_audio(p, comfy_url=comfy_url) for p in audios]
+
+    workflow = _fill_template(_load_workflow(engine.get("workflow", "h3_ref2v.json")), {
+        "UNET_NAME":       engine["unet"],
+        "CLIP_NAME":       engine["clip"],
+        "VIDEO_VAE":       engine["video_vae"],
+        "AUDIO_VAE":       engine["audio_vae"],
+        "POSITIVE_PROMPT": prompt,
+        "WIDTH":           gen_w,
+        "HEIGHT":          gen_h,
+        "LENGTH":          length,
+        "SEED":            seed,
+        "STEPS":           steps,
+        "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
+        "LORA_NAME":       engine.get("lora") or "",
+    })
+
+    # Reference slots are autogrow inputs: the API key is the DOTTED group form
+    # ("ref_images.ref_image_0"), which is what comfy_api's finalize_prefix()
+    # looks up. A flat "ref_image_0" is silently ignored — the render succeeds
+    # with no references at all — so this must not be "simplified".
+    ref_node = workflow[_ref_node_id(workflow)]["inputs"]
+    next_id = max((int(k) for k in workflow), default=100) + 1
+    for i, name in enumerate(image_names):
+        loader = str(next_id + i)
+        workflow[loader] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        ref_node[f"ref_images.ref_image_{i}"] = [loader, 0]
+    next_id += len(image_names)
+    for i, name in enumerate(audio_names):
+        loader = str(next_id + i)
+        workflow[loader] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+        ref_node[f"ref_audios.ref_audio_{i}"] = [loader, 0]
+
+    _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
+    logger.info(
+        "[comfy] generate_video_h3_ref %dx%d length=%d steps=%d refs=%di/%da timeout=%ds",
+        gen_w, gen_h, length, steps, len(image_names), len(audio_names), _video_timeout,
+    )
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url,
+                         heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for H3 Ref2VA prompt {prompt_id} ({comfy_url})")
+    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
 def generate_video_with_engine(
     video_engine: dict | None,
     positive_prompt: str,

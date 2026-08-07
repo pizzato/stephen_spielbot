@@ -100,3 +100,54 @@ class VideoStepsStyleTests(TempConfigCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReferenceEngineRegistryTests(unittest.TestCase):
+    """Ref2VA engines (performance films) — separate from the I2V picker."""
+
+    def test_resolve_reference_defaults_to_turbo(self):
+        self.assertEqual(engines.resolve_reference({}, None)["key"],
+                         engines.DEFAULT_REFERENCE_ENGINE)
+        # An I2V key is not a usable Ref2VA graph — fall back, never return it.
+        self.assertEqual(engines.resolve_reference({}, "minimax-h3")["key"],
+                         engines.DEFAULT_REFERENCE_ENGINE)
+
+    def test_reference_engines_declare_their_stack(self):
+        for key, workflow in (("minimax-h3-ref", "h3_ref2v.json"),
+                              ("minimax-h3-ref-turbo", "h3_ref2v_turbo.json")):
+            eng = engines.resolve_reference({}, key)
+            self.assertEqual(eng["key"], key)
+            self.assertTrue(eng["reference"])
+            self.assertEqual(eng["workflow"], workflow)
+            self.assertIn("ref2va", eng["unet"])
+            files = {m["file"] for m in eng["models"]}
+            for field in ("unet", "clip", "video_vae", "audio_vae"):
+                self.assertIn(eng[field], files)
+
+    def test_turbo_reference_needs_the_full_checkpoint(self):
+        # The distill LoRA adapts adaln_proj, which the pruned checkpoints bake
+        # to F16 (and they drop time_embedder entirely) — full unet only.
+        eng = engines.resolve_reference({}, "minimax-h3-ref-turbo")
+        self.assertNotIn("pruned", eng["unet"])
+        self.assertIn(eng["lora"], {m["file"] for m in eng["models"]})
+
+    def test_reference_engines_stay_out_of_the_i2v_picker(self):
+        i2v = {e["key"] for e in engines.public_list_video()}
+        ref = {e["key"] for e in engines.public_list_reference()}
+        self.assertFalse(i2v & ref)
+        self.assertIn("ltx23", i2v)
+        self.assertEqual(ref, {"minimax-h3-ref", "minimax-h3-ref-turbo"})
+
+    def test_reference_workflows_exist_and_are_wired(self):
+        import json
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        for key in ("minimax-h3-ref", "minimax-h3-ref-turbo"):
+            eng = engines.resolve_reference({}, key)
+            graph = json.loads((root / "workflows" / eng["workflow"]).read_text())
+            node = next(n for n in graph.values()
+                        if n["class_type"] == "MiniMaxH3ReferenceToVideo")
+            # R2V needs the audio VAE on the conditioning node (I2V does not),
+            # and must NOT carry a first frame.
+            self.assertIn("audio_vae", node["inputs"])
+            self.assertNotIn("first_frame", node["inputs"])

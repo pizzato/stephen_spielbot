@@ -240,9 +240,97 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
         ],
     },
+    # ── Reference-to-video (Ref2VA): performance films ───────────────────────
+    # Not scene I2V engines — these take character portraits (and voice clips)
+    # instead of a first frame, and are only reachable from a performance-mode
+    # film (script_mode = "performance"). "reference" marks them so the Settings
+    # video-engine picker keeps offering only the I2V engines.
+    "minimax-h3-ref": {
+        "key": "minimax-h3-ref",
+        "label": "MiniMax H3 33B Ref2VA",
+        "sub": "Character portraits → video + spoken dialogue · restricted license",
+        "family": "minimax",
+        "reference": True,
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        "workflow": "h3_ref2v.json",
+        "steps": 15,
+        "easycache_threshold": 0.2,
+        "lease_seconds": 14400,
+        # Same stack as minimax-h3 with the ref2va sibling checkpoint (identical
+        # size and quantisation); encoder and both VAEs are already downloaded
+        # for the I2V engine. Measured on s1/s2: ~22-24 min per 10 s scene at
+        # 704×1280 (warm ≈ cold), so prefer the turbo entry below.
+        "unet": "minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "requires_node": "MiniMaxH3ReferenceToVideo",
+        "probe": ("UNETLoader", "unet_name",
+                  "minimax_h3_ref2va_pruned_int8_convrot.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+        ],
+    },
+    "minimax-h3-ref-turbo": {
+        "key": "minimax-h3-ref-turbo",
+        "label": "MiniMax H3 33B Ref2VA Turbo",
+        "sub": "Faster Ref2VA · distilled few-step LoRA · restricted license",
+        "family": "minimax",
+        "reference": True,
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        "workflow": "h3_ref2v_turbo.json",
+        # Measured on s3 (704×1280, 243 frames): 10.2 min including a cold 34 GB
+        # load, vs 22.9 min for the base ref engine — quality at least equal.
+        "steps": 4,
+        "lease_seconds": 14400,
+        # As with the I2V turbo, the LoRA only fits the NON-pruned DiT: the
+        # pruned checkpoints drop time_embedder.* and bake adaln_proj to F16,
+        # and adaln_proj is exactly what the LoRA adapts.
+        "unet": "minimax_h3_ref2va_int8_convrot.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "lora": "minimax_h3_turbo_4step_ckpt500.safetensors",
+        "requires_node": "MiniMaxH3TurboSampler",
+        "probe": ("UNETLoader", "unet_name", "minimax_h3_ref2va_int8_convrot.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-H3",
+                   "diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+            _model("larryvrh/MiniMax-H3-Turbo-Lora",
+                   "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
+        ],
+    },
 }
 
 DEFAULT_VIDEO_ENGINE = "ltx23"
+# Performance films (script_mode = "performance") render through a Ref2VA engine
+# instead of the style's I2V engine; this is the default when none is stamped.
+DEFAULT_REFERENCE_ENGINE = "minimax-h3-ref-turbo"
 
 
 def get_video(key: str) -> dict | None:
@@ -266,11 +354,39 @@ def resolve_video(cfg: dict, key: str) -> dict:
     return eng
 
 
-def public_list_video() -> list[dict]:
-    """Compact video-engine descriptors for the Settings UI."""
-    return [{
+def resolve_reference(cfg: dict, key: str) -> dict:
+    """Return the Ref2VA engine dict for *key* (performance films), falling back
+    to DEFAULT_REFERENCE_ENGINE. Only ``reference`` engines are eligible — an
+    I2V key here would be a mis-stamped job, not a usable graph."""
+    eng = get_video(key)
+    if not eng or not eng.get("reference"):
+        eng = VIDEO_ENGINES[DEFAULT_REFERENCE_ENGINE]
+    eng = dict(eng)
+    try:
+        steps = int(cfg.get("video_steps") or 0) if isinstance(cfg, dict) else 0
+    except (TypeError, ValueError):
+        steps = 0
+    if steps > 0 and eng.get("steps"):
+        eng["steps"] = steps
+    return eng
+
+
+def _public_video(e: dict) -> dict:
+    return {
         "key": e["key"], "label": e["label"], "sub": e["sub"],
         "commercial_ok": e["commercial_ok"], "license": e["license"],
         "license_note": e.get("license_note"),
         "downloadable": bool(e.get("models")),
-    } for e in VIDEO_ENGINES.values()]
+    }
+
+
+def public_list_video() -> list[dict]:
+    """Compact scene-I2V engine descriptors for the Settings UI. Ref2VA engines
+    are excluded — they take portraits, not a first frame, and are picked by the
+    performance-film setting instead."""
+    return [_public_video(e) for e in VIDEO_ENGINES.values() if not e.get("reference")]
+
+
+def public_list_reference() -> list[dict]:
+    """Compact Ref2VA engine descriptors (performance films)."""
+    return [_public_video(e) for e in VIDEO_ENGINES.values() if e.get("reference")]

@@ -546,6 +546,27 @@ class DurableStore:
                     mux_task_ids.append(line_task)  # finalize waits on these
                 continue
 
+            # Performance scenes (script_mode = "performance") render as ONE
+            # Ref2VA generation carrying its own dialogue audio — no first
+            # frame, no TTS, no mux. Same reasoning as the dialogue branch: the
+            # quartet below would sit queued forever and poison the ETA.
+            if scene_md.get("mode") == "performance":
+                perf_task = task_id(job_id, "scene", sid, "performance")
+                self.create_task(
+                    perf_task,
+                    job_id,
+                    "scene.performance.generate",
+                    f"Scene {sid} performance",
+                    worker_kind="comfy",
+                    payload={**scene_payload,
+                             "resource_class": resource_classes.get("video", "comfy:video")},
+                    dependencies=[root],
+                    priority=40 + sid,
+                    max_attempts=3,
+                )
+                mux_task_ids.append(perf_task)  # finalize waits on these
+                continue
+
             image_task = task_id(job_id, "scene", sid, "image")
             narration_task = task_id(job_id, "scene", sid, "narration")
             video_task = task_id(job_id, "scene", sid, "video")
@@ -607,24 +628,32 @@ class DurableStore:
                 max_attempts=2,
             )
 
-        music_task = task_id(job_id, "music")
-        self.create_task(
-            music_task,
-            job_id,
-            "music.generate",
-            "Background music",
-            worker_kind="comfy",
-            payload={
-                "work_dir": str(work_dir),
-                "title": title,
-                "music_desc": config.get("music_desc", ""),
-                "output_path": str(Path(work_dir) / "background_music.wav"),
-                "resource_class": resource_classes.get("music", "comfy:music"),
-            },
-            dependencies=narration_task_ids or [root],
-            priority=30,
-            max_attempts=3,
-        )
+        # Performance films carry no score — every clip brings its own audio out
+        # of the same forward pass — so they never plan a music task.
+        performance_film = bool(scene_items) and all(
+            (_scene_value(s, "metadata", {}) or {}).get("mode") == "performance"
+            for s in scene_items)
+        music_tasks: list[str] = []
+        if not performance_film:
+            music_task = task_id(job_id, "music")
+            music_tasks.append(music_task)
+            self.create_task(
+                music_task,
+                job_id,
+                "music.generate",
+                "Background music",
+                worker_kind="comfy",
+                payload={
+                    "work_dir": str(work_dir),
+                    "title": title,
+                    "music_desc": config.get("music_desc", ""),
+                    "output_path": str(Path(work_dir) / "background_music.wav"),
+                    "resource_class": resource_classes.get("music", "comfy:music"),
+                },
+                dependencies=narration_task_ids or [root],
+                priority=30,
+                max_attempts=3,
+            )
 
         final_task = task_id(job_id, "final")
         self.create_task(
@@ -645,7 +674,7 @@ class DurableStore:
                 "vid_height": config.get("vid_height"),
                 "resource_class": resource_classes.get("finalize", "local"),
             },
-            dependencies=[music_task, *mux_task_ids],
+            dependencies=[*music_tasks, *mux_task_ids],
             priority=200,
             max_attempts=2,
         )

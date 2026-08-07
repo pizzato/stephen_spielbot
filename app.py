@@ -2925,6 +2925,52 @@ def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
     return voice_ref_for, make_still, prompt_for
 
 
+def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
+    """Build (portrait_for, voice_for) for performance scenes (Ref2VA).
+
+    A performance scene conditions on the CHARACTERS, not on a first frame:
+    each cast member's portrait becomes a <Picture N> reference and each
+    speaker's cast voice becomes an <Audio N> one. Both resolvers take a
+    character name and return a path or None — a missing portrait just drops
+    that reference (the model then invents the look), and a missing voice lets
+    it invent the voice.
+
+    Lives here beside _dialogue_resolvers so the backend's per-scene re-render
+    can share it without importing resume_generation."""
+    chars = _job_characters(cfg, style_name or cfg.get("style_name") or "", work_dir)
+    voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
+
+    def _find(name: str):
+        key = (name or "").strip().lower()
+        if not key:
+            return None
+        for c in chars:
+            names = [c.get("name", ""), *(c.get("aliases") or [])]
+            if any(key == str(n).strip().lower() for n in names if str(n).strip()):
+                return c
+        return None
+
+    def portrait_for(name: str) -> Path | None:
+        c = _find(name)
+        path = Path(c["_ref_path"]) if c and c.get("_ref_path") else None
+        if path and path.exists():
+            return path
+        logger.info("  performance: no portrait for %r — H3 will invent the look", name)
+        return None
+
+    def voice_for(name: str) -> Path | None:
+        c = _find(name)
+        if c and c.get("voice") and c["voice"] in voices:
+            path = Path(voices[c["voice"]])
+            if path.exists():
+                logger.info("  performance: %s speaks with voice %r", name, c["voice"])
+                return path
+        logger.info("  performance: no cast voice for %r — H3 will invent the voice", name)
+        return None
+
+    return portrait_for, voice_for
+
+
 def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
                                   resolution: str = "",
                                   worker_pool: WorkerPool | None = None) -> int:
