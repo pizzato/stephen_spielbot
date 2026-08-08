@@ -106,7 +106,7 @@ RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
 COPY --from=sage-builder /wheels /tmp/sage-wheels
 RUN if ls /tmp/sage-wheels/*.whl >/dev/null 2>&1; then \
         pip install /tmp/sage-wheels/*.whl \
-        && python3 -c "import sageattention; print('sageattention', sageattention.__version__)"; \
+        && python3 -c "from sageattention import sageattn; print('sageattention OK:', sageattn.__module__)"; \
     else \
         echo "SageAttention not built (SAGEATTENTION_ARCHS empty) — skipping"; \
     fi \
