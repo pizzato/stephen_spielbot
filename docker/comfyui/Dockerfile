@@ -36,6 +36,11 @@ ARG TORCH_SPEC
 ARG SAGEATTENTION_ARCHS="12.0;12.1"
 # Pin for reproducible workers: a tag, branch, or commit SHA.
 ARG SAGEATTENTION_REF=main
+# --no-build-isolation below is load-bearing: SageAttention's setup.py imports
+# torch to discover the CUDA extension toolchain, and PEP 517's isolated build
+# env has no torch in it. Without the flag the build dies with a bare
+# "ModuleNotFoundError: No module named 'torch'" that reads like a CUDA-13
+# incompatibility and isn't one.
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_BREAK_SYSTEM_PACKAGES=1
@@ -48,12 +53,13 @@ RUN if [ -n "${SAGEATTENTION_ARCHS}" ]; then \
         && if [ -n "${TORCH_INDEX_URL}" ]; then \
                pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
            fi \
+        && pip install setuptools wheel packaging ninja \
         && git clone https://github.com/thu-ml/SageAttention.git /src/SageAttention \
         && git -C /src/SageAttention checkout "${SAGEATTENTION_REF}" \
         && cd /src/SageAttention \
         && TORCH_CUDA_ARCH_LIST="${SAGEATTENTION_ARCHS}" \
            EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=8 \
-           pip wheel . --no-deps --wheel-dir /wheels; \
+           pip wheel . --no-deps --no-build-isolation --wheel-dir /wheels; \
     fi
 
 FROM ${BASE_IMAGE}
