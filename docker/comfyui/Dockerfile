@@ -184,8 +184,15 @@ PY
 
 # MiniMax-H3 Turbo nodes (MiniMaxH3TurboLoRA + the dual-schedule few-step
 # sampler) for the opt-in minimax-h3-turbo engine. Pure-Python, no extra deps.
-RUN git clone --depth=1 https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
-        custom_nodes/ComfyUI-MiniMax-H3-Turbo
+# PINNED: this repo adds required node inputs without warning — 55fee86 made
+# `low_vram` mandatory on MiniMaxH3TurboLoRA, and an unpinned clone silently
+# broke every turbo render on rebuilt workers while old ones kept going
+# ("Required input is missing: low_vram"). Bump this deliberately, checking
+# workflows/h3_turbo_i2v.json still satisfies the node's inputs.
+ARG H3_TURBO_NODES_REF=55fee864dd7b2976b1c4ce3c3d5f7968f181409f
+RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
+        custom_nodes/ComfyUI-MiniMax-H3-Turbo \
+    && git -C custom_nodes/ComfyUI-MiniMax-H3-Turbo checkout "${H3_TURBO_NODES_REF}"
 
 EXPOSE 8188
 
