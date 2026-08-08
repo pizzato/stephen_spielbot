@@ -141,12 +141,26 @@ approximation, and the same seed will not reproduce the un-accelerated render.
 To roll back, clear the variable and restart; the kernels stay in the image,
 unused.
 
-Measured on GB10 (one H3 scene, 704×1280, 124 frames, 15 steps, EasyCache 0.2,
-seed held equal across workers): **1.23× warm** (421.8 s → 343.0 s), 1.20× cold.
-Two unchanged workers running the same job differed by 2.4 %, so the gap is the
-kernel rather than the box. Output stayed intact — 124 frames, mean luma 137.4
-un-accelerated vs 136.3 accelerated. Only H3 was measured; LTX and FLUX go
-through the same flag unmeasured.
+Measured on GB10, seed held equal across workers. Two unchanged workers running
+the same job differed by 2.4 %, which is the noise floor these sit against:
+
+| Workload | Un-accelerated | SageAttention | Gain |
+|---|---|---|---|
+| MiniMax H3, 704×1280, 124 frames, 15 steps | 421.8 s | 343.0 s | **1.23×** |
+| FLUX.2 Klein, 2048², 4 steps | 14.91 s | 13.39 s | 1.11× |
+| FLUX.2 Klein, 1024², 4 steps | 3.23 s | 3.12 s | 1.04× — noise |
+
+The pattern is the point: attention is quadratic in token count, so the payoff
+tracks how much of the render is attention. Video-sized latents gain most, a 2K
+still gains some, and a 1K still gains nothing measurable — at that size a
+4-step render is mostly request overhead, text encode and VAE, none of which
+this touches. Don't expect a flat speedup across engines.
+
+Quality is close but not identical, as an approximation should be. Same seed,
+FLUX 1024²: mean RMSE 4.57/255 (1.79 %); at 2048²: 5.64/255 (2.21 %). Global
+brightness matches to a tenth of a level, but local max differences reach ~240,
+i.e. fine detail shifts rather than a uniform wash. H3 clips came back with 124
+frames either way, mean luma 137.4 vs 136.3 — no black-render fallback.
 
 When benchmarking, **change the seed between rounds**. ComfyUI caches by
 workflow hash, so re-submitting a seed a worker has already rendered returns the
