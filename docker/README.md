@@ -147,6 +147,7 @@ the same job differed by 2.4 %, which is the noise floor these sit against:
 | Workload | Un-accelerated | SageAttention | Gain |
 |---|---|---|---|
 | MiniMax H3, 704×1280, 124 frames, 15 steps | 421.8 s | 343.0 s | **1.23×** |
+| MiniMax H3 Turbo, same clip, 4 steps | 230.4 s | 195.5 s | 1.18× |
 | FLUX.2 Klein, 2048², 4 steps | 14.91 s | 13.39 s | 1.11× |
 | FLUX.2 Klein, 1024², 4 steps | 3.23 s | 3.12 s | 1.04× — noise |
 
@@ -156,11 +157,26 @@ still gains some, and a 1K still gains nothing measurable — at that size a
 4-step render is mostly request overhead, text encode and VAE, none of which
 this touches. Don't expect a flat speedup across engines.
 
-Quality is close but not identical, as an approximation should be. Same seed,
-FLUX 1024²: mean RMSE 4.57/255 (1.79 %); at 2048²: 5.64/255 (2.21 %). Global
-brightness matches to a tenth of a level, but local max differences reach ~240,
-i.e. fine detail shifts rather than a uniform wash. H3 clips came back with 124
-frames either way, mean luma 137.4 vs 136.3 — no black-render fallback.
+**Video does not merely drift — it diverges.** Same seed, same everything else,
+measured as per-pixel RMSE against the un-accelerated render:
+
+| Workload | Mean RMSE | Verdict |
+|---|---|---|
+| FLUX.2 Klein, 1024² / 2048² | 4.57 / 5.64 of 255 (1.8–2.2 %) | fine detail shifts |
+| MiniMax H3, 15 steps | 19.9 of 255 (7.8 %) | a different take |
+| MiniMax H3 Turbo, 4 steps | 38.7 of 255 (15.2 %) | a different take |
+
+and within a clip it compounds — turbo's frame 20 differs by RMSE 20, frame 100
+by 49, with ~89 % of pixels off by more than two levels. Fewer steps means each
+step carries more weight, so the same per-step approximation error is damped
+less; a 4-step schedule is roughly twice as sensitive as a 15-step one.
+
+Mean brightness still tracks (H3: 137.4 vs 136.3) and no clip came back black,
+so this is a *different sample*, not a broken one — but do not expect a
+re-render to match. The operational consequence is that **a mixed fleet renders
+mixed output**: the same scene sent to a Sage worker and a non-Sage worker comes
+back as visibly different video, which matters for re-renders, per-scene retakes
+and film reassembly. Roll it out to every worker or none.
 
 When benchmarking, **change the seed between rounds**. ComfyUI caches by
 workflow hash, so re-submitting a seed a worker has already rendered returns the
