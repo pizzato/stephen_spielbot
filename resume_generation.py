@@ -42,7 +42,7 @@ from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
-    concat_audio, concatenate_scenes,
+    concat_audio, concatenate_scenes, extract_last_frame,
     ensure_video_resolution, mix_background_music,
     fit_video_canvas,
     write_silence_wav as _write_silence_wav,
@@ -377,32 +377,53 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
 
 def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_url,
                               vid_width, vid_height, style_name) -> Path:
-    """Render each single-speaker shot, then join them into the scene."""
+    """Render each single-speaker shot, then join them into the scene.
+
+    Every shot is an independent generation, so left alone they each invent
+    their own room and the scene appears to teleport between cuts. The first
+    shot's own last frame is fed to the rest as a continuity reference: the
+    reverse angle is then demonstrably the same space, furniture and light.
+    """
     parts = []
+    room: Path | None = None
     for idx, shot in enumerate(shots):
         out = work_dir / f"scene_{scene.id:02d}_shot_{idx:02d}.mp4"
         if not (out.exists() and out.stat().st_size > 10_000):
-            logger.info("Scene %d shot %d/%d: %s speaks",
-                        scene.id, idx + 1, len(shots), shot.get("speaker"))
+            logger.info("Scene %d shot %d/%d: %s speaks%s",
+                        scene.id, idx + 1, len(shots), shot.get("speaker"),
+                        " (matching the first shot's room)" if room else "")
+            extra = ([{"name": "the room already filmed in this scene",
+                       "kind": "continuity", "path": str(room)}] if room else [])
             _render_performance_clip(
                 scene, {**shot, "scene_cast": _performance.speakers_in(
                     _performance.norm_lines(scene_meta.get("lines")))},
                 work_dir, cfg, out, comfy_url=comfy_url, vid_width=vid_width,
-                vid_height=vid_height, style_name=style_name)
+                vid_height=vid_height, style_name=style_name, extra_pictures=extra)
         parts.append(out)
+        if room is None:
+            # Best-effort: without it the later shots simply lose the hint.
+            candidate = work_dir / f"scene_{scene.id:02d}_room.png"
+            try:
+                extract_last_frame(out, candidate)
+                room = candidate
+            except Exception as exc:
+                logger.warning("Scene %d: no continuity frame (%s)", scene.id, exc)
     final = work_dir / f"scene_{scene.id:02d}_final.mp4"
     concatenate_scenes(parts, final)
     return final
 
 
 def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
-                             vid_width, vid_height, style_name) -> Path:
+                             vid_width, vid_height, style_name,
+                             extra_pictures: list[dict] | None = None) -> Path:
     from pipeline.comfyui import generate_video_h3_ref
     from app import resolve_performance_references
 
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
     refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    for pic in (extra_pictures or []):
+        refs["pictures"].append({**pic, "slot": len(refs["pictures"]) + 1})
     # Passed whole: build_h3_prompt reads each reference's kind to give it the
     # right job (keep the face / keep the space / keep the garments).
     picture_names = refs["pictures"]

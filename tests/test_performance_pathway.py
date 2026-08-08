@@ -195,9 +195,13 @@ class RenderWiringTests(TempConfigCase):
                       lines=meta.get("lines", []),
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
         cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
+        # The continuity frame is a separate concern (SceneContinuityTests) and
+        # runs real ffmpeg on these dummy clips — seconds per test.
         with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
              mock.patch.object(rg, "concatenate_scenes",
                                side_effect=lambda clips, out: Path(out).write_bytes(b"joined")), \
+             mock.patch.object(rg, "extract_last_frame",
+                               side_effect=lambda src, dst: Path(dst).write_bytes(b"png")), \
              mock.patch.object(rg, "ensure_video_resolution"):
             rg.render_performance_scene(scene, self.work_dir, cfg,
                                         comfy_url="http://w:8188",
@@ -214,13 +218,16 @@ class RenderWiringTests(TempConfigCase):
         return meta
 
     def test_a_two_hander_renders_one_face_and_one_voice_per_shot(self):
-        # The swap has no room to happen when a clip holds one of each.
+        # The swap has no room to happen when a clip holds one of each. Other
+        # reference kinds (the scene's continuity frame) may ride along — what
+        # matters is that only ONE of them is a person.
         shots = self._shots(self._meta())
         self.assertEqual(len(shots), 2)
         for shot in shots:
-            self.assertEqual(len(shot["ref_images"]), 1)
+            faces = [ln for ln in shot["prompt"].splitlines()[0].split(". ")
+                     if ln.startswith("<Picture") and "the SAME room" not in ln]
+            self.assertEqual(len(faces), 1, faces)
             self.assertEqual(len(shot["ref_audios"]), 1)
-            self.assertNotIn("<Picture 2>", shot["prompt"])
             self.assertNotIn("<Audio 2>", shot["prompt"])
             self.assertNotIn("different people", shot["prompt"])
 
@@ -670,3 +677,63 @@ class AssetCatalogueTests(TempConfigCase):
         vis = backend.gapp.scene_visuals(wd, 1, [], backend.gapp.load_config(), "Parent")
         self.assertEqual(len(vis), 1)
         self.assertEqual(vis[0]["description"], "this film's own")
+
+
+class SceneContinuityTests(unittest.TestCase):
+    """Every shot is its own generation, so without a hint the room changes
+    between cuts — the scene appears to teleport."""
+
+    def _film(self, n_lines=3, frame_fails=False):
+        import resume_generation as rg
+        from pipeline.llm import Scene
+        calls = []
+
+        def fake_gen(engine, prompt, ref_images, out, ref_audios=None, **kw):
+            calls.append({"prompt": prompt, "ref_images": [Path(p).name for p in ref_images]})
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wd = Path(tmp.name)
+        speakers = ["A", "B", "A"][:n_lines]
+        meta = {"mode": "performance", "cast": ["A", "B"], "seconds": 12,
+                "lines": [{"speaker": s, "text": f"line {i}"} for i, s in enumerate(speakers)]}
+        scene = Scene(id=1, title="S", image_prompt="", video_prompt="", narration="",
+                      mode="performance", lines=meta["lines"],
+                      metadata_extra={k: v for k, v in meta.items() if k != "lines"})
+
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            return {"pictures": [{"slot": 1, "name": m.get("speaker") or "A",
+                                  "kind": "character", "path": str(wd / "face.png")}],
+                    "audios": []}
+
+        (wd / "face.png").write_bytes(b"png")
+        with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
+             mock.patch("app.resolve_performance_references", side_effect=fake_refs), \
+             mock.patch.object(rg, "concatenate_scenes",
+                               side_effect=lambda c, o: Path(o).write_bytes(b"j")), \
+             mock.patch.object(rg, "ensure_video_resolution"), \
+             mock.patch.object(rg, "extract_last_frame",
+                               side_effect=(RuntimeError("no ffmpeg") if frame_fails
+                                            else lambda src, dst: Path(dst).write_bytes(b"png"))):
+            rg.render_performance_scene(scene, wd, {}, comfy_url="http://w:8188",
+                                        vid_width=704, vid_height=1280)
+        return calls
+
+    def test_later_shots_reference_the_first_shots_room(self):
+        calls = self._film()
+        self.assertEqual(len(calls), 3)
+        # The opening shot has nothing to match yet.
+        self.assertNotIn("scene_01_room.png", calls[0]["ref_images"])
+        self.assertNotIn("the SAME room", calls[0]["prompt"])
+        # Every shot after it does.
+        for call in calls[1:]:
+            self.assertIn("scene_01_room.png", call["ref_images"])
+            self.assertIn("the SAME room, furniture, lighting", call["prompt"])
+
+    def test_a_failed_continuity_frame_does_not_stop_the_scene(self):
+        calls = self._film(frame_fails=True)
+        self.assertEqual(len(calls), 3)
+        for call in calls:
+            self.assertNotIn("the SAME room", call["prompt"])

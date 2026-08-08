@@ -176,6 +176,12 @@ def picture_role(pic) -> str:
         return (f"is {name} — the place this scene happens in; keep the space, "
                 f"layout, furnishings and lighting exactly as shown, and put "
                 f"nobody in it who is not named below")
+    if kind == "continuity":
+        # A frame from the scene's own first shot. Without it each shot invents
+        # its own room and the scene teleports between cuts.
+        return (f"is {name} — the SAME room, furniture, lighting and time of day; "
+                f"this shot is another angle of that exact space, so keep it "
+                f"identical and do not redecorate or move the camera to a new place")
     if kind == "wardrobe":
         owner = (pic.get("character") or "").strip()
         who = f"{owner} is wearing" if owner else "the wardrobe is"
