@@ -99,6 +99,10 @@ the value must be an `http://host:8189` URL.
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` / `ECHOMIMIC_PORT` | `8188` / `8189` / `8190` | Host ports; match them in the controller config |
+| `BUILDER_IMAGE` | `nvidia/cuda:13.0.1-devel-ubuntu24.04` | `-devel` image used only to compile SageAttention (needs `nvcc`); not shipped. Match `BASE_IMAGE`'s CUDA version |
+| `SAGEATTENTION_ARCHS` | `12.0;12.1` | Compute capabilities SageAttention is compiled for — `12.1` = GB10 (DGX Spark), `12.0` = sm_120 Blackwell workstation. Set **empty** on non-Blackwell GPUs to skip the build |
+| `SAGEATTENTION_REF` | `main` | Pin SageAttention to a tag/branch/commit for reproducible workers |
+| `COMFYUI_EXTRA_ARGS` | — (empty) | Extra flags appended to ComfyUI's launch. Set to `--use-sage-attention` to turn SageAttention on |
 
 Temporal AI upscaling is configured by the app and submitted to the worker's
 ComfyUI API after the finished film has been reviewed on the Remix screen. The
@@ -114,6 +118,34 @@ wheel index for your CUDA version (older GPUs: `cu124`/`cu128`, with a matching
 `nvidia/cuda:12.x-runtime-ubuntu24.04` base). If a CUDA base-image tag is missing
 for your architecture, pick another from
 [hub.docker.com/r/nvidia/cuda](https://hub.docker.com/r/nvidia/cuda/tags).
+
+### SageAttention (opt-in)
+
+[SageAttention](https://github.com/thu-ml/SageAttention) replaces attention with
+quantised INT8/FP8 kernels. It ships no aarch64/CUDA-13 wheels and PyPI's build
+does not target sm_121, so the image compiles it from source in a throwaway
+`-devel` stage and installs only the resulting wheel — the CUDA toolkit itself
+never reaches the worker. Expect the first build to take ~20 extra minutes; it
+layer-caches afterwards.
+
+Building it does **not** enable it. Turn it on per worker in `docker/.env`:
+
+```
+COMFYUI_EXTRA_ARGS=--use-sage-attention
+```
+
+then `bash scripts/worker.sh restart <host>`. The flag is global — it applies to
+LTX and FLUX renders too, not just MiniMax H3 — so A/B one worker before rolling
+it out, and check output quality as well as speed: SageAttention is an
+approximation, and the same seed will not reproduce the un-accelerated render.
+To roll back, clear the variable and restart; the kernels stay in the image,
+unused.
+
+Two known failure modes on GB10, both fixed by clearing `COMFYUI_EXTRA_ARGS`:
+Triton has no sm_121 support, so if the flag falls through to SageAttention's
+Triton backend the render can come out black; and a torch upgrade that changes
+the C++ ABI needs an image rebuild, since the wheel is compiled against the
+torch installed at build time.
 
 ## Build once, run everywhere (optional)
 

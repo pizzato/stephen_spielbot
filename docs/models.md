@@ -114,6 +114,21 @@ Turbo variant notes:
   checkpoints are expected upstream; swap the `lora` filename in
   `pipeline/engines.py` to pick one up.
 
+Speed knobs that sit outside the engine picker:
+
+- The base H3 workflow already runs **EasyCache** (`reuse_threshold` 0.2), which
+  skips DiT steps whose latent barely moved. It only pays off when there are
+  steps to skip, so it is wired into the base engine's 15-step path and *not*
+  into turbo's 4-step one — at 4 steps there is nothing left to reuse. Community
+  cache nodes (TeaCache, FirstBlockCache) are alternative implementations of the
+  same trick, not additions: they must not be stacked with EasyCache.
+- **SageAttention** is compiled into the worker image but off by default. It is a
+  quantised attention kernel, so it stacks with caching and helps at *any* step
+  count — including turbo. Enable it per worker with `COMFYUI_EXTRA_ARGS` and
+  benchmark before trusting it; see
+  [SageAttention](https://github.com/pizzato/stephen_spielbot/blob/main/docker/README.md#sageattention-opt-in)
+  in the worker README for the flag, the quality caveat, and the rollback.
+
 Ref2VA notes ([performance films](performance_films.md)):
 
 - The Ref2VA checkpoints are siblings of the I2V ones at the same sizes and

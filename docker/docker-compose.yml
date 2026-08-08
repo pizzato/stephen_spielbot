@@ -19,11 +19,23 @@ services:
         # v0.30.0 = first ComfyUI release with native MiniMax H3 nodes.
         COMFYUI_REF: ${COMFYUI_REF:-v0.30.0}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+        # -devel base used only to compile SageAttention (needs nvcc); it is not
+        # part of the shipped image. Must match BASE_IMAGE's CUDA version.
+        BUILDER_IMAGE: ${BUILDER_IMAGE:-nvidia/cuda:13.0.1-devel-ubuntu24.04}
+        # 12.1 = GB10 (DGX Spark), 12.0 = sm_120 Blackwell workstation cards.
+        # Set empty on non-Blackwell GPUs to skip the ~20 min kernel build.
+        SAGEATTENTION_ARCHS: ${SAGEATTENTION_ARCHS-12.0;12.1}
+        SAGEATTENTION_REF: ${SAGEATTENTION_REF:-main}
     image: spielbot-comfyui:latest
     # fp16 accumulation speeds up bf16 GEMMs on Blackwell (GB10) with no
     # observed quality cost; part of the H3 speed pass. Overrides the image CMD.
-    command: ["python3", "main.py", "--listen", "0.0.0.0", "--port", "8188",
-              "--fast", "fp16_accumulation"]
+    # COMFYUI_EXTRA_ARGS is the opt-in slot for the rest of that pass — set it to
+    # `--use-sage-attention` in docker/.env to route attention through the
+    # SageAttention kernels baked in above. Default off: the flag is global (it
+    # applies to LTX and FLUX too, not just H3), so it wants an A/B per worker
+    # before it becomes the default. sh -c so an empty value expands to nothing
+    # rather than an empty argv entry.
+    command: ["sh", "-c", "exec python3 main.py --listen 0.0.0.0 --port 8188 --fast fp16_accumulation ${COMFYUI_EXTRA_ARGS:-}"]
     ports:
       - "${COMFYUI_PORT:-8188}:8188"
     environment:
