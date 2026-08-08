@@ -115,6 +115,52 @@ def _picture_label(pic) -> str:
     return pic if isinstance(pic, str) else str(pic.get("name") or "")
 
 
+def shots_for(meta: dict) -> list[dict]:
+    """Split a scene into single-speaker shots.
+
+    H3 does not reliably bind a reference to a NAME: give it two faces and two
+    voices and it swaps them — one character speaking in the other's voice, or
+    sitting in their seat. Names, appearance hints and explicit refusals all
+    failed to hold it. What does hold is removing the ambiguity: a shot with
+    ONE face and ONE voice has nothing to swap, and the scene becomes the
+    shot/reverse-shot a two-hander is really made of.
+
+    Consecutive lines by the same speaker stay in one shot. A scene with a
+    single speaker (or none) returns a single shot — unchanged behaviour.
+    """
+    lines = norm_lines(meta.get("lines"))
+    if len({line["speaker"] for line in lines}) < 2:
+        return [dict(meta)]
+
+    runs: list[dict] = []
+    for line in lines:
+        if runs and runs[-1]["speaker"] == line["speaker"]:
+            runs[-1]["lines"].append(line)
+        else:
+            runs.append({"speaker": line["speaker"], "lines": [line]})
+
+    total_words = sum(len(l["text"].split()) for r in runs for l in r["lines"]) or 1
+    seconds = _clamp_seconds(meta.get("seconds"))
+    shots = []
+    for run in runs:
+        words = sum(len(l["text"].split()) for l in run["lines"])
+        # Give each shot the share of the scene its words need, floored at the
+        # model's minimum clip length.
+        secs = max(MIN_SCENE_SECONDS, round(seconds * words / total_words, 1))
+        shots.append({
+            **meta,
+            "seconds": min(secs, MAX_SCENE_SECONDS),
+            "lines": run["lines"],
+            "speaker": run["speaker"],
+            # Only the speaker is on camera: the beats describe the whole scene,
+            # so they are replaced by what this one person is doing.
+            "beats": [],
+            "cast": [run["speaker"]],
+            "solo": True,
+        })
+    return shots
+
+
 def picture_role(pic) -> str:
     """The job a <Picture N> reference is given in the prompt.
 
@@ -192,6 +238,15 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
             f"{line['speaker']} says exactly, {line['delivery']}: \"{line['text']}\" "
             f"{line['speaker']}'s lips close and all mouth movement stops the instant "
             f"the line ends.")
+
+    if scene_meta.get("solo"):
+        others = [n for n in (scene_meta.get("scene_cast") or [])
+                  if n != scene_meta.get("speaker")]
+        if others:
+            blocks.append(
+                f"Only {scene_meta.get('speaker')} is on camera, facing "
+                f"{' and '.join(others)} just off frame and speaking to them. "
+                f"Do not show {' or '.join(others)}.")
 
     # 4 — camera.
     camera = _unterminated(scene_meta.get("camera")) or \

@@ -174,13 +174,19 @@ class RenderWiringTests(TempConfigCase):
         ]))
 
     def _render(self, meta, **kwargs):
+        """Render a scene and return the LAST clip's wiring (single-speaker
+        scenes make one clip; a two-hander makes one per shot — see _shots)."""
+        return self._shots(meta, **kwargs)[-1]
+
+    def _shots(self, meta, **kwargs):
         import resume_generation as rg
         from pipeline.llm import Scene
-        captured = {}
+        calls = []
 
         def fake_gen(engine, prompt, ref_images, out, ref_audios=None, **kw):
-            captured.update(engine=engine, prompt=prompt, ref_images=list(ref_images),
-                            ref_audios=list(ref_audios or []), kwargs=kw)
+            calls.append({"engine": engine, "prompt": prompt,
+                          "ref_images": list(ref_images),
+                          "ref_audios": list(ref_audios or []), "kwargs": kw})
             Path(out).write_bytes(b"mp4")
             return Path(out)
 
@@ -190,11 +196,13 @@ class RenderWiringTests(TempConfigCase):
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
         cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
         with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
+             mock.patch.object(rg, "concatenate_scenes",
+                               side_effect=lambda clips, out: Path(out).write_bytes(b"joined")), \
              mock.patch.object(rg, "ensure_video_resolution"):
             rg.render_performance_scene(scene, self.work_dir, cfg,
                                         comfy_url="http://w:8188",
                                         vid_width=704, vid_height=1280, **kwargs)
-        return captured
+        return calls
 
     def _meta(self, **over):
         meta = {"mode": "performance", "cast": ["CHICO", "MARIA"], "seconds": 10,
@@ -205,31 +213,44 @@ class RenderWiringTests(TempConfigCase):
         meta.update(over)
         return meta
 
-    def test_pictures_follow_cast_order_and_audio_follows_speaking_order(self):
-        cap = self._render(self._meta())
-        self.assertEqual([p.name for p in cap["ref_images"]], ["char_a.png", "char_b.png"])
-        self.assertIn("<Picture 1> is CHICO", cap["prompt"])
-        self.assertIn("<Picture 2> is MARIA", cap["prompt"])
-        # MARIA speaks first, so she is <Audio 1> and HER voice leads the slots.
-        self.assertEqual([p.name for p in cap["ref_audios"]], ["kara.wav", "walter.wav"])
-        self.assertIn("<Audio 1> is MARIA's voice", cap["prompt"])
-        self.assertIn("<Audio 2> is CHICO's voice", cap["prompt"])
+    def test_a_two_hander_renders_one_face_and_one_voice_per_shot(self):
+        # The swap has no room to happen when a clip holds one of each.
+        shots = self._shots(self._meta())
+        self.assertEqual(len(shots), 2)
+        for shot in shots:
+            self.assertEqual(len(shot["ref_images"]), 1)
+            self.assertEqual(len(shot["ref_audios"]), 1)
+            self.assertNotIn("<Picture 2>", shot["prompt"])
+            self.assertNotIn("<Audio 2>", shot["prompt"])
+            self.assertNotIn("different people", shot["prompt"])
 
-    def test_audio_slots_match_the_wired_voices(self):
-        # The Nth <Audio> tag must be the Nth wired clip, or H3 casts the wrong
-        # voice onto the wrong character.
-        cap = self._render(self._meta())
-        order = [cap["prompt"].index(f"<Audio {i + 1}>") for i in range(2)]
-        self.assertEqual(order, sorted(order))
-        voices = {"MARIA": "kara.wav", "CHICO": "walter.wav"}
-        names = [line.split("is ")[1].split("'s")[0]
-                 for line in cap["prompt"].splitlines()[0].split(". ")
-                 if line.startswith("<Audio ")]
-        self.assertEqual([voices[n] for n in names],
-                         [p.name for p in cap["ref_audios"]])
+    def test_each_shot_pairs_the_right_face_with_the_right_voice(self):
+        shots = self._shots(self._meta())
+        # MARIA speaks first: her portrait (char_b) and her voice (kara).
+        self.assertEqual(shots[0]["ref_images"][0].name, "char_b.png")
+        self.assertEqual(shots[0]["ref_audios"][0].name, "kara.wav")
+        self.assertIn("<Audio 1> is MARIA's voice", shots[0]["prompt"])
+        self.assertEqual(shots[1]["ref_images"][0].name, "char_a.png")
+        self.assertEqual(shots[1]["ref_audios"][0].name, "walter.wav")
+        self.assertIn("<Audio 1> is CHICO's voice", shots[1]["prompt"])
+
+    def test_a_solo_shot_says_who_is_listening_off_camera(self):
+        shots = self._shots(self._meta())
+        self.assertIn("Only MARIA is on camera", shots[0]["prompt"])
+        self.assertIn("Do not show CHICO", shots[0]["prompt"])
+
+    def test_a_single_speaker_scene_still_renders_one_clip(self):
+        shots = self._shots(self._meta(
+            cast=["CHICO"], lines=[{"speaker": "CHICO", "delivery": "flat", "text": "Alone."}]))
+        self.assertEqual(len(shots), 1)
+        self.assertNotIn("Only CHICO is on camera", shots[0]["prompt"])
 
     def test_unknown_character_is_dropped_not_renumbered_wrong(self):
-        cap = self._render(self._meta(cast=["CHICO", "GHOST", "MARIA"]))
+        # Single speaker, so the scene stays one clip and the slot numbering is
+        # visible: an unresolvable name must not leave a gap or shift the rest.
+        cap = self._render(self._meta(
+            cast=["CHICO", "GHOST", "MARIA"],
+            lines=[{"speaker": "CHICO", "delivery": "flat", "text": "Alone."}]))
         self.assertEqual([p.name for p in cap["ref_images"]], ["char_a.png", "char_b.png"])
         self.assertIn("<Picture 2> is MARIA", cap["prompt"])
         self.assertNotIn("GHOST", cap["prompt"].splitlines()[0])
@@ -246,7 +267,15 @@ class RenderWiringTests(TempConfigCase):
     def test_engine_is_a_reference_engine(self):
         cap = self._render(self._meta())
         self.assertTrue(cap["engine"]["reference"])
-        self.assertEqual(cap["kwargs"]["duration_seconds"], 10.0)
+        # Each shot gets the share of the scene its words need, never below the
+        # model's minimum clip length.
+        self.assertGreaterEqual(cap["kwargs"]["duration_seconds"],
+                                performance.MIN_SCENE_SECONDS)
+
+    def test_shot_lengths_add_up_to_about_the_scene(self):
+        shots = self._shots(self._meta())
+        total = sum(s["kwargs"]["duration_seconds"] for s in shots)
+        self.assertGreaterEqual(total, 10.0)
 
 
 def _write_concat(clips, out):

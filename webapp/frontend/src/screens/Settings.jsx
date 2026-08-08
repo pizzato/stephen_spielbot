@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import SettingsAssets from './SettingsAssets.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
@@ -685,6 +686,7 @@ const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
   { id: 'characters', label: 'Characters' },
+  { id: 'assets', label: 'Assets' },
   { id: 'voices', label: 'Voices' },
   { id: 'channels', label: 'Channels' },
   { id: 'automation', label: 'Automation' },
@@ -2458,6 +2460,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
         </>)}
+
+        {tab === 'assets' && <SettingsAssets styles={styles} />}
 
         {tab === 'characters' && (() => {
           // One library, browsed by home: a scope picker mirroring the Styles

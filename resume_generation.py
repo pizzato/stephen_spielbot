@@ -361,10 +361,45 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     Shared with the backend's per-scene re-render, so it takes everything it
     needs as arguments and touches no module state.
     """
+    scene_meta = _performance.scene_meta(scene)
+    # A two-hander is rendered as shot/reverse-shot: one face and one voice per
+    # clip, because with two of each the model swaps them (see shots_for).
+    shots = _performance.shots_for(scene_meta)
+    if len(shots) > 1:
+        return _render_performance_shots(
+            scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
+            vid_width=vid_width, vid_height=vid_height, style_name=style_name)
+    return _render_performance_clip(
+        scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
+        comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
+        style_name=style_name)
+
+
+def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_url,
+                              vid_width, vid_height, style_name) -> Path:
+    """Render each single-speaker shot, then join them into the scene."""
+    parts = []
+    for idx, shot in enumerate(shots):
+        out = work_dir / f"scene_{scene.id:02d}_shot_{idx:02d}.mp4"
+        if not (out.exists() and out.stat().st_size > 10_000):
+            logger.info("Scene %d shot %d/%d: %s speaks",
+                        scene.id, idx + 1, len(shots), shot.get("speaker"))
+            _render_performance_clip(
+                scene, {**shot, "scene_cast": _performance.speakers_in(
+                    _performance.norm_lines(scene_meta.get("lines")))},
+                work_dir, cfg, out, comfy_url=comfy_url, vid_width=vid_width,
+                vid_height=vid_height, style_name=style_name)
+        parts.append(out)
+    final = work_dir / f"scene_{scene.id:02d}_final.mp4"
+    concatenate_scenes(parts, final)
+    return final
+
+
+def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
+                             vid_width, vid_height, style_name) -> Path:
     from pipeline.comfyui import generate_video_h3_ref
     from app import resolve_performance_references
 
-    meta = _performance.scene_meta(scene)
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
     refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
@@ -385,9 +420,8 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
         meta, style_note=cfg.get("style", ""),
         picture_names=picture_names, audio_names=audio_names)
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
-    clip = work_dir / f"scene_{scene.id:02d}_final.mp4"
-    logger.info("Scene %d: performance render (%s) — %d portraits, %d voices",
-                scene.id, engine["key"], len(ref_images), len(ref_audios))
+    logger.info("Scene %d: performance render (%s) — %d portraits, %d voices → %s",
+                scene.id, engine["key"], len(ref_images), len(ref_audios), clip.name)
     generate_video_h3_ref(
         engine, prompt, ref_images, clip,
         ref_audios=ref_audios,
