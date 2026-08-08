@@ -141,6 +141,17 @@ approximation, and the same seed will not reproduce the un-accelerated render.
 To roll back, clear the variable and restart; the kernels stay in the image,
 unused.
 
+Measured on GB10 (one H3 scene, 704×1280, 124 frames, 15 steps, EasyCache 0.2,
+seed held equal across workers): **1.23× warm** (421.8 s → 343.0 s), 1.20× cold.
+Two unchanged workers running the same job differed by 2.4 %, so the gap is the
+kernel rather than the box. Output stayed intact — 124 frames, mean luma 137.4
+un-accelerated vs 136.3 accelerated. Only H3 was measured; LTX and FLUX go
+through the same flag unmeasured.
+
+When benchmarking, **change the seed between rounds**. ComfyUI caches by
+workflow hash, so re-submitting a seed a worker has already rendered returns the
+cached mp4 in well under a second and looks like an enormous speedup.
+
 Two known failure modes on GB10, both fixed by clearing `COMFYUI_EXTRA_ARGS`:
 Triton has no sm_121 support, so if the flag falls through to SageAttention's
 Triton backend the render can come out black; and a torch upgrade that changes

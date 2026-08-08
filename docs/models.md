@@ -124,8 +124,11 @@ Speed knobs that sit outside the engine picker:
   same trick, not additions: they must not be stacked with EasyCache.
 - **SageAttention** is compiled into the worker image but off by default. It is a
   quantised attention kernel, so it stacks with caching and helps at *any* step
-  count — including turbo. Enable it per worker with `COMFYUI_EXTRA_ARGS` and
-  benchmark before trusting it; see
+  count — including turbo. Measured on GB10 workers (704×1280, 124 frames,
+  15 steps, EasyCache 0.2, same seed both sides): **421.8 s → 343.0 s warm,
+  1.23×**; 440.3 s → 367.9 s cold, 1.20×. Two unchanged workers rendering the
+  same job landed within 2.4 % of each other, so the gap is the kernel, not the
+  machine. Enable it per worker with `COMFYUI_EXTRA_ARGS`; see
   [SageAttention](https://github.com/pizzato/stephen_spielbot/blob/main/docker/README.md#sageattention-opt-in)
   in the worker README for the flag, the quality caveat, and the rollback.
 
