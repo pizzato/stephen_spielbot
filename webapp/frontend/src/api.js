@@ -171,11 +171,17 @@ export const api = {
   loadPerformanceScript: (workDir) => req('GET', `/scripts/performance?work_dir=${encodeURIComponent(workDir || '')}`),
   // Per-script visuals: locations and wardrobe, the reference images that pin
   // where a scene happens and what people wear.
+  // Catalogue assets: locations and wardrobe reusable across films.
+  listAssets: () => req('GET', '/assets'),
+  saveAssets: (assets) => req('POST', '/assets', { assets }),
+  generateAssetImage: (assetId, styleName, extraPrompt) => req('POST', '/assets/image', { asset_id: assetId, style_name: styleName || '', extra_prompt: extraPrompt || '' }),
+  uploadAssetImage: (assetId, filename, data) => req('POST', '/assets/upload', { asset_id: assetId, filename, data }),
   listVisuals: (jobId) => req('GET', `/jobs/${jobId}/visuals`),
   addVisual: (jobId, body) => req('POST', `/jobs/${jobId}/visuals`, body),
   updateVisual: (jobId, id, body) => req('PUT', `/jobs/${jobId}/visuals/${id}`, body),
   deleteVisual: (jobId, id) => req('DELETE', `/jobs/${jobId}/visuals/${id}`),
   generateVisualImage: (jobId, id, extraPrompt) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '' }),
+  uploadVisualImage: (jobId, id, filename, data) => req('POST', `/jobs/${jobId}/visuals/${id}/upload`, { filename, data }),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),

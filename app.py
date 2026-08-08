@@ -2339,6 +2339,118 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
 VISUAL_KINDS = ("location", "wardrobe")
 
 
+def _assets_dir() -> Path:
+    d = CONFIG_FILE.parent / "assets"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _asset_image_path(filename: str) -> Path | None:
+    name = Path(str(filename or "")).name
+    return _assets_dir() / name if name else None
+
+
+def _norm_assets(raw) -> list[dict]:
+    """Catalogue assets: the reusable half of the visual library.
+
+    Characters are the other kind and keep their own list — they carry voices,
+    aliases and casting rules these do not. Scoping matches theirs exactly: no
+    style = the global pool, a style = that style and its children."""
+    out = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        kind = str(item.get("kind") or "location").strip().lower()
+        out.append({
+            "id": str(item.get("id") or f"ast_{uuid.uuid4().hex[:8]}"),
+            "name": name,
+            "kind": kind if kind in VISUAL_KINDS else "location",
+            "description": str(item.get("description") or "").strip(),
+            "character": str(item.get("character") or "").strip(),
+            "ref_image": str(item.get("ref_image") or "").strip(),
+            "style": str(item.get("style") or "").strip(),
+            "enabled": bool(item.get("enabled", True)),
+        })
+    return out
+
+
+def style_assets(cfg: dict, style_name: str = "") -> list[dict]:
+    """Catalogue assets visible to a style — same rule as _style_characters."""
+    requested = (style_name or "").strip()
+    assets = _norm_assets(cfg.get("assets"))
+    if requested == NO_STYLE:
+        return [a for a in assets if not a.get("style")]
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None:
+        target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
+                      styles[0] if styles else None)
+    visible = {str(s.get("name") or "") for s in _style_lineage(styles, target)} if target else set()
+    return [a for a in assets if not a.get("style") or a.get("style") in visible]
+
+
+def save_assets(assets) -> dict:
+    cfg = load_config()
+    cfg["assets"] = _norm_assets(assets)
+    save_config(cfg)
+    return load_config()
+
+
+def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "") -> dict:
+    """Paint a catalogue asset's reference image (same framing rules as a
+    per-script one: the space or the garments, never people)."""
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    if asset["kind"] == "wardrobe":
+        subject, framing = (f"{asset['name']}: {asset.get('description') or 'an outfit'}",
+                            "full-length view of the outfit on a plain neutral background, "
+                            "no person's face, no other clothing")
+    else:
+        subject, framing = (f"{asset['name']}: {asset.get('description') or 'a location'}",
+                            "wide establishing shot of the empty space, no people, no text")
+    prompt = ", ".join(x for x in (subject, framing, (extra_prompt or "").strip()) if x)
+    combined = _compose_visual_style("", cfg, style_name or asset.get("style") or "")
+    full = f"{combined}. {prompt}" if combined else prompt
+    engine = engines.resolve(cfg, style_settings(cfg, style_name or asset.get("style") or "")
+                             .get("image_engine"))
+    out = _assets_dir() / f"{asset['id']}.png"
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        pool.release(url)
+    asset["ref_image"] = out.name
+    return save_assets(assets)
+
+
+def set_asset_image(asset_id: str, raw: bytes) -> dict:
+    """Store an uploaded photo as a catalogue asset's reference image."""
+    from PIL import Image
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    out = _assets_dir() / f"{asset['id']}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    asset["ref_image"] = out.name
+    return save_assets(assets)
+
+
 def _script_visuals_path(work_dir: Path) -> Path:
     return Path(work_dir) / "visuals.json"
 
@@ -2474,14 +2586,50 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
     return write_script_visuals(work_dir, visuals)
 
 
-def scene_visuals(work_dir, scene_id: int, cast: list | None = None) -> list[dict]:
+def set_script_visual_image(work_dir, visual_id: str, raw: bytes) -> list[dict]:
+    """Store uploaded bytes as a visual's reference image.
+
+    A real photograph of the actual room or garment beats anything painted —
+    generating is the fallback when you do not have one, not the only way in."""
+    from PIL import Image
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{visual_id}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
+                  cfg: dict | None = None, style_name: str = "") -> list[dict]:
     """The visuals that apply to one scene, in slot order: locations first
     (the space), then wardrobe. A visual with no scene list applies to every
-    scene; wardrobe only applies when its character is in the scene."""
+    scene; wardrobe only applies when its character is in the scene.
+
+    The film's own visuals come first and shadow a catalogue asset of the same
+    name — same precedence as characters, so a film can override the shared
+    studio without editing the catalogue."""
     names = {str(n).strip().lower() for n in (cast or [])}
+    own = read_script_visuals(work_dir)
+    taken = {v["name"].strip().lower() for v in own}
+    catalogue = [
+        {**a, "scenes": []}          # catalogue assets are not scene-scoped
+        for a in style_assets(cfg if cfg is not None else load_config(), style_name)
+        if a["name"].strip().lower() not in taken
+    ]
+    pool = own + catalogue
     out = []
     for kind in ("location", "wardrobe"):
-        for v in read_script_visuals(work_dir):
+        for v in pool:
             if not v.get("enabled", True) or v["kind"] != kind:
                 continue
             if v["scenes"] and int(scene_id) not in v["scenes"]:
@@ -2489,7 +2637,8 @@ def scene_visuals(work_dir, scene_id: int, cast: list | None = None) -> list[dic
             if kind == "wardrobe" and v.get("character") and \
                     v["character"].strip().lower() not in names:
                 continue
-            img = _script_visual_image_path(work_dir, v.get("ref_image"))
+            img = (_script_visual_image_path(work_dir, v.get("ref_image"))
+                   if v in own else _asset_image_path(v.get("ref_image")))
             if img and img.exists():
                 out.append({**v, "_ref_path": str(img)})
     return out
@@ -3194,7 +3343,7 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
     # Locations and wardrobe take the slots after the cast: identity first, then
     # the space, then the clothes — so trimming to H3's nine-image cap drops the
     # least identity-critical references rather than a face.
-    for vis in scene_visuals(work_dir, scene_id, meta.get("cast")):
+    for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
                          "kind": vis["kind"], "character": vis.get("character", ""),
                          "id": vis["id"], "path": vis["_ref_path"]})

@@ -579,3 +579,65 @@ class VisualsTests(TempConfigCase):
         backend.gapp.add_script_visual(self.wd, "Imagined place", "location", "somewhere")
         _, refs = self._refs()
         self.assertEqual([p["kind"] for p in refs["pictures"]], ["character"])
+
+
+class AssetCatalogueTests(TempConfigCase):
+    """Reusable locations and wardrobe, scoped like characters."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({
+            "styles": [_style("Parent"), {**_style("Child"), "parent": "Parent"},
+                       _style("Other")],
+            "default_style": "Parent", "characters": [], "characters_migrated_v2": True,
+            "assets": [
+                {"id": "ast_g", "name": "Global studio", "kind": "location", "description": "x"},
+                {"id": "ast_p", "name": "Parent set", "kind": "location", "style": "Parent"},
+                {"id": "ast_o", "name": "Other set", "kind": "location", "style": "Other"},
+            ],
+        })
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_scoping_matches_characters(self):
+        cfg = backend.gapp.load_config()
+        names = lambda st: sorted(a["name"] for a in backend.gapp.style_assets(cfg, st))
+        self.assertEqual(names("Parent"), ["Global studio", "Parent set"])
+        # A child inherits its parent's assets.
+        self.assertEqual(names("Child"), ["Global studio", "Parent set"])
+        self.assertEqual(names("Other"), ["Global studio", "Other set"])
+        # Experiment mode sees the global pool only, like characters.
+        self.assertEqual(names(backend.gapp.NO_STYLE), ["Global studio"])
+
+    def test_catalogue_asset_reaches_a_scene(self):
+        wd = self.output_dir / "film-20260808-140000"
+        (wd / "characters").mkdir(parents=True)
+        (wd / "characters.json").write_text("[]")
+        img = backend.gapp._assets_dir() / "ast_g.png"
+        img.write_bytes(b"png")
+        cfg = backend.gapp.load_config()
+        cfg["assets"][0]["ref_image"] = img.name
+        backend.gapp.save_assets(cfg["assets"])
+        vis = backend.gapp.scene_visuals(wd, 1, [], backend.gapp.load_config(), "Parent")
+        self.assertEqual([v["name"] for v in vis], ["Global studio"])
+
+    def test_the_films_own_visual_shadows_the_catalogue(self):
+        wd = self.output_dir / "film-20260808-140100"
+        (wd / "visuals").mkdir(parents=True)
+        backend.gapp.add_script_visual(wd, "Global studio", "location", "this film's own")
+        own = backend.gapp.read_script_visuals(wd)[0]
+        own_img = wd / "visuals" / f"{own['id']}.png"
+        own_img.write_bytes(b"png")
+        backend.gapp.update_script_visual(wd, own["id"])
+        visuals = backend.gapp.read_script_visuals(wd)
+        visuals[0]["ref_image"] = own_img.name
+        backend.gapp.write_script_visuals(wd, visuals)
+        cat_img = backend.gapp._assets_dir() / "ast_g.png"
+        cat_img.write_bytes(b"png")
+        cfg = backend.gapp.load_config()
+        cfg["assets"][0]["ref_image"] = cat_img.name
+        backend.gapp.save_assets(cfg["assets"])
+
+        vis = backend.gapp.scene_visuals(wd, 1, [], backend.gapp.load_config(), "Parent")
+        self.assertEqual(len(vis), 1)
+        self.assertEqual(vis[0]["description"], "this film's own")

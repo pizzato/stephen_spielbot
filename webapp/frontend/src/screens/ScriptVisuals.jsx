@@ -2,6 +2,13 @@ import { useEffect, useState } from 'react'
 import { api } from '../api.js'
 import { Card, Field, Button, Icon, Banner, GuidedRegenButton } from '../components.jsx'
 
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(r.result)
+  r.onerror = reject
+  r.readAsDataURL(file)
+})
+
 // Locations and wardrobe: the reference images that stop a performance film
 // drifting between scenes. Words alone don't hold a room or an outfit still —
 // these ride the same <Picture N> slots as the cast, after it.
@@ -70,10 +77,23 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
         </div>
       </Field>
 
-      <GuidedRegenButton block size="sm" variant="ghost" icon="rotate-right"
-        label={v.has_image ? 'Regenerate image' : 'Generate image'} busyLabel="Painting…"
-        busy={busy === 'img'} disabled={!!busy}
-        onRegen={(instr) => run('img', () => api.generateVisualImage(jobId, v.id, instr))} />
+      <div className="stack gap-6">
+        {/* A real photo of the actual room or garment beats anything painted,
+            so uploading is a first-class option, not a fallback. */}
+        <label className="btn btn--ghost btn--sm btn--block" style={{ cursor: busy ? 'default' : 'pointer' }}>
+          <Icon name="upload" /> Upload an image
+          <input type="file" accept="image/*" hidden disabled={!!busy}
+            onChange={async (e) => {
+              const f = e.target.files?.[0]
+              e.target.value = ''
+              if (f) await run('img', async () => api.uploadVisualImage(jobId, v.id, f.name, await fileToDataUrl(f)))
+            }} />
+        </label>
+        <GuidedRegenButton block size="sm" variant="ghost" icon="rotate-right"
+          label={v.has_image ? 'Regenerate image' : 'Generate image'} busyLabel="Painting…"
+          busy={busy === 'img'} disabled={!!busy}
+          onRegen={(instr) => run('img', () => api.generateVisualImage(jobId, v.id, instr))} />
+      </div>
     </Card>
   )
 }

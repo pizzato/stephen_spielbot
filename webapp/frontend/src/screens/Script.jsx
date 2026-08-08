@@ -274,9 +274,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     .catch(() => {})
   useEffect(() => { refreshScripts() }, [])
 
-  // Generate any missing scene previews as soon as the script loads
+  // Generate any missing scene previews as soon as the script loads.
+  // A performance film renders no first frames — every scene is conditioned on
+  // the character portraits instead — so painting a still per scene here was
+  // pure wasted GPU on a film that never looks at it.
   useEffect(() => {
-    if (!job?.job_id) return
+    if (!job?.job_id || isPerformance) return
     if (!(job.scenes || []).some((s) => !s.has_preview)) return
     setGenAll(true)
     setGenAllMsg('Generating missing scene previews…')

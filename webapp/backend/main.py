@@ -2922,6 +2922,68 @@ def _cast_member(wd: Path, cfg: dict, style_name: str, name: str) -> dict:
             "has_image": False, "image_url": "", "scope": "missing", "editable": False}
 
 
+# ── asset catalogue: reusable locations and wardrobe ─────────────────────────
+# Characters are the other kind of asset and keep their own catalogue (they
+# carry voices, aliases and casting rules these do not).
+
+class AssetsBody(BaseModel):
+    assets: list[dict]
+
+
+class AssetImageBody(BaseModel):
+    asset_id: str
+    style_name: str = ""
+    extra_prompt: str = ""
+
+
+class AssetUploadBody(BaseModel):
+    asset_id: str
+    filename: str = ""
+    data: str
+
+
+def _assets_payload(cfg: dict) -> dict:
+    out = []
+    for a in gapp._norm_assets(cfg.get("assets")):
+        img = gapp._asset_image_path(a.get("ref_image"))
+        has = bool(img and img.exists() and img.stat().st_size > 0)
+        out.append({**a, "has_image": has,
+                    "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                                  if has else "")})
+    return {"ok": True, "assets": out}
+
+
+@api.get("/api/assets")
+def list_assets() -> dict:
+    return _assets_payload(gapp.load_config())
+
+
+@api.post("/api/assets")
+def save_assets(body: AssetsBody) -> dict:
+    return _assets_payload(gapp.save_assets(body.assets))
+
+
+@api.post("/api/assets/image")
+def generate_asset_image(body: AssetImageBody) -> dict:
+    try:
+        with _track_op("Painting a reference image", body.asset_id):
+            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
+    return _assets_payload(cfg)
+
+
+@api.post("/api/assets/upload")
+def upload_asset_image(body: AssetUploadBody) -> dict:
+    try:
+        cfg = gapp.set_asset_image(body.asset_id, _decode_image(body.data))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _assets_payload(cfg)
+
+
 # ── per-script visuals: locations and wardrobe ───────────────────────────────
 
 class VisualCreate(BaseModel):
@@ -2983,6 +3045,22 @@ def edit_script_visual(job_id: str, visual_id: str, body: VisualUpdate) -> dict:
 def remove_script_visual(job_id: str, visual_id: str) -> dict:
     wd = _job_wd_or_404(job_id)
     gapp.delete_script_visual(wd, visual_id)
+    return _visuals_ok(wd)
+
+
+class VisualUpload(BaseModel):
+    filename: str = ""
+    data: str
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/upload")
+def upload_script_visual_image(job_id: str, visual_id: str, body: VisualUpload) -> dict:
+    """Use a real photo of the room or the garment instead of painting one."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.set_script_visual_image(wd, visual_id, _decode_image(body.data))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     return _visuals_ok(wd)
 
 
@@ -3449,6 +3527,13 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         store.close()
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
+    # Performance scenes have no first frame — they are conditioned on the
+    # character portraits — so a still per scene is GPU spent on an image
+    # nothing ever reads. Guarded server-side too: the render path and any
+    # older client both reach this endpoint.
+    if all((r.get("metadata") or {}).get("mode") == "performance" for r in rows):
+        return {"scenes": [], "generated": 0, "failed": [],
+                "skipped": "performance film — scenes have no first frame"}
 
     to_generate = rows if force else [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
     failed: list[int] = []
