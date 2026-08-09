@@ -1,8 +1,8 @@
-"""Performance films fork the pathway at script creation.
+"""Acted scenes fork the pathway at script creation.
 
-script_mode = "performance" must produce acted scenes and, from there, a render
-that never touches the narrated machinery (first frames, TTS, music) — while a
-narrated style keeps working exactly as before.
+The Dialogue/Mixed format must produce acted scenes and, from there, a render
+that never touches the narrated machinery (first frames, TTS, music) for those
+scenes — while narrated scenes keep working exactly as before.
 """
 import json
 import os
@@ -15,33 +15,34 @@ os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))
 
 import webapp.backend.main as backend  # noqa: E402
 from pipeline import performance  # noqa: E402
+from pipeline import story as story_mode  # noqa: E402
+from scriptstub import STORY  # noqa: E402
 from test_styles import TempConfigCase, _style  # noqa: E402
 
-_REPLY = json.dumps({
-    "style": "handheld 16mm, humid greens",
-    "characters": [{"name": "CHICO", "description": "moustache, white shirt",
-                    "gender": "male", "age": "adult"}],
-    "scenes": [
-        {"title": "The clearing", "setting": "a burnt clearing", "seconds": 10,
-         "cast": ["CHICO"], "camera": "locked off", "soundscape": "cicadas",
-         "beats": [{"t0": 0, "t1": 10, "action": "CHICO stands his ground"}],
-         "lines": [{"speaker": "CHICO", "delivery": "quiet", "text": "You can burn the trees."}]},
-        {"title": "After", "setting": "the clearing at night", "seconds": 10,
-         "cast": ["CHICO"], "camera": "slow push", "soundscape": "insects",
-         "beats": [{"t0": 0, "t1": 10, "action": "CHICO walks away"}],
-         "lines": [{"speaker": "CHICO", "delivery": "tired", "text": "Not tonight."}]},
-    ],
-})
+# What the story-divide prompt returns for an acted chapter.
+_DIVIDED = [
+    {"id": 1, "title": "The clearing", "mode": "dialogue",
+     "setting": "a burnt clearing", "seconds": 10, "cast": ["CHICO"],
+     "camera": "locked off", "soundscape": "cicadas", "image_prompt": "",
+     "video_prompt": "a burnt clearing",
+     "beats": [{"t0": 0, "t1": 10, "action": "CHICO stands his ground"}],
+     "lines": [{"speaker": "CHICO", "delivery": "quiet", "text": "You can burn the trees."}]},
+    {"id": 2, "title": "After", "mode": "dialogue",
+     "setting": "the clearing at night", "seconds": 10, "cast": ["CHICO"],
+     "camera": "slow push", "soundscape": "insects", "image_prompt": "",
+     "video_prompt": "the clearing at night",
+     "beats": [{"t0": 0, "t1": 10, "action": "CHICO walks away"}],
+     "lines": [{"speaker": "CHICO", "delivery": "tired", "text": "Not tonight."}]},
+]
 
 
 class ScriptForkTests(TempConfigCase):
+    """The format decides the scenes; the story is always where they come from."""
+
     def setUp(self):
         super().setUp()
         self.write_config({
-            "styles": [
-                _style("Acted", n_scenes=4, voice="Narrator", visual_style="gritty"),
-                _style("Narrated", n_scenes=4, voice="Narrator", visual_style="cinematic"),
-            ],
+            "styles": [_style("Acted", n_scenes=4, voice="Narrator", visual_style="gritty")],
             "default_style": "Acted",
             # Library voices are what get cast onto the characters and become
             # the <Audio N> references at render time.
@@ -56,40 +57,50 @@ class ScriptForkTests(TempConfigCase):
             "characters": [],
             "characters_migrated_v2": True,
         })
-        cfg = backend.gapp.load_config()
-        for s in cfg["styles"]:
-            if s["name"] == "Acted":
-                s["script_mode"] = "performance"
-        backend.gapp.save_config(cfg)
         mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
         # Portraits are rendered in a background thread — never in a test.
         mock.patch.object(backend.gapp, "generate_all_script_portraits").start()
         mock.patch.object(backend.threading, "Thread").start()
         self.addCleanup(mock.patch.stopall)
 
-    def _generate(self, style_name="Acted", **kwargs):
+    def _generate(self, fmt="dialogue", **kwargs):
+        """Draft stubbed; the divide runs for real over a canned LLM reply, so
+        the acted scene shape is exercised end to end."""
         body = backend.GenerateScriptBody(
             video_title="Chico Mendes", topic="the rubber tappers",
-            style_name=style_name, n_scenes=2, **kwargs)
-        with mock.patch.object(performance, "_chat_complete", return_value=_REPLY):
+            style_name="Acted", n_scenes=2, format=fmt, **kwargs)
+        story = {**STORY, "n_scenes": 2, "topic": "the rubber tappers",
+                 "characters": [{"name": "CHICO", "description": "moustache, white shirt",
+                                 "gender": "male", "age": "adult"}],
+                 "chapters": [{"chapter": 1, "title": "One", "scenes": 2,
+                               "text": "Chico stood his ground."}]}
+        with mock.patch.object(story_mode, "generate_story", return_value=story), \
+             mock.patch.object(story_mode, "_call_fn",
+                               return_value=lambda *a, **k: json.dumps(_DIVIDED)), \
+             mock.patch.object(story_mode, "_detect_recurring_characters",
+                               side_effect=lambda call, scenes, ident, **k: ident):
             return backend._do_script_generate(body)
 
-    def test_performance_style_produces_acted_scenes(self):
+    def test_a_dialogue_format_produces_acted_scenes(self):
         result = self._generate()
         scenes = json.loads((Path(result["work_dir"]) / "script.json").read_text())
         self.assertEqual(len(scenes), 2)
         for s in scenes:
-            self.assertEqual(s["metadata"]["mode"], "performance")
+            self.assertEqual(s["metadata"]["mode"], "dialogue")
             # The prompt the video model receives, editable in the script editor.
             self.assertIn("<Picture 1> defines CHICO", s["video_prompt"])
             self.assertIn("Do not add subtitles", s["video_prompt"])
             # No image engine runs, so no image prompt is written.
             self.assertEqual(s["image_prompt"], "")
 
-    def test_brief_records_the_mode(self):
+    def test_the_story_is_still_where_the_scenes_come_from(self):
+        result = self._generate()
+        self.assertTrue((Path(result["work_dir"]) / "story.json").exists())
+
+    def test_brief_records_the_format(self):
         result = self._generate()
         brief = json.loads((Path(result["work_dir"]) / "create_brief.json").read_text())
-        self.assertEqual(brief["script_mode"], "performance")
+        self.assertEqual(brief["format"], "dialogue")
 
     def test_cast_is_persisted_with_a_voice(self):
         # Voices are cast at script creation and become the <Audio N> references.
@@ -98,51 +109,27 @@ class ScriptForkTests(TempConfigCase):
         self.assertEqual([c["name"] for c in chars], ["CHICO"])
         self.assertTrue(chars[0].get("voice"))
 
-    def test_body_override_forces_performance_on_a_narrated_style(self):
-        result = self._generate(style_name="Narrated", script_mode="performance")
-        scenes = json.loads((Path(result["work_dir"]) / "script.json").read_text())
-        self.assertEqual(scenes[0]["metadata"]["mode"], "performance")
-
-    def test_narrated_style_never_reaches_the_performance_generator(self):
-        called = []
-        with mock.patch.object(performance, "generate_performance_script",
-                               side_effect=lambda *a, **k: called.append(1)), \
-             mock.patch.object(backend, "generate_script",
-                               return_value=([], "music", "style", [])) as classic:
-            body = backend.GenerateScriptBody(video_title="X", topic="y",
-                                              style_name="Narrated", n_scenes=2)
+    def test_a_narrated_format_asks_for_no_dialogue(self):
+        with mock.patch.object(story_mode, "generate_story",
+                               return_value={**STORY}) as gen, \
+             mock.patch.object(story_mode, "divide_story",
+                               return_value=([], "m", "s", [])) as div:
             try:
-                backend._do_script_generate(body)
+                backend._do_script_generate(backend.GenerateScriptBody(
+                    video_title="X", topic="y", style_name="Acted", n_scenes=2))
             except Exception:
-                pass  # empty scene list — we only care which generator ran
-        self.assertEqual(called, [])
-        self.assertTrue(classic.called)
+                pass  # empty scene list — we only care what was asked for
+        self.assertIsNone(gen.call_args.kwargs["dialogue_note"])
+        self.assertIsNone(div.call_args.kwargs["dialogue_note"])
 
     def test_scene_count_from_minutes_uses_clip_length_not_word_budget(self):
         ss = backend.gapp.style_settings(backend.gapp.load_config(), "Acted")
         body = backend.GenerateScriptBody(video_title="X", topic="y", minutes=1.0)
         # 60 s of film at ~10 s per acted clip.
-        self.assertEqual(backend._performance_scene_count(body, ss), 6)
+        self.assertEqual(backend._acted_scene_count(body, ss), 6)
         # An explicit count still wins.
         body_n = backend.GenerateScriptBody(video_title="X", topic="y", minutes=1.0, n_scenes=3)
-        self.assertEqual(backend._performance_scene_count(body_n, ss), 3)
-
-
-class ModeResolutionTests(unittest.TestCase):
-    def test_effective_mode(self):
-        body = backend.GenerateScriptBody()
-        self.assertEqual(backend._effective_script_mode(body, {"script_mode": "performance"}),
-                         "performance")
-        self.assertEqual(backend._effective_script_mode(body, {"script_mode": "nonsense"}),
-                         "classic")
-        # Performance ignores the dialogue/mixed format switch (it IS dialogue).
-        dlg = backend.GenerateScriptBody(format="dialogue")
-        self.assertEqual(backend._effective_script_mode(dlg, {"script_mode": "performance"}),
-                         "performance")
-        # Story still falls back to classic for those formats.
-        self.assertEqual(backend._effective_script_mode(dlg, {"script_mode": "story"}),
-                         "classic")
-
+        self.assertEqual(backend._acted_scene_count(body_n, ss), 3)
 
 
 class RenderWiringTests(TempConfigCase):

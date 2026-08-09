@@ -7,7 +7,8 @@ from unittest import mock
 
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))
 
-import webapp.backend.main as backend  # noqa: E402
+import webapp.backend.main as backend
+from scriptstub import STORY  # noqa: E402
 from pipeline import cadence  # noqa: E402
 from pipeline.llm import (  # noqa: E402
     Scene,
@@ -46,16 +47,22 @@ class GenerateWithMinutesTests(LengthPlanCase):
     def _generate(self, **body_kwargs):
         captured = {}
 
-        def fake_generate(title, n_scenes, *a, **kw):
+        def fake_story(title, n_scenes, *a, **kw):
             captured["n_scenes"] = n_scenes
             captured["scene_plan"] = kw.get("scene_plan")
+            return {**STORY, "n_scenes": n_scenes,
+                    "scene_plan": kw.get("scene_plan")}
+
+        def fake_divide(story, *a, **kw):
+            n = int(story.get("n_scenes") or 1)
             return ([Scene(id=i + 1, title=f"S{i+1}", image_prompt="p",
                            video_prompt="v", narration="n")
-                     for i in range(n_scenes)], "music", "vis", [])
+                     for i in range(n)], "music", "vis", [])
 
         body = backend.GenerateScriptBody(video_title="T", topic="topic",
                                           style_name="Hero", **body_kwargs)
-        with mock.patch.object(backend, "generate_script", side_effect=fake_generate), \
+        with mock.patch.object(backend.story_mode, "generate_story", side_effect=fake_story), \
+             mock.patch.object(backend.story_mode, "divide_story", side_effect=fake_divide), \
              mock.patch.object(backend, "_describe_in_background"):
             res = backend._do_script_generate(body)
         return res, captured

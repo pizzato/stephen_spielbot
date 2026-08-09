@@ -8,13 +8,13 @@ a script you then review — no GPU work happens here.
 ## Style
 
 The first choice, because it decides the others. A **style** owns the narrator voice,
-visual direction, script mode, render quality, audio mix, and which channel the film
+visual direction, render quality, audio mix, and which channel the film
 publishes to. Pick one and the fields it owns lock to it — the hint under the picker shows
 the style's description.
 
 Child styles are shown indented under their parent (`↳`), and the default style is marked.
 
-**No style — experiment** unlocks the narrator voice, visual style, and script mode so you
+**No style — experiment** unlocks the narrator voice and visual style so you
 can try something one-off. Render quality and audio mix still come from the default style.
 Switching to it clears the previous style's imprint rather than inheriting it, so you start
 clean.
@@ -56,39 +56,34 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 
 | Format | What you get |
 |---|---|
-| **Narration** | Classic voice-over. The mature default path |
+| **Narration** | Voice-over throughout. The mature default path |
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 
 See [acted scenes](../performance_films.md) for what the modes actually render.
 
-## Script mode
+An all-dialogue film is measured in clips rather than words: every scene is one acted take
+of about ten seconds, so the length you ask for becomes a scene count at that rate.
 
-| Mode | How the script is written |
-|---|---|
-| **Classic** | Scenes are generated directly, in batches |
-| **Story-first** | The LLM drafts and critiques the whole story as prose, shows it to you for review, then divides it into scenes |
-| **Performance** | Acted scenes: the characters speak on screen and the video model generates picture and voice together. See [performance films](../performance_films.md) |
+## How the script is written
 
-Story-first keeps long videos coherent — it's the mode to reach for above ten or so scenes.
-It's narration-only for now: Dialogue and Mixed always run Classic, and the backend enforces
-the same rule.
+Every script is **story-first**. The LLM drafts and critiques the whole story as prose, you
+read and edit it, and only then is it divided into scenes — in whichever format you chose
+above. It's what keeps a long video coherent instead of a sequence of scenes that each make
+sense alone.
 
-Performance is a different kind of film rather than a different way of writing the same
-one — no narrator, no music, no first frames — so it ignores the Format switch above (an
-acted film *is* dialogue). Scenes are one acted clip each, about ten seconds, so the scene
-count comes from the clip length rather than a word budget.
+## Music
 
-Like the voice and visuals, script mode is owned by the style unless you're on *No style*.
+**Score this film with background music** — on by default, following the style. Music is
+mixed in at the very end, never baked into a scene, so switching it off simply leaves the
+film with its voices and room tone. An all-dialogue film has no score at all: the acted
+takes already carry their own sound.
 
 ## Auto-approve
 
-**Auto-approve the script → send straight to the queue** skips the [Script](script.md)
-review entirely: the draft goes to the queue ready to render. Useful once you trust a
-style; not what you want on a first run.
-
-Story-first replaces this checkbox with a note, because reviewing the story *is* the next
-step.
+**Auto-approve the scenes → straight to the queue after dividing** skips the
+[Script](script.md) review: once you divide the story, the scenes go to the queue ready to
+render. The story review still happens — that's the point of it.
 
 ## Predicted reach
 
@@ -99,8 +94,8 @@ simply doesn't appear.
 
 ## Generating
 
-**1. Generate script** (or **1. Draft the story** in story-first mode) drafts the script and
-moves you to [Script](script.md).
+**1. Draft the story** writes the prose and moves you to [Script](script.md), where you
+review it and divide it into scenes.
 
 If you arrived here from a queued request, a banner says so — generating fills that
 existing queue slot and keeps its position. If you arrived via **Re-draft** from an existing

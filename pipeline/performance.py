@@ -1,10 +1,8 @@
-"""Performance-film script generation (per-style script_mode = "performance").
+"""Acted scenes: the shape they take, and the H3 prompt they become.
 
-A performance film is a different kind of video from the narrated ones: the
-characters act and SPEAK, and MiniMax H3 Ref2VA writes picture and voice in a
-single pass from character portraits. There is no first frame, no TTS step and
-no background music — so the script this module produces is a different shape
-from the narrated one:
+In an acted scene the characters SPEAK, and MiniMax H3 Ref2VA writes picture and
+voice in a single pass from their portraits. There is no first frame and no TTS
+step, so an acted scene is a different shape from a narrated one:
 
     scene = cast + timed beats + quoted dialogue + soundscape + refusals
 
@@ -14,8 +12,10 @@ assembly is deterministic rather than LLM prose, so the reference-role line and
 the "no subtitles" refusals are present on every single scene — H3 burns
 subtitles in without them.
 
-The narrated generators (pipeline/llm.py, pipeline/story.py) are untouched;
-nothing here runs unless a style opts in.
+The scenes themselves are written by pipeline/story.py, which stages an approved
+story as acted scenes when the film's format asks for them (``scene_from_raw``
+is where one of its scene objects becomes a Scene). A narrated scene in the same
+film is untouched by any of this.
 """
 from __future__ import annotations
 
@@ -23,8 +23,7 @@ import json
 import logging
 import re
 
-from pipeline import prompts as _prompts
-from pipeline.llm import Scene, _chat_complete, _load_cfg, _parse_claude_response
+from pipeline.llm import Scene
 
 logger = logging.getLogger("video_gen")
 
@@ -415,90 +414,8 @@ def spoken_text(scene_meta: dict) -> str:
     return " ".join(line["text"] for line in norm_lines(scene_meta.get("lines")))
 
 
-def _call_fn(cfg: dict):
-    def call(system, user_msg, max_tokens, label, retries=3):
-        return _chat_complete(cfg, system, user_msg, max_tokens, label, retries=retries)
-    return call
-
-
-def generate_performance_script(
-    title: str,
-    n_scenes: int,
-    *,
-    style_hint: str | None = None,
-    video_title: str | None = None,
-    character_sheet: str | None = None,
-    avoid_hint: str | None = None,
-    language: str | None = None,
-    cfg: dict | None = None,
-) -> tuple[list[Scene], str, list[dict]]:
-    """Write a performance film: N scenes of acted, spoken drama.
-
-    Returns ``(scenes, style, characters)`` — the same shape the narrated
-    generators return minus the music description, since performance films have
-    no score. Every scene comes back with ``mode = "performance"`` and its
-    structured performance fields in ``metadata_extra``.
-    """
-    cfg = cfg or _load_cfg()
-    call = _call_fn(cfg)
-    n_scenes = max(1, int(n_scenes or 1))
-
-    notes = []
-    if style_hint and style_hint.strip():
-        notes.append(f'Use exactly this text for the "style" field: "{style_hint.strip()}"')
-    if character_sheet:
-        notes.append(f"Existing cast you should reuse where they fit:\n{character_sheet}")
-    if avoid_hint:
-        notes.append(f"Avoid: {avoid_hint}")
-    if language:
-        notes.append(f"Write every spoken line in {language}. "
-                     "Keep setting/camera/soundscape descriptions in English.")
-
-    raw = call(
-        _prompts.system("performance_script"),
-        _prompts.user("performance_script",
-                      title=(video_title or title),
-                      topic=title,
-                      n_scenes=n_scenes,
-                      seconds=int(SCENE_SECONDS),
-                      max_speakers=MAX_SPEAKERS_PER_SCENE,
-                      notes=("\n\n".join(notes) if notes else "")),
-        max_tokens=1200 + 700 * n_scenes,
-        label="performance script",
-    )
-    data = _parse_claude_response(raw, "performance script")
-    if not isinstance(data, dict) or not data.get("scenes"):
-        raise RuntimeError("Performance script generation returned no scenes")
-
-    style = _clean(data.get("style")) or (style_hint or "")
-    characters = _norm_characters(data.get("characters"))
-    scenes: list[Scene] = []
-    for raw_scene in data["scenes"][:n_scenes]:
-        for piece in split_overloaded(raw_scene):
-            scenes.append(_to_scene(len(scenes) + 1, piece, style_note=style))
-    logger.info("Performance script: %d scenes, %d characters", len(scenes), len(characters))
-    return scenes, style, characters
-
-
-def _norm_characters(raw) -> list[dict]:
-    out: list[dict] = []
-    for item in raw or []:
-        if not isinstance(item, dict):
-            continue
-        name = _clean(item.get("name"))
-        if not name:
-            continue
-        out.append({
-            "name": name,
-            "description": _clean(item.get("description")),
-            "gender": _clean(item.get("gender")).lower(),
-            "age": _clean(item.get("age")).lower(),
-        })
-    return out
-
-
-def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
-    """One LLM scene object → a performance Scene.
+def scene_from_raw(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
+    """One LLM scene object → an acted Scene.
 
     The assembled H3 prompt lives in ``video_prompt`` so the script editor shows
     and edits the exact text the model receives; the structured fields stay in
@@ -510,7 +427,12 @@ def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
     seconds = _clamp_seconds(content_seconds({**raw, "lines": lines})
                              if lines else raw.get("seconds"))
     beats = norm_beats(raw.get("beats"), seconds)
-    cast = [c for c in (speakers_in(lines) + [_clean(x) for x in (raw.get("cast") or [])])
+    # The scene's OWN cast order leads, then anyone who speaks but wasn't
+    # listed. This is the <Picture N> order, and the screen-geography block
+    # places Picture 1 left and Picture 2 right — so when a long exchange is
+    # split across consecutive scenes, a per-piece order (whoever speaks first)
+    # would swap the two of them from side to side across the cut.
+    cast = [c for c in ([_clean(x) for x in (raw.get("cast") or [])] + speakers_in(lines))
             if c]
     # De-dup, first mention wins (this is the <Picture N> order).
     ordered_cast: list[str] = []
@@ -522,7 +444,7 @@ def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
     # re-emits), so it is deliberately absent from metadata_extra — putting it
     # in both would let an edit to one silently lose to the other.
     meta = {
-        "mode": "performance",
+        "mode": "dialogue",
         "cast": ordered_cast,
         "lines": lines,
         "beats": beats,
@@ -544,10 +466,11 @@ def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
         image_prompt="",
         video_prompt=prompt,
         narration=spoken_text(meta),
-        mode="performance",
+        mode="dialogue",
         lines=lines,
         duration=seconds,
-        metadata_extra={k: v for k, v in meta.items() if k != "lines"},
+        metadata_extra={**{k: v for k, v in meta.items() if k != "lines"},
+                        "style_note": _clean(style_note)},
     )
 
 

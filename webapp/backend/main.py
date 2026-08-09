@@ -1615,9 +1615,6 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
     # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
     format: str = "narration"
-    # "" (style default) | "classic" | "story" — story-first mode drafts and
-    # judges a prose story before dividing it into scenes (pipeline/story.py).
-    script_mode: str = ""
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
@@ -1745,38 +1742,52 @@ def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
 
 
 def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
-    """Instruction appended to the JSON script prompt so the LLM emits dialogue/
-    silent/narration scenes. None for the default narration format (no change)."""
+    """Instruction appended to the script prompts so the LLM stages scenes as
+    ACTED takes. None for the narration format (the prompts are unchanged).
+
+    An acted scene is one continuous H3 generation carrying its own voices, so
+    the shape it asks for is the one pipeline/performance.py assembles: who is
+    on screen, what they say, where, and how it sounds. The word budget is the
+    binding constraint — the model truncates a clip that runs past its length,
+    mid-sentence."""
     fmt = (fmt or "narration").strip().lower()
     if fmt not in ("dialogue", "mixed"):
         return None
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
-        f"Speakers are these existing characters ({cast}) and/or the main character(s) you "
-        "identify in the \"characters\" field. Do not invent speakers outside those."
+        f"Speakers are these existing characters ({cast}) and/or the main character(s) "
+        "in the story. Do not invent speakers outside those."
         if cast else
-        "Use the recurring character(s) you identify in the \"characters\" field as the speakers."
+        "The speakers are the story's recurring characters — identify them and use them "
+        "consistently; a scene with nobody to speak must be \"narration\" or \"silent\"."
     )
     balance = (
         "Almost every scene should be mode \"dialogue\": the characters carry the story by "
-        "speaking to the camera or to each other."
+        "speaking to camera or to each other. Use \"narration\" only where no one could "
+        "plausibly say it."
         if fmt == "dialogue" else
-        "Mix freely: use \"dialogue\" when characters speak or interact, \"narration\" for "
-        "scene-setting voice-over, and \"silent\" for pure visual beats."
+        "Mix freely: \"dialogue\" when characters speak or interact, \"narration\" for "
+        "scene-setting voice-over, \"silent\" for a pure visual beat."
     )
     return (
-        "DIALOGUE VIDEO — characters SPEAK rather than only a narrator. For EACH scene object, "
-        "add a \"mode\" field: \"dialogue\" | \"silent\" | \"narration\". "
-        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of SHOTS, each "
-        "{\"speaker\": <character name>, \"text\": <one or two SHORT spoken sentences — keep each "
-        "line under ~20 words / 8 seconds of speech>, \"shot\": <static medium-shot framing of the "
-        "speaker — roughly waist-up with the setting around them, face clear but NOT an extreme "
-        "close-up>}, and leave \"narration\" empty. A dialogue scene plays "
-        "as a cut between these shots — the camera favors whoever speaks. "
-        "When \"silent\", leave narration empty (visuals only). "
+        "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. "
+        "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
+        "A \"dialogue\" scene also gets:\n"
+        "  \"cast\": [names on screen, AT MOST 2 — a third face makes the model swap them],\n"
+        "  \"lines\": ordered [{\"speaker\": <a cast name>, \"delivery\": <2-4 words, e.g. "
+        "\"quiet, certain\">, \"text\": <ONE short spoken sentence>}],\n"
+        "  \"setting\": one sentence — where this happens and what is around them,\n"
+        "  \"camera\": one sentence — the whole scene is ONE continuous take, so describe a "
+        "single shot and at most one move,\n"
+        "  \"soundscape\": diegetic sound only (no score),\n"
+        "and leaves \"narration\" EMPTY. "
+        "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
+        "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
+        "in the same setting rather than overfilling one. "
+        "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". "
         f"{speakers} {balance} "
-        "Still fill image_prompt and video_prompt as usual; for dialogue scenes the image_prompt "
-        "is the establishing wide shot of the setting."
+        "Still fill image_prompt and video_prompt as usual — for a dialogue scene they "
+        "describe the setting the performance happens in."
     )
 
 
@@ -1814,51 +1825,17 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
 
-    # Performance films fork the WHOLE pathway right here: a different script
-    # shape (cast + beats + quoted dialogue), and downstream no first frames,
-    # no TTS and no music. Nothing below this branch runs for one.
-    if _effective_script_mode(body, ss) == "performance":
-        return _do_performance_generate(body, cfg, ss, user_topic)
-
-    # Story-first mode (per-style script_mode, or a body override): draft and
-    # judge the prose story, then divide it into scenes — chained inline so
-    # automation callers run the whole thing headless with no review pause.
-    if _effective_script_mode(body, ss) == "story":
-        sg = _do_story_generate(body)
-        return _do_story_divide(DivideStoryBody(
-            work_dir=sg["work_dir"], voice=body.voice,
-            resolution=body.resolution,
-            auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
-            style_name=body.style_name, auto_critic=body.auto_critic))
-
-    extra = (ss.get("extra_instructions") or "").strip()
-    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
-
-    style_hint = body.visual_style or ss.get("visual_style", "") or None
-    video_style_hint = ss.get("video_style", "") or None
-    avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    style_cast = gapp._style_characters(cfg, body.style_name)
-    character_sheet = gapp._character_sheet(style_cast) or None
-    dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
-    # Style narration language (issue #176 part 2): narration + dialogue lines are
-    # written in the style's TTS language; prompts/titles stay English.
-    language = gapp._norm_tts_language(ss.get("tts_language"))
-    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
-    plan = _plan_for_generate(body, ss)
-    try:
-        with _track_op("Generating script", display_topic):
-            scenes, music_desc, style, characters = generate_script(
-                llm_topic, plan["n_scenes"], style_hint, (body.video_title or "").strip() or None,
-                video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, dialogue_note=dialogue_note, language=language,
-                scene_plan=plan,
-            )
-    except Exception as e:  # surface a clean message to the client
-        raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
-
-    return _persist_generated_script(body, cfg, ss, user_topic,
-                                     scenes, music_desc, style, characters,
-                                     scene_plan=plan)
+    # Every script is story-first: draft and judge the prose, then divide it
+    # into scenes in whatever mode the format asks for (narrated, acted, or a
+    # mix). Chained inline so automation callers run it headless with no
+    # review pause; the Create screen calls the two phases separately so the
+    # story can be read and edited before it becomes scenes.
+    sg = _do_story_generate(body)
+    return _do_story_divide(DivideStoryBody(
+        work_dir=sg["work_dir"], voice=body.voice,
+        resolution=body.resolution,
+        auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
+        style_name=body.style_name, auto_critic=body.auto_critic))
 
 
 def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
@@ -1920,7 +1897,6 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
-        "script_mode": _effective_script_mode(body, ss),
         "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
     }
     _write_create_brief(work_dir, create_brief)
@@ -2010,7 +1986,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     return result
 
 
-# ── Story-first mode (per-style script_mode = "story") ───────────────────────
+# ── Story-first: the one way a script is written ─────────────────────────────
 
 class StoryChapterEdit(BaseModel):
     chapter: int
@@ -2028,26 +2004,6 @@ class DivideStoryBody(BaseModel):
     style_name: str = ""
     # Automation only — see GenerateScriptBody.auto_critic.
     auto_critic: bool = False
-
-
-SCRIPT_MODES = ("classic", "story", "performance")
-
-
-def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
-    """The mode this generation runs with: an explicit body override wins, else
-    the style's script_mode. Dialogue/mixed formats always run classic — story
-    mode writes narration-only prose (v1). Performance mode is a whole
-    different film (acted scenes, no narrator) and ignores the format."""
-    mode = (body.script_mode or "").strip().lower()
-    if mode not in SCRIPT_MODES:
-        mode = ss.get("script_mode") or "classic"
-    if mode not in SCRIPT_MODES:
-        mode = "classic"
-    if mode == "story" and (body.format or "narration").strip().lower() != "narration":
-        gapp.logger.warning("Story mode requested with format=%r — falling back to classic",
-                            body.format)
-        mode = "classic"
-    return mode
 
 
 def _story_path(wd: Path) -> Path:
@@ -2076,13 +2032,12 @@ def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
             target["text"] = edit.text.strip()
 
 
-def _performance_scene_count(body: GenerateScriptBody, ss: dict) -> int:
-    """How many scenes a performance film gets.
+def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
+    """How many scenes an ALL-ACTED film gets.
 
-    Not the narration cadence plan: performance scenes are acted clips capped
-    by the video model (~10 s each), not a word budget. An explicit scene count
-    wins, then the requested minutes at one scene per clip, then the style's
-    own length."""
+    Not the narration cadence plan: acted scenes are clips capped by the video
+    model (~10 s each), not a word budget. An explicit scene count wins, then
+    the requested minutes at one scene per clip, then the style's own length."""
     try:
         n = int(body.n_scenes or 0)
     except (TypeError, ValueError):
@@ -2096,41 +2051,6 @@ def _performance_scene_count(body: GenerateScriptBody, ss: dict) -> int:
     if minutes > 0:
         return max(1, round(minutes * 60.0 / performance_mode.SCENE_SECONDS))
     return int(_plan_for_generate(body, ss)["n_scenes"])
-
-
-def _do_performance_generate(body: GenerateScriptBody, cfg: dict, ss: dict,
-                             user_topic: str) -> dict:
-    """Performance films: write acted, spoken scenes and persist them.
-
-    Same persistence as every other script (so the editor, queue, characters
-    and portraits all work unchanged) — but the scenes carry mode
-    "performance", which is what makes the render fork later."""
-    extra = (ss.get("extra_instructions") or "").strip()
-    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
-    style_hint = body.visual_style or ss.get("visual_style", "") or None
-    avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
-    language = gapp._norm_tts_language(ss.get("tts_language"))
-    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
-    n_scenes = _performance_scene_count(body, ss)
-    try:
-        with _track_op("Writing performance", display_topic):
-            scenes, style, characters = performance_mode.generate_performance_script(
-                llm_topic, n_scenes,
-                style_hint=style_hint,
-                video_title=(body.video_title or "").strip() or None,
-                character_sheet=character_sheet, avoid_hint=avoid_hint,
-                language=language, cfg=cfg,
-            )
-    except Exception as e:  # surface a clean message to the client
-        raise HTTPException(500, f"Performance script generation failed: "
-                                 f"{str(e).splitlines()[0][:300]}")
-
-    # The script critic rewrites narration for a narrated film — it has nothing
-    # to say about acted scenes, so it never runs here.
-    quiet = body.model_copy(update={"auto_critic": False})
-    return _persist_generated_script(quiet, cfg, ss, user_topic,
-                                     scenes, "", style, characters)
 
 
 def _do_story_generate(body: GenerateScriptBody) -> dict:
@@ -2149,14 +2069,21 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    fmt = (body.format or "narration").strip().lower()
     plan = _plan_for_generate(body, ss)
+    if fmt == "dialogue":
+        # Every scene is an acted clip, so the length comes from clip count,
+        # not from a narrator's word budget.
+        plan = {**plan, "n_scenes": _acted_scene_count(body, ss)}
+    dialogue_note = _build_dialogue_note(
+        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
                 llm_topic, plan["n_scenes"], style_hint=style_hint,
                 video_title=(body.video_title or "").strip() or None,
                 character_sheet=character_sheet, avoid_hint=avoid_hint,
-                scene_plan=plan,
+                scene_plan=plan, dialogue_note=dialogue_note,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
@@ -2176,8 +2103,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
-        "format": "narration",
-        "script_mode": "story",
+        "format": fmt,
+        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
     }
     _write_create_brief(work_dir, create_brief)
     store = DurableStore.default()
@@ -2188,7 +2115,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                     "topic": user_topic, "phase": "story_review", "style_name": ss["name"],
                     "create_brief": create_brief},
             metadata={"scene_count": 0, "music_desc": story.get("music", ""),
-                      "style": story.get("style", "")},
+                      "style": story.get("style", ""),
+                      "music_enabled": create_brief["music"]},
         )
     finally:
         store.close()
@@ -2238,12 +2166,17 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = video_title or user_topic.splitlines()[0][:80]
+    # The format decides how the story is STAGED: narrated voice-over, acted
+    # scenes the characters speak, or a mix of both (and silent beats).
+    fmt = (brief.get("format") or "narration").strip().lower()
+    dialogue_note = _build_dialogue_note(
+        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(
                 story, style_hint=style_hint, video_title=video_title or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, language=language,
+                avoid_hint=avoid_hint, language=language, dialogue_note=dialogue_note,
             )
     except HTTPException:
         raise
@@ -2263,8 +2196,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         resolution=(body.resolution or brief.get("resolution") or "").strip(),
         queue_item_id=body.queue_item_id,
         style_name=ss["name"],
-        format="narration",
-        script_mode="story",
+        format=fmt,
         auto_critic=body.auto_critic,
     )
     return _persist_generated_script(gen_body, cfg, ss, user_topic,

@@ -148,7 +148,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         resolution: job.resolution || '',
         style_name: job.style_name || '',
         queue_item_id: job.queue_item_id || '',
+        // Chosen at Create: skip the scene review and queue it once divided.
+        auto_approve: !!job.create_brief?.auto_approve,
       })
+      if (data.auto_approved) {
+        go(data.started ? 'progress' : 'queue',
+           data.started ? { workDir: data.started.work_dir || data.work_dir } : undefined)
+        return
+      }
       const forked = data.job_id !== job.job_id
       setJob({ ...job, ...data })
       if (!forked) {
@@ -779,7 +786,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   styleName: b.style_name || job.style_name || '',
                   voice: b.voice || job.voice || '',
                   visualStyle: b.visual_style || '',
-                  scriptMode: b.script_mode || '',
                   autoApprove: b.auto_approve,
                   queueItemId: job.queue_item_id || null,
                 })

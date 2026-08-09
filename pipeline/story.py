@@ -1,4 +1,4 @@
-"""Story-first script generation (per-style script_mode = "story").
+"""Story-first script generation — the one way a script is written.
 
 Instead of generating scenes directly in batches (pipeline/llm.py), this mode
 writes the whole story as prose first, judges it, and only then divides it
@@ -42,6 +42,7 @@ from pipeline.llm import (
 logger = logging.getLogger("video_gen")
 
 _SCENES_PER_CHAPTER = 10   # one prose chapter per ~10 video scenes
+_SILENT_SECONDS = 5.0      # a silent beat with no authored length
 _WORDS_PER_SCENE = 35      # legacy prose budget when no cadence plan is given
 
 
@@ -136,7 +137,8 @@ def generate_story(title: str, n_scenes: int,
                    video_title: str | None = None,
                    character_sheet: str | None = None,
                    avoid_hint: str | None = None,
-                   scene_plan: dict | None = None) -> dict:
+                   scene_plan: dict | None = None,
+                   dialogue_note: str | None = None) -> dict:
     """Draft, judge, and revise the full prose story. Returns the story dict
     persisted as story.json (status "draft"); ``divide_story`` turns it into
     scenes. *scene_plan* (pipeline/cadence.py) sets the prose word budget per
@@ -150,6 +152,9 @@ def generate_story(title: str, n_scenes: int,
     style_note = _style_note(style_hint)
     avoid_note = _avoid_note(avoid_hint)
     character_note = _character_note(character_sheet)
+    # An acted film needs people to speak: the outline must come back with
+    # recurring characters, not the empty list an abstract topic would give.
+    dialogue_str = f"\n{dialogue_note.strip()}" if dialogue_note and dialogue_note.strip() else ""
 
     # ── Outline: arc plan + style/music/characters ────────────────────────────
     raw = call(
@@ -157,7 +162,7 @@ def generate_story(title: str, n_scenes: int,
         _prompts.user("story_outline", title_line=_title_line(title, video_title),
                       n_scenes=n_scenes, n_chapters=n_chapters,
                       style_note=style_note, avoid_note=avoid_note,
-                      character_note=character_note),
+                      character_note=character_note, dialogue_note=dialogue_str),
         600 + 120 * n_chapters, "story outline",
     )
     outer = _parse_claude_response(raw, "story outline")
@@ -378,13 +383,19 @@ def divide_story(story: dict, n_scenes: int | None = None,
                  character_sheet: str | None = None,
                  avoid_hint: str | None = None,
                  language: str | None = None,
-                 scene_plan: dict | None = None) -> tuple[list[Scene], str, str, list[dict]]:
+                 scene_plan: dict | None = None,
+                 dialogue_note: str | None = None) -> tuple[list[Scene], str, str, list[dict]]:
     """Divide an approved story into scenes. Same return contract as
     ``pipeline.llm.generate_script``: (scenes, music_description, style,
     characters) — everything downstream of script generation is unchanged.
     *scene_plan* (default: the one stored on the story) sets each scene's
     10–15 s word caps in the divide prompt and drives the split-at-natural-
-    pause backstop for over-long narrations."""
+    pause backstop for over-long narrations.
+
+    *dialogue_note* asks for ACTED scenes: the story stays the source, but its
+    beats are staged as characters speaking on camera instead of (or as well
+    as) narrated. Those scenes come back mode "dialogue" with their lines
+    already assembled into an H3 prompt."""
     cfg = _load_cfg()
     call = _call_fn(cfg)
     scene_plan = scene_plan or story.get("scene_plan")
@@ -424,14 +435,18 @@ def divide_story(story: dict, n_scenes: int | None = None,
             video_style_note=video_style_note, avoid_note=avoid_note,
             character_note=character_note, language_note=language_note,
             conclusion_note=conclusion_note, scene_plan=scene_plan,
+            dialogue_note=dialogue_note, style_hint=style_hint,
         ))
         batch_start = batch_end + 1
 
-    final_scenes = scenes[:n]
-    _fill_empty_narrations(call, final_scenes, title, video_title, language=language,
+    final_scenes = _split_overloaded_acted(scenes[:n])
+    # Narrated scenes only: a silent scene is meant to be empty, and an acted
+    # scene's "narration" is what its characters say (filled at assembly).
+    narrated = [s for s in final_scenes if s.mode in ("narration", "", None) and not s.lines]
+    _fill_empty_narrations(call, narrated, title, video_title, language=language,
                            scene_plan=scene_plan)
-    # Absolute last-resort safety net: no Scene leaves with empty narration.
-    for s in final_scenes:
+    # Absolute last-resort safety net: no narrated Scene leaves empty.
+    for s in narrated:
         if not (s.narration or "").strip():
             s.narration = f"{s.title or f'Scene {s.id}'}."
             logger.warning("Scene %d still empty after divide fill — used title", s.id)
@@ -451,11 +466,41 @@ def divide_story(story: dict, n_scenes: int | None = None,
     return final_scenes, music, style, identified
 
 
+def _split_overloaded_acted(scenes: list[Scene]) -> list[Scene]:
+    """Split any acted scene whose dialogue cannot fit one clip, and renumber.
+
+    The video model truncates past ~15 s, so a scene the LLM overfilled is cut
+    at a speaker turn into consecutive scenes instead — more short scenes beat
+    one that stops mid-sentence."""
+    from pipeline import performance as _perf
+
+    out: list[Scene] = []
+    for scene in scenes:
+        if not (_perf.is_performance(scene) and scene.lines):
+            out.append(scene)
+            continue
+        raw = {**_perf.scene_meta(scene), "title": scene.title, "lines": scene.lines}
+        pieces = _perf.split_overloaded(raw)
+        if len(pieces) == 1:
+            out.append(scene)
+            continue
+        logger.info("Scene %d: dialogue needs more than one clip — split into %d",
+                    scene.id, len(pieces))
+        for piece in pieces:
+            out.append(_perf.scene_from_raw(len(out) + 1, piece,
+                                            style_note=scene.metadata_extra.get("style_note", "")))
+    for i, scene in enumerate(out, 1):
+        scene.id = i
+    return out
+
+
 def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                   n_scenes: int, topic_ref: str, ctx_str: str,
                   video_style_note: str, avoid_note: str, character_note: str,
                   language_note: str, conclusion_note: str,
-                  scene_plan: dict | None = None) -> list[Scene]:
+                  scene_plan: dict | None = None,
+                  dialogue_note: str | None = None,
+                  style_hint: str | None = None) -> list[Scene]:
     """One story→scenes JSON call for scenes start..end. On a parse failure the
     chunk is halved and retried (the _translate_batch defense); a single scene
     that still fails becomes a stub the narration-fill pass completes. Always
@@ -469,7 +514,9 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
                           batch_start=start, batch_end=end, chapter_text=text,
                           ctx_str=ctx_str, video_style_note=video_style_note,
                           avoid_note=avoid_note, character_note=character_note,
-                          language_note=language_note, conclusion_note=conclusion_note),
+                          language_note=language_note, conclusion_note=conclusion_note,
+                          dialogue_note=("\n" + dialogue_note.strip()
+                                         if dialogue_note and dialogue_note.strip() else "")),
             count * 600 + 400, f"divide scenes {start}–{end}", retries=2,
         )
         items = _parse_claude_response(raw, f"divide scenes {start}–{end}")
@@ -486,7 +533,8 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
             kw = dict(n_scenes=n_scenes, topic_ref=topic_ref, ctx_str=ctx_str,
                       video_style_note=video_style_note, avoid_note=avoid_note,
                       character_note=character_note, language_note=language_note,
-                      scene_plan=scene_plan)
+                      scene_plan=scene_plan, dialogue_note=dialogue_note,
+                      style_hint=style_hint)
             return (_divide_chunk(call, title, first, start, mid, conclusion_note="", **kw)
                     + _divide_chunk(call, title, second, mid + 1, end,
                                     conclusion_note=conclusion_note, **kw))
@@ -496,14 +544,40 @@ def _divide_chunk(call, title: str, text: str, start: int, end: int, *,
     out = []
     for i in range(count):
         item = items[i] if i < len(items) and isinstance(items[i], dict) else {}
-        out.append(Scene(
-            id=start + i,
-            title=item.get("title", f"Scene {start + i}"),
+        out.append(_scene_from_item(start + i, item, title, style_hint))
+    return out
+
+
+def _scene_from_item(scene_id: int, item: dict, title: str,
+                     style_hint: str | None) -> Scene:
+    """One divide-prompt object → a Scene, in whichever mode it came back as.
+
+    An acted scene is assembled here rather than left as loose fields, so the
+    editor shows the same H3 prompt the renderer will send (pipeline/
+    performance.py owns that assembly; this is its only other caller)."""
+    from pipeline import performance as _perf
+
+    mode = str(item.get("mode") or "narration").strip().lower()
+    if _perf.is_performance_mode(mode) and item.get("lines"):
+        return _perf.scene_from_raw(scene_id, item, style_note=style_hint or "")
+    if mode == "silent":
+        return Scene(
+            id=scene_id,
+            title=item.get("title", f"Scene {scene_id}"),
             image_prompt=item.get("image_prompt", title),
             video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
-            narration=item.get("narration", ""),
-        ))
-    return out
+            narration="",
+            mode="silent",
+            duration=float(item.get("seconds") or 0) or _SILENT_SECONDS,
+            metadata_extra={"mode": "silent"},
+        )
+    return Scene(
+        id=scene_id,
+        title=item.get("title", f"Scene {scene_id}"),
+        image_prompt=item.get("image_prompt", title),
+        video_prompt=item.get("video_prompt", item.get("image_prompt", title)),
+        narration=item.get("narration", ""),
+    )
 
 
 # ── Script critic (post-generation QC over the assembled scene list) ─────────

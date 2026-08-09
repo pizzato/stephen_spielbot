@@ -1,4 +1,4 @@
-"""Performance-film script generation (script_mode = "performance")."""
+"""Acted scenes: the prompt they assemble into, and the shape they take."""
 import json
 import unittest
 from unittest import mock
@@ -114,57 +114,44 @@ class NormalizationTests(unittest.TestCase):
             self.assertEqual(performance._clamp_seconds(raw), expected)
 
 
-_LLM_REPLY = json.dumps({
-    "style": "handheld 16mm documentary, humid greens",
-    "characters": [
-        {"name": "CHICO", "description": "stocky man, thick moustache, white shirt",
-         "gender": "male", "age": "adult"},
-        {"name": "DARLY", "description": "broad rancher, wide-brimmed hat",
-         "gender": "male", "age": "mature"},
-    ],
-    "scenes": [
-        {"title": "The felled log", "setting": "a burnt clearing at dusk", "seconds": 10,
-         "cast": ["CHICO", "DARLY"], "camera": "locked off",
-         "soundscape": "cicadas, distant fire",
-         "beats": [{"t0": 0, "t1": 10, "action": "the two men square up"}],
-         "lines": [{"speaker": "CHICO", "delivery": "quiet", "text": "You can burn the trees."},
-                   {"speaker": "DARLY", "delivery": "flat", "text": "Then remember this one."}]},
-        {"title": "After", "setting": "the same clearing, night", "seconds": 30,
-         "cast": ["CHICO"], "camera": "slow push",
-         "soundscape": "insects",
-         "beats": [{"t0": 0, "t1": 8, "action": "CHICO walks away"}],
-         "lines": [{"speaker": "CHICO", "delivery": "tired", "text": "Not tonight."}]},
-    ],
-})
+_RAW_SCENES = [
+    {"title": "The felled log", "setting": "a burnt clearing at dusk", "seconds": 10,
+     "mode": "dialogue", "cast": ["CHICO", "DARLY"], "camera": "locked off",
+     "soundscape": "cicadas, distant fire",
+     "beats": [{"t0": 0, "t1": 10, "action": "the two men square up"}],
+     "lines": [{"speaker": "CHICO", "delivery": "quiet", "text": "You can burn the trees."},
+               {"speaker": "DARLY", "delivery": "flat", "text": "Then remember this one."}]},
+    {"title": "After", "setting": "the same clearing, night", "seconds": 30,
+     "mode": "dialogue", "cast": ["CHICO"], "camera": "slow push",
+     "soundscape": "insects",
+     "beats": [{"t0": 0, "t1": 8, "action": "CHICO walks away"}],
+     "lines": [{"speaker": "CHICO", "delivery": "tired", "text": "Not tonight."}]},
+]
 
 
-class GenerationTests(unittest.TestCase):
-    def _generate(self, reply=_LLM_REPLY, **kwargs):
-        with mock.patch.object(performance, "_chat_complete", return_value=reply) as call:
-            scenes, style, characters = performance.generate_performance_script(
-                "Chico Mendes", 2, cfg={}, **kwargs)
-        return scenes, style, characters, call
+class SceneShapeTests(unittest.TestCase):
+    """One divide-prompt object → the Scene the renderer and editor share."""
+
+    def _scenes(self, style_note="handheld 16mm documentary, humid greens"):
+        return [performance.scene_from_raw(i, raw, style_note=style_note)
+                for i, raw in enumerate(_RAW_SCENES, 1)]
 
     def test_scene_shape(self):
-        scenes, style, characters, _ = self._generate()
-        self.assertEqual(len(scenes), 2)
-        self.assertEqual(style, "handheld 16mm documentary, humid greens")
-        self.assertEqual([c["name"] for c in characters], ["CHICO", "DARLY"])
-        s = scenes[0]
+        s = self._scenes()[0]
         self.assertEqual(s.id, 1)
-        self.assertEqual(s.mode, "performance")
-        # No image engine runs for a performance scene.
+        self.assertEqual(s.mode, "dialogue")
+        # No image engine runs for an acted scene.
         self.assertEqual(s.image_prompt, "")
         # The editable video_prompt IS the assembled H3 prompt.
         self.assertIn("<Picture 1> defines CHICO", s.video_prompt)
         self.assertIn("Do not add subtitles", s.video_prompt)
+        self.assertIn("handheld 16mm documentary", s.video_prompt)
         # Narration mirrors the spoken words (captions/description), never TTS input.
         self.assertEqual(s.narration, "You can burn the trees. Then remember this one.")
 
     def test_metadata_carries_the_structure(self):
-        scenes, _, _, _ = self._generate()
-        meta = scenes[0].metadata
-        self.assertEqual(meta["mode"], "performance")
+        meta = self._scenes()[0].metadata
+        self.assertEqual(meta["mode"], "dialogue")
         self.assertEqual(meta["cast"], ["CHICO", "DARLY"])
         self.assertEqual(len(meta["lines"]), 2)
         self.assertEqual(meta["beats"][0]["action"], "the two men square up")
@@ -174,32 +161,16 @@ class GenerationTests(unittest.TestCase):
     def test_scene_length_comes_from_its_words_not_the_llm_guess(self):
         # Scene 2 claims 30 s for one short line — content decides now, so it
         # lands at the model minimum instead of a padded (babble-prone) clip.
-        scenes, _, _, _ = self._generate()
-        self.assertEqual(scenes[1].metadata["seconds"], performance.MIN_SCENE_SECONDS)
-        self.assertEqual(scenes[1].duration, performance.MIN_SCENE_SECONDS)
-
-    def test_hints_reach_the_prompt(self):
-        _, _, _, call = self._generate(style_hint="claymation", avoid_hint="gore",
-                                       language="Portuguese")
-        user_msg = call.call_args[0][2]
-        self.assertIn("claymation", user_msg)
-        self.assertIn("gore", user_msg)
-        self.assertIn("Portuguese", user_msg)
-
-    def test_empty_reply_is_an_error(self):
-        with self.assertRaises(RuntimeError):
-            self._generate(reply=json.dumps({"style": "x", "scenes": []}))
+        scene = self._scenes()[1]
+        self.assertEqual(scene.metadata["seconds"], performance.MIN_SCENE_SECONDS)
+        self.assertEqual(scene.duration, performance.MIN_SCENE_SECONDS)
 
     def test_is_performance_detects_scenes_and_rows(self):
-        scenes, _, _, _ = self._generate()
-        self.assertTrue(performance.is_performance(scenes[0]))
+        self.assertTrue(performance.is_performance(self._scenes()[0]))
         self.assertTrue(performance.is_performance({"metadata": {"mode": "performance"}}))
+        self.assertTrue(performance.is_performance({"metadata": {"mode": "dialogue"}}))
         self.assertFalse(performance.is_performance({"metadata": {"mode": "narration"}}))
         self.assertFalse(performance.is_performance({}))
-
-
-if __name__ == "__main__":
-    unittest.main()
 
 
 class PunctuationTests(unittest.TestCase):
@@ -337,3 +308,35 @@ class SceneLengthTests(unittest.TestCase):
         self.assertLess(performance.render_seconds(short), 14.0)
         self.assertGreaterEqual(performance.render_seconds(short),
                                 performance.MIN_SCENE_SECONDS)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class SplitOrderTests(unittest.TestCase):
+    """A long exchange splits across scenes without swapping the two people."""
+
+    def test_the_cast_order_survives_a_split(self):
+        raw = {"title": "The argument", "cast": ["ANA", "BO"], "seconds": 10,
+               "setting": "a wharf", "camera": "locked wide", "soundscape": "gulls",
+               "lines": [
+                   {"speaker": "ANA", "text": "You said a lot of things and you meant "
+                                              "almost none of them, I stood here believing."},
+                   {"speaker": "BO", "text": "That is not fair and you know exactly why "
+                                             "it is not fair, so do not pretend."},
+                   {"speaker": "ANA", "text": "Then tell me what is fair, because I have "
+                                              "run out of ways to ask you nicely."}]}
+        pieces = performance.split_overloaded(raw)
+        self.assertGreater(len(pieces), 1)
+        scenes = [performance.scene_from_raw(i, p) for i, p in enumerate(pieces, 1)]
+        # Picture 1 is the same person in every piece — the geography block puts
+        # Picture 1 on the left, so a per-piece order would swap them mid-scene.
+        self.assertEqual([s.metadata["cast"] for s in scenes],
+                         [["ANA", "BO"]] * len(scenes))
+
+    def test_a_speaker_missing_from_the_cast_is_added(self):
+        scene = performance.scene_from_raw(1, {
+            "cast": ["ANA"], "seconds": 8,
+            "lines": [{"speaker": "BO", "text": "Hello."}]})
+        self.assertEqual(scene.metadata["cast"], ["ANA", "BO"])

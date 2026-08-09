@@ -19,13 +19,14 @@ scenes, and each scene takes the path its mode asks for.
 
 ## Turning it on
 
-**A whole film.** Settings → a style → *Script & content* → **Script mode → Performance**,
-or pick it per film in [Create](manual/create.md) when you're on *No style*. A second
-picker appears for the video model (below).
+Choose the **Dialogue** format in [Create](manual/create.md) for a film that is acted all
+the way through, or **Mixed** to let the writer place acted scenes among narrated and silent
+ones. A single scene can also be switched to *dialogue* in the
+[Script editor](manual/script.md) — any scene with dialogue lines is acted, wherever it sits.
 
-**Some scenes.** Choose the **Dialogue** or **Mixed** format in Create, or set a single
-scene's type to *dialogue* in the [Script editor](manual/script.md). Any scene with
-dialogue lines is acted, wherever it sits.
+The script is written story-first either way: the prose story comes first, and the division
+into scenes is what stages it as performance. The video model is picked per style
+(Settings → a style → **Acted scene video model**; see below).
 
 A scene written as dialogue in a mixed script only carries its lines — the cast comes from
 who speaks, the length from what they say, and the setting from the scene's own video

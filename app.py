@@ -191,7 +191,7 @@ DEFAULT_CFG = {
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
     # model animates each scene. Default = the incumbent LTX 2.3 path.
     "default_video_engine": "ltx23",
-    # Ref2VA model for performance films (script_mode = "performance"): portraits
+    # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
@@ -244,11 +244,6 @@ DEFAULT_CFG = {
     # word budget is minutes × cadence, divided into 10–15 s scenes
     # (pipeline/cadence.py). 0 = derive the length from the legacy n_scenes.
     "default_video_minutes": 0.0,
-    # How scripts are written: "classic" generates scenes directly in batches;
-    # "story" drafts a full prose story first (outline → chapters → critique),
-    # then divides it into scenes (see pipeline/story.py). Mirrors the default
-    # style like every other STYLE_FIELD_TO_FLAT entry.
-    "default_script_mode": "classic",
     # Burn the cover into the head of the final video when a render finishes
     # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
     # and pick their own frame. Held for _seconds (1s by default; a single
@@ -412,8 +407,6 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Target video length in minutes (0 = derive from legacy n_scenes)
     "video_minutes":        "default_video_minutes",
-    # Script generation mode: "classic" (direct scenes) or "story" (story-first)
-    "script_mode":          "default_script_mode",
     # Burn the cover into the head of the final video after each render
     # ("none" | "image" | "text") — Shorts pick their own frame, not the
     # uploaded thumbnail — and how long that cover is held (seconds)
@@ -800,11 +793,6 @@ def _norm_video_minutes(value) -> float:
     return 0.0 if v <= 0 else round(max(0.25, min(cadence.MAX_MINUTES, v)), 2)
 
 
-def _norm_script_mode(value) -> str:
-    """Coerce a script-generation mode to "classic", "story" or "performance"."""
-    return value if value in ("story", "performance") else "classic"
-
-
 def _norm_reference_engine(value) -> str:
     """Coerce a Ref2VA engine key (performance films) to a known one."""
     return engines.resolve_reference({}, value)["key"]
@@ -967,7 +955,6 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
         _coerce(row, "voice_cadence_wpm", _norm_voice_cadence_wpm)
         _coerce(row, "video_minutes", _norm_video_minutes)
-        _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
         _coerce(row, "cover_typography", _norm_cover_typography)

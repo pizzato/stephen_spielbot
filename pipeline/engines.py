@@ -243,7 +243,7 @@ VIDEO_ENGINES: dict[str, dict] = {
     # ── Reference-to-video (Ref2VA): performance films ───────────────────────
     # Not scene I2V engines — these take character portraits (and voice clips)
     # instead of a first frame, and are only reachable from a performance-mode
-    # film (script_mode = "performance"). "reference" marks them so the Settings
+    # scene (the Dialogue/Mixed format). "reference" marks them so the Settings
     # video-engine picker keeps offering only the I2V engines.
     "minimax-h3-ref": {
         "key": "minimax-h3-ref",
@@ -371,7 +371,7 @@ VIDEO_ENGINES: dict[str, dict] = {
 }
 
 DEFAULT_VIDEO_ENGINE = "ltx23"
-# Performance films (script_mode = "performance") render through a Ref2VA engine
+# Acted scenes render through a Ref2VA engine
 # instead of the style's I2V engine; this is the default when none is stamped.
 # w4a8 over turbo, measured on one shot at one seed: same wall clock (~6.6 min
 # vs ~6), but 15 real steps instead of a 4-step distillation — sharpness 4.2 vs

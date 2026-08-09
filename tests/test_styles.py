@@ -19,6 +19,7 @@ import yaml
 
 import app
 import webapp.backend.main as backend
+from scriptstub import stub_script
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir
 
 
@@ -105,19 +106,17 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(cfg["default_video_negative_prompt"], "")
         self.assertEqual(cfg["script_avoid"], "")
 
-    def test_script_mode_normalizes_and_mirrors(self):
+    def test_music_enabled_defaults_on_and_mirrors(self):
         self.write_config({
-            "styles": [_style("A"), _style("B", script_mode="story"),
-                       _style("C", script_mode="bogus")],
+            "styles": [_style("A"), _style("B", music_enabled=False)],
             "default_style": "B",
         })
         cfg = app.load_config()
         by_name = {s["name"]: s for s in cfg["styles"]}
-        self.assertEqual(by_name["A"]["script_mode"], "classic")   # absent → default
-        self.assertEqual(by_name["B"]["script_mode"], "story")     # preserved
-        self.assertEqual(by_name["C"]["script_mode"], "classic")   # invalid → classic
+        self.assertTrue(by_name["A"]["music_enabled"])     # absent → scored
+        self.assertFalse(by_name["B"]["music_enabled"])    # preserved
         # flat key mirrors the default style (B)
-        self.assertEqual(cfg["default_script_mode"], "story")
+        self.assertFalse(cfg["music_enabled"])
 
     def test_install_seeded_worker_lists_still_count_as_fresh(self):
         self.write_config({"comfy_workers": ["http://s1:8188"], "tts_workers": ["s1"]})
@@ -488,19 +487,18 @@ class QueueItemStyleTests(TempConfigCase):
         def fake_update(item_id, **kw):
             updates.setdefault(item_id, {}).update(kw)
 
-        with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "B-vision", [])) as gen, \
+        with stub_script(scenes, music="calm piano", style="B-vision") as (draft, divide), \
              mock.patch.object(backend.yt, "load_queue", return_value=[dict(item)]), \
              mock.patch.object(backend.yt, "update_queue_item", side_effect=fake_update), \
              mock.patch.object(backend.gapp, "_launch_generation_job") as launch:
             out = backend._start_queue_item(dict(item))
 
-        # The LLM prompt carried style B's extra instructions, visual style and
-        # motion/video style.
-        topic_arg, _n, style_hint = gen.call_args[0][:3]
+        # The story prompt carried style B's extra instructions and visuals,
+        # and the division carried its motion style.
+        topic_arg, _n = draft.call_args[0][:2]
         self.assertIn("Speak like B.", topic_arg)
-        self.assertEqual(style_hint, "B-vision")
-        self.assertEqual(gen.call_args.kwargs["video_style_hint"], "B motion")
+        self.assertEqual(draft.call_args.kwargs["style_hint"], "B-vision")
+        self.assertEqual(divide.call_args.kwargs["video_style_hint"], "B motion")
         # The render launched straight away and its job_config carries the
         # profile: style B's name, voice and resolution drive the worker.
         launch.assert_called_once()
@@ -563,8 +561,7 @@ class DescriptionSuffixTests(TempConfigCase):
         self.write_config({"styles": [_style("A")], "default_style": "A"})
         scenes = [backend.Scene(id=1, title="One", image_prompt="i", video_prompt="v",
                                 narration="n")]
-        with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "A visual", [])), \
+        with stub_script(scenes, music="calm piano", style="A visual"), \
              mock.patch.object(backend.threading, "Thread") as Thread:
             backend._do_script_generate(backend.GenerateScriptBody(
                 video_title="Threaded", topic="Threaded", n_scenes=1))

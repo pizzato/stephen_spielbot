@@ -15,6 +15,7 @@ os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))
 
 import webapp.backend.main as backend  # noqa: E402
 from pipeline.llm import Scene  # noqa: E402
+from scriptstub import stub_script  # noqa: E402
 from test_styles import TempConfigCase, _style  # noqa: E402
 
 
@@ -45,8 +46,7 @@ class CreateBriefTests(TempConfigCase):
             style_name="Hero",
             **kwargs,
         )
-        with mock.patch.object(backend, "generate_script",
-                               return_value=([scene], "music", "vis", [])), \
+        with stub_script([scene]), \
              mock.patch.object(backend, "_describe_in_background"):
             return backend._do_script_generate(body)
 

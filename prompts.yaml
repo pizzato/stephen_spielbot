@@ -199,7 +199,7 @@ story_outline:
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    ${title_line}Plan the story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes.${style_note}${avoid_note}${character_note}
+    ${title_line}Plan the story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes.${style_note}${avoid_note}${character_note}${dialogue_note}
 
 
 story_chapter:
@@ -339,72 +339,6 @@ story_redraft_chapter:
     Write this chapter's narration prose (~${target_words} words).
 
 
-performance_script:
-  description: |
-    Performance films (per-style script_mode = "performance"): the characters
-    act and SPEAK, and MiniMax H3 Ref2VA generates picture AND voice in one pass
-    from character portraits. There is no narrator, no first frame and no music,
-    so this asks for structured scene beats and quoted dialogue rather than
-    image/video prompts — pipeline/performance.py assembles the model prompt
-    from the fields deterministically.
-  system: |
-    You are a screenwriter writing SHORT acted scenes for an AI video model that
-    generates picture and synchronized speech together.
-
-    Output ONLY a JSON object with exactly three keys:
-
-    "style": a 15-30 word visual style sentence applied to EVERY scene (medium,
-    palette, era, lens, lighting, film texture). No character names in it.
-
-    "characters": array of the people who appear, each
-    {"name": <single distinctive name as used in the dialogue>,
-     "description": <25-45 words of fixed physical appearance: face, hair,
-                     build, wardrobe — what must never change between scenes>,
-     "gender": "male"|"female"|"neutral", "age": "child"|"young"|"adult"|"mature"}
-
-    "scenes": array of scene objects, each with exactly these keys:
-      - "title": 4-8 word scene title
-      - "setting": 20-40 words — where this happens and what is physically
-        around the characters. No camera or motion words.
-      - "seconds": integer clip length; keep every scene at ${seconds} or less.
-      - "cast": array of the character names physically present ON SCREEN.
-      - "beats": ordered array of {"t0": <second>, "t1": <second>,
-        "action": <what is visibly happening, 10-25 words>} covering the whole
-        clip with no gaps. Actions describe bodies, faces and objects — never
-        the camera, never sound.
-      - "lines": ordered array of {"speaker": <a name from "cast">,
-        "delivery": <3-6 words on tone and pace, e.g. "low, flat, unhurried">,
-        "text": <the words spoken, VERBATIM>}. At most ${max_speakers} distinct
-        speakers per scene.
-      - "camera": one sentence of camera behaviour, or an explicit refusal
-        ("locked off, no push, no zoom").
-      - "soundscape": the diegetic sound only — what the microphone in that
-        place would pick up, with the moment each cue lands. NEVER music.
-
-    Hard rules:
-    - Spoken lines must fit the clip: roughly 2.5 words per second of scene,
-      shared across all lines, and AT MOST ~22 spoken words per scene in total.
-      Going over means the model cuts the line off mid-sentence. Write MORE,
-      SHORTER scenes rather than packing a conversation into one — a scene is
-      one exchange (one or two lines), not a whole discussion.
-    - Every scene stands alone as one continuous shot in one place. Never write
-      a scene that cuts to a different location.
-    - Refer to characters by name only. Never describe their appearance in
-      beats or lines — the model gets their portrait as a reference image.
-    - No narrator, no voice-over, no on-screen text, no music anywhere.
-    - The scenes in order must tell one complete story with a beginning, a
-      turn, and an ending.
-  user: |
-    Film: ${title}
-
-    TOPIC/DIRECTION:
-    ${topic}
-
-    Write exactly ${n_scenes} scenes.
-
-    ${notes}
-
-
 story_divide:
   description: |
     Story mode final step: convert one chapter's prose into scene objects
@@ -438,7 +372,7 @@ story_divide:
     ${chapter_text}
 
     Previous scenes for narrative continuity:
-    ${ctx_str}${video_style_note}${avoid_note}${character_note}${language_note}${conclusion_note}
+    ${ctx_str}${video_style_note}${avoid_note}${character_note}${language_note}${dialogue_note}${conclusion_note}
 
     Generate scene objects with IDs ${batch_start}–${batch_end}.
 

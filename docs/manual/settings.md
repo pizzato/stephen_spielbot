@@ -132,7 +132,6 @@ those scripts, so they accent the last line instead — nothing when the title f
 | Field | Effect |
 |---|---|
 | **Video length (minutes)** | The style's default runtime. The script's word budget is length × the narrator's cadence, divided into 10–15 s scenes |
-| **Script mode** | Classic or [story-first](create.md#script-mode) |
 | **Visual style** | Appended to every image prompt |
 | **Video / motion style** | Camera and subject movement guidance for video prompts |
 | **Video negative prompt** | Per-style LTX negative; blank uses the built-in quality default |

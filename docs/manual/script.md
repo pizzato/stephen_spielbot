@@ -5,7 +5,7 @@
 The review gate. Everything the render will do is decided here, and nothing has touched a
 GPU yet except the scene preview images you ask for.
 
-Five views along the top: **Scripts**, **Story** (story-first drafts only), **Cover**,
+Five views along the top: **Scripts**, **Story**, **Cover**,
 **Characters**, **Scenes**.
 
 ## Scripts
@@ -18,7 +18,7 @@ no scenes yet; the loaded one is marked too.
 
 ## Story
 
-Only for [story-first](create.md#script-mode) scripts. The prose behind the scenes, one
+The prose behind the scenes, one
 editable box per chapter, each labelled with how many scenes it will become.
 
 - **Save story** keeps your edits and lets you come back later — the draft persists until

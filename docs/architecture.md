@@ -39,7 +39,7 @@ at the top is the documented key set.
 | Module | Responsibility |
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
-| `story.py` | Story-first script mode — draft, critique, then divide into scenes |
+| `story.py` | Script generation — draft the story, critique it, then divide it into scenes |
 | `performance.py` | Performance films — acted script shape and the Ref2VA prompt assembly |
 | `engines.py` | Image engine bundles (FLUX.2 Klein, FLUX.1 schnell) for generate and edit |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission and per-scene video rendering |
