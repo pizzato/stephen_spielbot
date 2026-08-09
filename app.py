@@ -190,7 +190,7 @@ DEFAULT_CFG = {
     "default_video_engine": "ltx23",
     # Ref2VA model for performance films (script_mode = "performance"): portraits
     # and dialogue instead of a first frame. Narrated films never use it.
-    "default_reference_engine": "minimax-h3-ref-turbo",
+    "default_reference_engine": "minimax-h3-ref-w4a8",
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,

@@ -30,6 +30,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | Gemma 3 text encoder (required by the LTX graph) | `Comfy-Org/ltx-2` (`gemma_3_12B_it_fp4_mixed`) | Google **Gemma Terms of Use** + Prohibited Use Policy (not an OSI license) | Allowed under Gemma terms; you must comply with the Prohibited Use Policy |
 | MiniMax H3 33B (opt-in engine: DiT and Ref2VA sibling checkpoints, Qwen3-VL text encoder, video/audio VAEs) | `Comfy-Org/MiniMax-H3` | **MiniMax H3 Community License** (not an OSI license) | ⚠️ Territory-restricted (not licensed in the USA, EU, UK, South Korea); machine-generated disclosure + "MiniMax H3" attribution required; separate authorization above US$20M yearly revenue |
 | faster-whisper + CTranslate2 (performance-shot quality gate, CPU transcription) | `SYSTRAN/faster-whisper` (base.en weights via `Systran/faster-whisper-base.en`) | MIT | ✅ |
+| MiniMax H3 w4a8 Ref2VA checkpoint (default performance-film engine; 4-bit weights) | `Kijai/MiniMax-H3-experimental` | Derived from MiniMax H3 — **MiniMax H3 Community License** | ⚠️ Same territory restrictions and attribution as the base H3 weights |
 | MiniMax H3 Turbo LoRA (opt-in few-step distillation) | `larryvrh/MiniMax-H3-Turbo-Lora` | Apache-2.0 (the base H3 weights it patches keep the MiniMax H3 Community License) | ✅ LoRA itself yes; output remains bound by the H3 terms above |
 
 ## Audio models

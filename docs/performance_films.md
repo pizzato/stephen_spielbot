@@ -70,11 +70,21 @@ Assembly is a straight concat that keeps each clip's own audio.
 
 | Engine | Speed | Notes |
 |---|---|---|
-| `minimax-h3-ref-turbo` (default) | ~10 min per 10 s scene | Distilled few-step LoRA on the full 34 GB checkpoint |
-| `minimax-h3-ref` | ~23 min per 10 s scene | 15 steps + EasyCache on the 21 GB pruned checkpoint |
+| `minimax-h3-ref-w4a8` (default) | ~6.6 min per 10 s scene | 4-bit weights, **15 real steps** — turbo's speed without the distillation look. Needs ComfyUI ≥ 0.31.0 |
+| `minimax-h3-ref-turbo` | ~6 min | Distilled 4-step LoRA on the full 34 GB checkpoint — fastest, but over-saturated and over-sharpened |
+| `minimax-h3-ref` | ~23 min | 15 steps + EasyCache on the 21 GB pruned checkpoint — the fidelity reference |
 
-Both are measured on a DGX Spark GB10 at 704×1280 / 243 frames. Download them from
+Measured on a DGX Spark GB10, same shot and seed throughout (704×1280): edge
+energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
+engine at 4.4 — the "over-sharpened" look is the distillation, not the step
+count, and w4a8 avoids it at turbo's wall clock. Download them from
 Settings → Infrastructure like any other engine; see [models](models.md).
+
+!!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
+    Below that version the checkpoint does not error — it renders **black
+    frames**. The render refuses up front rather than shipping them, but a
+    mixed fleet still means some workers cannot take the job at all. Rebuild
+    all of them together (`COMFYUI_REF`), exactly like SageAttention.
 
 !!! warning "Licence"
     MiniMax H3 is **not licensed for use in the USA, EU, UK or South Korea**, and requires

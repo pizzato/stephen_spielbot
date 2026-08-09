@@ -373,7 +373,12 @@ VIDEO_ENGINES: dict[str, dict] = {
 DEFAULT_VIDEO_ENGINE = "ltx23"
 # Performance films (script_mode = "performance") render through a Ref2VA engine
 # instead of the style's I2V engine; this is the default when none is stamped.
-DEFAULT_REFERENCE_ENGINE = "minimax-h3-ref-turbo"
+# w4a8 over turbo, measured on one shot at one seed: same wall clock (~6.6 min
+# vs ~6), but 15 real steps instead of a 4-step distillation — sharpness 4.2 vs
+# turbo's 5.5 (base scores 4.4), which is the over-sharpened look going away.
+# Needs ComfyUI >= 0.31.0 fleet-wide; older workers are refused, not silently
+# given black frames (see comfyui.check_engine_supported).
+DEFAULT_REFERENCE_ENGINE = "minimax-h3-ref-w4a8"
 
 
 def get_video(key: str) -> dict | None:

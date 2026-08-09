@@ -160,6 +160,9 @@ huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_audio_vae_fp32.safe
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download larryvrh/MiniMax-H3-Turbo-Lora minimax_h3_turbo_4step_ckpt500.safetensors --local-dir models/loras --local-dir-use-symlinks False
 
+# performance films — the DEFAULT w4a8 (4-bit, needs ComfyUI >= 0.31.0):
+huggingface-cli download Kijai/MiniMax-H3-experimental minimax_h3_ref2va_pruned_w4a8_mixed.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+
 # performance films — minimax-h3-ref (pruned) and minimax-h3-ref-turbo (full):
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False

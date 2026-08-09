@@ -66,7 +66,7 @@ FROM ${BASE_IMAGE}
 
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
 # v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3).
-ARG COMFYUI_REF=v0.30.0
+ARG COMFYUI_REF=v0.31.1
 ARG TORCH_INDEX_URL
 ARG TORCH_SPEC
 
