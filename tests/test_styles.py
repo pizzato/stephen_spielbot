@@ -73,7 +73,10 @@ class TempConfigCase(unittest.TestCase):
             p = mock.patch.object(target, attr, value)
             p.start()
             self.addCleanup(p.stop)
-        db = mock.patch.dict(os.environ, {"VIDEO_GEN_DB": str(tmp / "orchestrator.sqlite3")})
+        # SPIELBOT_ORCHESTRATOR_DB, not VIDEO_GEN_DB — the wrong name meant every
+        # test through this base wrote its jobs into the REAL orchestrator DB.
+        db = mock.patch.dict(
+            os.environ, {"SPIELBOT_ORCHESTRATOR_DB": str(tmp / "orchestrator.sqlite3")})
         db.start()
         self.addCleanup(db.stop)
 
