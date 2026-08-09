@@ -321,3 +321,32 @@ class TurboNodeContractTests(unittest.TestCase):
                         if n["class_type"] == "MiniMaxH3TurboLoRA")
             self.assertIn("low_vram", lora["inputs"], wf)
             self.assertIs(lora["inputs"]["low_vram"], False, wf)
+
+
+class EngineVersionGateTests(unittest.TestCase):
+    """An engine that renders black frames on an old worker must refuse first."""
+
+    def _gate(self, worker_version):
+        eng = engines.resolve_reference({}, "minimax-h3-ref-w4a8")
+        with mock.patch.object(comfyui, "comfyui_version", return_value=worker_version):
+            comfyui.check_engine_supported(eng, "http://w:8188")
+
+    def test_old_worker_is_refused_with_an_actionable_message(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            self._gate((0, 30, 0))
+        msg = str(ctx.exception)
+        self.assertIn("0.31", msg)
+        self.assertIn("black frames", msg)
+
+    def test_new_enough_worker_passes(self):
+        self._gate((0, 31, 1))
+        self._gate((0, 32, 0))
+
+    def test_unknown_version_does_not_block(self):
+        # A worker that won't report its version is not proof of an old one.
+        self._gate(())
+
+    def test_engines_without_a_floor_are_never_gated(self):
+        with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 1, 0)):
+            comfyui.check_engine_supported(
+                engines.resolve_reference({}, "minimax-h3-ref-turbo"), "http://w:8188")

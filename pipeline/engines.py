@@ -325,6 +325,49 @@ VIDEO_ENGINES: dict[str, dict] = {
                    "minimax_h3_turbo_4step_ckpt500.safetensors", "models/loras"),
         ],
     },
+    "minimax-h3-ref-w4a8": {
+        "key": "minimax-h3-ref-w4a8",
+        "label": "MiniMax H3 33B Ref2VA W4A8",
+        "sub": "Experimental 4-bit weights · full step count, no distillation · restricted license",
+        "family": "minimax",
+        "reference": True,
+        "commercial_ok": True,
+        "license": "MiniMax H3 Community License",
+        "license_note": ("Not licensed for use in the USA, EU, UK or South Korea. "
+                         "Requires machine-generated disclosure and “MiniMax H3” "
+                         "attribution; separate authorization above US$20M yearly revenue."),
+        # Same graph as the base ref engine: multi-step sampling with EasyCache,
+        # NOT the turbo LoRA path (w4a8 is a pruned checkpoint and the distill
+        # LoRA only fits the non-pruned DiT). The point of this engine is base
+        # fidelity at a lower memory cost — speed without the distillation look.
+        "workflow": "h3_ref2v.json",
+        "steps": 15,
+        "easycache_threshold": 0.2,
+        "lease_seconds": 14400,
+        "unet": "minimax_h3_ref2va_pruned_w4a8_mixed.safetensors",
+        "clip": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+        "video_vae": "minimax_h3_video_vae_fp16.safetensors",
+        "audio_vae": "minimax_h3_audio_vae_fp32.safetensors",
+        "requires_node": "MiniMaxH3ReferenceToVideo",
+        # 4-bit weights need loader support landed in ComfyUI 0.31.0. On an
+        # older worker the render SUCCEEDS and returns black frames, so this is
+        # a hard gate rather than a warning.
+        "min_comfyui": (0, 31, 0),
+        "probe": ("UNETLoader", "unet_name",
+                  "minimax_h3_ref2va_pruned_w4a8_mixed.safetensors"),
+        "models": [
+            _model("Kijai/MiniMax-H3-experimental",
+                   "minimax_h3_ref2va_pruned_w4a8_mixed.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_video_vae_fp16.safetensors", "models/vae"),
+            _model("Comfy-Org/MiniMax-H3",
+                   "vae/minimax_h3_audio_vae_fp32.safetensors", "models/vae"),
+        ],
+    },
 }
 
 DEFAULT_VIDEO_ENGINE = "ltx23"

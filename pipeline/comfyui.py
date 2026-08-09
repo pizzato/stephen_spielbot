@@ -908,6 +908,36 @@ def _ref_node_id(workflow: dict) -> str:
     raise RuntimeError("Ref2VA workflow has no MiniMaxH3ReferenceToVideo node")
 
 
+def comfyui_version(comfy_url: str = COMFYUI_URL) -> tuple:
+    """The worker's ComfyUI version as a tuple, or () if it won't say."""
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/system_stats", timeout=10) as resp:
+            raw = json.loads(resp.read())
+        ver = (raw.get("system") or {}).get("comfyui_version") or ""
+        return tuple(int(x) for x in re.findall(r"\d+", ver)[:3]) or ()
+    except Exception:
+        return ()
+
+
+def check_engine_supported(engine: dict, comfy_url: str = COMFYUI_URL) -> None:
+    """Refuse to render an engine the worker is too old for.
+
+    The w4a8 checkpoints need loader support from ComfyUI 0.31.0; an older
+    worker does not error — it returns BLACK FRAMES. A silent black render
+    that costs ten minutes and passes the speech gate is the worst possible
+    failure, so this is checked before queueing.
+    """
+    need = engine.get("min_comfyui")
+    if not need:
+        return
+    have = comfyui_version(comfy_url)
+    if have and have < tuple(need):
+        raise RuntimeError(
+            f"{engine['label']} needs ComfyUI >= {'.'.join(map(str, need))} but "
+            f"{comfy_url} runs {'.'.join(map(str, have))} — it would render black "
+            f"frames. Rebuild that worker (COMFYUI_REF) or pick another engine.")
+
+
 def generate_video_h3_ref(
     engine: dict,
     positive_prompt: str,
@@ -932,6 +962,7 @@ def generate_video_h3_ref(
     """
     if not ref_images:
         raise ValueError("Ref2VA needs at least one reference image")
+    check_engine_supported(engine, comfy_url)
 
     gen_w, gen_h = h3_dimensions(width, height)
     length = h3_frame_count(duration_seconds)

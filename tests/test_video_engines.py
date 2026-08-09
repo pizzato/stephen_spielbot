@@ -136,7 +136,8 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
         ref = {e["key"] for e in engines.public_list_reference()}
         self.assertFalse(i2v & ref)
         self.assertIn("ltx23", i2v)
-        self.assertEqual(ref, {"minimax-h3-ref", "minimax-h3-ref-turbo"})
+        self.assertEqual(ref, {"minimax-h3-ref", "minimax-h3-ref-turbo",
+                               "minimax-h3-ref-w4a8"})
 
     def test_reference_workflows_exist_and_are_wired(self):
         import json
@@ -151,3 +152,23 @@ class ReferenceEngineRegistryTests(unittest.TestCase):
             # and must NOT carry a first frame.
             self.assertIn("audio_vae", node["inputs"])
             self.assertNotIn("first_frame", node["inputs"])
+
+
+class W4A8EngineTests(unittest.TestCase):
+    """4-bit Ref2VA: base fidelity at lower memory cost, gated on ComfyUI."""
+
+    def test_it_is_a_multi_step_reference_engine_not_a_turbo(self):
+        eng = engines.resolve_reference({}, "minimax-h3-ref-w4a8")
+        self.assertTrue(eng["reference"])
+        self.assertEqual(eng["workflow"], "h3_ref2v.json")   # EasyCache graph
+        self.assertGreater(eng["steps"], 4)
+        # The distill LoRA only fits the NON-pruned DiT; w4a8 is pruned.
+        self.assertNotIn("lora", eng)
+        self.assertIn("w4a8", eng["unet"])
+
+    def test_it_declares_the_comfyui_floor(self):
+        # Below 0.31.0 the render succeeds and returns BLACK frames.
+        self.assertEqual(engines.resolve_reference({}, "minimax-h3-ref-w4a8")["min_comfyui"],
+                         (0, 31, 0))
+        for key in ("minimax-h3-ref", "minimax-h3-ref-turbo"):
+            self.assertIsNone(engines.resolve_reference({}, key).get("min_comfyui"))
