@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, fmtDuration, DurationInput } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -562,12 +562,34 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     const s = override || scenes[idx]
     if (!s) return
     try {
-      await api.saveScene(job.job_id, s.id, {
+      const r = await api.saveScene(job.job_id, s.id, {
         title: s.title || '', image_prompt: s.image_prompt || '',
         video_prompt: s.video_prompt || '', narration: s.narration || '',
         tts_text: s.tts_text || '',
         mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
+        // Acted-scene fields — the server assembles the video prompt from these.
+        setting: s.setting ?? null, camera: s.camera ?? null,
+        soundscape: s.soundscape ?? null, cast: s.cast ?? null,
+        beats: s.beats ?? null, seconds: s.seconds ?? null,
       })
+      // The server rebuilt the prompt (and narration) from the fields — adopt
+      // its copy so the read-only prompt on screen is exactly what renders.
+      const fresh = (r?.scene && r.scene.id === s.id) ? r.scene : null
+      if (fresh) setScenes((arr) => arr.map((x, i) => (i === idx ? { ...x, ...fresh } : x)))
+    } catch (e) { setError(e.message) }
+  }
+
+  // Pin / unpin the assembled prompt for an acted scene.
+  const savePromptOverride = async (text) => {
+    const s = scenes[cur]
+    if (!s) return
+    try {
+      const r = await api.saveScene(job.job_id, s.id, {
+        title: s.title || '', image_prompt: '', video_prompt: s.video_prompt || '',
+        narration: s.narration || '', mode: s.mode || 'dialogue', prompt: text,
+      })
+      const fresh = (r?.scene && r.scene.id === s.id) ? r.scene : null
+      if (fresh) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...fresh } : x)))
     } catch (e) { setError(e.message) }
   }
 
@@ -1168,16 +1190,51 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </div>
                 )}
 
-                <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
-                  <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
-                <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="LTX — motion & camera.">
-                  <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
-                </Field>
+                {isActedMode(d.mode) ? (
+                  <ActedPrompt prompt={d.video_prompt || ''} edited={!!d.prompt_edited}
+                    refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    onSave={(text) => savePromptOverride(text)}
+                    onRebuild={() => savePromptOverride('')} />
+                ) : (
+                  <>
+                    <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
+                      <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                    </Field>
+                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="LTX — motion & camera.">
+                      <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
+                    </Field>
+                  </>
+                )}
               </div>
             </Card>
 
             <div className="col-4 stack gap-16">
+              {isActedMode(d.mode) ? (
+                <Card className="reveal reveal-d2">
+                  <span className="label-sm">References</span>
+                  <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
+                    An acted scene renders from these — no first frame is painted.
+                  </div>
+                  <div className="row gap-10 row--wrap mt-16">
+                    {(d.cast || []).map((n, i) => {
+                      const c = characters.find((x) => x.name === n)
+                      return (
+                        <div key={n} className="stack gap-4" style={{ width: 86, textAlign: 'center' }}>
+                          {c?.image_url
+                            ? <img src={c.image_url} alt={n} style={{ width: 86, height: 86, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--line)' }} />
+                            : <div style={{ width: 86, height: 86, borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--paper-2)', border: '1px dashed var(--line)' }}><Icon name="user" /></div>}
+                          <span className="muted" style={{ fontSize: 11 }}>Picture {i + 1} · {n}</span>
+                        </div>
+                      )
+                    })}
+                    {!(d.cast || []).length && <span className="muted" style={{ fontSize: 12.5 }}>No one on screen yet — pick the cast on the left.</span>}
+                  </div>
+                  <div className="muted mt-16" style={{ fontSize: 12 }}>
+                    Portraits and voices are managed in <strong>Characters</strong>; scenery and
+                    wardrobe reference images in <strong>{allActed ? 'Characters & visuals' : 'Acted scenes'}</strong>.
+                  </div>
+                </Card>
+              ) : (
               <Card className="reveal reveal-d2">
                 <span className="label-sm">First frame</span>
                 <div className="mt-16" onClick={() => d.has_preview && openLightbox()}
@@ -1200,6 +1257,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
                   onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
               </Card>
+              )}
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">
                   <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />

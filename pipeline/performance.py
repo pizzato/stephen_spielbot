@@ -510,7 +510,15 @@ def acted_meta(scene) -> dict:
     meta["cast"] = ordered
 
     if not _clean(meta.get("setting")):
-        meta["setting"] = _clean(field("video_prompt") or field("image_prompt"))
+        # An acted scene's video_prompt IS the assembled prompt once it has been
+        # saved through the editor, and feeding that back in as the setting
+        # would nest the whole thing inside itself.
+        video = _clean(field("video_prompt"))
+        if video.startswith("[") or "[NEGATIVES]" in video:
+            # Already an assembled prompt (a previous save) — feeding it back
+            # in as the setting would nest the whole thing inside itself.
+            video = ""
+        meta["setting"] = video or _clean(field("image_prompt"))
     if not meta.get("seconds"):
         meta["seconds"] = _clamp_seconds(
             content_seconds(meta) if lines else field("duration", 0) or SCENE_SECONDS)

@@ -67,13 +67,16 @@ Keep spoken lines short: roughly 2.5 words per second of clip, so about 25 words
 
 ## Editing an acted scene
 
-The **Scenes** view on the Script and Film screens shows each acted scene as one card: the
-portrait that IS `<Picture 1>`, the voice clip that IS `<Audio 1>`, the beats, and the
-dialogue — editable line by line (speaker, delivery, text; add and remove lines).
+An acted scene is written through its fields — who is **on screen** (Picture 1, Picture 2…),
+the **setting**, the **dialogue** with per-line delivery, timed **action** beats, **camera**
+and **sound** — in the [Script editor](manual/script.md) like any other scene. The *Acted
+scenes* view adds the resolved references: the portrait that IS `<Picture 1>`, the voice
+clip that IS `<Audio 1>`.
 
-Under *Exact prompt sent to the video model* is the assembled prompt. Editing it **pins**
-that text: the scene's fields stop rebuilding it, and the render sends exactly what is on
-screen. **Rebuild from the scene** drops the override again.
+The **video prompt is read-only and assembled from those fields**, so nothing is written
+twice. **Edit prompt** pins hand-written text instead: the fields stop rebuilding it, and
+the render sends exactly what is on screen. **Rebuild from the fields** drops the override
+again.
 
 Editing a scene of a film that has already rendered keeps the existing clip — it is the
 deliverable — and offers **Shoot this scene again** to re-render just that scene.

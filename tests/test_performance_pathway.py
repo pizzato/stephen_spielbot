@@ -1007,3 +1007,56 @@ class MixedPreviewTests(unittest.TestCase):
             out = backend.generate_all_previews("job")
         gen.assert_not_called()
         self.assertIn("skipped", out)
+
+
+class ActedFieldEditingTests(ActedSceneEditingTests):
+    """The acted scene is written through its FIELDS; the prompt follows."""
+
+    def test_saving_fields_assembles_the_prompt(self):
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", mode="dialogue",
+            lines=[{"speaker": "Ana", "text": "You came."}],
+            setting="a fog-wrapped wharf before dawn",
+            camera="locked wide, no move",
+            soundscape="gulls, water on pilings",
+            cast=["Ana", "Bo"],
+            beats=[{"t0": 0, "t1": 4, "action": "Ana turns as Bo arrives"}]))
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        for piece in ("a fog-wrapped wharf before dawn", "locked wide",
+                      "gulls, water on pilings", "[0s-4s]", "You came."):
+            self.assertIn(piece, scene["video_prompt"])
+        # the editor reads these back as fields, not by parsing the prompt
+        self.assertEqual(scene["cast"], ["Ana", "Bo"])
+        self.assertEqual(scene["camera"], "locked wide, no move")
+        self.assertEqual(len(scene["beats"]), 1)
+
+    def test_acted_scene_never_keeps_an_image_prompt(self):
+        # No image engine runs for an acted scene — a stale FLUX prompt on the
+        # row is what made the editor look like the old talking-head path.
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", image_prompt="a leftover FLUX prompt",
+            video_prompt="a wharf", mode="dialogue",
+            lines=[{"speaker": "Ana", "text": "Hi."}]))
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            row = store.get_scene(self.job_id, 1)
+        finally:
+            store.close()
+        self.assertEqual(row["image_prompt"], "")
+        self.assertTrue(row["video_prompt"].startswith("[REFERENCE USE]"))
+
+    def test_saving_twice_does_not_nest_the_prompt(self):
+        # The stored video_prompt IS the assembly; a second save must not feed
+        # it back in as the setting.
+        body = dict(title="Talk", mode="dialogue",
+                    lines=[{"speaker": "Ana", "text": "Hi."}],
+                    setting="", camera="", soundscape="")
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            **body, video_prompt="a wharf"))
+        first = self.backend.job_scenes(self.job_id)["scenes"][0]["video_prompt"]
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            **body, video_prompt=first))
+        second = self.backend.job_scenes(self.job_id)["scenes"][0]["video_prompt"]
+        self.assertEqual(first.count("[REFERENCE USE]"), 1)
+        self.assertEqual(second.count("[REFERENCE USE]"), 1)

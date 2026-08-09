@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -85,7 +85,11 @@ function SceneCard({
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
   // Scene type (narration | dialogue | silent) + dialogue shots + silent
   // duration — mirrors the Script editor via the shared SceneTypeControls.
-  const [sceneType, setSceneType] = useState({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
+  const [sceneType, setSceneType] = useState({
+    mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
+    setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
+    cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+  })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [taskId, setTaskId] = useState(null)
@@ -108,7 +112,11 @@ function SceneCard({
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
-    setSceneType({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
+    setSceneType({
+      mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
+      setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
+      cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+    })
     setEditing(false)
   }, [scene.id])
 
@@ -118,6 +126,10 @@ function SceneCard({
       await api.saveScene(jobId, scene.id, {
         title, narration, tts_text: split ? ttsText : '', voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
         mode: st.mode || 'narration', lines: st.lines || [], duration: st.duration || 0,
+        // Acted-scene fields — the server assembles the video prompt from these.
+        setting: st.setting ?? null, camera: st.camera ?? null,
+        soundscape: st.soundscape ?? null, cast: st.cast ?? null,
+        beats: st.beats ?? null, seconds: st.seconds ?? null,
       })
     } catch (e) {
       setError(e.message)
@@ -439,12 +451,37 @@ function SceneCard({
                     </select>
                   </Field>
                 </>)}
+                {isActedMode(sceneType.mode) ? (
+                  <ActedPrompt prompt={videoPrompt} edited={!!scene.prompt_edited}
+                    refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    onSave={async (text) => {
+                      try {
+                        const r = await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: '', video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: text,
+                        })
+                        if (r?.scene) setVideoPrompt(r.scene.video_prompt || '')
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }}
+                    onRebuild={async () => {
+                      try {
+                        const r = await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: '', video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: '',
+                        })
+                        if (r?.scene) setVideoPrompt(r.scene.video_prompt || '')
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }} />
+                ) : (<>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>} hint="LTX — motion & camera">
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
+                </>)}
               </div>
             )}
 
@@ -466,6 +503,9 @@ function SceneCard({
                   {busy === 'narration' ? 'Rendering…' : 'Narration'}
                 </Button>
               )}
+              {/* An acted scene has no first frame — Image buttons would paint
+                  a still nothing reads. Video re-shoots the whole take. */}
+              {!isActedMode(sceneType.mode) && (<>
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
                 label="Image" busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
@@ -473,8 +513,9 @@ function SceneCard({
                 onClick={() => { setInpaintErr(''); setInpaint(true) }}>
                 Edit image
               </Button>
+              </>)}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
-                label="Video" busyLabel="Rendering…" busy={busy === 'video'}
+                label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
 
               <div style={{ flex: 1 }} />

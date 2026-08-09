@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fileUrl } from '../api.js'
-import { Card, Button, Banner, Icon, GuidedRegenButton, voiceLabel } from '../components.jsx'
+import { Card, Button, Banner, Icon, GuidedRegenButton, ActedPrompt, voiceLabel } from '../components.jsx'
 
 // Performance films are conditioned on CHARACTERS, not on a scene still, and the
 // prompt refers to them by slot number ("<Picture 1>", "<Audio 1>"). Showing the
@@ -78,17 +78,15 @@ function CastMember({ c, picture, audio, jobId, voiceOpts, voiceMeta, onChanged 
 // fields stop rebuilding it, and "Rebuild from the scene" drops it again.
 function SceneEditor({ scene, jobId, onSaved }) {
   const [lines, setLines] = useState(scene.lines)
-  const [prompt, setPrompt] = useState(scene.prompt)
+  const prompt = scene.prompt
   const [busy, setBusy] = useState('')
   const [err, setErr] = useState('')
 
   // A refresh (or another scene's save) reloads the script: adopt the new text
   // unless this card is mid-edit.
-  useEffect(() => { setLines(scene.lines); setPrompt(scene.prompt) },
-    [scene.lines, scene.prompt])
+  useEffect(() => { setLines(scene.lines) }, [scene.lines])
 
   const dirtyLines = JSON.stringify(lines) !== JSON.stringify(scene.lines)
-  const dirtyPrompt = prompt !== scene.prompt
 
   const save = async (what, body) => {
     setBusy(what); setErr('')
@@ -143,36 +141,10 @@ function SceneEditor({ scene, jobId, onSaved }) {
         </div>
       </div>
 
-      <details open={scene.prompt_edited}>
-        <summary style={{ cursor: 'pointer', fontSize: 12.5 }} className="muted">
-          Exact prompt sent to the video model{scene.prompt_edited ? ' — hand-edited' : ''}
-        </summary>
-        <div className="stack gap-8" style={{ marginTop: 10 }}>
-          <textarea className="textarea mono" rows={14} value={prompt} style={{ fontSize: 12 }}
-            onChange={(e) => setPrompt(e.target.value)} />
-          <div className="row gap-8">
-            <Button variant={dirtyPrompt ? 'primary' : 'ghost'} size="sm"
-              disabled={!dirtyPrompt || !!busy} onClick={() => save('prompt', { prompt })}>
-              {busy === 'prompt' ? 'Saving…' : 'Save prompt'}
-            </Button>
-            {dirtyPrompt && (
-              <Button variant="ghost" size="sm" disabled={!!busy}
-                onClick={() => setPrompt(scene.prompt)}>Discard</Button>
-            )}
-            {scene.prompt_edited && (
-              <Button variant="ghost" size="sm" disabled={!!busy}
-                onClick={() => save('prompt', { prompt: '' })}>
-                {busy === 'prompt' ? 'Rebuilding…' : 'Rebuild from the scene'}
-              </Button>
-            )}
-          </div>
-          <span className="muted" style={{ fontSize: 11.5 }}>
-            {scene.prompt_edited
-              ? 'This scene renders from the text above — the cast, beats and sound below no longer rebuild it.'
-              : 'Assembled from the scene. Editing it pins this exact text for the render.'}
-          </span>
-        </div>
-      </details>
+      <ActedPrompt prompt={prompt} edited={scene.prompt_edited} busy={!!busy}
+        refs={scene.pictures} audios={scene.audios}
+        onSave={(text) => save('prompt', { prompt: text })}
+        onRebuild={() => save('prompt', { prompt: '' })} />
     </>
   )
 }

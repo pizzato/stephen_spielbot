@@ -203,6 +203,15 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "mode": meta.get("mode", "narration"),
         "lines": meta.get("lines", []),
         "duration": meta.get("duration", 0),
+        # Acted-scene fields (empty on narrated scenes): the editor writes the
+        # scene through these, and the video prompt is assembled from them.
+        "setting": meta.get("setting", ""),
+        "camera": meta.get("camera", ""),
+        "soundscape": meta.get("soundscape", ""),
+        "cast": meta.get("cast", []),
+        "beats": meta.get("beats", []),
+        "seconds": meta.get("seconds", 0),
+        "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
@@ -3192,6 +3201,30 @@ class SceneUpdate(BaseModel):
     # Hand-edited H3 prompt for an acted scene. "" clears the override and the
     # prompt goes back to being assembled from the scene's fields.
     prompt: str | None = None
+    # Acted-scene fields — everything build_h3_prompt assembles the prompt FROM.
+    # Editing these is how an acted scene is written; the prompt follows.
+    setting: str | None = None
+    camera: str | None = None
+    soundscape: str | None = None
+    cast: list | None = None
+    beats: list | None = None
+    seconds: float | None = None
+
+
+def _scene_style_note(job_id: str) -> str:
+    """The style sentence prepended to an acted scene's assembled prompt."""
+    try:
+        cfg = gapp.load_config()
+        store = DurableStore.default()
+        try:
+            row = store.get_job(job_id)
+        finally:
+            store.close()
+        meta = json.loads(dict(row).get("metadata_json") or "{}") if row else {}
+        name = json.loads(dict(row).get("config_json") or "{}").get("style_name", "") if row else ""
+        return meta.get("style") or gapp.style_settings(cfg, name).get("visual_style", "") or ""
+    except Exception:
+        return ""
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
@@ -3240,17 +3273,55 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["prompt_override"] = pr
             else:
                 meta.pop("prompt_override", None)
-        # An acted scene's narration text is just what is said on screen, so
-        # editing the dialogue rewrites it (nothing speaks it — TTS is skipped).
-        narration = body.narration
-        if performance_mode.is_performance_mode(meta.get("mode")) and body.lines is not None:
-            narration = performance_mode.spoken_text({"lines": meta.get("lines") or []})
+        for field, value in (("setting", body.setting), ("camera", body.camera),
+                             ("soundscape", body.soundscape)):
+            if value is not None:
+                text = (value or "").strip()
+                if text:
+                    meta[field] = text
+                else:
+                    meta.pop(field, None)
+        if body.cast is not None:
+            meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
+        if body.beats is not None:
+            meta["beats"] = performance_mode.norm_beats(
+                body.beats, float(body.seconds or meta.get("seconds")
+                                  or performance_mode.SCENE_SECONDS))
+        if body.seconds is not None:
+            secs = float(body.seconds or 0)
+            if secs > 0:
+                meta["seconds"] = secs
+            else:
+                meta.pop("seconds", None)
+        # An acted scene is written through its FIELDS: what is said becomes the
+        # narration text (nothing speaks it — TTS is skipped), and the video
+        # prompt is assembled from cast/setting/beats/lines rather than typed,
+        # so nothing has to be written twice. A hand-edited prompt still wins
+        # (build_h3_prompt honours prompt_override).
+        narration, image_prompt, video_prompt = (
+            body.narration, body.image_prompt, body.video_prompt)
+        if performance_mode.is_performance_mode(meta.get("mode")):
+            acted = performance_mode.acted_meta(
+                {"metadata": meta, "lines": meta.get("lines") or [],
+                 "video_prompt": video_prompt, "image_prompt": image_prompt})
+            meta.update({k: acted[k] for k in ("cast", "seconds", "beats", "setting")})
+            narration = performance_mode.spoken_text(acted)
+            # Cast names stand in for the slots (same as script generation) —
+            # the renderer rebuilds with the actually-resolved references.
+            video_prompt = performance_mode.build_h3_prompt(
+                acted, style_note=_scene_style_note(job_id),
+                picture_names=list(acted.get("cast") or []),
+                audio_names=performance_mode.speakers_in(
+                    acted.get("lines") or [])[:performance_mode.MAX_SPEAKERS_PER_SCENE])
+            # No image engine runs for an acted scene — the setting lives in
+            # metadata, where the prompt and the scene-visual painter read it.
+            image_prompt = ""
         store.upsert_scene(
             job_id,
             sid,
             title=body.title,
-            image_prompt=body.image_prompt,
-            video_prompt=body.video_prompt,
+            image_prompt=image_prompt,
+            video_prompt=video_prompt,
             narration=narration,
             preview_path=current.get("preview_path", ""),
             metadata=meta,
@@ -3277,7 +3348,12 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
-    return {"ok": True}
+    # The saved row, so the editor can adopt the server-assembled prompt and
+    # narration without a second fetch.
+    fresh = next((r for r in rows if int(r.get("id") or 0) == sid), None)
+    return {"ok": True,
+            "scene": _scene_to_json(fresh, Path(work_dir) if work_dir else None)
+                     if fresh else None}
 
 
 # ── scene structure: add / remove / reorder (issue #193) ─────────────────────

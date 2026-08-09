@@ -114,6 +114,38 @@ export function DurationInput({ value, onChange, disabled, maxMinutes = 40 }) {
 // the duration. `scene` = {mode, lines, duration}; onChange(patch) merges into
 // it; onCommit() persists (called on blur and after discrete edits). The
 // narration textarea stays in each parent (it owns its own regen wiring).
+// An ACTED scene is written through its fields — who is on screen, where, what
+// they say, when it happens — and the prompt the video model receives is
+// assembled from them (ActedPrompt below shows it). Nothing is typed twice.
+export const ACTED_MODES = ['dialogue', 'performance']
+export const isActedMode = (m) => ACTED_MODES.includes(m || '')
+
+function BeatRows({ beats, seconds, onChange, onCommit }) {
+  const set = (i, k, v) => onChange(beats.map((b, j) => (i === j ? { ...b, [k]: v } : b)))
+  return (
+    <div className="stack gap-8">
+      {beats.map((b, i) => (
+        <div key={i} className="row gap-8 center">
+          <input className="input" type="number" min={0} max={seconds} step={0.5} style={{ width: 78 }}
+            value={b.t0 ?? 0} onChange={(e) => set(i, 't0', Number(e.target.value))} onBlur={onCommit} />
+          <span className="muted" style={{ fontSize: 12 }}>→</span>
+          <input className="input" type="number" min={0} max={seconds} step={0.5} style={{ width: 78 }}
+            value={b.t1 ?? seconds} onChange={(e) => set(i, 't1', Number(e.target.value))} onBlur={onCommit} />
+          <span className="muted" style={{ fontSize: 12 }}>s</span>
+          <input className="input" style={{ flex: 1 }} placeholder="What happens in that window"
+            value={b.action || ''} onChange={(e) => set(i, 'action', e.target.value)} onBlur={onCommit} />
+          <Button variant="quiet" icon="trash" title="Remove beat"
+            onClick={() => onChange(beats.filter((_, j) => j !== i))} />
+        </div>
+      ))}
+      <div>
+        <Button variant="ghost" size="sm" icon="plus"
+          onClick={() => onChange([...beats, { t0: 0, t1: seconds, action: '' }])}>Add beat</Button>
+      </div>
+    </div>
+  )
+}
+
 export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommit }) {
   // onChange(patch, commit): merge patch into the scene; when commit is true the
   // parent persists the merged value immediately (discrete edits). Text inputs
@@ -121,11 +153,14 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
   // patch (rather than a deferred callback) avoids a stale-closure save.
   const mode = scene.mode || 'narration'
   const lines = scene.lines || []
+  const cast = scene.cast || []
+  const beats = scene.beats || []
+  const seconds = Math.round(scene.seconds || 10)
   const commit = () => onCommit && onCommit()
   const setLine = (i, k, v, doCommit = false) =>
     onChange({ lines: lines.map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln) }, doCommit)
-  const addLine = () => onChange({ lines: [...lines, { speaker: castOpts[0] || '', text: '' }] }, true)
-  const addSilent = () => onChange({ lines: [...lines, { silent: true, shot: '', video_prompt: '', duration: 3 }] }, true)
+  const addLine = () => onChange(
+    { lines: [...lines, { speaker: cast[0] || castOpts[0] || '', delivery: 'even, natural', text: '' }] }, true)
   const removeShot = (i) => onChange({ lines: lines.filter((_, idx) => idx !== i) }, true)
   const moveShot = (i, di) => {
     const j = i + di
@@ -135,69 +170,91 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
     onChange({ lines: next }, true)
   }
   const setMode = (m) => onChange({ mode: m }, true)
+  const speakerOpts = [...new Set([...cast, ...castOpts].filter(Boolean))]
 
   return (
     <>
-      <Field label="Scene type" hint="Narration = voice-over. Dialogue = characters speak, lip-synced. Silent = visuals only, no voice.">
+      <Field label="Scene type" hint="Narration = voice-over over a still that moves. Dialogue = the characters act and speak on camera, in one take. Silent = visuals only, no voice.">
         <div className="row gap-8">
           {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
-            <Button key={m} variant={mode === m ? 'primary' : 'ghost'} onClick={() => setMode(m)}>{lbl}</Button>
+            <Button key={m} variant={(m === 'dialogue' ? isActedMode(mode) : mode === m) ? 'primary' : 'ghost'}
+              onClick={() => setMode(m)}>{lbl}</Button>
           ))}
         </div>
       </Field>
 
-      {mode === 'dialogue' && (
-        <Field label="Shots" hint="A dialogue scene is performed in one take: each speaking line is acted in that character's own voice, and a silent line is a beat where people move but don't speak. Speakers need a portrait.">
-          <div className="stack gap-12">
-            {lines.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No shots yet — add one below.</span>}
-            {lines.map((ln, i) => (
-              <div key={i} className="stack gap-8"
-                style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 10, background: 'var(--paper-2)' }}>
-                <div className="row center between">
-                  <Chip tone={ln.silent ? 'neutral' : 'accent'} dot>{ln.silent ? `Silent shot ${i + 1}` : `Line ${i + 1}`}</Chip>
-                  <div className="row center gap-4">
-                    <Button variant="quiet" icon="chevron-up" title="Move shot up" disabled={i === 0} onClick={() => moveShot(i, -1)} />
-                    <Button variant="quiet" icon="chevron-down" title="Move shot down" disabled={i === lines.length - 1} onClick={() => moveShot(i, 1)} />
-                    <Button variant="quiet" icon="trash" title="Remove shot" onClick={() => removeShot(i)} />
-                  </div>
-                </div>
-                {ln.silent ? (
-                  <>
-                    <input className="input" placeholder="Shot framing — e.g. Billy's hand drops toward his holster, saloon behind"
-                      value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={commit} />
-                    <input className="input" placeholder="Motion / video prompt — what moves and how (camera included)"
-                      value={ln.video_prompt || ''} onChange={(e) => setLine(i, 'video_prompt', e.target.value)} onBlur={commit} />
-                    <div className="row center gap-8">
-                      <span className="muted" style={{ fontSize: 12.5 }}>Duration (s)</span>
-                      <input className="input" type="number" min={1} step={1} style={{ maxWidth: 90 }}
-                        value={ln.duration || 3} onChange={(e) => setLine(i, 'duration', Number(e.target.value) || 0)} onBlur={commit} />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="row gap-8 center">
-                      <select className="input" style={{ maxWidth: 190 }} value={ln.speaker || ''}
-                        onChange={(e) => setLine(i, 'speaker', e.target.value, true)}>
-                        {!castOpts.length && <option value="">(no characters yet)</option>}
-                        {ln.speaker && !castOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
-                        {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
-                      </select>
-                      <input className="input" style={{ flex: 1 }} placeholder="What they say…"
-                        value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={commit} />
-                    </div>
-                    <input className="input" style={{ fontSize: 12.5 }}
-                      placeholder="Shot framing (optional) — e.g. close-up of Billy at the saloon bar, face large and clear"
-                      value={ln.shot || ''} onChange={(e) => setLine(i, 'shot', e.target.value)} onBlur={commit} />
-                  </>
-                )}
-              </div>
-            ))}
-            <div className="row gap-8">
-              <Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button>
-              <Button variant="ghost" icon="film" onClick={addSilent}>Add silent shot</Button>
+      {isActedMode(mode) && (
+        <>
+          <Field label="On screen"
+            hint="Who appears, in order. The first is Picture 1, the second Picture 2 — the model is told each one defines that person's face and nothing else. Keep it to two: a third face is where they start swapping.">
+            <div className="row gap-8 row--wrap">
+              {castOpts.map((n) => {
+                const on = cast.includes(n)
+                return (
+                  <Button key={n} variant={on ? 'primary' : 'ghost'} size="sm"
+                    onClick={() => onChange({ cast: on ? cast.filter((c) => c !== n) : [...cast, n] }, true)}>
+                    {on ? `${cast.indexOf(n) + 1}. ${n}` : n}
+                  </Button>
+                )
+              })}
+              {!castOpts.length && <span className="muted" style={{ fontSize: 12.5 }}>No characters yet — add them in Characters.</span>}
             </div>
+          </Field>
+
+          <Field label="Setting" hint="Where this happens and what is around them. This is the scenery the model builds — there is no separate first frame for an acted scene.">
+            <textarea className="textarea" rows={2} value={scene.setting || ''}
+              onChange={(e) => onChange({ setting: e.target.value }, false)} onBlur={commit} />
+          </Field>
+
+          <Field label="Dialogue" hint="One continuous take: each line is acted in that character's own voice. About 2.5 words a second, so roughly 22 words fit in a ten-second scene.">
+            <div className="stack gap-10">
+              {lines.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>Nobody speaks — the scene plays silent.</span>}
+              {lines.map((ln, i) => (
+                <div key={i} className="stack gap-8"
+                  style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 10, background: 'var(--paper-2)' }}>
+                  <div className="row center between">
+                    <Chip tone="accent" dot>Line {i + 1}</Chip>
+                    <div className="row center gap-4">
+                      <Button variant="quiet" icon="chevron-up" title="Move up" disabled={i === 0} onClick={() => moveShot(i, -1)} />
+                      <Button variant="quiet" icon="chevron-down" title="Move down" disabled={i === lines.length - 1} onClick={() => moveShot(i, 1)} />
+                      <Button variant="quiet" icon="trash" title="Remove line" onClick={() => removeShot(i)} />
+                    </div>
+                  </div>
+                  <div className="row gap-8 center">
+                    <select className="input" style={{ maxWidth: 170 }} value={ln.speaker || ''}
+                      onChange={(e) => setLine(i, 'speaker', e.target.value, true)}>
+                      {!speakerOpts.length && <option value="">(no characters yet)</option>}
+                      {ln.speaker && !speakerOpts.includes(ln.speaker) && <option value={ln.speaker}>{ln.speaker} (unknown)</option>}
+                      {speakerOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                    </select>
+                    <input className="input" style={{ maxWidth: 170 }} placeholder="delivery — e.g. quiet, certain"
+                      value={ln.delivery || ''} onChange={(e) => setLine(i, 'delivery', e.target.value)} onBlur={commit} />
+                  </div>
+                  <textarea className="textarea" rows={2} placeholder="What they say…"
+                    value={ln.text || ''} onChange={(e) => setLine(i, 'text', e.target.value)} onBlur={commit} />
+                </div>
+              ))}
+              <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
+            </div>
+          </Field>
+
+          <Field label={`Action — ${seconds}s`}
+            hint="Timed beats inside the take. These reach the model as [0s-4s] windows, so they are how you place a move at a moment.">
+            <BeatRows beats={beats} seconds={seconds}
+              onChange={(next) => onChange({ beats: next }, false)} onCommit={commit} />
+          </Field>
+
+          <div className="row gap-16 row--wrap">
+            <Field label="Camera" hint="One continuous shot — describe the framing and at most one move.">
+              <input className="input" style={{ minWidth: 260 }} value={scene.camera || ''}
+                onChange={(e) => onChange({ camera: e.target.value }, false)} onBlur={commit} />
+            </Field>
+            <Field label="Sound" hint="Diegetic sound only — what is audible in the room. No score.">
+              <input className="input" style={{ minWidth: 260 }} value={scene.soundscape || ''}
+                onChange={(e) => onChange({ soundscape: e.target.value }, false)} onBlur={commit} />
+            </Field>
           </div>
-        </Field>
+        </>
       )}
 
       {mode === 'silent' && (
@@ -207,6 +264,67 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
         </Field>
       )}
     </>
+  )
+}
+
+// The assembled prompt: read-only, because it is built from the fields above.
+// "Edit" pins whatever you type — the fields stop rebuilding it until you
+// rebuild. `refs` is the resolved slot list, so the numbers in the text mean
+// something on screen.
+export function ActedPrompt({ prompt, refs = [], audios = [], edited, busy, onSave, onRebuild }) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(prompt || '')
+  useEffect(() => { setDraft(prompt || '') }, [prompt])
+
+  return (
+    <Field label="Video prompt"
+      hint="Assembled from the fields above — cast, setting, dialogue, beats, camera, sound — so nothing is written twice.">
+      {(refs.length > 0 || audios.length > 0) && (
+        <div className="stack gap-4" style={{ marginBottom: 10 }}>
+          {refs.map((r) => (
+            <div key={`p${r.slot}`} className="muted" style={{ fontSize: 12 }}>
+              <code>&lt;Picture {r.slot}&gt;</code> {r.name}
+              {r.kind && r.kind !== 'character' ? ` — ${r.kind}` : ' — their face'}
+            </div>
+          ))}
+          {audios.map((a) => (
+            <div key={`a${a.slot}`} className="muted" style={{ fontSize: 12 }}>
+              <code>&lt;Audio {a.slot}&gt;</code> {a.name} — their voice
+            </div>
+          ))}
+        </div>
+      )}
+      {editing ? (
+        <div className="stack gap-8">
+          <textarea className="textarea mono" rows={14} style={{ fontSize: 12 }}
+            value={draft} onChange={(e) => setDraft(e.target.value)} />
+          <div className="row gap-8">
+            <Button variant="primary" size="sm" disabled={busy || draft === prompt}
+              onClick={() => { onSave(draft); setEditing(false) }}>Save prompt</Button>
+            <Button variant="ghost" size="sm" disabled={busy}
+              onClick={() => { setDraft(prompt || ''); setEditing(false) }}>Cancel</Button>
+          </div>
+        </div>
+      ) : (
+        <div className="stack gap-8">
+          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, margin: 0, maxHeight: 260, overflowY: 'auto',
+                        background: 'var(--well, rgba(127,127,127,.08))', padding: 12, borderRadius: 8 }}>
+            {prompt || 'Fill in the fields above and the prompt appears here.'}
+          </pre>
+          <div className="row gap-8 center">
+            <Button variant="ghost" size="sm" icon="pen" disabled={busy}
+              onClick={() => setEditing(true)}>Edit prompt</Button>
+            {edited && (
+              <>
+                <Chip tone="warn" dot>hand-edited</Chip>
+                <Button variant="ghost" size="sm" disabled={busy}
+                  onClick={onRebuild}>Rebuild from the fields</Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </Field>
   )
 }
 

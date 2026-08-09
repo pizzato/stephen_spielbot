@@ -88,6 +88,11 @@ reordering is safe.
 
 ### The fields
 
+Above the fields sits the **scene type** control — narration, dialogue, or silent — and
+the fields below change with it.
+
+A **narrated or silent** scene has:
+
 | Field | Feeds |
 |---|---|
 | **Scene title** | Organisation only — not rendered |
@@ -98,9 +103,21 @@ reordering is safe.
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
 
-Above the narration sits the **scene type** control — narration, dialogue, or silent — and,
-for dialogue, who speaks. A dialogue scene is performed on camera; see
-[acted scenes](../performance_films.md).
+A **dialogue** scene is [acted on camera](../performance_films.md), so it is written
+through different fields — and each is stated once, in its proper place:
+
+| Field | Feeds |
+|---|---|
+| **On screen** | Who appears, in order — the first is `<Picture 1>`, the second `<Picture 2>` (their portraits are the references; keep it to two) |
+| **Setting** | The scenery the model builds — an acted scene has no first frame or image prompt |
+| **Dialogue** | The lines, each with a speaker and a delivery note, acted in that character's own voice |
+| **Action** | Timed beats — each reaches the model as a `[2s-6s]` window |
+| **Camera / Sound** | One continuous shot; diegetic sound only |
+
+The **video prompt is read-only**: it is assembled from those fields (never write the same
+thing twice), with a legend above it saying which reference each `<Picture N>` number is.
+**Edit prompt** pins hand-written text instead — the fields stop rebuilding it until you
+**Rebuild from the fields**.
 
 !!! note "Spoken text"
     A scene can have narration text that differs from what the voice reads — useful for
