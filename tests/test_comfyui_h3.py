@@ -305,3 +305,19 @@ class FallbackPollTests(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             self._run([{}], "running", seconds=0.05)
         self.assertNotIsInstance(ctx.exception, comfyui.DroppedJobError)
+
+
+class TurboNodeContractTests(unittest.TestCase):
+    def test_ref2va_turbo_sends_low_vram(self):
+        # The pinned H3-Turbo nodes (55fee86) made low_vram a REQUIRED input on
+        # MiniMaxH3TurboLoRA — the i2v workflow was fixed, this one was missed,
+        # so every performance render on a rebuilt worker was rejected.
+        import json
+        from pathlib import Path
+        root = Path(__file__).resolve().parent.parent
+        for wf in ("h3_turbo_i2v.json", "h3_ref2v_turbo.json"):
+            graph = json.loads((root / "workflows" / wf).read_text())
+            lora = next(n for n in graph.values()
+                        if n["class_type"] == "MiniMaxH3TurboLoRA")
+            self.assertIn("low_vram", lora["inputs"], wf)
+            self.assertIs(lora["inputs"]["low_vram"], False, wf)

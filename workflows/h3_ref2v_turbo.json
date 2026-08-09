@@ -72,6 +72,6 @@
   },
   "17": {
     "class_type": "MiniMaxH3TurboLoRA",
-    "inputs": {"model": ["1", 0], "lora_name": "{{LORA_NAME}}", "strength": 1.0}
+    "inputs": {"model": ["1", 0], "lora_name": "{{LORA_NAME}}", "strength": 1.0, "low_vram": false}
   }
 }
