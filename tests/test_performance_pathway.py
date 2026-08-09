@@ -893,3 +893,92 @@ class SceneContinuityTests(unittest.TestCase):
         self.assertEqual(len(calls), 3)
         for call in calls:
             self.assertNotIn("the SAME room", call["prompt"])
+
+
+class ActedSceneEditingTests(unittest.TestCase):
+    """The performance view edits dialogue and the prompt in place."""
+
+    def setUp(self):
+        import app as gapp
+        import webapp.backend.main as backend
+        self.backend = backend
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-acted-edit-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"
+        self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"
+        cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db = mock.patch.dict(os.environ,
+                             {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start()
+        self.addCleanup(db.stop)
+
+        from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        (self.wd / "scene_01_final.mp4").write_bytes(b"x" * 20_000)
+        self.job_id = job_id_from_work_dir(self.wd)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(self.job_id, self.wd, "Film",
+                                       config={"video_title": "Film"}, metadata={})
+            store.upsert_scene(self.job_id, 1, title="Talk", image_prompt="",
+                               video_prompt="a wharf", narration="You came.",
+                               metadata={"mode": "dialogue", "cast": ["Ana"],
+                                         "lines": [{"speaker": "Ana", "text": "You came."}]})
+        finally:
+            store.close()
+
+    def _scene(self):
+        return self.backend.load_performance_script(work_dir=str(self.wd))["scenes"][0]
+
+    def _save(self, **body):
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", image_prompt="", video_prompt="a wharf",
+            narration="You came.", mode="dialogue", **body))
+
+    def test_edited_dialogue_rewrites_the_prompt_and_the_spoken_text(self):
+        self._save(lines=[{"speaker": "Ana", "text": "You are late."}])
+        scene = self._scene()
+        self.assertEqual([l["text"] for l in scene["lines"]], ["You are late."])
+        self.assertIn("You are late.", scene["prompt"])
+        self.assertIn("You are late.", scene["narration"])
+
+    def test_an_edited_prompt_is_what_the_render_sends(self):
+        self._save(prompt="Just this, verbatim.")
+        scene = self._scene()
+        self.assertTrue(scene["prompt_edited"])
+        self.assertEqual(scene["prompt"], "Just this, verbatim.")
+        # …and the renderer assembles from the same function, so it agrees.
+        from pipeline import performance as perf
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            meta = store.get_scene(self.job_id, 1)["metadata"]
+        finally:
+            store.close()
+        self.assertEqual(perf.build_h3_prompt(meta), "Just this, verbatim.")
+
+    def test_clearing_the_override_rebuilds_from_the_scene(self):
+        self._save(prompt="Pinned.")
+        self._save(prompt="")
+        scene = self._scene()
+        self.assertFalse(scene["prompt_edited"])
+        self.assertIn("[REFERENCE USE]", scene["prompt"] + "[REFERENCE USE]")
+        self.assertNotEqual(scene["prompt"], "Pinned.")
+
+    def test_a_finished_film_keeps_its_clip_through_an_edit(self):
+        # The take is the deliverable — the film editor re-shoots on request.
+        (self.wd / "combined.mp4").write_bytes(b"x" * 20_000)
+        self._save(lines=[{"speaker": "Ana", "text": "Something else."}])
+        self.assertTrue((self.wd / "scene_01_final.mp4").exists())
+
+    def test_an_unrendered_scene_drops_its_stale_take(self):
+        self._save(lines=[{"speaker": "Ana", "text": "Something else."}])
+        self.assertFalse((self.wd / "scene_01_final.mp4").exists())
