@@ -2409,8 +2409,9 @@ def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str 
         raise ValueError(f"Unknown asset {asset_id!r}.")
     if asset["kind"] == "wardrobe":
         subject, framing = (f"{asset['name']}: {asset.get('description') or 'an outfit'}",
-                            "full-length view of the outfit on a plain neutral background, "
-                            "no person's face, no other clothing")
+                            "the garments alone laid flat on a plain neutral background, "
+                            "product photography, empty clothes with nobody wearing them, "
+                            "no person, no model, no mannequin, no body parts")
     else:
         subject, framing = (f"{asset['name']}: {asset.get('description') or 'a location'}",
                             "wide establishing shot of the empty space, no people, no text")
@@ -2558,8 +2559,9 @@ def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
 
     if vis["kind"] == "wardrobe":
         subject = f"{vis['name']}: {vis.get('description') or 'an outfit'}"
-        framing = ("full-length view of the outfit on a plain neutral background, "
-                   "no person's face, no other clothing")
+        framing = ("the garments alone laid flat on a plain neutral background, "
+                   "product photography, empty clothes with nobody wearing them, "
+                   "no person, no model, no mannequin, no body parts")
     else:
         subject = f"{vis['name']}: {vis.get('description') or 'a location'}"
         framing = ("wide establishing shot of the empty space, no people, "
