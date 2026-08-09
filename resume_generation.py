@@ -362,7 +362,9 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     Shared with the backend's per-scene re-render, so it takes everything it
     needs as arguments and touches no module state.
     """
-    scene_meta = _performance.scene_meta(scene)
+    # Fills in cast/length/setting for a dialogue scene authored in a MIXED
+    # film, where only the lines and the classic prompts exist.
+    scene_meta = _performance.acted_meta(scene)
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
@@ -781,9 +783,9 @@ def main(work_dir: Path) -> None:
     # below runs exactly as before — which is what makes MIXED films work: each
     # scene takes the path its mode asks for.
     dialogue_scenes = [s for s in scenes
-                       if _performance.is_performance_mode(getattr(s, "mode", ""))
-                       and (s.lines or [])]
-    classic_scenes = [s for s in scenes if s not in dialogue_scenes]
+                       if _performance.is_performance(s) and (s.lines or [])]
+    acted_ids = {s.id for s in dialogue_scenes}
+    classic_scenes = [s for s in scenes if s.id not in acted_ids]
     dialogue_durs: dict[int, float] = {}
 
     # Progress bands. Acted scenes dominate a dialogue film's wall-clock, so the

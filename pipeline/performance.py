@@ -289,7 +289,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     scene, dialogue, screen geography, the shot list, camera, sound, and a
     preservation contract — with the tag syntax (<Picture N>/<Audio N>) and
     the phrasings we have verified on this model kept intact.
+
+    A hand-edited prompt (``prompt_override``) wins outright: the check lives
+    here, in the one function both the editor and the renderer call, so what is
+    shown on screen is exactly what the model receives.
     """
+    override = _clean(scene_meta.get("prompt_override"))
+    if override:
+        return override
     seconds = _clamp_seconds(scene_meta.get("seconds"))
     lines = norm_lines(scene_meta.get("lines"))
     beats = norm_beats(scene_meta.get("beats"), seconds)
@@ -551,6 +558,41 @@ PERFORMANCE_MODES = ("dialogue", "performance")
 
 def is_performance_mode(mode) -> bool:
     return str(mode or "").strip().lower() in PERFORMANCE_MODES
+
+
+def acted_meta(scene) -> dict:
+    """The metadata an acted scene needs to render, filled in where it's absent.
+
+    A performance script authors cast/beats/seconds/setting directly. A dialogue
+    scene written in a MIXED film has only lines and the classic prompts — so
+    the cast comes from who speaks, the length from what they say, and the
+    setting from the scene's own video/image prompt. Without this a mixed film's
+    dialogue scene would render castless (no portraits → hard failure) and
+    5 seconds long.
+    """
+    def field(name, default=""):
+        return (scene.get(name, default) if isinstance(scene, dict)
+                else getattr(scene, name, default))
+
+    meta = dict(scene_meta(scene))
+    lines = norm_lines(meta.get("lines") or field("lines", None))
+    meta["lines"] = lines
+    meta["mode"] = "dialogue" if is_performance_mode(meta.get("mode")) else meta.get("mode", "")
+
+    cast = [c for c in (list(meta.get("cast") or []) + speakers_in(lines)) if _clean(c)]
+    ordered: list[str] = []
+    for name in cast:
+        if name not in ordered:
+            ordered.append(name)
+    meta["cast"] = ordered
+
+    if not _clean(meta.get("setting")):
+        meta["setting"] = _clean(field("video_prompt") or field("image_prompt"))
+    if not meta.get("seconds"):
+        meta["seconds"] = _clamp_seconds(
+            content_seconds(meta) if lines else field("duration", 0) or SCENE_SECONDS)
+    meta["beats"] = norm_beats(meta.get("beats"), float(meta["seconds"]))
+    return meta
 
 
 def scene_meta(scene) -> dict:

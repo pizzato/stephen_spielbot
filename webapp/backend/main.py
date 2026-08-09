@@ -1622,6 +1622,9 @@ class GenerateScriptBody(BaseModel):
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
     auto_critic: bool = False
+    # Score this film? None = whatever the style says. Rides the create brief
+    # to the render, so the choice made at Create survives approve → queue.
+    music: bool | None = None
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1918,6 +1921,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
         "script_mode": _effective_script_mode(body, ss),
+        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -1928,7 +1932,8 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
             config={"title": display_title, "video_title": (body.video_title or "").strip(),
                     "topic": user_topic, "phase": "script_review", "style_name": ss["name"],
                     "create_brief": create_brief},
-            metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
+            metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style,
+                      "music_enabled": create_brief["music"]},
         )
         store.upsert_scenes(job_id, scenes_list)
     finally:
@@ -3092,8 +3097,12 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
     scenes = []
     for row in rows:
         meta = dict(row.get("metadata") or {})
-        if meta.get("mode") != "performance":
+        if not performance_mode.is_performance_mode(meta.get("mode")):
             continue
+        # A dialogue scene authored in a mixed film carries only its lines —
+        # fill in the cast/length/setting the acted render derives.
+        meta = performance_mode.acted_meta(
+            {**row, "metadata": meta, "lines": meta.get("lines") or []})
         refs = gapp.resolve_performance_references(meta, cfg, wd, style_name,
                                                    scene_id=int(row.get("id") or 0))
         lines = performance_mode.norm_lines(meta.get("lines"))
@@ -3118,6 +3127,15 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         scenes.append({
             "id": row.get("id"),
             "title": row.get("title") or "",
+            # Not shown, but PUT back untouched when the dialogue or prompt is
+            # edited (the scene endpoint writes every field it is given).
+            "image_prompt": row.get("image_prompt") or "",
+            "video_prompt": row.get("video_prompt") or "",
+            "narration": row.get("narration") or "",
+            "mode": meta.get("mode") or "dialogue",
+            # True once the prompt has been hand-edited: the screen then shows
+            # the override instead of re-assembling, and offers to drop it.
+            "prompt_edited": bool(meta.get("prompt_override")),
             "video_url": media.get("video_url") or "",
             "has_video": bool(media.get("has_video") or media.get("has_final")),
             "seconds": meta.get("seconds") or performance_mode.SCENE_SECONDS,
@@ -3145,6 +3163,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
     from pipeline import engines as eng
     engine = eng.resolve_reference(ss, ss.get("reference_engine"))
     return {"work_dir": str(wd), "style_name": style_name,
+            "job_id": job_id_from_work_dir(wd),
             "engine": {"key": engine["key"], "label": engine["label"]},
             "scenes": scenes}
 
@@ -3238,6 +3257,9 @@ class SceneUpdate(BaseModel):
     mode: str | None = None
     lines: list | None = None
     duration: float | None = None
+    # Hand-edited H3 prompt for an acted scene. "" clears the override and the
+    # prompt goes back to being assembled from the scene's fields.
+    prompt: str | None = None
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
@@ -3247,7 +3269,7 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     try:
         current = store.get_scene(job_id, sid) or {}
         meta = dict(current.get("metadata") or {})
-        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration")}
+        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")}
         if body.voice is not None:
             voice = (body.voice or "").strip()
             if voice:
@@ -3280,13 +3302,24 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["duration"] = d
             else:
                 meta.pop("duration", None)
+        if body.prompt is not None:
+            pr = (body.prompt or "").strip()
+            if pr:
+                meta["prompt_override"] = pr
+            else:
+                meta.pop("prompt_override", None)
+        # An acted scene's narration text is just what is said on screen, so
+        # editing the dialogue rewrites it (nothing speaks it — TTS is skipped).
+        narration = body.narration
+        if performance_mode.is_performance_mode(meta.get("mode")) and body.lines is not None:
+            narration = performance_mode.spoken_text({"lines": meta.get("lines") or []})
         store.upsert_scene(
             job_id,
             sid,
             title=body.title,
             image_prompt=body.image_prompt,
             video_prompt=body.video_prompt,
-            narration=body.narration,
+            narration=narration,
             preview_path=current.get("preview_path", ""),
             metadata=meta,
         )
@@ -3298,8 +3331,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         gapp._persist_script_snapshot(work_dir, rows)
         # A scene whose mode/lines/duration changed must not reuse its previously
         # rendered files — the resume path skips scenes whose final already exists,
-        # which would silently serve the OLD (e.g. narrated) take.
-        if {k: meta.get(k) for k in ("mode", "lines", "duration")} != old_dialogue:
+        # which would silently serve the OLD (e.g. narrated) take. A FINISHED film
+        # keeps its clips: they are the deliverable, and the film editor re-renders
+        # the scene on request rather than leaving a hole in the cut.
+        if ({k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
+                and not (Path(work_dir) / "combined.mp4").exists()):
             wd = Path(work_dir)
             stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
                      wd / f"scene_{sid:02d}_establish.mp4"]
@@ -4076,6 +4112,12 @@ def create_improve(body: BriefImproveBody) -> dict:
     return {"value": text}
 
 
+def _job_music_enabled(job_id: str, ss: dict) -> bool:
+    """Whether this film gets a score: the Create-time choice, else the style."""
+    stamped = _job_meta_field(job_id, "music_enabled", None)
+    return bool(ss.get("music_enabled", True)) if stamped is None else bool(stamped)
+
+
 # ── approve & generate (launches the background pipeline) ─────────────────────
 
 class GenerateBody(BaseModel):
@@ -4233,6 +4275,9 @@ def start_generation(body: GenerateBody) -> dict:
         "first_pass_steps": ss.get("first_pass_steps"),
         "second_pass_cfg": ss.get("second_pass_cfg"),
         "second_pass_steps": ss.get("second_pass_steps"),
+        # Score this film? The Create-time choice (stamped on the job) wins over
+        # the style's default; music is a final-mix ingredient either way.
+        "music_enabled": _job_music_enabled(job_id, ss),
         "music_vol": ss.get("music_vol"),
         "voice_vol": ss.get("voice_vol"),
         "ambient_vol": ss.get("ambient_vol"),
@@ -9973,7 +10018,7 @@ def queue_approve(body: QueueApproveBody) -> dict:
     return {"ok": True, "queue": yt.load_queue()}
 
 
-def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
+def _job_meta_field(job_id: str, key: str, default=""):
     try:
         store = DurableStore.default()
         try:

@@ -2418,6 +2418,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Narrator & audio</span>
             <div className="stack gap-22 mt-16">
+              <Field label="Music"
+                hint="Score every film in this style. Music is mixed in at the very end, never baked into a scene — off leaves the film with only its voices and room tone. Acted films never get a score.">
+                <Check checked={eff.music_enabled !== false}
+                  onChange={(v) => setStyleField('music_enabled', v)}
+                  label="Add background music" />
+                <ParentVal k="music_enabled" />
+              </Field>
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
                 <Field key={k} label={`${label} — ${eff[k] ?? 0}%`}>
                   <input className="slider" type="range" min={0} max={max} value={eff[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />

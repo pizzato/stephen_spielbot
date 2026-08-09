@@ -374,6 +374,66 @@ class WorkerFailoverTests(unittest.TestCase):
         self.assertRegex(str(ctx.exception), r"(?i)workers? (failed|remaining)")
 
 
+class MixedFilmTests(unittest.TestCase):
+    """One film, three scene modes: narrated, silent, and acted."""
+
+    def _scenes(self):
+        from pipeline.llm import Scene
+        return [
+            Scene(id=1, title="open", image_prompt="i", video_prompt="v",
+                  narration="Once upon a time."),
+            Scene(id=2, title="talk", image_prompt="i", video_prompt="a busy wharf at dusk",
+                  narration="", mode="dialogue",
+                  lines=[{"speaker": "Ana", "text": "You came."},
+                         {"speaker": "Bo", "text": "I said I would."}]),
+            Scene(id=3, title="beat", image_prompt="i", video_prompt="v", narration="",
+                  mode="silent", duration=5),
+        ]
+
+    def test_each_scene_takes_the_path_its_mode_asks_for(self):
+        from pipeline.orchestrator import DurableStore
+        with tempfile.TemporaryDirectory() as tmp:
+            store = DurableStore(Path(tmp) / "orchestrator.sqlite3")
+            try:
+                store.ensure_generation_plan("job", tmp, "T", self._scenes(),
+                                             {"vid_width": 512, "vid_height": 256})
+                kinds = {r["id"]: r["kind"] for r in store.task_rows("job")}
+            finally:
+                store.close()
+        # the acted scene renders in one take …
+        self.assertEqual(kinds.get("job:scene:2:performance"), "scene.performance.generate")
+        self.assertNotIn("job:scene:2:mux", kinds)
+        # … while the narrated and silent ones keep the classic quartet
+        for sid in (1, 3):
+            self.assertIn(f"job:scene:{sid}:mux", kinds)
+            self.assertIn(f"job:scene:{sid}:video", kinds)
+        # a mixed film still gets a score (only an all-acted one skips it)
+        self.assertIn("music.generate", set(kinds.values()))
+
+    def test_a_hand_written_dialogue_scene_gets_a_cast_and_a_length(self):
+        # Authored in the mixed script editor: lines, no performance fields.
+        # Without the fill-in it would render castless and 5 seconds long.
+        from pipeline import performance as perf
+        meta = perf.acted_meta(self._scenes()[1])
+        self.assertEqual(meta["cast"], ["Ana", "Bo"])
+        self.assertEqual(meta["setting"], "a busy wharf at dusk")
+        self.assertGreater(meta["seconds"], perf.MIN_SCENE_SECONDS)
+        self.assertLessEqual(meta["seconds"], perf.H3_CEILING_SECONDS)
+
+    def test_an_authored_performance_scene_keeps_its_own_fields(self):
+        from pipeline import performance as perf
+        from pipeline.llm import Scene
+        scene = Scene(id=1, title="t", image_prompt="", video_prompt="ignored me",
+                      narration="", mode="performance",
+                      lines=[{"speaker": "Ana", "text": "hi"}],
+                      metadata_extra={"mode": "performance", "cast": ["Bo", "Ana"],
+                                      "setting": "a kitchen", "seconds": 11})
+        meta = perf.acted_meta(scene)
+        self.assertEqual(meta["cast"], ["Bo", "Ana"])   # authored order wins
+        self.assertEqual(meta["setting"], "a kitchen")
+        self.assertEqual(meta["seconds"], 11)
+
+
 class MusicToggleTests(unittest.TestCase):
     """Music is a choice, and acted films never get a score planned."""
 

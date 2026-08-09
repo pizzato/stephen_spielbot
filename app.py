@@ -148,6 +148,9 @@ _DEFAULT_SIZE_PRESETS = {
 
 
 DEFAULT_CFG = {
+    # Score the film at all. Off means no music is generated and the final cut
+    # IS the concatenation (acted scenes already carry their own sound).
+    "music_enabled": True,
     "music_vol": 18,
     "voice_vol": 100,
     "ambient_vol": 0,
@@ -453,6 +456,7 @@ STYLE_FIELD_TO_FLAT = {
     "second_pass_cfg":      "second_pass_cfg",
     "second_pass_steps":    "second_pass_steps",
     # Narrator & audio mix
+    "music_enabled":        "music_enabled",
     "music_vol":            "music_vol",
     "voice_vol":            "voice_vol",
     "ambient_vol":          "ambient_vol",

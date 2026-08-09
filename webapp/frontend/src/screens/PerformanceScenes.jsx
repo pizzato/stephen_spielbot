@@ -72,7 +72,121 @@ function CastMember({ c, picture, audio, jobId, voiceOpts, voiceMeta, onChanged 
 }
 
 
-function SceneCard({ scene, seconds, jobId, voiceOpts, voiceMeta, onChanged }) {
+// The dialogue and the assembled prompt are editable in place. Lines are staged
+// locally and saved on demand (typing a line shouldn't re-render the film view
+// on every keystroke); the prompt saves as an OVERRIDE — once set, the scene's
+// fields stop rebuilding it, and "Rebuild from the scene" drops it again.
+function SceneEditor({ scene, jobId, onSaved }) {
+  const [lines, setLines] = useState(scene.lines)
+  const [prompt, setPrompt] = useState(scene.prompt)
+  const [busy, setBusy] = useState('')
+  const [err, setErr] = useState('')
+
+  // A refresh (or another scene's save) reloads the script: adopt the new text
+  // unless this card is mid-edit.
+  useEffect(() => { setLines(scene.lines); setPrompt(scene.prompt) },
+    [scene.lines, scene.prompt])
+
+  const dirtyLines = JSON.stringify(lines) !== JSON.stringify(scene.lines)
+  const dirtyPrompt = prompt !== scene.prompt
+
+  const save = async (what, body) => {
+    setBusy(what); setErr('')
+    try {
+      await api.saveScene(jobId, scene.id, {
+        title: scene.title, image_prompt: scene.image_prompt,
+        video_prompt: scene.video_prompt, narration: scene.narration,
+        mode: scene.mode, ...body,
+      })
+      await onSaved()
+    } catch (e) { setErr(e.message) } finally { setBusy('') }
+  }
+
+  const setLine = (i, key, v) => setLines(lines.map((l, j) => (i === j ? { ...l, [key]: v } : l)))
+  const addLine = () => setLines([...lines, { speaker: scene.cast[0]?.name || '', delivery: 'even, natural', text: '' }])
+
+  return (
+    <>
+      {err && <Banner tone="danger">{err}</Banner>}
+      <div className="stack gap-10">
+        <div className="row between center">
+          <span className="label-sm">Dialogue</span>
+          <span className="muted" style={{ fontSize: 11.5 }}>
+            About {Math.round(scene.seconds)}s of screen time — longer dialogue makes a longer clip.
+          </span>
+        </div>
+        {lines.map((l, i) => (
+          <div key={i} className="row gap-8" style={{ alignItems: 'flex-start' }}>
+            <select className="input" style={{ width: 130, flex: '0 0 auto' }} value={l.speaker}
+              onChange={(e) => setLine(i, 'speaker', e.target.value)}>
+              {[...new Set([...scene.cast.map((c) => c.name), l.speaker].filter(Boolean))]
+                .map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <input className="input" style={{ width: 150, flex: '0 0 auto' }} value={l.delivery || ''}
+              placeholder="delivery" onChange={(e) => setLine(i, 'delivery', e.target.value)} />
+            <textarea className="textarea" rows={2} style={{ flex: '1 1 220px', minWidth: 0 }}
+              value={l.text} onChange={(e) => setLine(i, 'text', e.target.value)} />
+            <Button variant="ghost" size="sm" icon="trash" title="Remove this line"
+              onClick={() => setLines(lines.filter((_, j) => j !== i))} />
+          </div>
+        ))}
+        <div className="row gap-8">
+          <Button variant="ghost" size="sm" icon="plus" onClick={addLine}>Add a line</Button>
+          <Button variant={dirtyLines ? 'primary' : 'ghost'} size="sm" disabled={!dirtyLines || !!busy}
+            onClick={() => save('lines', { lines })}>
+            {busy === 'lines' ? 'Saving…' : 'Save dialogue'}
+          </Button>
+          {dirtyLines && (
+            <Button variant="ghost" size="sm" disabled={!!busy}
+              onClick={() => setLines(scene.lines)}>Discard</Button>
+          )}
+        </div>
+      </div>
+
+      <details open={scene.prompt_edited}>
+        <summary style={{ cursor: 'pointer', fontSize: 12.5 }} className="muted">
+          Exact prompt sent to the video model{scene.prompt_edited ? ' — hand-edited' : ''}
+        </summary>
+        <div className="stack gap-8" style={{ marginTop: 10 }}>
+          <textarea className="textarea mono" rows={14} value={prompt} style={{ fontSize: 12 }}
+            onChange={(e) => setPrompt(e.target.value)} />
+          <div className="row gap-8">
+            <Button variant={dirtyPrompt ? 'primary' : 'ghost'} size="sm"
+              disabled={!dirtyPrompt || !!busy} onClick={() => save('prompt', { prompt })}>
+              {busy === 'prompt' ? 'Saving…' : 'Save prompt'}
+            </Button>
+            {dirtyPrompt && (
+              <Button variant="ghost" size="sm" disabled={!!busy}
+                onClick={() => setPrompt(scene.prompt)}>Discard</Button>
+            )}
+            {scene.prompt_edited && (
+              <Button variant="ghost" size="sm" disabled={!!busy}
+                onClick={() => save('prompt', { prompt: '' })}>
+                {busy === 'prompt' ? 'Rebuilding…' : 'Rebuild from the scene'}
+              </Button>
+            )}
+          </div>
+          <span className="muted" style={{ fontSize: 11.5 }}>
+            {scene.prompt_edited
+              ? 'This scene renders from the text above — the cast, beats and sound below no longer rebuild it.'
+              : 'Assembled from the scene. Editing it pins this exact text for the render.'}
+          </span>
+        </div>
+      </details>
+    </>
+  )
+}
+
+
+function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged }) {
+  const [reshoot, setReshoot] = useState('')
+  const rerender = async (instruction) => {
+    setReshoot('busy')
+    try {
+      await api.rerenderFilmScene(workDir, scene.id, 'video', instruction)
+      setReshoot('queued')
+    } catch (e) { setReshoot(e.message) }
+  }
   return (
     <Card span={12} className="stack gap-16">
       <div className="row between center row--wrap gap-10">
@@ -86,8 +200,24 @@ function SceneCard({ scene, seconds, jobId, voiceOpts, voiceMeta, onChanged }) {
       </div>
 
       {scene.has_video && (
-        <video controls preload="metadata" src={scene.video_url}
-          style={{ width: '100%', maxWidth: 360, borderRadius: 10, background: '#000' }} />
+        <div className="stack gap-8">
+          <video controls preload="metadata" src={scene.video_url}
+            style={{ width: '100%', maxWidth: 360, borderRadius: 10, background: '#000' }} />
+          {/* The take on screen was shot from the text below — after an edit it
+              is stale until the scene is shot again. */}
+          <div className="row gap-8 center">
+            <GuidedRegenButton size="sm" variant="ghost" icon="clapperboard"
+              label="Shoot this scene again" busyLabel="Queued…"
+              busy={reshoot === 'busy'} disabled={reshoot === 'busy'}
+              onRegen={rerender} />
+            {reshoot === 'queued' && (
+              <span className="muted" style={{ fontSize: 12 }}>Re-rendering — watch it in Activity.</span>
+            )}
+            {reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
+              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
+            )}
+          </div>
+        </div>
       )}
 
       {/* ── Cast: each numbered slot IS the portrait / the voice clip, and the
@@ -115,42 +245,24 @@ function SceneCard({ scene, seconds, jobId, voiceOpts, voiceMeta, onChanged }) {
         </Banner>
       )}
 
-      {/* ── What happens, and what is said ── */}
-      <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
-        <div className="stack gap-8" style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <span className="label-sm">Action</span>
-          {scene.beats.map((b, i) => (
-            <div key={i} style={{ fontSize: 13.5 }}>
-              <code style={{ opacity: 0.7 }}>{b.t0}s–{b.t1}s</code> {b.action}
-            </div>
-          ))}
-          {!scene.beats.length && <span className="muted" style={{ fontSize: 13 }}>No beats.</span>}
-        </div>
-        <div className="stack gap-8" style={{ flex: '1 1 320px', minWidth: 0 }}>
-          <span className="label-sm">Dialogue</span>
-          {scene.lines.map((l, i) => (
-            <div key={i} style={{ fontSize: 13.5 }}>
-              <strong>{l.speaker}</strong>
-              <span className="muted"> ({l.delivery})</span><br />“{l.text}”
-            </div>
-          ))}
-          {!scene.lines.length && <span className="muted" style={{ fontSize: 13 }}>Nobody speaks.</span>}
-        </div>
+      {/* ── What happens ── */}
+      <div className="stack gap-8">
+        <span className="label-sm">Action</span>
+        {scene.beats.map((b, i) => (
+          <div key={i} style={{ fontSize: 13.5 }}>
+            <code style={{ opacity: 0.7 }}>{b.t0}s–{b.t1}s</code> {b.action}
+          </div>
+        ))}
+        {!scene.beats.length && <span className="muted" style={{ fontSize: 13 }}>No beats.</span>}
       </div>
+
+      {/* ── What is said, and the exact prompt — both editable ── */}
+      <SceneEditor scene={scene} jobId={jobId} onSaved={onChanged} />
 
       <div className="row gap-16 row--wrap" style={{ fontSize: 13 }}>
         <div style={{ flex: '1 1 320px' }}><span className="label-sm">Camera</span><div>{scene.camera || '—'}</div></div>
         <div style={{ flex: '1 1 320px' }}><span className="label-sm">Sound</span><div>{scene.soundscape || '—'}</div></div>
       </div>
-
-      <details>
-        <summary style={{ cursor: 'pointer', fontSize: 12.5 }} className="muted">
-          Exact prompt sent to the video model
-        </summary>
-        <pre style={{ whiteSpace: 'pre-wrap', fontSize: 12, marginTop: 10,
-                      background: 'var(--well, rgba(127,127,127,.08))', padding: 12,
-                      borderRadius: 8, overflowX: 'auto' }}>{scene.prompt}</pre>
-      </details>
     </Card>
   )
 }
@@ -192,7 +304,8 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
         </div>
       </Card>
       {data.scenes.map((s) => (
-        <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId}
+        <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId || data.job_id}
+          workDir={workDir}
           voiceOpts={voiceOpts} voiceMeta={voiceMeta} onChanged={load} />
       ))}
       {!data.scenes.length && (

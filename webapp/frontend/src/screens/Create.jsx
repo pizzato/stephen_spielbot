@@ -61,6 +61,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
+  const [music, setMusic] = useState(true)   // score this film? (style default, overridable here)
   // Script mode ('classic' | 'story'): owned by the style, like the narrator
   // voice and visual style — locked while a style is active, editable under
   // "No style". Story-first drafts + judges a prose story, then hands off to
@@ -81,6 +82,7 @@ export default function Create({ seed, meta, onGenerated }) {
     setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
     setStyle(profile.visual_style || '')
     setScriptMode(['story', 'performance'].includes(profile.script_mode) ? profile.script_mode : 'classic')
+    setMusic(profile.music_enabled !== false)
   }, [profile, voiceChoices])
 
   // In No-style mode, keep a manually chosen voice valid if the voice list changes.
@@ -160,6 +162,9 @@ export default function Create({ seed, meta, onGenerated }) {
   const effMode = scriptMode === 'performance'
     ? 'performance'
     : (format !== 'narration' ? 'classic' : (scriptMode || 'classic'))
+  // An all-acted film has no room for a score: every scene already carries the
+  // voices generated with its picture.
+  const musicable = effMode !== 'performance' && format !== 'dialogue'
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -176,6 +181,7 @@ export default function Create({ seed, meta, onGenerated }) {
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
         script_mode: effMode,
+        music: musicable && music,
       }
       if (effMode === 'story') {
         // Phase 1: draft the story, then open the Script screen's Story view —
@@ -264,7 +270,7 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Format"
-              hint="Narration = classic voice-over. Dialogue = characters speak, lip-synced (needs characters with a portrait + voice). Mixed = the AI blends narration, dialogue and silent scenes.">
+              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes.">
               <div className="row gap-8">
                 {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed']].map(([f, lbl]) => (
                   <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
@@ -287,6 +293,14 @@ export default function Create({ seed, meta, onGenerated }) {
                 <option value="story">Story-first — draft, review, then divide</option>
                 <option value="performance">Performance — acted scenes, characters speak</option>
               </select>
+            </Field>
+
+            <Field label="Music"
+              hint={musicable
+                ? 'Background score, mixed in at the very end. Off leaves the film with only its voices and room tone.'
+                : 'An acted film carries its own sound — the characters\u2019 voices are generated with the picture, so there is no score.'}>
+              <Check checked={musicable && music} onChange={setMusic} disabled={!musicable}
+                label="Score this film with background music" />
             </Field>
 
             <div className="row center between mt-8 row--wrap gap-16">
