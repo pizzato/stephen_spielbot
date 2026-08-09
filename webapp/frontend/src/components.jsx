@@ -147,7 +147,7 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
       </Field>
 
       {mode === 'dialogue' && (
-        <Field label="Shots" hint="A dialogue scene is a sequence of shots. A speaking shot is a talking-head close-up in that character's voice; a silent shot is a beat where people move but don't speak (rendered as motion). Speakers need a portrait.">
+        <Field label="Shots" hint="A dialogue scene is performed in one take: each speaking line is acted in that character's own voice, and a silent line is a beat where people move but don't speak. Speakers need a portrait.">
           <div className="stack gap-12">
             {lines.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>No shots yet — add one below.</span>}
             {lines.map((ln, i) => (

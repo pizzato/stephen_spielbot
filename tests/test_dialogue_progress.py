@@ -1,9 +1,9 @@
-"""Dialogue rendering is visible to the progress/ETA system.
+"""Acted (dialogue) rendering is visible to the progress/ETA system.
 
-Locks: the generation plan creates one durable task per dialogue line (instead
-of a narration/video/mux quartet that never runs and poisons the ETA), the
-timing model knows the "dialogue line" kind and the echomimic worker pool, and
-completed line tasks feed the learned table like any other kind.
+Locks: the generation plan creates ONE durable task per acted scene (instead of
+a narration/video/mux quartet that never runs and poisons the ETA), the timing
+model knows the "acted scene" kind, and completed scene tasks feed the learned
+table like any other kind.
 """
 import json
 import tempfile
@@ -35,16 +35,16 @@ class DialoguePlanTests(unittest.TestCase):
         self.store.close()
         self.tmp.cleanup()
 
-    def test_plan_creates_line_tasks_for_dialogue_scenes(self):
+    def test_plan_creates_one_task_per_acted_scene(self):
         self.store.ensure_generation_plan(
             "job_x", self.tmp.name, "T", _scenes(),
             {"vid_width": 512, "vid_height": 256})
         rows = self.store.task_rows("job_x")
         kinds = {r["id"]: r["kind"] for r in rows}
-        # dialogue scene 1 → two line tasks, and NO narration/video/mux tasks
-        line_ids = [i for i, k in kinds.items() if k == "scene.dialogue.line"]
-        self.assertEqual(len(line_ids), 2)
-        self.assertFalse(any(i.startswith("job_x:scene:1:") and k != "scene.dialogue.line"
+        # dialogue scene 1 → ONE acted task, and NO narration/video/mux tasks
+        acted = [i for i, k in kinds.items() if k == "scene.performance.generate"]
+        self.assertEqual(len(acted), 1)
+        self.assertFalse(any(i.startswith("job_x:scene:1:") and k != "scene.performance.generate"
                              for i, k in kinds.items()))
         # classic scene 2 keeps the standard quartet
         self.assertIn("job_x:scene:2:narration", kinds)
@@ -63,50 +63,39 @@ class DialoguePlanTests(unittest.TestCase):
             self.store.record_artifact("job_fk", mux_id, "scene_final",
                                        Path(self.tmp.name) / "x.mp4")
 
-    def test_completed_line_feeds_timing_table(self):
+    def test_completed_acted_scene_feeds_timing_table(self):
         self.store.ensure_generation_plan(
             "job_y", self.tmp.name, "T", _scenes(),
             {"vid_width": 512, "vid_height": 256})
-        line_id = next(r["id"] for r in self.store.task_rows("job_y")
-                       if r["kind"] == "scene.dialogue.line")
-        self.store.start_task(line_id)
-        self.store.complete_task(line_id, result={})
-        sig = timing_signature("scene.dialogue.line", {"vid_width": 512, "vid_height": 256})
-        self.assertEqual(sig, "dialogue line|512x256")
+        acted_id = next(r["id"] for r in self.store.task_rows("job_y")
+                        if r["kind"] == "scene.performance.generate")
+        self.store.start_task(acted_id)
+        self.store.complete_task(acted_id, result={})
+        sig = timing_signature("scene.performance.generate",
+                               {"vid_width": 512, "vid_height": 256})
+        self.assertEqual(sig, "acted scene|512x256")
         # the label is registered, so the sample lands in the learned table
-        self.assertIn("scene.dialogue.line", TIMING_KIND_LABELS)
+        self.assertIn("scene.performance.generate", TIMING_KIND_LABELS)
 
 
 class DialogueEtaTests(unittest.TestCase):
-    def test_estimate_eta_counts_echomimic_pool(self):
+    def test_acted_scenes_share_the_comfy_pool(self):
+        # Acted scenes render on ComfyUI like any other clip, so they queue
+        # behind the image/video work rather than on a pool of their own.
         tasks = [
-            {"kind": "scene.dialogue.line", "status": "queued",
-             "payload_json": '{"vid_width": 512, "vid_height": 256}'},
-            {"kind": "scene.dialogue.line", "status": "queued",
-             "payload_json": '{"vid_width": 512, "vid_height": 256}'},
+            {"kind": "scene.performance.generate", "status": "queued",
+             "payload_json": '{"vid_width": 512, "vid_height": 256, "scene_id": 1}'},
+            {"kind": "scene.performance.generate", "status": "queued",
+             "payload_json": '{"vid_width": 512, "vid_height": 256, "scene_id": 2}'},
             {"kind": "video.finalize", "status": "queued", "payload_json": "{}"},
         ]
-        eta = estimate_eta(tasks, {}, {"comfy_workers": ["a"], "tts_workers": ["b"],
-                                       "echomimic_workers": ["c", "d"]})
-        self.assertIsNotNone(eta)
-        self.assertEqual(eta["workers"]["echomimic"], 2)
-        # two seeded lines render serially (~480s each, res-scaled) + finalize
-        self.assertGreater(eta["eta_seconds"], 100)
-        self.assertTrue(any(r["label"].startswith("dialogue line") for r in eta["table"]))
-
-    def test_parallel_scenes_divide_echomimic_wall(self):
-        # 2 scenes × 2 lines each on 3 echomimic workers → 2 render in parallel,
-        # so the echomimic wall is ~half the serial time.
-        def lines(scene_id):
-            return [{"kind": "scene.dialogue.line", "status": "queued",
-                     "payload_json": json.dumps({"vid_width": 512, "vid_height": 256,
-                                                  "scene_id": scene_id})} for _ in range(2)]
-        cfg = {"comfy_workers": ["a"], "tts_workers": ["b"], "echomimic_workers": ["c", "d", "e"]}
-        one_scene = estimate_eta(lines(1), {}, cfg)          # 2 lines, 1 scene → serial
-        two_scenes = estimate_eta(lines(1) + lines(2), {}, cfg)  # 4 lines, 2 scenes → parallel
-        # twice the work but across 2 workers → about the same wall, not double
-        self.assertLess(two_scenes["eta_seconds"], 1.6 * one_scene["eta_seconds"])
-        self.assertEqual(two_scenes["workers"]["echomimic"], 3)
+        one = estimate_eta(tasks, {}, {"comfy_workers": ["a"], "tts_workers": ["b"]})
+        two = estimate_eta(tasks, {}, {"comfy_workers": ["a", "c"], "tts_workers": ["b"]})
+        self.assertIsNotNone(one)
+        self.assertNotIn("echomimic", one["workers"])
+        self.assertTrue(any(r["label"].startswith("acted scene") for r in one["table"]))
+        # a second render worker roughly halves the acted wall
+        self.assertLess(two["eta_seconds"], one["eta_seconds"])
 
 
 if __name__ == "__main__":

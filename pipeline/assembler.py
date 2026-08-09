@@ -40,7 +40,7 @@ def _resolve_media_tool(name: str) -> str:
 _FFMPEG = _resolve_media_tool("ffmpeg")
 _FFPROBE = _resolve_media_tool("ffprobe")
 # Canonical film format for cross-scene concatenation — the pipeline renders at
-# 25fps throughout (LTX, EchoMimic, Ken Burns), and heterogeneous scene finals
+# 25fps throughout (LTX, H3, Ken Burns), and heterogeneous scene finals
 # (e.g. a silent establishing track vs talking clips) are normalised to this
 # fps + audio rate/layout so the concat filter accepts them.
 _FILM_FPS = 25
@@ -718,7 +718,7 @@ def fit_video_canvas(video_path: Path, width: int, height: int) -> Path:
 
     Scales to fit inside the canvas and fills the leftover area with a blurred,
     zoomed copy of the frame (the standard pillarbox/letterbox treatment) — used
-    for square talking-head clips inside a landscape/portrait film, where
+    for square clips inside a landscape/portrait film, where
     ensure_video_resolution's center-crop would cut the speaker's face. In-place
     (atomic swap); no-op when the clip already matches."""
     actual_w, actual_h = _get_video_dimensions(video_path)

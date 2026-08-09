@@ -101,7 +101,7 @@ for host in $HOSTS; do
         || echo "  (no compose stack dir on $host — cleaning up directly)"
     _on_host "$host" "docker ps -aq --filter label=com.docker.compose.project=spielbot-worker | xargs -r docker rm -f" 2>/dev/null || true
     _on_host "$host" "docker volume ls -q --filter label=com.docker.compose.project=spielbot-worker | xargs -r docker volume rm -f" 2>/dev/null || true
-    _on_host "$host" "docker rmi spielbot-comfyui:latest spielbot-tts:latest spielbot-echomimic:latest" 2>/dev/null || true
+    _on_host "$host" "docker rmi spielbot-comfyui:latest spielbot-tts:latest" 2>/dev/null || true
     _on_host "$host" "rm -rf ~/spielbot-worker" || true
     if $PURGE_MODELS; then
         # ~/github/ComfyUI is deleted ONLY if Spielbot created it (install.sh

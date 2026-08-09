@@ -149,13 +149,6 @@ def _worker_activity(cfg: dict, tasks: list[dict], reserved_comfy: int = 0) -> l
     for ep in cfg.get("tts_workers") or []:
         ep_by_wid[worker_id("tts", ep)] = ep
         fleet.append(("tts", ep))
-    # EchoMimic talking-head workers (dialogue). Without these the fleet reads
-    # "all idle" during a dialogue render — the comfy/tts pools genuinely are
-    # idle while the work runs on echomimic.
-    for ep in cfg.get("echomimic_workers") or []:
-        ep_by_wid[worker_id("echomimic", ep)] = ep
-        fleet.append(("echomimic", ep))
-
     job_by_ep: dict[str, str] = {}
     for t in tasks:
         if t.get("status") in _WORKER_RUNNING_STATUSES:
@@ -1513,7 +1506,6 @@ def workers_status() -> dict:
     """
     from pipeline.worker_pool import queue_depth
     from pipeline.tts_worker import worker_alive as tts_alive
-    from pipeline.echomimic import worker_alive as echomimic_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -1527,7 +1519,6 @@ def workers_status() -> dict:
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
         "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
-        "echomimic": [{"endpoint": h, "up": echomimic_alive(h, timeout=3)} for h in cfg.get("echomimic_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
@@ -1553,7 +1544,7 @@ def _worker_hosts(cfg: dict) -> list[str]:
     Each host runs one docker compose stack (ComfyUI + F5-TTS) that
     scripts/worker.sh controls over SSH — same hosts `make stop W=<host>` uses."""
     hosts: list[str] = []
-    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []) + (cfg.get("echomimic_workers") or []):
+    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []):
         h = _host_of(entry)
         if h and h not in hosts:
             hosts.append(h)
@@ -4193,17 +4184,6 @@ def start_generation(body: GenerateBody) -> dict:
                 generate_all_previews(job_id, resolution, body.style or "")
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
-
-    # Per-shot stills for dialogue lines (speaker close-ups in the scene setting) —
-    # the talking-head model needs a large, clear face; a wide scene frame gives
-    # poor lip-sync. Best-effort: a missing still falls back to the scene frame.
-    try:
-        made = gapp.generate_dialogue_shot_stills(job_id, ss["name"], resolution)
-        if made:
-            (work_dir / "progress.json").write_text(json.dumps(
-                {"pct": 0, "msg": f"Rendered {made} dialogue shot still(s)…", "ts": time.time()}))
-    except Exception as e:
-        gapp.logger.warning("Dialogue shot pre-build failed (non-fatal): %s", e)
 
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({
@@ -11203,191 +11183,56 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _finish_film_task_error(task_id, e)
 
 
-def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                           instruction: str = "") -> None:
-    """Background thread: fully re-render a DIALOGUE scene — per-shot stills,
-    per-line TTS + EchoMimic talking heads, LTX silent shots, establishing
-    push-in, concat — mirroring the full render's dialogue path
-    (resume_generation), so a dialogue scene added or edited post-render can be
-    built from the edit screen. The classic worker (_run_video_rerender) can't
-    render these: dialogue audio is per-line, there is no scene_NN_narration.wav."""
-    import shutil
+def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        instruction: str = "") -> None:
+    """Background thread: re-render an ACTED scene as one H3 Ref2VA generation.
 
-    from pipeline.assembler import fit_video_canvas
-    from pipeline.comfyui import generate_keyframed_clip, ltx_dimensions
-    from pipeline.dialogue_render import render_dialogue_scene, NARRATOR
-    from pipeline.scene_video import generate_scene_video as gen_scene_video
+    Acted scenes carry their own voices in-picture, so there is no
+    scene_NN_narration.wav for the classic worker (_run_video_rerender) to mux
+    — the whole scene is regenerated from its cast portraits and lines."""
+    from pipeline.llm import Scene
+    from resume_generation import render_performance_scene
 
     cfg = gapp.load_config()
     md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     final_path = wd / f"scene_{sid:02d}_final.mp4"
 
     try:
-        lines = [ln for ln in (md.get("lines") or []) if isinstance(ln, dict)]
-        if not lines:
-            raise RuntimeError("Dialogue scene has no shots — add a line or a silent shot first.")
-        echo_hosts = [h for h in (cfg.get("echomimic_workers") or [])
-                      if str(h).startswith(("http://", "https://"))]
-        if not echo_hosts:
-            raise RuntimeError("No echomimic_workers configured — dialogue scenes need a talking-head worker.")
         pool = _shared_edit_render_pool()
         if pool is None:
             raise RuntimeError("No ComfyUI workers reachable.")
-        tts_host = _first_live_tts_host(cfg)
 
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
-        vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
-        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
-
-        _film_checkpoint(task_id)
-        # Per-shot stills (solo speaker close-ups in the scene setting) — the full
-        # render pre-builds these before rendering. Best-effort: a missing still
-        # falls back to the scene frame / portrait inside make_still.
-        _film_tasks[task_id] = {"status": "running", "step": "shots"}
-        try:
-            gapp.generate_dialogue_shot_stills(job_id_from_work_dir(wd),
-                                               jc.get("style_name") or "",
-                                               resolution, worker_pool=pool)
-        except Exception:
-            gapp.logger.warning("Dialogue shot-still pre-build failed — render falls back to the scene frame",
-                                exc_info=True)
-
-        voice_ref_for, make_still, prompt_for = gapp._dialogue_resolvers(
-            cfg, wd, jc.get("voice_ref") or "", vid_width=vid_w, vid_height=vid_h)
-
-        video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
-        style_clean = jc.get("style", "").strip().rstrip(".")
-        if style_clean and video_prompt and not video_prompt.startswith(style_clean):
-            video_prompt = f"{style_clean}. {video_prompt}"
-        # One-off steering only reaches the motion prompts (silent shots); the
-        # spoken lines are authored text and are voiced verbatim.
-        video_prompt = gapp._apply_prompt_instruction(video_prompt, instruction)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(
+            resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
 
         scene = Scene(
             id=sid,
-            title=row.get("title") or f"Scene {sid}",
+            title=row.get("title") or "",
             image_prompt=row.get("image_prompt") or "",
-            video_prompt=video_prompt,
-            narration="",
-            negative_prompt=(jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT,
-            mode="dialogue",
-            lines=lines,
-            duration=float(md.get("duration") or 0.0),
+            video_prompt=row.get("video_prompt") or "",
+            narration=row.get("narration") or "",
+            mode=md.get("mode") or "dialogue",
+            lines=[ln for ln in (md.get("lines") or []) if isinstance(ln, dict)],
+            metadata_extra=md,
         )
+        # Guided re-generation: the user's note rides along with the prompt.
+        scene_cfg = dict(jc)
+        scene_cfg["style_name"] = jc.get("style_name") or ""
+        if instruction.strip():
+            scene_cfg["performance_instruction"] = instruction.strip()
 
-        image_engine = gapp.engines.resolve(cfg, jc.get("image_engine")
-                                            or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine"))
-        video_engine = _resolve_video_for_job(cfg, jc)
-
-        def silent_video(scene_obj, shot, still, out_clip):
-            """A silent shot (people move, no speech) as an LTX i2v clip from its
-            still — same recipe as the full render's silent_video."""
-            vp = (str((shot or {}).get("video_prompt") or "").strip()
-                  or scene_obj.video_prompt or scene_obj.image_prompt or scene_obj.title)
-            dur = float((shot or {}).get("duration") or 0) or 5.0
-            shot_scene = Scene(id=scene_obj.id, title=scene_obj.title, image_prompt="",
-                               video_prompt=vp, narration="",
-                               negative_prompt=scene_obj.negative_prompt)
-            url = _acquire_render_worker(pool, task_id)
-            try:
-                _film_checkpoint(task_id)
-                raw, _amb = gen_scene_video(
-                    shot_scene, wd, dur, vid_w, vid_h,
-                    float(jc.get("max_clip_secs", 12.0)),
-                    float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
-                    float(jc.get("first_pass_cfg", cfg.get("first_pass_cfg", 1.0))),
-                    int(jc.get("first_pass_steps", cfg.get("first_pass_steps", 8))),
-                    float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
-                    int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
-                    url,
-                    scene_first_frame=Path(still), image_engine=image_engine,
-                    video_engine=video_engine,
-                )
-            finally:
-                pool.release(url)
-            if Path(raw) != Path(out_clip):
-                shutil.move(str(raw), str(out_clip))
-            return Path(out_clip)
-
-        _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
-
-        def _first_shot_still(scene_obj):
-            """The first shot's solo close-up still (push-in target) — only a real
-            in-scene shot still qualifies; see resume_generation's twin."""
-            first = None
-            for ln in (scene_obj.lines or []):
-                ln = ln or {}
-                silent = bool(ln.get("silent")) and not str(ln.get("text") or "").strip()
-                if silent or str(ln.get("text") or "").strip():
-                    first = ln
-                    break
-            if first is None:
-                return None
-            speaker = "" if (bool(first.get("silent")) and not str(first.get("text") or "").strip()) \
-                else str(first.get("speaker") or NARRATOR).strip()
-            try:
-                still = make_still(scene_obj, speaker, 0)
-            except Exception:
-                return None
-            return still if still and still.name.endswith("_line_00_shot.png") else None
-
-        def establishing(scene_obj):
-            """Open on the wide establishing frame and push in to the first
-            speaker's close-up (LTX first→last keyframes) — same beat as the
-            full render, so an editor-rendered scene matches its siblings."""
-            if _establish_secs <= 0:
-                return None
-            wide = gapp._scene_establishing_frame(
-                wd, scene_obj.id, {"preview_path": row.get("preview_path") or ""}, vid_w, vid_h)
-            if wide is None:
-                return None
-            close = _first_shot_still(scene_obj)
-            if close is None or Path(close) == Path(wide):
-                return None
-            out = wd / f"scene_{scene_obj.id:02d}_establish.mp4"
-            url = _acquire_render_worker(pool, task_id)
-            try:
-                _film_checkpoint(task_id)
-                generate_keyframed_clip(
-                    first_frame_path=wide, last_frame_path=close, output_path=out,
-                    positive_prompt=(
-                        "slow cinematic push-in from the wide establishing shot toward "
-                        "the speaker, steady smooth camera move, the setting and people "
-                        "stay consistent, subtle natural motion"),
-                    negative_prompt="static, jump cut, warp, morph, distortion, flicker, "
-                                    + ((jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT),
-                    width=vid_w, height=vid_h,
-                    duration_seconds=_establish_secs,
-                    lora_strength=float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
-                    comfy_url=url,
-                )
-            finally:
-                pool.release(url)
-            return out
-
-        @contextmanager
-        def line_cm(scene_obj, idx, n_lines, speaker):
-            _film_checkpoint(task_id)
-            who = "silent shot" if speaker == "silent" else f"{speaker} speaks"
-            _film_tasks[task_id] = {"status": "running",
-                                    "step": f"shot {idx + 1}/{n_lines} — {who}"}
-            yield
-
-        render_dialogue_scene(
-            scene, wd,
-            voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
-            echomimic_host=echo_hosts[0],
-            tts_host=tts_host,
-            tts_engine=jc.get("tts_engine", cfg.get("default_tts_engine", "openf5")),
-            tts_language=jc.get("tts_language", cfg.get("default_tts_language", "en")),
-            canvas=(vid_w, vid_h),
-            line_cm=line_cm, silent_video=silent_video,
-            establishing=establishing,
-        )
         _film_checkpoint(task_id)
-        # EchoMimic output is portrait-shaped; fit onto the film's canvas so the
-        # cross-scene concat gets uniform dims (same as the full render).
-        fit_video_canvas(final_path, vid_w, vid_h)
+        _film_tasks[task_id] = {"status": "running", "step": "acted scene"}
+        url = pool.acquire()
+        try:
+            render_performance_scene(scene, wd, scene_cfg, comfy_url=url,
+                                     vid_width=vid_w, vid_height=vid_h,
+                                     style_name=scene_cfg["style_name"])
+        finally:
+            pool.release(url)
+
+        _film_checkpoint(task_id)
         video_history.record(wd, sid, final_path)
         # The fresh final supersedes any legacy narration-style artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
@@ -11399,12 +11244,6 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
         _finish_film_task_error(task_id, e)
 
 
-# Scene re-renders run as in-process daemon threads, unlike the full film
-# render's separate subprocess — a backend restart kills them silently, mid-
-# flight. This journal persists each dispatched re-render's *intent* (not its
-# progress) so startup can requeue whatever was interrupted, mirroring how a
-# killed full render resumes: the in-flight scene redoes from scratch, and the
-# atomic staging swap means nothing already on disk was lost.
 _RERENDER_JOURNAL_PATH = _ACTIVITY_LOG_PATH.parent / "rerender_journal.json"
 _rerender_journal_lock = threading.Lock()
 
@@ -11465,9 +11304,9 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         else:
             name, st = f"Re-rendered scene {sid}", "done"
             # Learn this op's duration so the next re-render predicts its ETA.
-            # Dialogue scenes render per-line talking heads and take far longer
+            # Acted scenes render as one H3 generation and take far longer
             # than an LTX clip — keep their timings out of the "video" average.
-            timing_key = "dialogue" if target is _run_dialogue_rerender else component
+            timing_key = "dialogue" if target is _run_acted_rerender else component
             w, h = _film_job_dims(str(wd))
             film_timing.record(f"rerender_{timing_key}", end - started, width=w, height=h)
         # Full grouped/persisted history entry (under the film), like every other
@@ -11546,10 +11385,10 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_narration_rerender
     elif component == "image":
         target = _run_image_rerender
-    elif scene_mode == "dialogue":
-        # Dialogue scenes re-render the whole scene: per-line TTS + talking
-        # heads + silent LTX shots (there is no single narration wav to mux).
-        target = _run_dialogue_rerender
+    elif scene_mode in performance_mode.PERFORMANCE_MODES:
+        # Acted scenes re-render whole: one H3 generation carrying its own
+        # voices (there is no single narration wav to mux).
+        target = _run_acted_rerender
     else:
         target = _run_video_rerender
     # Persist the intent before the thread starts, so a restart in any window

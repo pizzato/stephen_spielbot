@@ -102,14 +102,20 @@ TIMING_KIND_LABELS = {
     "scene.image.generate": "image",
     "scene.video.generate": "video",
     "scene.narration.generate": "narration",
-    "scene.dialogue.line": "dialogue line",
+    "scene.performance.generate": "acted scene",
     "music.generate": "music",
     "scene.video.mux": "mux",
     "video.finalize": "finalize",
 }
 
+# Scene modes that render as ONE acted H3 generation carrying their own audio.
+# "dialogue" is the current spelling; "performance" is what older scripts wrote.
+# (Duplicated from pipeline.performance on purpose — this module stays
+# dependency-free so the controller DB can be used standalone.)
+ACTED_SCENE_MODES = {"dialogue", "performance"}
+
 # Labels whose duration depends on output resolution (the rest are flat).
-TIMING_RES_SENSITIVE = {"image", "video", "finalize", "dialogue line"}
+TIMING_RES_SENSITIVE = {"image", "video", "finalize", "acted scene"}
 
 
 def timing_signature(kind: str, payload: dict[str, Any] | None) -> str | None:
@@ -521,36 +527,13 @@ class DurableStore:
             }
             scene_payload.update({k: v for k, v in common_scene_payload.items() if v is not None})
 
-            # Dialogue scenes render as one talking-head generation per line
-            # (EchoMimic) — plan those as real tasks so the progress/ETA system
-            # sees them; the narration/image/video/mux quartet never runs for a
-            # dialogue scene and would sit "queued" forever, poisoning the ETA.
+            # An acted scene ("dialogue"/"performance") renders as ONE H3 Ref2VA
+            # generation carrying its own voices — no first frame, no TTS, no
+            # mux — so it gets one real task and the quartet below is skipped
+            # (queued-forever tasks poison the ETA).
             scene_md = _scene_value(scene, "metadata", {}) or {}
             dlg_lines = scene_md.get("lines") or []
-            if scene_md.get("mode") == "dialogue" and dlg_lines:
-                for idx, ln in enumerate(dlg_lines):
-                    line_task = task_id(job_id, "scene", sid, f"line-{idx}")
-                    self.create_task(
-                        line_task,
-                        job_id,
-                        "scene.dialogue.line",
-                        f"Scene {sid} · {str((ln or {}).get('speaker') or 'line')} speaks ({idx + 1}/{len(dlg_lines)})",
-                        worker_kind="echomimic",
-                        payload={**scene_payload, "line_index": idx,
-                                 "speaker": str((ln or {}).get("speaker") or ""),
-                                 "resource_class": "echomimic"},
-                        dependencies=[root],
-                        priority=30 + sid,
-                        max_attempts=2,
-                    )
-                    mux_task_ids.append(line_task)  # finalize waits on these
-                continue
-
-            # Performance scenes (script_mode = "performance") render as ONE
-            # Ref2VA generation carrying its own dialogue audio — no first
-            # frame, no TTS, no mux. Same reasoning as the dialogue branch: the
-            # quartet below would sit queued forever and poison the ETA.
-            if scene_md.get("mode") == "performance":
+            if scene_md.get("mode") in ACTED_SCENE_MODES and dlg_lines:
                 perf_task = task_id(job_id, "scene", sid, "performance")
                 self.create_task(
                     perf_task,
@@ -628,13 +611,14 @@ class DurableStore:
                 max_attempts=2,
             )
 
-        # Performance films carry no score — every clip brings its own audio out
-        # of the same forward pass — so they never plan a music task.
-        performance_film = bool(scene_items) and all(
-            (_scene_value(s, "metadata", {}) or {}).get("mode") == "performance"
+        # Music is optional per style/film, and an all-acted film has no score
+        # by nature — every clip brings its own audio out of the same forward
+        # pass. Either way: no task, so nothing sits queued forever.
+        all_acted = bool(scene_items) and all(
+            (_scene_value(s, "metadata", {}) or {}).get("mode") in ACTED_SCENE_MODES
             for s in scene_items)
         music_tasks: list[str] = []
-        if not performance_film:
+        if config.get("music_enabled", True) and not all_acted:
             music_task = task_id(job_id, "music")
             music_tasks.append(music_task)
             self.create_task(

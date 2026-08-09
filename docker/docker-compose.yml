@@ -90,35 +90,6 @@ services:
               count: all
               capabilities: [gpu]
 
-  echomimic:
-    build:
-      context: ..
-      dockerfile: docker/echomimic/Dockerfile
-      args:
-        BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
-        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
-    image: spielbot-echomimic:latest
-    ports:
-      - "${ECHOMIMIC_PORT:-8190}:8190"
-    environment:
-      # GB10 GEMM routing (see the comfyui service) — harmless elsewhere.
-      - TORCH_BLAS_PREFER_CUBLASLT=${TORCH_BLAS_PREFER_CUBLASLT:-}
-    volumes:
-      # ~27 GB of EchoMimic + Wan2.1-Fun-1.3B + wav2vec weights, fetched on first
-      # use and persisted across container recreation.
-      - echomimic-weights:/weights
-      - hf-cache:/cache/huggingface
-    labels:
-      autoheal: "true"
-    restart: unless-stopped
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
-
   # ── Self-heal GPU loss ──────────────────────────────────────────────────────
   # A host `systemctl daemon-reload` / driver update can revoke the GPU from an
   # already-running container ("Failed to initialize NVML: Unknown Error"), after
@@ -141,4 +112,3 @@ services:
 volumes:
   comfyui-output:
   hf-cache:
-  echomimic-weights:

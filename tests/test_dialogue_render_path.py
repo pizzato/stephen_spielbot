@@ -148,25 +148,6 @@ class ShotStillTests(unittest.TestCase):
                              {"speaker": "J", "text": "  "}])
         self.assertEqual(ls, [{"speaker": "K", "text": "Hi", "shot": "tight close-up"}])
 
-    def test_make_still_prefers_shot_then_frame(self):
-        try:
-            from PIL import Image
-        except ImportError:
-            self.skipTest("PIL not available")
-        import resume_generation as rg
-        with tempfile.TemporaryDirectory() as td:
-            wd = Path(td)
-            (wd / "characters.json").write_text("[]")
-            Image.new("RGB", (512, 256)).save(wd / "scene_03_preview.png")
-            Image.new("RGB", (512, 256)).save(wd / "scene_03_line_01_shot.png")
-            _, make_still, _ = rg._dialogue_resolvers({}, wd, None, vid_width=512, vid_height=256)
-            scene = Scene(id=3, title="", image_prompt="", video_prompt="", narration="",
-                          mode="dialogue", lines=[{"speaker": "K", "text": "a"},
-                                                  {"speaker": "J", "text": "b"}])
-            # line 1 has its shot still; line 0 falls back to the scene frame
-            self.assertEqual(make_still(scene, "J", 1).name, "scene_03_line_01_shot.png")
-            self.assertEqual(make_still(scene, "K", 0).name, "scene_03_preview.png")
-
 
 class FitCanvasTests(unittest.TestCase):
     def test_square_clip_fits_landscape_canvas(self):

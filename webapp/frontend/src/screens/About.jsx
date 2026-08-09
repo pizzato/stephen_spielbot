@@ -45,7 +45,7 @@ const PIPELINE = [
   ['feather-pointed', 'Script', 'An LLM writes a multi-scene script with visual prompts and narration'],
   ['image', 'Images', 'FLUX paints each scene’s first frame, with consistent recurring characters'],
   ['film', 'Video', 'LTX animates every scene from its still through ComfyUI'],
-  ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning; talking-head dialogue is lip-synced by EchoMimic-V3'],
+  ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning; acted scenes are performed and voiced by MiniMax H3'],
   ['music', 'Music', 'ACE-Step scores it from a mood description'],
   ['clapperboard', 'Assembly', 'FFmpeg cuts it all into one finished film'],
 ]

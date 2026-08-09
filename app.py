@@ -214,10 +214,8 @@ DEFAULT_CFG = {
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
     # tts_workers:   hostnames for F5-TTS narration.
-    # echomimic_workers: EchoMimic-V3 talking-head URLs (dialogue/performance scenes).
     "comfy_workers": [],
     "tts_workers":   [],
-    "echomimic_workers": [],
     # UI worker reservation (issue #98): while the web UI is actively used, the
     # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
     # render pool once the UI has been idle this many seconds.
@@ -3156,106 +3154,6 @@ def _scene_establishing_frame(work_dir: Path, sid: int, row: dict,
     return None
 
 
-def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
-                        vid_width: int = 0, vid_height: int = 0):
-    """Build (voice_ref_for, make_still, prompt_for) for dialogue scenes.
-
-    Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
-    own voice, else the style narrator — (b) the still EchoMimic animates, and
-    (c) the text prompt guiding the animation.
-
-    The still is always the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at
-    the job resolution — same rule as the classic video path) so the character
-    speaks *in the scene*; the speaker's portrait is only a fallback when no frame
-    exists on disk. On multi-character frames the prompt names WHO is speaking so
-    the right lips move (best-effort text guidance).
-
-    Lives here (not resume_generation) so the web backend's per-scene dialogue
-    re-render can share it — importing resume_generation would clobber the
-    backend's logging config."""
-    try:
-        chars = json.loads((work_dir / "characters.json").read_text()) or []
-    except Exception:
-        chars = []
-    # Global catalogue characters are speakable too (the per-script cast wins on
-    # a name clash) — e.g. a recurring presenter defined once in Settings.
-    seen = {str(c.get("name", "")).strip().lower() for c in chars if isinstance(c, dict)}
-    for c in (cfg.get("characters") or []):
-        if isinstance(c, dict) and str(c.get("name", "")).strip().lower() not in seen:
-            chars.append(c)
-    voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
-    global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
-
-    def _find(speaker: str):
-        s = (speaker or "").strip().lower()
-        for c in chars:
-            names = [c.get("name", "")] + list(c.get("aliases") or [])
-            if any(s == str(n).strip().lower() for n in names if str(n).strip()):
-                return c
-        return None
-
-    def voice_ref_for(speaker: str):
-        c = _find(speaker)
-        if c and c.get("voice") and c["voice"] in voices:
-            p = Path(voices[c["voice"]])
-            if p.exists():
-                logger.info("  %s speaks with voice %r", speaker, c["voice"])
-                return p
-        logger.info("  %s speaks with the narrator voice", speaker)
-        return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
-
-    def _scene_frame(scene) -> Path | None:
-        """The scene's first frame at the job resolution, if present on disk."""
-        for ext in ("_preview.png", "_first_frame.png"):
-            p = work_dir / f"scene_{scene.id:02d}{ext}"
-            if p.exists() and vid_width and vid_height and _image_matches_resolution(p, vid_width, vid_height):
-                return p
-        return None
-
-    def _portrait(scene, speaker: str) -> Path | None:
-        c = _find(speaker)
-        ref = (c or {}).get("ref_image") or ""
-        for cand in ((work_dir / "characters" / ref, global_char_dir / ref) if ref else ()):
-            if cand.exists():
-                return cand
-        return None
-
-    def make_still(scene, speaker: str, idx: int) -> Path:
-        # Per-line SHOT still (speaker close-up in the scene setting, generated at
-        # render start from the line's "shot" framing) — the best lip-sync source:
-        # face large, correct speaker, in-scene. Then the scene frame, then portrait.
-        shot = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}_shot.png"
-        if shot.exists() and vid_width and vid_height and _image_matches_resolution(shot, vid_width, vid_height):
-            logger.info("  scene %d line %d: talking still = shot close-up (%s)", scene.id, idx, shot.name)
-            return shot
-        frame = _scene_frame(scene)
-        if frame is not None:
-            logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
-            return frame
-        portrait = _portrait(scene, speaker)
-        if portrait is not None:
-            logger.info("  scene %d: no scene frame at the job resolution — %s speaks on their portrait",
-                        scene.id, speaker)
-            return portrait
-        raise RuntimeError(
-            f"dialogue speaker {speaker!r} (scene {scene.id}) has no shot still, no scene first "
-            "frame at the job resolution, and no character portrait"
-        )
-
-    def prompt_for(scene, speaker: str) -> str:
-        """Text guidance for EchoMimic: name WHO is speaking so a multi-character
-        scene frame animates the right character's lips (best-effort — the model
-        is text-guided)."""
-        c = _find(speaker)
-        who = (c or {}).get("description") or speaker
-        return (
-            f"{speaker} ({who}) is speaking, with natural facial expressions and subtle head "
-            "movement. Any other characters present listen silently, mouths closed, without talking."
-        )
-
-    return voice_ref_for, make_still, prompt_for
-
-
 def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
     """Build (portrait_for, voice_for) for performance scenes (Ref2VA).
 
@@ -3266,8 +3164,8 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
     that reference (the model then invents the look), and a missing voice lets
     it invent the voice.
 
-    Lives here beside _dialogue_resolvers so the backend's per-scene re-render
-    can share it without importing resume_generation."""
+    Lives here (not resume_generation) so the backend's per-scene re-render can
+    share it — importing resume_generation would clobber its logging config."""
     chars = _job_characters(cfg, style_name or cfg.get("style_name") or "", work_dir)
     voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
 
@@ -3356,157 +3254,6 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
             audios.append({"slot": len(audios) + 1, "name": name,
                            "voice": voice_name_for(name), "path": str(path)})
     return {"pictures": pictures, "audios": audios}
-
-
-def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
-                                  resolution: str = "",
-                                  worker_pool: WorkerPool | None = None) -> int:
-    """Render each dialogue line's per-shot still (speaker close-up, in-scene).
-
-    Dialogue lines may carry a "shot" framing (see the dialogue schema): a close
-    view of the speaker so the talking-head model has a large, clear face to
-    animate — lip-sync quality collapses when the speaker is small in the frame.
-    Writes scene_NN_line_MM_shot.png at the job resolution (the dialogue render
-    prefers it over the scene frame); skips shots already on disk at the right
-    size. Best-effort per shot: a failed still just falls back to the scene
-    frame at render time. Returns how many stills were generated."""
-    work_dir = _job_work_dir(job_id)
-    if work_dir is None:
-        return 0
-    store = DurableStore.default()
-    try:
-        rows = store.scene_rows(job_id)
-    finally:
-        store.close()
-    cfg = load_config()
-    # (scene_row, line_idx, line_dict). Speaking shots always get a solo still —
-    # even without an explicit "shot" — so the talking head is never animated
-    # from a two-person frame. Silent shots only when they carry a framing.
-    todo: list[tuple[dict, int, dict]] = []
-    for row in rows:
-        md = row.get("metadata") or {}
-        if md.get("mode") != "dialogue":
-            continue
-        for idx, ln in enumerate(md.get("lines") or []):
-            ln = ln or {}
-            speaking = not ln.get("silent") and str(ln.get("text") or "").strip()
-            if speaking or str(ln.get("shot") or "").strip():
-                todo.append((row, idx, ln))
-    if not todo:
-        return 0
-
-    def _speaker_char(name: str) -> dict | None:
-        n = (name or "").strip().lower()
-        if not n:
-            return None
-        for c in _job_characters(cfg, style_name, work_dir):
-            names = [c.get("name", ""), *(c.get("aliases") or [])]
-            if any(n == str(x).strip().lower() for x in names if str(x).strip()):
-                return c
-        return None
-
-    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
-    # Shot stills MUST match the render resolution — the dialogue render only uses
-    # a still that matches, else it falls back to the (multi-person) scene frame.
-    # Prefer the job's own resolution over the style default. Also pick up the
-    # job's per-job visual style ("style") — the general art-direction instruction
-    # the user set at Create time — so close-ups match the scene previews (which
-    # DO include it) instead of only the profile default.
-    job_style = ""
-    try:
-        _jc = json.loads((work_dir / "job_config.json").read_text())
-        resolution = resolution or _jc.get("resolution") or ""
-        job_style = _jc.get("style") or ""
-    except Exception:
-        pass
-    img_width, img_height = _RESOLUTIONS.get(
-        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
-        (1024, 576),
-    )
-    img_width, img_height = ltx_dimensions(img_width, img_height)
-    combined_style = _compose_visual_style(job_style, cfg, style_name)
-
-    if worker_pool is None:
-        worker_urls = _preview_worker_urls()
-        if not worker_urls:
-            logger.warning("[shots] no image worker available — dialogue shots skipped")
-            return 0
-        worker_pool = WorkerPool(worker_urls)
-
-    made = 0
-    # First shot still per (scene, speaker) so a character's LATER lines in the
-    # same scene reuse their first close-up — the repeated shot then matches the
-    # first exactly (correct shot/reverse-shot continuity) instead of drifting to
-    # a different-looking generation.
-    first_by_speaker: dict[tuple[int, str], Path] = {}
-    for row, idx, ln in todo:
-        sid = int(row["id"])
-        shot = str(ln.get("shot") or "").strip()
-        out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
-        speaker = "" if ln.get("silent") else str(ln.get("speaker") or "").strip()
-        key = (sid, speaker.lower())
-
-        if speaker and key in first_by_speaker:
-            prior = first_by_speaker[key]
-            if prior.exists() and prior != out:
-                shutil.copy2(prior, out)
-                logger.info("[shots] scene %d line %d reuses %s's earlier close-up (%s)",
-                            sid, idx, speaker, prior.name)
-            continue
-
-        if out.exists() and _image_matches_resolution(out, img_width, img_height):
-            if speaker:
-                first_by_speaker[key] = out
-            continue
-        if ln.get("silent"):
-            # Silent (motion) shot — no lip-sync, so multiple people are fine.
-            base_prompt, reference_images = _characters_prompt_and_refs(
-                shot, row, cfg, style_name, work_dir, engine=engine)
-            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-        else:
-            # Speaking shot — force a SOLO close-up of just the speaker (only their
-            # description + reference face) so EchoMimic can't animate a second
-            # person in frame.
-            char = _speaker_char(speaker)
-            desc = (char or {}).get("description", "")
-            parts = [shot] if shot else [f"{speaker} speaks in the scene."]
-            parts.append(
-                f"Solo medium shot of {speaker or 'the speaker'} — exactly ONE person, roughly "
-                "waist-up, facing the camera, with the scene's setting visible around them; "
-                "their face clearly visible and in focus (not an extreme close-up). "
-                "No other people or characters anywhere in the frame.")
-            if desc and desc.lower() not in " ".join(parts).lower():
-                parts.append(f"{speaker}: {desc}.")
-            parts.append("Keep the SAME setting, background, lighting and wardrobe as the "
-                         "establishing shot — the same room, just framed close on the speaker.")
-            base_prompt = " ".join(parts)
-            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-            # Anchor the close-up to the scene's establishing frame (so its setting
-            # matches — coherent scene) AND the speaker's reference face.
-            reference_images = []
-            establishing = _scene_establishing_frame(work_dir, sid, row, img_width, img_height)
-            if establishing:
-                reference_images.append(establishing)
-            ref = char and (char.get("_ref_path") or _character_image_path(char.get("ref_image")))
-            if ref and Path(ref).exists():
-                reference_images.append(Path(ref))
-        url = worker_pool.acquire()
-        try:
-            generate_with_engine(
-                engine, prompt, out,
-                width=img_width, height=img_height,
-                reference_images=reference_images, comfy_url=url,
-            )
-            made += 1
-            if speaker:
-                first_by_speaker[key] = out
-            logger.info("[shots] scene %d line %d shot still ready (%s)", sid, idx, out.name)
-        except Exception:
-            logger.warning("[shots] scene %d line %d shot failed — render will fall back",
-                           sid, idx, exc_info=True)
-        finally:
-            worker_pool.release(url)
-    return made
 
 
 def _generate_active_scene_preview(

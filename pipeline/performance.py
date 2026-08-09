@@ -544,6 +544,15 @@ def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
     )
 
 
+# "dialogue" is the user-facing name for an acted scene; older scripts wrote
+# "performance". Both render through H3 Ref2VA — one path, two spellings.
+PERFORMANCE_MODES = ("dialogue", "performance")
+
+
+def is_performance_mode(mode) -> bool:
+    return str(mode or "").strip().lower() in PERFORMANCE_MODES
+
+
 def scene_meta(scene) -> dict:
     """The performance metadata of a scene, from either a Scene or a stored row."""
     if isinstance(scene, dict):
@@ -552,8 +561,8 @@ def scene_meta(scene) -> dict:
 
 
 def is_performance(scene) -> bool:
-    return scene_meta(scene).get("mode") == "performance" or \
-        getattr(scene, "mode", "") == "performance"
+    return (is_performance_mode(scene_meta(scene).get("mode"))
+            or is_performance_mode(getattr(scene, "mode", "")))
 
 
 def parse_scene_rows(rows) -> list[dict]:

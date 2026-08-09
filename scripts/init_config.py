@@ -35,9 +35,8 @@ def main(argv: list[str]) -> int:
     # http:// = the containers' HTTP transport (same form install.sh writes
     # after deploying them).
     tts = [f"http://{h}:8189" for h in hosts]
-    echomimic = [f"http://{h}:8190" for h in hosts]
 
-    cfg = {"comfy_workers": comfy, "tts_workers": tts, "echomimic_workers": echomimic}
+    cfg = {"comfy_workers": comfy, "tts_workers": tts}
     if os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD"):
         cfg["temporal_video_upscaler_cmd"] = os.environ["TEMPORAL_VIDEO_UPSCALER_CMD"]
     if os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT"):
@@ -51,7 +50,6 @@ def main(argv: list[str]) -> int:
     print(f"[config] wrote {CONFIG}")
     print(f"  comfy_workers: {comfy}")
     print(f"  tts_workers:   {tts}")
-    print(f"  echomimic_workers: {echomimic}")
     print("  Edit these any time in the Settings screen, or in the file above.")
     return 0
 

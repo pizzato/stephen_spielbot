@@ -35,15 +35,15 @@ _DEFAULT_SECONDS = {
     "image": 40.0,
     "video": 240.0,
     "narration": 12.0,
-    # One talking-head line (EchoMimic): TTS + FLUX shot + animate. Heavily
-    # resolution-dependent; the seed reflects a small-preset line.
-    "dialogue line": 480.0,
+    # One acted scene: a single H3 Ref2VA generation carrying its own voices.
+    # Heavily resolution-dependent; the seed reflects a ~10s vertical scene.
+    "acted scene": 600.0,
     "music": 60.0,
     "mux": 8.0,
     "finalize": 25.0,
 }
 _FHD_PIXELS = 1920 * 1080
-_RES_SENSITIVE = ("image", "video", "finalize", "dialogue line")
+_RES_SENSITIVE = ("image", "video", "finalize", "acted scene")
 
 # Which worker pool each label competes for.
 _POOL = {
@@ -51,7 +51,7 @@ _POOL = {
     "video": "comfy",
     "music": "comfy",
     "narration": "tts",
-    "dialogue line": "echomimic",
+    "acted scene": "comfy",
     "mux": "local",
     "finalize": "local",
 }
@@ -195,19 +195,17 @@ def estimate_eta(
     now = now if now is not None else time.time()
     n_comfy_total = max(1, len(cfg.get("comfy_workers") or []))
     n_tts = max(1, len(cfg.get("tts_workers") or []))
-    n_echo = max(1, len(cfg.get("echomimic_workers") or []))
     reserved = max(0, min(int(reserved_comfy), n_comfy_total - 1))
     n_comfy = n_comfy_total - reserved
 
     # full = whole render (stable estimate); rem = work still outstanding.
-    full = {"comfy": 0.0, "tts": 0.0, "echomimic": 0.0}
-    rem = {"comfy": 0.0, "tts": 0.0, "echomimic": 0.0}
+    full = {"comfy": 0.0, "tts": 0.0}
+    rem = {"comfy": 0.0, "tts": 0.0}
     full_mux = full_finalize = 0.0
     rem_last_mux = rem_finalize = 0.0
     by_label: dict[str, dict[str, Any]] = {}
     any_default = False
     tracked = 0
-    echo_scenes: set = set()  # distinct dialogue scenes → how many run in parallel
 
     for t in tasks:
         kind = t.get("kind", "")
@@ -219,9 +217,6 @@ def estimate_eta(
         est, learned = _estimate_one(table, kind, payload)
         if not learned:
             any_default = True
-        if _POOL.get(label) == "echomimic" and payload.get("scene_id") is not None:
-            echo_scenes.add(payload.get("scene_id"))
-
         status = t.get("status", "")
         if status in _DONE_STATUSES:
             rem_one = 0.0
@@ -233,7 +228,7 @@ def estimate_eta(
             rem_one = est
 
         pool = _POOL.get(label, "local")
-        if pool in ("comfy", "tts", "echomimic"):
+        if pool in ("comfy", "tts"):
             full[pool] += est
             rem[pool] += rem_one
         elif label == "mux":
@@ -253,13 +248,8 @@ def estimate_eta(
     if tracked == 0:
         return None
 
-    # Dialogue scenes render concurrently — one per echomimic worker — so the
-    # echomimic wall is divided by however many scenes actually run in parallel
-    # (min of workers and distinct scenes; a lines-within-a-scene stay serial).
-    echo_par = max(1, min(n_echo, len(echo_scenes) or 1))
-
     def _wall(d: dict[str, float]) -> float:
-        return max(d["comfy"] / n_comfy, d["tts"] / n_tts, d["echomimic"] / echo_par)
+        return max(d["comfy"] / n_comfy, d["tts"] / n_tts)
 
     total_seconds = _wall(full) + full_mux + full_finalize
     eta_seconds = _wall(rem) + rem_last_mux + rem_finalize
@@ -276,6 +266,6 @@ def estimate_eta(
         "total_seconds": round(total_seconds),
         "total_text": humanize_eta(total_seconds),
         "confidence": "rough" if any_default else "learned",
-        "workers": {"comfy": n_comfy, "tts": n_tts, "echomimic": n_echo, "comfy_reserved": reserved},
+        "workers": {"comfy": n_comfy, "tts": n_tts, "comfy_reserved": reserved},
         "table": table_rows,
     }

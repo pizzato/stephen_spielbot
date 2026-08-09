@@ -322,103 +322,93 @@ class WorkerFailoverTests(unittest.TestCase):
             return out
 
         scenes = [Scene(id=i, title=f"S{i}", image_prompt="", video_prompt="p",
-                        narration="", mode="performance",
-                        metadata_extra={"mode": "performance", "cast": ["X"], "seconds": 10})
+                        narration="", mode="dialogue",
+                        metadata_extra={"mode": "dialogue", "cast": ["X"], "seconds": 10})
                   for i in range(1, n_scenes + 1)]
         store = mock.MagicMock()
         pool = WorkerPool(["http://a:8188", "http://b:8188"])
+        outs = []
         with mock.patch.object(rg, "render_performance_scene", side_effect=fake_render), \
              mock.patch.object(rg, "TaskRun"), \
              mock.patch.object(rg, "_get_duration", return_value=10.0), \
-             mock.patch.object(rg, "concatenate_scenes",
-                               side_effect=_write_concat) as concat, \
-             mock.patch.object(rg, "ensure_video_resolution"), \
-             mock.patch.object(rg, "write_progress"), \
-             mock.patch.object(rg, "generate_cover_image"), \
              mock.patch.object(rg.time, "sleep"):
-            rg._run_performance_film(
-                work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
-                store=store, durable_job_id="job", worker_pool=pool,
-                status_file=work_dir / "progress.json",
-                vid_width=704, vid_height=1280,
-                final_path=work_dir / "final.mp4", cover_path=work_dir / "cover.png")
-        return attempts, concat
+            for scene in scenes:
+                outs.append(rg.render_acted_scene(
+                    scene, work_dir, {"reference_engine": "minimax-h3-ref-turbo"},
+                    store=store, durable_job_id="job", worker_pool=pool,
+                    vid_width=704, vid_height=1280))
+        return attempts, outs
 
     def test_scene_retries_on_a_worker_that_has_the_model(self):
-        attempts, concat = self._film(fail_urls={"http://a:8188"})
+        attempts, outs = self._film(fail_urls={"http://a:8188"})
         # Every scene still landed, and the bad worker was dropped rather than
         # retried three times.
         self.assertEqual(sorted(a[0] for a in attempts if a[1] == "http://b:8188"), [1, 2])
         self.assertEqual(len([a for a in attempts if a[1] == "http://a:8188"]), 1)
-        clips = concat.call_args[0][0]
-        self.assertEqual(len(clips), 2)
+        self.assertEqual([p.name for p in outs],
+                         ["scene_01_final.mp4", "scene_02_final.mp4"])
 
-    def test_scene_order_is_preserved_after_a_failover(self):
-        _, concat = self._film(fail_urls={"http://a:8188"}, n_scenes=3)
-        names = [Path(p).name for p in concat.call_args[0][0]]
-        self.assertEqual(names, ["scene_01_final.mp4", "scene_02_final.mp4",
-                                 "scene_03_final.mp4"])
+    def test_an_already_rendered_scene_is_not_redone(self):
+        # Resume must be cheap: a scene whose clip survives a crash is kept.
+        import resume_generation as rg
+        from pipeline.llm import Scene
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = Path(tmp)
+            (wd / "scene_01_final.mp4").write_bytes(b"x" * 20_000)
+            scene = Scene(id=1, title="S", image_prompt="", video_prompt="p",
+                          narration="", mode="dialogue",
+                          metadata_extra={"mode": "dialogue", "cast": ["X"]})
+            pool = mock.MagicMock()
+            with mock.patch.object(rg, "render_performance_scene") as render:
+                out = rg.render_acted_scene(
+                    scene, wd, {}, store=mock.MagicMock(), durable_job_id="j",
+                    worker_pool=pool, vid_width=704, vid_height=1280)
+            render.assert_not_called()
+            self.assertEqual(out.name, "scene_01_final.mp4")
 
     def test_all_workers_missing_the_model_is_a_clear_error(self):
         with self.assertRaises(RuntimeError) as ctx:
             self._film(fail_urls={"http://a:8188", "http://b:8188"})
-        # Whichever thread loses the race reports it, but the film must stop
-        # with a worker-level message rather than a bare ComfyUI validation dump.
+        # The film must stop with a worker-level message rather than a bare
+        # ComfyUI validation dump.
         self.assertRegex(str(ctx.exception), r"(?i)workers? (failed|remaining)")
+
+
+class MusicToggleTests(unittest.TestCase):
+    """Music is a choice, and acted films never get a score planned."""
+
+    def _plan(self, scenes, config):
+        import tempfile as tf
+        from pipeline.orchestrator import DurableStore
+        tmp = tf.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        store = DurableStore(Path(tmp.name) / "orchestrator.sqlite3")
+        self.addCleanup(store.close)
+        store.ensure_generation_plan("job", tmp.name, "T", scenes, config)
+        return {r["kind"] for r in store.task_rows("job")}
+
+    def _scene(self, mode):
+        from pipeline.llm import Scene
+        lines = [{"speaker": "A", "text": "hi"}] if mode != "narration" else []
+        return Scene(id=1, title="S", image_prompt="i", video_prompt="v",
+                     narration="n" if mode == "narration" else "",
+                     mode=mode, lines=lines, metadata_extra={"mode": mode})
+
+    def test_music_off_plans_no_music_task(self):
+        kinds = self._plan([self._scene("narration")], {"music_enabled": False})
+        self.assertNotIn("music.generate", kinds)
+
+    def test_music_on_by_default_for_a_narrated_film(self):
+        kinds = self._plan([self._scene("narration")], {})
+        self.assertIn("music.generate", kinds)
+
+    def test_an_all_acted_film_carries_its_own_sound(self):
+        kinds = self._plan([self._scene("dialogue")], {})
+        self.assertNotIn("music.generate", kinds)
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class AssemblyArtifactTests(unittest.TestCase):
-    """Assembly must leave the artifacts the rest of the app keys off."""
-
-    def test_combined_mp4_is_written_next_to_the_final(self):
-        # The backend reads combined.mp4's existence as "this film finished"
-        # (Activity %, film editor, re-render, publish). Concatenating straight
-        # to the final left performance films pinned at 99% forever.
-        import resume_generation as rg
-        from pipeline.llm import Scene
-
-        with tempfile.TemporaryDirectory() as tmp:
-            work_dir = Path(tmp) / "film"
-            work_dir.mkdir()
-            final_path = Path(tmp) / "film.mp4"
-            scenes = [Scene(id=1, title="S", image_prompt="", video_prompt="p",
-                            narration="", mode="performance",
-                            metadata_extra={"mode": "performance", "cast": ["X"],
-                                            "seconds": 10})]
-
-            def fake_render(scene, wd, cfg, **kw):
-                out = wd / f"scene_{scene.id:02d}_final.mp4"
-                out.write_bytes(b"mp4")
-                return out
-
-            def fake_concat(clips, out):
-                Path(out).write_bytes(b"concatenated")
-                return Path(out)
-
-            pool = mock.MagicMock()
-            pool.urls = ["http://a:8188"]
-            pool.acquire.return_value = "http://a:8188"
-            pool.has_healthy.return_value = True
-            with mock.patch.object(rg, "render_performance_scene", side_effect=fake_render), \
-                 mock.patch.object(rg, "TaskRun"), \
-                 mock.patch.object(rg, "_get_duration", return_value=10.0), \
-                 mock.patch.object(rg, "concatenate_scenes", side_effect=fake_concat), \
-                 mock.patch.object(rg, "ensure_video_resolution"), \
-                 mock.patch.object(rg, "write_progress"), \
-                 mock.patch.object(rg, "generate_cover_image"):
-                rg._run_performance_film(
-                    work_dir, scenes, {"reference_engine": "minimax-h3-ref-turbo"},
-                    store=mock.MagicMock(), durable_job_id="job", worker_pool=pool,
-                    status_file=work_dir / "progress.json",
-                    vid_width=704, vid_height=1280,
-                    final_path=final_path, cover_path=work_dir / "cover.png")
-
-            self.assertTrue((work_dir / "combined.mp4").exists(), "combined.mp4 missing")
-            self.assertTrue(final_path.exists(), "final video missing")
-            self.assertEqual(final_path.read_bytes(), (work_dir / "combined.mp4").read_bytes())
 
 
 class UnvoicedCharacterTests(TempConfigCase):

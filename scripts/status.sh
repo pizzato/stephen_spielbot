@@ -107,7 +107,6 @@ for host in $(remote_hosts); do
     fi
     check_health "ComfyUI  ${host}" "http://${host}:8188/system_stats"
     check_health "F5-TTS   ${host}" "http://${host}:8189/health"
-    check_health "EchoMimic ${host}" "http://${host}:8190/health"
 done
 
 # ── Summary ────────────────────────────────────────────────────────────────────

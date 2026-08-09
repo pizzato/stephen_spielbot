@@ -748,7 +748,7 @@ def generate_keyframed_clip(
 
     Single-pass, silent (no audio track). Used for a dialogue scene's establishing
     shot: first = the wide setting, last = the speaker's close-up, so the push-in
-    lands exactly on the still the talking head then animates."""
+    lands exactly on the still the next clip continues from."""
     length = _frame_count(length, duration_seconds)
     if seed is None:
         seed = random.randint(0, 2**32 - 1)

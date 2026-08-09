@@ -30,7 +30,6 @@ fi
 
 COMFYUI_PORT="${COMFYUI_PORT:-8188}"
 TTS_PORT="${TTS_PORT:-8189}"
-ECHOMIMIC_PORT="${ECHOMIMIC_PORT:-8190}"
 REMOTE_DIR="spielbot-worker/docker"
 
 LOCAL=false
@@ -81,10 +80,9 @@ case "$ACTION" in
         _compose ps 2>/dev/null || true
         _health "ComfyUI  " "http://${HOST}:${COMFYUI_PORT}/system_stats"
         _health "F5-TTS   " "http://${HOST}:${TTS_PORT}/health"
-        _health "EchoMimic" "http://${HOST}:${ECHOMIMIC_PORT}/health"
         # GPU device per container — surfaces a silent CPU fallback (a host
         # daemon-reload can revoke the GPU from a running container; see README).
-        for svc in comfyui tts echomimic; do
+        for svc in comfyui tts; do
             dev=$(_run "docker exec spielbot-worker-${svc}-1 nvidia-smi -L 2>/dev/null | grep -m1 '^GPU'" 2>/dev/null || true)
             if [ -n "$dev" ]; then
                 printf "    ✓ %-7s GPU  %s\n" "$svc" "$dev"
