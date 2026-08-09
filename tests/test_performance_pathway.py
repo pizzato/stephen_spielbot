@@ -969,3 +969,41 @@ class ActedSceneEditingTests(unittest.TestCase):
     def test_an_unrendered_scene_drops_its_stale_take(self):
         self._save(lines=[{"speaker": "Ana", "text": "Something else."}])
         self.assertFalse((self.wd / "scene_01_final.mp4").exists())
+
+
+class MixedPreviewTests(unittest.TestCase):
+    """A mixed film paints stills for its narrated scenes only."""
+
+    def _rows(self):
+        return [
+            {"id": 1, "title": "open", "image_prompt": "i", "preview_path": "",
+             "metadata": {}},
+            {"id": 2, "title": "talk", "image_prompt": "", "preview_path": "",
+             "metadata": {"mode": "dialogue", "lines": [{"speaker": "A", "text": "hi"}]}},
+        ]
+
+    def test_only_the_narrated_scene_is_painted(self):
+        import webapp.backend.main as backend
+        store = mock.MagicMock()
+        store.scene_rows.return_value = self._rows()
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend.gapp, "_preview_worker_urls",
+                               return_value=["http://a:8188"]), \
+             mock.patch.object(backend.gapp, "WorkerPool"), \
+             mock.patch.object(backend.gapp, "_job_work_dir", return_value=None), \
+             mock.patch.object(backend.gapp, "_generate_active_scene_preview") as gen:
+            out = backend.generate_all_previews("job")
+        self.assertEqual([c.args[1] for c in gen.call_args_list], [1])
+        self.assertEqual(out["generated"], 1)
+        # the response still describes every scene, acted ones included
+        self.assertEqual(len(out["scenes"]), 2)
+
+    def test_an_all_acted_film_paints_nothing(self):
+        import webapp.backend.main as backend
+        store = mock.MagicMock()
+        store.scene_rows.return_value = [self._rows()[1]]
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend.gapp, "_generate_active_scene_preview") as gen:
+            out = backend.generate_all_previews("job")
+        gen.assert_not_called()
+        self.assertIn("skipped", out)

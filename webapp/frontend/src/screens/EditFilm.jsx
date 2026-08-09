@@ -1907,7 +1907,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
     if (!workDir) return
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
-      setIsPerformance((r.scenes || []).some((s) => (s.mode || s.metadata?.mode) === 'performance'))
+      setIsPerformance((r.scenes || []).some(
+        (s) => ['dialogue', 'performance'].includes(s.mode || s.metadata?.mode)))
     }).catch(() => {})
   }, [workDir])
 

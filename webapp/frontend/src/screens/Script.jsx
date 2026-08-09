@@ -34,10 +34,12 @@ const fileToDataUrl = (file) => new Promise((resolve, reject) => {
 })
 
 export default function Script({ job, setJob, meta, onGenerate, go }) {
-  // Performance films are a different kind of script: no narration, no scene
-  // stills, and references cited by slot number. They get their own view
-  // instead of the narration-shaped Scenes/Characters tabs.
-  const isPerformance = (job?.scenes || []).some((s) => s.mode === 'performance')
+  // An acted scene has no narration and no still, and cites its references by
+  // slot number, so it gets its own view. A film made ENTIRELY of them replaces
+  // the narration-shaped Scenes tab with it; a mixed film keeps both.
+  const acted = (s) => s.mode === 'dialogue' || s.mode === 'performance'
+  const someActed = (job?.scenes || []).some(acted)
+  const allActed = !!(job?.scenes || []).length && (job?.scenes || []).every(acted)
   const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
@@ -250,8 +252,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     // review + division; anything with scenes lands on Cover as before.
     if (!job?.job_id) return
     const hasScenes = (job.scenes || []).length
-    const performance = (job.scenes || []).some((s) => s.mode === 'performance')
-    setView(performance ? 'performance' : hasScenes ? 'cover' : 'story')
+    const everyActed = hasScenes && (job.scenes || []).every(
+      (s) => s.mode === 'dialogue' || s.mode === 'performance')
+    setView(everyActed ? 'performance' : hasScenes ? 'cover' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -282,12 +285,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   useEffect(() => { refreshScripts() }, [])
 
   // Generate any missing scene previews as soon as the script loads.
-  // A performance film renders no first frames — every scene is conditioned on
-  // the character portraits instead — so painting a still per scene here was
-  // pure wasted GPU on a film that never looks at it.
+  // An acted scene renders no first frame — it is conditioned on the character
+  // portraits instead — so painting a still for one is pure wasted GPU on a
+  // frame the film never looks at. A mixed film still needs its narrated ones.
   useEffect(() => {
-    if (!job?.job_id || isPerformance) return
-    if (!(job.scenes || []).some((s) => !s.has_preview)) return
+    if (!job?.job_id || allActed) return
+    if (!(job.scenes || []).some((s) => !s.has_preview && !acted(s))) return
     setGenAll(true)
     setGenAllMsg('Generating missing scene previews…')
     // Generate previews at the SAME resolution the render will use (what approve
@@ -819,7 +822,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
-          {view === 'characters' && job && isPerformance && (
+          {view === 'characters' && job && allActed && (
         <ScriptVisuals jobId={job.job_id}
           sceneIds={(job.scenes || []).map((s) => s.id)}
           castNames={[...new Set((job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
@@ -867,11 +870,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           { value: 'scripts', label: 'Scripts' },
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
-          ...(isPerformance
+          ...(allActed
             ? [{ value: 'characters', label: 'Characters & visuals' },
-               { value: 'performance', label: 'Performance' }]
+               { value: 'performance', label: 'Scenes' }]
             : [{ value: 'characters', label: 'Characters' },
-               { value: 'scenes', label: 'Scenes' }]),
+               { value: 'scenes', label: 'Scenes' },
+               // Mixed film: the acted scenes get their cast slots and prompts.
+               ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : [])]),
         ]} />
       </div>
 
@@ -1349,12 +1354,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                         onChange={(e) => setCharField(c.id, 'description', e.target.value)}
                         onBlur={() => saveCharacter(c)} />
                     </Field>
-                    <Field label="Voice" hint={isPerformance
+                    <Field label="Voice" hint={someActed
                       ? 'Passed to the video model as this character\u2019s <Audio N> reference so they sound the same in every scene. Leave it unset and the model invents a voice \u2014 which will drift between scenes.'
                       : 'Cloned voice this character speaks with in dialogue scenes.'}>
                       <select className="input" value={c.voice || ''} disabled={b}
                         onChange={(e) => setCharVoice(c, e.target.value)}>
-                        <option value="">{isPerformance
+                        <option value="">{someActed
                           ? 'Let the model invent the voice (no reference)'
                           : 'Style narrator (default)'}</option>
                         {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}

@@ -3486,15 +3486,19 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         store.close()
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
-    # Performance scenes have no first frame — they are conditioned on the
-    # character portraits — so a still per scene is GPU spent on an image
-    # nothing ever reads. Guarded server-side too: the render path and any
-    # older client both reach this endpoint.
-    if all((r.get("metadata") or {}).get("mode") == "performance" for r in rows):
+    # An acted scene has no first frame — it is conditioned on the character
+    # portraits — so a still for one is GPU spent on an image nothing ever
+    # reads. Guarded server-side too: the render path and any older client both
+    # reach this endpoint. A mixed film still gets stills for its other scenes.
+    needs_frame = [r for r in rows
+                   if not performance_mode.is_performance_mode(
+                       (r.get("metadata") or {}).get("mode"))]
+    if not needs_frame:
         return {"scenes": [], "generated": 0, "failed": [],
-                "skipped": "performance film — scenes have no first frame"}
+                "skipped": "every scene is acted — none has a first frame"}
 
-    to_generate = rows if force else [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
+    to_generate = needs_frame if force else [
+        r for r in needs_frame if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
     failed: list[int] = []
     if to_generate:
         worker_urls = gapp._preview_worker_urls()
