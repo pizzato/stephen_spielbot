@@ -363,12 +363,16 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     needs as arguments and touches no module state.
     """
     scene_meta = _performance.scene_meta(scene)
-    # A two-hander is rendered as shot/reverse-shot: one face and one voice per
-    # clip, because with two of each the model swaps them (see shots_for). It
-    # opens on a silent wide of everyone together (swap-proof: no voices) so
-    # the scene still reads as people in one place — config-off-able.
-    shots = _performance.shots_for(
-        scene_meta, establishing=bool(cfg.get("performance_establishing", True)))
+    # One scene = ONE generation, whole conversation in a single continuous
+    # clip (the user's call: shot/reverse-shot splitting kept identities safe
+    # but broke scenes apart). The splitter remains available per config
+    # (performance_shot_split) for content where identity outranks flow;
+    # in one-clip mode the identity locks and the gate carry the swap risk.
+    if bool(cfg.get("performance_shot_split", False)):
+        shots = _performance.shots_for(
+            scene_meta, establishing=bool(cfg.get("performance_establishing", True)))
+    else:
+        shots = [dict(scene_meta)]
     if len(shots) > 1:
         return _render_performance_shots(
             scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,

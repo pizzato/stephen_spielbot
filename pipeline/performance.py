@@ -297,6 +297,16 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                      f"the {off_side} edge of frame. Do not show "
                      f"{' or '.join(others)}")
         geo.append(line + ".")
+    if (lines and len(people_names) > 1
+            and not scene_meta.get("solo") and not scene_meta.get("establishing")):
+        # Whole conversation in one clip: fix everyone's side up front so the
+        # framing is a real two-shot with meeting eyelines, not a guess.
+        placed = [f"{n} on the {'left' if i == 0 else 'right'}"
+                  for i, n in enumerate(people_names[:2])]
+        geo.append(f"{' and '.join(people_names)} are together in the frame, "
+                   f"{', '.join(placed)}, facing each other, both faces clearly "
+                   f"visible to the camera. They keep these positions for the "
+                   f"whole shot.")
     if scene_meta.get("establishing") and len(people_names) > 1:
         placed = [f"{n} on the {'left' if i == 0 else 'right'}"
                   for i, n in enumerate(people_names[:2])]

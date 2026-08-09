@@ -194,9 +194,10 @@ class RenderWiringTests(TempConfigCase):
                       narration="", mode="performance",
                       lines=meta.get("lines", []),
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
-        # Establishing and the gate have their own tests; here they would run
-        # real ffmpeg over these fake clips.
+        # These tests exercise the (opt-in) shot splitter; establishing and the
+        # gate have their own tests and would run real ffmpeg over fake clips.
         cfg = {**backend.gapp.load_config(), "style_name": "Acted",
+               "performance_shot_split": True,
                "performance_establishing": False, "performance_verify": False}
         # The continuity frame is a separate concern (SceneContinuityTests) and
         # runs real ffmpeg on these dummy clips — seconds per test.
@@ -683,6 +684,54 @@ class AssetCatalogueTests(TempConfigCase):
         self.assertEqual(vis[0]["description"], "this film's own")
 
 
+class OneClipDefaultTests(TempConfigCase):
+    """The default: one scene = one generation, both speakers in the clip."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({"styles": [_style("Acted")], "default_style": "Acted",
+                           "voices": [], "characters": [], "characters_migrated_v2": True})
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def test_a_two_hander_renders_as_a_single_clip_by_default(self):
+        import resume_generation as rg
+        from pipeline.llm import Scene
+        wd = self.output_dir / "film-20260809-160000"
+        (wd / "characters").mkdir(parents=True)
+        (wd / "characters" / "a.png").write_bytes(b"png")
+        (wd / "characters" / "b.png").write_bytes(b"png")
+        (wd / "characters.json").write_text(json.dumps([
+            {"id": "a", "name": "A", "description": "x", "ref_image": "a.png", "enabled": True},
+            {"id": "b", "name": "B", "description": "y", "ref_image": "b.png", "enabled": True}]))
+        calls = []
+
+        def fake_gen(engine, prompt, ref_images, out, ref_audios=None, **kw):
+            calls.append({"prompt": prompt, "refs": len(ref_images)})
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        lines = [{"speaker": "A", "text": "one"}, {"speaker": "B", "text": "two"}]
+        scene = Scene(id=1, title="S", image_prompt="", video_prompt="", narration="",
+                      mode="performance", lines=lines,
+                      metadata_extra={"mode": "performance", "cast": ["A", "B"], "seconds": 12})
+        with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
+             mock.patch.object(rg, "ensure_video_resolution"):
+            out = rg.render_performance_scene(
+                scene, wd, {"style_name": "Acted", "performance_verify": False},
+                comfy_url="http://w:8188", vid_width=704, vid_height=1280)
+        # ONE generation, whole conversation, both people placed and locked.
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(out.name, "scene_01_final.mp4")
+        self.assertEqual(calls[0]["refs"], 2)
+        prompt = calls[0]["prompt"]
+        self.assertIn("Exactly 2 people on screen", prompt)
+        self.assertIn("A on the left, B on the right", prompt)
+        self.assertIn('A says exactly', prompt)
+        self.assertIn('B says exactly', prompt)
+        self.assertNotIn("Do not show", prompt)   # nobody is off-frame
+
+
 class SceneContinuityTests(unittest.TestCase):
     """Every shot is its own generation, so without a hint the room changes
     between cuts — the scene appears to teleport."""
@@ -721,7 +770,8 @@ class SceneContinuityTests(unittest.TestCase):
              mock.patch.object(rg, "extract_last_frame",
                                side_effect=(RuntimeError("no ffmpeg") if frame_fails
                                             else lambda src, dst: Path(dst).write_bytes(b"png"))):
-            rg.render_performance_scene(scene, wd, {"performance_establishing": False,
+            rg.render_performance_scene(scene, wd, {"performance_shot_split": True,
+                                                    "performance_establishing": False,
                                                     "performance_verify": False},
                                         comfy_url="http://w:8188",
                                         vid_width=704, vid_height=1280)
@@ -765,7 +815,8 @@ class SceneContinuityTests(unittest.TestCase):
              mock.patch.object(rg, "ensure_video_resolution"), \
              mock.patch.object(rg, "extract_last_frame",
                                side_effect=lambda src, dst: Path(dst).write_bytes(b"png")):
-            rg.render_performance_scene(scene, wd, {"performance_establishing": False,
+            rg.render_performance_scene(scene, wd, {"performance_shot_split": True,
+                                                    "performance_establishing": False,
                                                     "performance_verify": False},
                                         comfy_url="http://w:8188",
                                         vid_width=704, vid_height=1280)

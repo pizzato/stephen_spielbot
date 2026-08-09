@@ -84,11 +84,14 @@ Settings → Infrastructure like any other engine; see [models](models.md).
 
 Consistency comes from three mechanisms, each born from a measured failure:
 
-- **One face, one voice per clip.** With two of each in a clip the model swaps
-  them — prompt wording does not fix this. Two-handers render as
-  shot/reverse-shot, and each scene opens on a **silent wide** of everyone
-  together (swap-proof: a swap needs two voices). Turn the wide off with
-  `performance_establishing: false`.
+- **One scene, one generation.** A whole conversation renders as a single
+  continuous clip — both speakers in frame, placed left/right with locked
+  positions, every line in order. Identity is protected by the prompt's
+  identity locks and verified by the gate; be aware the model *can* still swap
+  two same-kind people in one clip. For content where identity outranks flow,
+  `performance_shot_split: true` renders shot/reverse-shot instead — one face
+  and one voice per clip (structurally swap-proof), with a silent wide opening
+  each scene (`performance_establishing`).
 - **A reference budget.** Measured directly: at three picture references
   everything held (face, outfit colour, location); at four the weakest dropped.
   The renderer enforces it — later shots swap the scene's own first frame in
