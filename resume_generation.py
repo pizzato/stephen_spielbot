@@ -470,7 +470,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             engine, prompt, ref_images, out,
             ref_audios=ref_audios,
             width=vid_width, height=vid_height,
-            duration_seconds=float(meta.get("seconds") or _performance.SCENE_SECONDS),
+            duration_seconds=_performance.render_seconds(meta),
             comfy_url=comfy_url,
         )
         return out

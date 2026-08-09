@@ -33,7 +33,10 @@ logger = logging.getLogger("video_gen")
 # a frozen tail. Scenes are written to this budget.
 SCENE_SECONDS = 10.0
 MIN_SCENE_SECONDS = 5.0
-MAX_SCENE_SECONDS = 14.0
+# 12, not the model's 15: scenes at the ceiling get truncated mid-line and
+# freeze-pad. The margin is the safety.
+MAX_SCENE_SECONDS = 12.0
+H3_CEILING_SECONDS = 15.0
 
 # One audio reference per speaker, and H3 accepts at most 3 (and 9 images).
 MAX_SPEAKERS_PER_SCENE = 3
@@ -103,6 +106,58 @@ def norm_beats(raw, seconds: float) -> list[dict]:
         t0 = min(max(0.0, t0), max(0.0, seconds - 1.0))
         t1 = min(max(t1, t0 + 1.0), seconds)
         out.append({"t0": round(t0, 1), "t1": round(t1, 1), "action": action})
+    return out
+
+
+def content_seconds(meta: dict) -> float:
+    """How long this scene's dialogue actually needs on screen.
+
+    ~2.5 spoken words/second, a beat per speaker turn, and a moment of air.
+    The LLM's own "seconds" guess is ignored when there are lines — scenes it
+    overloaded got truncated mid-sentence at the model's 15 s ceiling.
+    """
+    lines = norm_lines(meta.get("lines"))
+    if not lines:
+        return _clamp_seconds(meta.get("seconds"))
+    words = sum(len(l["text"].split()) for l in lines)
+    turns = 1 + sum(1 for a, b in zip(lines, lines[1:]) if a["speaker"] != b["speaker"])
+    return words / WORDS_PER_SECOND + 1.0 * turns + 1.0
+
+
+def render_seconds(meta: dict) -> float:
+    """The clip length a shot is actually rendered at: never below what its
+    words need, never above the model's hard ceiling. A scene that needs more
+    than the ceiling will still truncate — the script-side split exists so
+    that never happens; this is the last line of defence."""
+    return min(H3_CEILING_SECONDS,
+               max(_clamp_seconds(meta.get("seconds")), content_seconds(meta)))
+
+
+def split_overloaded(raw_scene: dict) -> list[dict]:
+    """Split a scene whose dialogue cannot fit one clip into consecutive
+    scenes: same setting, cast and sound, lines divided at speaker turns.
+    More short scenes beat one long truncated one."""
+    lines = norm_lines(raw_scene.get("lines"))
+    if not lines or content_seconds({"lines": lines}) <= MAX_SCENE_SECONDS:
+        return [raw_scene]
+    parts: list[list[dict]] = [[]]
+    for line in lines:
+        candidate = parts[-1] + [line]
+        if parts[-1] and content_seconds({"lines": candidate}) > MAX_SCENE_SECONDS:
+            parts.append([line])
+        else:
+            parts[-1] = candidate
+    out = []
+    for i, chunk in enumerate(parts):
+        piece = dict(raw_scene)
+        piece["lines"] = chunk
+        piece["seconds"] = content_seconds({"lines": chunk})
+        if i > 0:
+            piece["title"] = f"{_clean(raw_scene.get('title')) or 'Scene'} (cont.)"
+            piece["beats"] = []          # the action beat belongs to the opening
+        out.append(piece)
+    logger.info("Scene %r needs %.1fs of dialogue — split into %d scenes",
+                raw_scene.get("title"), content_seconds({"lines": lines}), len(out))
     return out
 
 
@@ -408,8 +463,9 @@ def generate_performance_script(
     style = _clean(data.get("style")) or (style_hint or "")
     characters = _norm_characters(data.get("characters"))
     scenes: list[Scene] = []
-    for i, raw_scene in enumerate(data["scenes"][:n_scenes], start=1):
-        scenes.append(_to_scene(i, raw_scene, style_note=style))
+    for raw_scene in data["scenes"][:n_scenes]:
+        for piece in split_overloaded(raw_scene):
+            scenes.append(_to_scene(len(scenes) + 1, piece, style_note=style))
     logger.info("Performance script: %d scenes, %d characters", len(scenes), len(characters))
     return scenes, style, characters
 
@@ -438,8 +494,11 @@ def _to_scene(scene_id: int, raw: dict, *, style_note: str = "") -> Scene:
     and edits the exact text the model receives; the structured fields stay in
     metadata so a re-assembly (or a re-cast voice) can rebuild it.
     """
-    seconds = _clamp_seconds(raw.get("seconds"))
     lines = norm_lines(raw.get("lines"))
+    # Content decides the length; the LLM's guess routinely under-buys time
+    # and the truncation lands mid-sentence.
+    seconds = _clamp_seconds(content_seconds({**raw, "lines": lines})
+                             if lines else raw.get("seconds"))
     beats = norm_beats(raw.get("beats"), seconds)
     cast = [c for c in (speakers_in(lines) + [_clean(x) for x in (raw.get("cast") or [])])
             if c]

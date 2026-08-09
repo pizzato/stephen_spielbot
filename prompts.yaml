@@ -383,8 +383,10 @@ performance_script:
 
     Hard rules:
     - Spoken lines must fit the clip: roughly 2.5 words per second of scene,
-      shared across all lines. A 10-second scene holds about 25 spoken words in
-      total. Going over means the model cuts the line off mid-sentence.
+      shared across all lines, and AT MOST ~22 spoken words per scene in total.
+      Going over means the model cuts the line off mid-sentence. Write MORE,
+      SHORTER scenes rather than packing a conversation into one — a scene is
+      one exchange (one or two lines), not a whole discussion.
     - Every scene stands alone as one continuous shot in one place. Never write
       a scene that cuts to a different location.
     - Refer to characters by name only. Never describe their appearance in

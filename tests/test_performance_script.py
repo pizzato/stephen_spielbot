@@ -168,12 +168,15 @@ class GenerationTests(unittest.TestCase):
         self.assertEqual(meta["cast"], ["CHICO", "DARLY"])
         self.assertEqual(len(meta["lines"]), 2)
         self.assertEqual(meta["beats"][0]["action"], "the two men square up")
-        self.assertEqual(meta["seconds"], 10.0)
+        # Content-driven: two short lines need ~6.6 s, not the LLM's 10.
+        self.assertAlmostEqual(meta["seconds"], 6.6, delta=0.2)
 
-    def test_overlong_scene_is_clamped(self):
+    def test_scene_length_comes_from_its_words_not_the_llm_guess(self):
+        # Scene 2 claims 30 s for one short line — content decides now, so it
+        # lands at the model minimum instead of a padded (babble-prone) clip.
         scenes, _, _, _ = self._generate()
-        self.assertEqual(scenes[1].metadata["seconds"], performance.MAX_SCENE_SECONDS)
-        self.assertEqual(scenes[1].duration, performance.MAX_SCENE_SECONDS)
+        self.assertEqual(scenes[1].metadata["seconds"], performance.MIN_SCENE_SECONDS)
+        self.assertEqual(scenes[1].duration, performance.MIN_SCENE_SECONDS)
 
     def test_hints_reach_the_prompt(self):
         _, _, _, call = self._generate(style_hint="claymation", avoid_hint="gore",
@@ -290,3 +293,38 @@ class ShotSizingTests(unittest.TestCase):
         p = performance.build_h3_prompt({**shot, "scene_cast": ["A", "B"]})
         self.assertIn("face fully visible to the camera", p)
         self.assertIn("never turning away from it", p)
+
+
+class SceneLengthTests(unittest.TestCase):
+    def _lines(self, *word_counts, alternate=True):
+        return [{"speaker": "AB"[i % 2] if alternate else "A",
+                 "text": " ".join(["word"] * n)} for i, n in enumerate(word_counts)]
+
+    def test_content_seconds_counts_words_and_turns(self):
+        secs = performance.content_seconds({"lines": self._lines(10, 10)})
+        self.assertAlmostEqual(secs, 20 / 2.5 + 2.0 + 1.0, delta=0.01)
+
+    def test_overloaded_scene_splits_at_speaker_turns(self):
+        # Four long lines cannot fit one 12 s clip — that is where the user's
+        # "scene was cut short" came from. More short scenes, never truncation.
+        raw = {"title": "Big talk", "setting": "x",
+               "lines": self._lines(20, 18, 16, 4)}
+        pieces = performance.split_overloaded(raw)
+        self.assertGreater(len(pieces), 1)
+        for piece in pieces:
+            self.assertLessEqual(
+                performance.content_seconds(piece), performance.MAX_SCENE_SECONDS + 0.01)
+        # Nothing lost, order kept.
+        joined = [l["text"] for p in pieces for l in p["lines"]]
+        self.assertEqual(joined, [l["text"] for l in raw["lines"]])
+        self.assertIn("(cont.)", pieces[1]["title"])
+
+    def test_light_scene_is_not_split(self):
+        raw = {"title": "Quick", "lines": self._lines(8, 6)}
+        self.assertEqual(len(performance.split_overloaded(raw)), 1)
+
+    def test_render_seconds_never_exceeds_the_model_ceiling(self):
+        heavy = {"seconds": 12, "lines": self._lines(25, 25)}
+        self.assertEqual(performance.render_seconds(heavy), performance.H3_CEILING_SECONDS)
+        light = {"seconds": 10, "lines": self._lines(5)}
+        self.assertLessEqual(performance.render_seconds(light), 10.0)
