@@ -398,7 +398,12 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
                 scene, {**shot, "scene_cast": _performance.speakers_in(
                     _performance.norm_lines(scene_meta.get("lines")))},
                 work_dir, cfg, out, comfy_url=comfy_url, vid_width=vid_width,
-                vid_height=vid_height, style_name=style_name, extra_pictures=extra)
+                vid_height=vid_height, style_name=style_name, extra_pictures=extra,
+                # The room frame IS the location, photographed. Sending the
+                # location asset alongside it wastes a slot and dilutes binding —
+                # measured: at 3 picture refs everything held (outfit, wharf,
+                # face); at 4+ the weakest refs started dropping.
+                drop_kinds=("location",) if room else ())
         parts.append(out)
         if room is None:
             # Best-effort: without it the later shots simply lose the hint.
@@ -415,13 +420,17 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
 
 def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
                              vid_width, vid_height, style_name,
-                             extra_pictures: list[dict] | None = None) -> Path:
+                             extra_pictures: list[dict] | None = None,
+                             drop_kinds: tuple = ()) -> Path:
     from pipeline.comfyui import generate_video_h3_ref
     from app import resolve_performance_references
 
     # The SAME resolver the editor's performance view calls, so the slots shown
     # on screen are the slots wired into the graph.
     refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    if drop_kinds:
+        kept = [p for p in refs["pictures"] if p.get("kind") not in drop_kinds]
+        refs["pictures"] = [{**p, "slot": i + 1} for i, p in enumerate(kept)]
     for pic in (extra_pictures or []):
         refs["pictures"].append({**pic, "slot": len(refs["pictures"]) + 1})
     # Passed whole: build_h3_prompt reads each reference's kind to give it the

@@ -721,6 +721,53 @@ class SceneContinuityTests(unittest.TestCase):
                                         vid_width=704, vid_height=1280)
         return calls
 
+    def test_continuity_frame_replaces_the_location_not_stacks_on_it(self):
+        # Measured in a real A/B: at 3 picture refs everything held; at 4+ the
+        # weakest (wardrobe colour, location) dropped. The room frame IS the
+        # location photographed, so later shots must swap it in, not add it.
+        import resume_generation as rg
+        from pipeline.llm import Scene
+        calls = []
+
+        def fake_gen(engine, prompt, ref_images, out, ref_audios=None, **kw):
+            calls.append({"prompt": prompt, "refs": [Path(p).name for p in ref_images]})
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wd = Path(tmp.name)
+        (wd / "face.png").write_bytes(b"png")
+        (wd / "loc.png").write_bytes(b"png")
+        meta = {"mode": "performance", "cast": ["A", "B"], "seconds": 12,
+                "lines": [{"speaker": "A", "text": "one"}, {"speaker": "B", "text": "two"}]}
+        scene = Scene(id=1, title="S", image_prompt="", video_prompt="", narration="",
+                      mode="performance", lines=meta["lines"],
+                      metadata_extra={k: v for k, v in meta.items() if k != "lines"})
+
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            return {"pictures": [
+                {"slot": 1, "name": m.get("speaker") or "A", "kind": "character",
+                 "path": str(wd / "face.png")},
+                {"slot": 2, "name": "The wharf", "kind": "location",
+                 "path": str(wd / "loc.png")}], "audios": []}
+
+        with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
+             mock.patch("app.resolve_performance_references", side_effect=fake_refs), \
+             mock.patch.object(rg, "concatenate_scenes",
+                               side_effect=lambda c, o: Path(o).write_bytes(b"j")), \
+             mock.patch.object(rg, "ensure_video_resolution"), \
+             mock.patch.object(rg, "extract_last_frame",
+                               side_effect=lambda src, dst: Path(dst).write_bytes(b"png")):
+            rg.render_performance_scene(scene, wd, {}, comfy_url="http://w:8188",
+                                        vid_width=704, vid_height=1280)
+        # Shot 1: location asset present, no room frame yet.
+        self.assertIn("loc.png", calls[0]["refs"])
+        # Shot 2: room frame IN, location asset OUT, slots renumbered densely.
+        self.assertIn("scene_01_room.png", calls[1]["refs"])
+        self.assertNotIn("loc.png", calls[1]["refs"])
+        self.assertIn("<Picture 2> is the room already filmed", calls[1]["prompt"])
+
     def test_later_shots_reference_the_first_shots_room(self):
         calls = self._film()
         self.assertEqual(len(calls), 3)
