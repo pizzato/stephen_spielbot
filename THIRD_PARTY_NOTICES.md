@@ -52,17 +52,6 @@ a convenience summary, **not** legal advice — always check the linked model ca
 > (`assets/default_narrator.mp3`) provenance is still pending a public-domain
 > replacement (tracked TODO).
 
-## Talking-head models (dialogue scenes)
-
-The `echomimic` worker container downloads these on first use
-(`pipeline/echomimic_server.py`):
-
-| Model | Hugging Face repo | License | Commercial? |
-|---|---|---|---|
-| EchoMimic-V3 (flash transformer) | `BadToBest/EchoMimicV3` | Apache-2.0 | ✅ Yes |
-| Wan2.1-Fun-V1.1-1.3B-InP (base video model) | `alibaba-pai/Wan2.1-Fun-V1.1-1.3B-InP` | Apache-2.0 | ✅ Yes |
-| chinese-wav2vec2-base (audio encoder) | `TencentGameMate/chinese-wav2vec2-base` | MIT | ✅ Yes |
-
 ## Runtime tools
 
 - **ComfyUI** — GPL-3.0 (run as a separate service; not linked into this code).
@@ -82,7 +71,6 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) | `docker/comfyui` | Apache-2.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
-| [echomimic_v3](https://github.com/antgroup/echomimic_v3) | `docker/echomimic` | Apache-2.0 |
 
 > Running the built images locally is unremarkable. But **publishing** a built
 > `spielbot-comfyui` image to a registry distributes GPL-3.0 code (and

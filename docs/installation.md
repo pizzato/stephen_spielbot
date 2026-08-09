@@ -26,7 +26,7 @@ single-machine install where the controller is also the (localhost) worker.
     - Docker Engine + Docker Compose v2
     - The [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
-    ComfyUI (LTX 2.3 / FLUX / ACE-Step), F5-TTS/Chatterbox, and EchoMimic all run as
+    ComfyUI (LTX 2.3 / FLUX / ACE-Step) and F5-TTS/Chatterbox run as
     **containers** that `make install` builds and deploys. A worker needs no Python,
     conda, or ComfyUI install of its own.
 

@@ -21,7 +21,6 @@ Six tabs: **Infrastructure**, **Styles**, **Characters**, **Voices**, **Channels
 
 - **ComfyUI workers** — one URL per line; scenes distribute across them in parallel
 - **TTS workers** — narration endpoints (port 8189, derived by `make install`)
-- **EchoMimic workers** — talking-head endpoints for dialogue scenes (port 8190)
 - **UI worker idle timeout (min)** — how long the UI must be idle before its
   [reserved render worker](../cluster.md#the-reserved-ui-worker) rejoins the pool
 - **Temporal AI upscale timeout (min)**

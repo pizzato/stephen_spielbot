@@ -57,10 +57,10 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | Format | What you get |
 |---|---|
 | **Narration** | Classic voice-over. The mature default path |
-| **Dialogue** | Characters speak their lines, lip-synced. Needs characters with a portrait and a voice |
+| **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 
-See [dialogue scenes](../dialogue_scenes.md) for what the modes actually render.
+See [acted scenes](../performance_films.md) for what the modes actually render.
 
 ## Script mode
 

@@ -99,7 +99,8 @@ Every field label has a regenerate button that rewrites just that field with the
 optionally with a free-text instruction. Edits save when you leave the field.
 
 Above the narration sits the **scene type** control — narration, dialogue, or silent — and,
-for dialogue, who speaks. See [dialogue scenes](../dialogue_scenes.md).
+for dialogue, who speaks. A dialogue scene is performed on camera; see
+[acted scenes](../performance_films.md).
 
 !!! note "Spoken text"
     A scene can have narration text that differs from what the voice reads — useful for

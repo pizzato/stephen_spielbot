@@ -1,30 +1,35 @@
-# Performance Films
+# Acted Scenes & Performance Films
 
-A performance film is a second kind of video, not a variation on the narrated one. The
-characters act and speak on screen, and **MiniMax H3 Ref2VA generates the picture and the
-speech in a single pass** from the characters' portraits. There is no narrator, no first
-frame, no TTS step and no background music.
+An **acted scene** is one where the characters speak on screen: **MiniMax H3 Ref2VA
+generates the picture and the speech in a single pass** from the characters' portraits.
+There is no first frame, no TTS step, and nothing is lip-synced onto a still — the
+performance and the voice are made together.
 
-Narrated films are untouched by all of this. The two pathways share only the queue, the
-work dir, and publishing.
+A **performance film** is a film made entirely of them: no narrator, no music. But acted
+scenes are not confined to that — a *Mixed* film puts them alongside narrated and silent
+scenes, and each scene takes the path its mode asks for.
 
-| | Narrated film | Performance film |
+| | Narrated scene | Acted scene |
 |---|---|---|
 | Script | image + video prompts + narration | cast, timed beats, quoted dialogue, soundscape |
-| First frame | image engine (FLUX) per scene | none |
+| First frame | image engine (FLUX) | none |
 | Video | LTX 2.3 or H3 I2V | **H3 Ref2VA** from character portraits |
 | Voice | TTS (OpenF5 / Chatterbox) | generated with the picture, cast from the voice library |
-| Music | ACE-Step score, mixed in | none |
-| Scene length | narration audio | one acted clip, ~10 s |
+| Length | the narration audio | what the dialogue needs, ~10 s |
 
 ## Turning it on
 
-Settings → a style → **Script & content** → *Script mode* → **Performance**. A second
-picker appears for the video model (below). In [Create](manual/create.md) the mode can
-also be chosen per film when you're on *No style*.
+**A whole film.** Settings → a style → *Script & content* → **Script mode → Performance**,
+or pick it per film in [Create](manual/create.md) when you're on *No style*. A second
+picker appears for the video model (below).
 
-Performance ignores the Narration/Dialogue/Mixed format switch — an acted film is already
-dialogue.
+**Some scenes.** Choose the **Dialogue** or **Mixed** format in Create, or set a single
+scene's type to *dialogue* in the [Script editor](manual/script.md). Any scene with
+dialogue lines is acted, wherever it sits.
+
+A scene written as dialogue in a mixed script only carries its lines — the cast comes from
+who speaks, the length from what they say, and the setting from the scene's own video
+prompt.
 
 ## What you need first
 
@@ -59,12 +64,29 @@ them so the reference numbering always matches the references actually wired up.
 Keep spoken lines short: roughly 2.5 words per second of clip, so about 25 words in a
 10-second scene. Over that and the model cuts the line off.
 
+## Editing an acted scene
+
+The **Scenes** view on the Script and Film screens shows each acted scene as one card: the
+portrait that IS `<Picture 1>`, the voice clip that IS `<Audio 1>`, the beats, and the
+dialogue — editable line by line (speaker, delivery, text; add and remove lines).
+
+Under *Exact prompt sent to the video model* is the assembled prompt. Editing it **pins**
+that text: the scene's fields stop rebuilding it, and the render sends exactly what is on
+screen. **Rebuild from the scene** drops the override again.
+
+Editing a scene of a film that has already rendered keeps the existing clip — it is the
+deliverable — and offers **Shoot this scene again** to re-render just that scene.
+
 ## Rendering
 
-Each scene is a single Ref2VA generation, one per ComfyUI worker in parallel
-(`resume_generation.py`). No image task, no narration task, no mux and no music task are
-planned at all — a performance film's task list is one task per scene plus assembly.
-Assembly is a straight concat that keeps each clip's own audio.
+Each scene is a single Ref2VA generation, run across the ComfyUI workers in parallel
+(`resume_generation.py`). An acted scene plans one task — no image, narration or mux task
+— and the narrated scenes in the same film plan their usual quartet. Assembly concatenates
+everything, keeping each clip's own audio.
+
+**Music** is a final-mix ingredient, never baked into a scene. Switch it off per style
+(Settings → *Narrator & audio* → **Music**) or per film (Create → **Music**), and the
+final cut is the concatenation itself. An all-acted film never plans a score at all.
 
 ### Video model
 
@@ -127,6 +149,6 @@ and no prompt can separate them.
 - **One voice reference bleeds onto other speakers** in the same clip. Give every speaker
   their own voice (the model accepts 3 per scene), or write scenes with one speaker.
 - **Nine portraits and three voices** per scene, maximum.
-- **Caption timing is approximate.** There is no TTS step to measure, so a scene's
-  captions cover the clip rather than each line.
+- **Acted scenes are not captioned.** There is no TTS step to measure, so the caption
+  track covers the narrated scenes only.
 - English is what this has been exercised on; other languages are untested.

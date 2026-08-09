@@ -17,7 +17,6 @@ rebuilds.
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
 | [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
-| EchoMimic-V3 (+ Wan2.1-Fun-1.3B, chinese-wav2vec2) | ~27 GB | Talking-head dialogue scenes — fetched into the `echomimic` container volume on first use |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
 
 The **OpenF5-TTS-Base** narration weights are fetched by the TTS container on first use.

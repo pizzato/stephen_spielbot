@@ -26,7 +26,7 @@ app; one or more **GPU workers** do the rendering.
 | 2 | **Images** | [FLUX.2 Klein](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) paints each scene's first frame, with recurring [characters](characters.md) held consistent via reference images |
 | 3 | **Video** | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) animates each scene from its still, through ComfyUI |
 | 4 | **Narration** | [F5-TTS](https://github.com/SWivid/F5-TTS) speaks the script in a cloned voice — or [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) for 23 languages |
-| 5 | **Dialogue** | Scenes can instead be talking heads: characters speak their own lines, lip-synced by EchoMimic-V3 — see [dialogue scenes](dialogue_scenes.md) |
+| 5 | **Dialogue** | Scenes can instead be acted: the characters speak on screen, picture and voice generated together by [MiniMax H3](https://github.com/MiniMax-AI) — see [acted scenes](performance_films.md) |
 | 6 | **Music** | [ACE-Step](https://github.com/ace-step/ACE-Step) scores it from the LLM's mood description |
 | 7 | **Assembly** | FFmpeg mixes it all into one film with synced audio |
 
@@ -98,9 +98,9 @@ the script, and nothing publishes until you say so.
 **Controller** — Python 3.11+, Node.js 20+, FFmpeg, and either a local vLLM server or an
 API key for Claude, Grok, or OpenAI.
 
-**Workers** — Linux + NVIDIA GPU, Docker, and the NVIDIA Container Toolkit. ComfyUI,
-TTS, and EchoMimic all run as containers that `make install` builds and deploys, so a
-worker needs no Python of its own. The controller can also *be* the worker on a single
+**Workers** — Linux + NVIDIA GPU, Docker, and the NVIDIA Container Toolkit. ComfyUI and
+TTS run as containers that `make install` builds and deploys, so a worker needs no Python
+of its own. The controller can also *be* the worker on a single
 machine.
 
 Full detail on the [installation page](installation.md).
