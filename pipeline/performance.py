@@ -129,8 +129,11 @@ def render_seconds(meta: dict) -> float:
     words need, never above the model's hard ceiling. A scene that needs more
     than the ceiling will still truncate — the script-side split exists so
     that never happens; this is the last line of defence."""
-    return min(H3_CEILING_SECONDS,
-               max(_clamp_seconds(meta.get("seconds")), content_seconds(meta)))
+    if norm_lines(meta.get("lines")):
+        # Content wins outright when there are lines: a stored guess used as a
+        # floor pads the clip, and padding is where the model invents speech.
+        return min(H3_CEILING_SECONDS, max(MIN_SCENE_SECONDS, content_seconds(meta)))
+    return min(H3_CEILING_SECONDS, _clamp_seconds(meta.get("seconds")))
 
 
 def split_overloaded(raw_scene: dict) -> list[dict]:

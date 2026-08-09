@@ -328,3 +328,12 @@ class SceneLengthTests(unittest.TestCase):
         self.assertEqual(performance.render_seconds(heavy), performance.H3_CEILING_SECONDS)
         light = {"seconds": 10, "lines": self._lines(5)}
         self.assertLessEqual(performance.render_seconds(light), 10.0)
+
+    def test_a_legacy_overlong_scene_is_not_padded_to_its_stored_guess(self):
+        # Scripts written before content-sizing carry seconds=14 regardless of
+        # their words. Using that as a floor pads the clip — and padding is
+        # where the model babbles.
+        short = {"seconds": 14, "lines": self._lines(6)}
+        self.assertLess(performance.render_seconds(short), 14.0)
+        self.assertGreaterEqual(performance.render_seconds(short),
+                                performance.MIN_SCENE_SECONDS)
