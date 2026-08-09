@@ -8,8 +8,8 @@ there in a pull request and touch nothing else. This script fans it out to:
   * README.md — the list between the CHANNELS:START/END markers
 
 Run it with `make channels`. The `Sync channels list` GitHub Action runs it on
-every push to main that changes channels.yaml and commits the result, so the
-generated files never drift from the source.
+every push to main that changes channels.yaml and opens a follow-up pull request
+with the result, so the generated files never drift from the source.
 
 Output is deterministic (source order, stable key order) so re-running with no
 source change produces no diff.
