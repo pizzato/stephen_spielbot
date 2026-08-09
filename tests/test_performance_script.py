@@ -27,15 +27,18 @@ class PromptAssemblyTests(unittest.TestCase):
         p = performance.build_h3_prompt(
             self._meta(), style_note="35mm grain",
             picture_names=["CHICO", "DARLY"], audio_names=["CHICO", "DARLY"])
-        # 1 reference roles, in slot order
-        self.assertIn("<Picture 1> is CHICO", p)
-        self.assertIn("<Picture 2> is DARLY", p)
-        self.assertIn("<Audio 1> is CHICO's voice", p)
-        # 2 style, 3 beats + quoted dialogue, 4 camera, 5 audio, 6 refusals
+        # Section per concern, references first with bounded authority.
+        for header in ("[REFERENCE USE]", "[IDENTITY LOCKS]", "[SCENE]",
+                       "[DIALOGUE]", "[SHOT LIST]", "[CAMERA]",
+                       "[PRODUCTION SOUND]", "[NEGATIVES]"):
+            self.assertIn(header, p)
+        self.assertIn("<Picture 1> defines CHICO's appearance", p)
+        self.assertIn("<Picture 2> defines DARLY's appearance", p)
+        self.assertIn("<Audio 1> defines CHICO's voice only", p)
         self.assertIn("35mm grain", p)
         self.assertIn("[0s-4s]", p)
         self.assertIn('says exactly, steady and quiet: "You can burn the trees."', p)
-        self.assertIn("Camera: locked off at chest height", p)
+        self.assertIn("locked off at chest height", p)
         self.assertIn("cicadas throughout", p)
         self.assertIn("Do not add subtitles", p)
 
@@ -153,7 +156,7 @@ class GenerationTests(unittest.TestCase):
         # No image engine runs for a performance scene.
         self.assertEqual(s.image_prompt, "")
         # The editable video_prompt IS the assembled H3 prompt.
-        self.assertIn("<Picture 1> is CHICO", s.video_prompt)
+        self.assertIn("<Picture 1> defines CHICO", s.video_prompt)
         self.assertIn("Do not add subtitles", s.video_prompt)
         # Narration mirrors the spoken words (captions/description), never TTS input.
         self.assertEqual(s.narration, "You can burn the trees. Then remember this one.")
@@ -205,8 +208,8 @@ class PunctuationTests(unittest.TestCase):
             "soundscape": "Light breeze; seagulls at second 4.",
         })
         self.assertNotIn("..", p)
-        self.assertIn("Camera: Slow steady walk, holding him centre-frame.", p)
-        self.assertIn("seagulls at second 4, no music of any kind.", p)
+        self.assertIn("Slow steady walk, holding him centre-frame.", p)
+        self.assertIn("seagulls at second 4. Clear dialogue, no music of any kind.", p)
 
 
 class IdentityBindingTests(unittest.TestCase):
@@ -221,20 +224,21 @@ class IdentityBindingTests(unittest.TestCase):
     def test_hint_gives_each_name_something_to_bind_to(self):
         p = self._prompt([{"name": "Joe", "kind": "character", "hint": "Bald, broad build"},
                           {"name": "Kinho", "kind": "character", "hint": "Younger, dark hair"}])
-        self.assertIn("<Picture 1> is Joe (Bald, broad build)", p)
-        self.assertIn("<Picture 2> is Kinho (Younger, dark hair)", p)
+        self.assertIn("Joe's appearance — Joe is Bald, broad build", p)
+        self.assertIn("Kinho's appearance — Kinho is Younger, dark hair", p)
 
     def test_missing_hint_still_names_the_character(self):
         p = self._prompt([{"name": "Joe", "kind": "character"},
                           {"name": "Kinho", "kind": "character"}])
-        self.assertIn("<Picture 1> is Joe.", p)
+        self.assertIn("<Picture 1> defines Joe's appearance.", p)
         self.assertNotIn("()", p)
 
     def test_two_people_get_an_explicit_no_swap_instruction(self):
         p = self._prompt([{"name": "Joe", "kind": "character"},
                           {"name": "Kinho", "kind": "character"}])
         self.assertIn("Joe and Kinho are different people", p)
-        self.assertIn("never swap them", p)
+        self.assertIn("never swap or merge", p)
+        self.assertIn("Exactly 2 people on screen", p)
 
     def test_a_lone_character_gets_no_swap_line(self):
         p = self._prompt([{"name": "Joe", "kind": "character"}], audios=("Joe",))
@@ -275,11 +279,14 @@ class ShotSizingTests(unittest.TestCase):
     def test_establishing_prompt_promises_silence_and_company(self):
         wide = performance.shots_for(self._meta("Hi.", "Hi."), establishing=True)[0]
         p = performance.build_h3_prompt(wide)
-        self.assertIn("A and B are together in the frame", p)
-        self.assertIn("Nobody speaks", p)
+        p2 = performance.build_h3_prompt(
+            wide, picture_names=[{"name": "A", "kind": "character"},
+                                 {"name": "B", "kind": "character"}])
+        self.assertIn("A and B are together in the frame, A on the left, B on the right", p2)
+        self.assertIn("Nobody speaks", p2)
 
     def test_solo_prompt_demands_the_face(self):
         shot = performance.shots_for(self._meta("Hello there my friend.", "Hi."))[0]
         p = performance.build_h3_prompt({**shot, "scene_cast": ["A", "B"]})
-        self.assertIn("filmed from the front", p)
         self.assertIn("face fully visible to the camera", p)
+        self.assertIn("never turning away from it", p)

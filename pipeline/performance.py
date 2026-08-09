@@ -177,125 +177,162 @@ def shots_for(meta: dict, establishing: bool = False) -> list[dict]:
     return shots
 
 
-def picture_role(pic) -> str:
-    """The job a <Picture N> reference is given in the prompt.
+def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
+    """One reference's bounded-authority line: what it controls, what to ignore.
 
-    Every reference needs an explicit one or H3 blends them — and a location
-    or an outfit needs a DIFFERENT instruction from a face: keep the space,
-    keep the garments, rather than keep the person.
+    References compete — a portrait's own clothing and background fight the
+    wardrobe and location references unless each asset's authority is bounded
+    (measured: the weakest references drop first). So every line says what the
+    reference defines AND what it must not control.
     """
     if isinstance(pic, str):
-        return f"is {pic}"
+        return f"defines {pic}'s appearance"
     name, kind = pic.get("name", ""), pic.get("kind", "character")
     hint = _clean(pic.get("hint"))
     if kind == "location":
-        return (f"is {name} — the place this scene happens in; keep the space, "
-                f"layout, furnishings and lighting exactly as shown, and put "
-                f"nobody in it who is not named below")
+        return (f"defines the place only — keep the space, layout, furnishings "
+                f"and lighting exactly as shown. It contains no people and adds "
+                f"none")
     if kind == "continuity":
-        # A frame from the scene's own first shot. Without it each shot invents
-        # its own room and the scene teleports between cuts.
-        return (f"is {name} — the SAME room, furniture, lighting and time of day; "
-                f"this shot is another angle of that exact space, so keep it "
-                f"identical and do not redecorate or move the camera to a new place")
+        return (f"defines the SAME room, furniture, lighting and time of day "
+                f"already filmed in this scene — this shot is another angle of "
+                f"that exact space; do not redecorate or move to a new place")
     if kind == "wardrobe":
         owner = (pic.get("character") or "").strip()
-        who = f"{owner} is wearing" if owner else "the wardrobe is"
-        return (f"is {name} — what {who}; keep those exact garments, colours "
-                f"and details")
-    # A bare name gives the model nothing to match a face against, and with two
-    # same-kind references it swaps them — one character ends up playing the
-    # other's part. The portrait still carries the look; this is just the hook.
-    return f"is {name} ({hint})" if hint else f"is {name}"
+        who = f"the clothes {owner} wears" if owner else "the wardrobe"
+        return (f"defines {who} only — those exact garments, colours and "
+                f"details. Ignore its background")
+    tail = f" — {name} is {hint}" if hint else ""
+    if name.strip().lower() in has_wardrobe:
+        # Their clothes come from a wardrobe reference; the portrait must not
+        # compete for them.
+        return (f"defines {name}'s face, hair and build only{tail}. Ignore "
+                f"this picture's clothing and background")
+    return f"defines {name}'s appearance{tail}. Ignore this picture's background"
+
+
+def _sides(scene_cast: list, speaker: str) -> tuple[str, str]:
+    """(speaker's frame position, listener's off-frame side), kept stable by
+    cast order across a scene so reverse-shot eyelines actually meet."""
+    try:
+        idx = [str(n) for n in (scene_cast or [])].index(str(speaker))
+    except ValueError:
+        idx = 0
+    return ("left", "right") if idx == 0 else ("right", "left")
 
 
 def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                     picture_names: list | None = None,
                     audio_names: list[str] | None = None) -> str:
-    """Assemble the six-block H3 prompt for one performance scene.
+    """Assemble the H3 prompt for one performance shot.
 
-    *picture_names* are the references wired to ``<Picture 1..N>`` — plain names
-    for characters, or dicts carrying a ``kind`` for a location or wardrobe —
-    and *audio_names* the speakers wired to ``<Audio 1..N>``. Both are in
-    reference order: the render passes the same order to ComfyUI, so the tags in
-    the prompt and the slots in the graph always agree.
+    Structured after the six-section architecture the strongest prompting
+    guides converge on: reference authority first, then identity locks, the
+    scene, dialogue, screen geography, the shot list, camera, sound, and a
+    preservation contract — with the tag syntax (<Picture N>/<Audio N>) and
+    the phrasings we have verified on this model kept intact.
     """
     seconds = _clamp_seconds(scene_meta.get("seconds"))
     lines = norm_lines(scene_meta.get("lines"))
     beats = norm_beats(scene_meta.get("beats"), seconds)
-    blocks: list[str] = []
+    pics = picture_names or []
+    people = [p for p in pics
+              if (not isinstance(p, dict)) or p.get("kind", "character") == "character"]
+    people_names = [_picture_label(p) for p in people]
+    wardrobe_owners = frozenset(
+        str(p.get("character") or "").strip().lower()
+        for p in pics if isinstance(p, dict) and p.get("kind") == "wardrobe")
+    sections: list[str] = []
 
-    # 1 — reference roles. Every reference gets an explicit job or H3 blends them.
-    roles = [f"<Picture {i + 1}> {picture_role(pic)}"
-             for i, pic in enumerate(picture_names or [])]
-    roles += [f"<Audio {i + 1}> is {name}'s voice — {name} must speak in exactly that voice"
-              for i, name in enumerate(audio_names or [])]
-    if roles:
-        line = (". ".join(roles) +
-                ". Keep every face, wardrobe and body exactly as in the references.")
-        # With two people on screen the model does swap them — one character
-        # ends up in the other's seat, with the other's voice. An explicit
-        # refusal binds harder than the tags alone (H3 is CFG-free: refusals
-        # are plain sentences, not a negative prompt).
-        people = [_picture_label(p) for p in (picture_names or [])
-                  if (not isinstance(p, dict)) or p.get("kind", "character") == "character"]
-        if len(people) > 1:
-            line += (f" {' and '.join(people)} are different people: keep each one's own "
-                     f"face, body and voice, and never swap them or exchange their places.")
-        blocks.append(line)
+    # [REFERENCE USE] — every asset's authority, bounded.
+    refs = [f"<Picture {i + 1}> {picture_role(p, wardrobe_owners)}."
+            for i, p in enumerate(pics)]
+    refs += [f"<Audio {i + 1}> defines {name}'s voice only — {name} must speak "
+             f"in exactly this voice." for i, name in enumerate(audio_names or [])]
+    if refs:
+        sections.append("[REFERENCE USE]\n" + "\n".join(refs))
 
-    # 2 — style contract.
+    # [IDENTITY LOCKS] — who is on screen, how many, and never merged.
+    locks = []
+    if people_names:
+        count = len(people_names)
+        locks.append(f"Exactly {'one person' if count == 1 else f'{count} people'} "
+                     f"on screen: {' and '.join(people_names)}. No one else appears.")
+    if len(people_names) > 1:
+        locks.append(f"{' and '.join(people_names)} are different people — never "
+                     f"swap or merge their faces, bodies, clothes or voices.")
+    locks.append("Keep every face, wardrobe and body exactly as in the references.")
+    sections.append("[IDENTITY LOCKS]\n" + "\n".join(locks))
+
+    # [SCENE]
     setting = _clean(scene_meta.get("setting"))
     look = " ".join(x for x in (setting, _clean(style_note)) if x)
     if look:
-        blocks.append(f"Style: {look}")
+        sections.append(f"[SCENE]\n{look}")
 
-    # 3 — timed beats, with the quoted dialogue in place.
-    for beat in beats:
-        blocks.append(f"[{beat['t0']:g}s-{beat['t1']:g}s] {beat['action']}")
-    for line in lines:
-        # Delivery in front, line verbatim in quotes, then the lips-close
-        # instruction — without it the mouth keeps moving after the line ends.
-        blocks.append(
-            f"{line['speaker']} says exactly, {line['delivery']}: \"{line['text']}\" "
-            f"{line['speaker']}'s lips close and all mouth movement stops the instant "
-            f"the line ends.")
+    # [DIALOGUE] — each line bound to one speaker and one delivery; the
+    # lips-close instruction is load-bearing (without it the mouth keeps
+    # moving after the line ends).
+    if lines:
+        spoken = []
+        for line in lines:
+            spoken.append(
+                f"{line['speaker']} says exactly, {line['delivery']}: \"{line['text']}\" "
+                f"{line['speaker']}'s lips close and all mouth movement stops the "
+                f"instant the line ends.")
+        sections.append("[DIALOGUE]\n" + "\n".join(spoken))
 
+    # [SCREEN GEOGRAPHY] — place people in the frame before any action, with
+    # eyelines that stay stable across the scene's shots.
+    geo = []
     if scene_meta.get("solo"):
         speaker = scene_meta.get("speaker")
         others = [n for n in (scene_meta.get("scene_cast") or []) if n != speaker]
-        # Face the camera. Without this the model happily films the speaker
-        # from behind — a real render delivered a whole line to the back of a
-        # head — because the beats describe walking, not address.
-        framing = (f"{speaker} is filmed from the front in a medium close-up, "
-                   f"face fully visible to the camera for the entire shot, "
-                   f"never turning away from it")
+        _, off_side = _sides(scene_meta.get("scene_cast"), speaker)
+        line = (f"{speaker} is centered, framed from the chest up, face fully "
+                f"visible to the camera for the entire shot, never turning away "
+                f"from it")
         if others:
-            framing += (f", speaking toward {' and '.join(others)} just off "
-                        f"frame. Do not show {' or '.join(others)}")
-        blocks.append(framing + ".")
-    if scene_meta.get("establishing"):
-        names = [n for n in (scene_meta.get("cast") or []) if n]
-        if len(names) > 1:
-            blocks.append(
-                f"{' and '.join(names)} are together in the frame in a wide shot. "
-                f"Nobody speaks: every mouth stays completely closed for the "
-                f"whole shot.")
+            line += (f", angled slightly toward {' and '.join(others)} just off "
+                     f"the {off_side} edge of frame. Do not show "
+                     f"{' or '.join(others)}")
+        geo.append(line + ".")
+    if scene_meta.get("establishing") and len(people_names) > 1:
+        placed = [f"{n} on the {'left' if i == 0 else 'right'}"
+                  for i, n in enumerate(people_names[:2])]
+        geo.append(f"{' and '.join(people_names)} are together in the frame, "
+                   f"{', '.join(placed)}, in a wide shot. Nobody speaks: every "
+                   f"mouth stays completely closed for the whole shot.")
+    if geo:
+        sections.append("[SCREEN GEOGRAPHY]\n" + "\n".join(geo))
 
-    # 4 — camera.
+    # [SHOT LIST]
+    if beats:
+        sections.append("[SHOT LIST]\n" + "\n".join(
+            f"[{b['t0']:g}s-{b['t1']:g}s] {b['action']}" for b in beats))
+
+    # [CAMERA]
     camera = _unterminated(scene_meta.get("camera")) or \
         "locked off at chest height, slight handheld drift, no push, no zoom"
-    blocks.append(f"Camera: {camera}.")
+    sections.append(f"[CAMERA]\n{camera}.")
 
-    # 5 — audio as its own track (never music: performance films carry no score).
+    # [PRODUCTION SOUND] — diegetic only; performance films carry no score.
     soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
-    blocks.append(f"Audio: {soundscape}, no music of any kind.")
+    sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
+                    f"Clear dialogue, no music of any kind.")
 
-    # 6 — refusals. Plain sentences: H3 is CFG-free, there is no negative field.
+    # [NEGATIVES] — a preservation contract plus named failure modes. H3 is
+    # CFG-free: these are plain sentences, not a negative prompt.
     extra = _clean(scene_meta.get("refusals"))
-    blocks.append(f"{_REFUSALS} {extra}".strip())
+    sections.append(("[NEGATIVES]\n"
+                     "Preserve every reference exactly as assigned; do not modify "
+                     "anything else. No extra people, no face drift, no wardrobe "
+                     "changes, no voice swaps, no broken eyelines, no unmotivated "
+                     "cuts. Do not add subtitles, do not add captions, do not add "
+                     "any on-screen text, no watermark, no scene changes, no "
+                     f"music. {extra}").strip())
 
-    return "\n".join(blocks)
+    return "\n\n".join(sections)
 
 
 def spoken_text(scene_meta: dict) -> str:

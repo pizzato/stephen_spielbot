@@ -81,7 +81,7 @@ class ScriptForkTests(TempConfigCase):
         for s in scenes:
             self.assertEqual(s["metadata"]["mode"], "performance")
             # The prompt the video model receives, editable in the script editor.
-            self.assertIn("<Picture 1> is CHICO", s["video_prompt"])
+            self.assertIn("<Picture 1> defines CHICO", s["video_prompt"])
             self.assertIn("Do not add subtitles", s["video_prompt"])
             # No image engine runs, so no image prompt is written.
             self.assertEqual(s["image_prompt"], "")
@@ -227,9 +227,7 @@ class RenderWiringTests(TempConfigCase):
         shots = self._shots(self._meta())
         self.assertEqual(len(shots), 2)
         for shot in shots:
-            faces = [ln for ln in shot["prompt"].splitlines()[0].split(". ")
-                     if ln.startswith("<Picture") and "the SAME room" not in ln]
-            self.assertEqual(len(faces), 1, faces)
+            self.assertIn("Exactly one person on screen", shot["prompt"])
             self.assertEqual(len(shot["ref_audios"]), 1)
             self.assertNotIn("<Audio 2>", shot["prompt"])
             self.assertNotIn("different people", shot["prompt"])
@@ -239,18 +237,17 @@ class RenderWiringTests(TempConfigCase):
         # MARIA speaks first: her portrait (char_b) and her voice (kara).
         self.assertEqual(shots[0]["ref_images"][0].name, "char_b.png")
         self.assertEqual(shots[0]["ref_audios"][0].name, "kara.wav")
-        self.assertIn("<Audio 1> is MARIA's voice", shots[0]["prompt"])
+        self.assertIn("<Audio 1> defines MARIA's voice", shots[0]["prompt"])
         self.assertEqual(shots[1]["ref_images"][0].name, "char_a.png")
         self.assertEqual(shots[1]["ref_audios"][0].name, "walter.wav")
-        self.assertIn("<Audio 1> is CHICO's voice", shots[1]["prompt"])
+        self.assertIn("<Audio 1> defines CHICO's voice", shots[1]["prompt"])
 
     def test_a_solo_shot_demands_the_face_and_names_the_listener(self):
         # A real render delivered a whole line to the back of a head — the solo
         # block must demand the face, not just name who is off frame.
         shots = self._shots(self._meta())
-        self.assertIn("MARIA is filmed from the front", shots[0]["prompt"])
         self.assertIn("face fully visible to the camera", shots[0]["prompt"])
-        self.assertIn("speaking toward CHICO just off frame", shots[0]["prompt"])
+        self.assertIn("angled slightly toward CHICO", shots[0]["prompt"])
         self.assertIn("Do not show CHICO", shots[0]["prompt"])
 
     def test_a_single_speaker_scene_still_renders_one_clip(self):
@@ -266,7 +263,7 @@ class RenderWiringTests(TempConfigCase):
             cast=["CHICO", "GHOST", "MARIA"],
             lines=[{"speaker": "CHICO", "delivery": "flat", "text": "Alone."}]))
         self.assertEqual([p.name for p in cap["ref_images"]], ["char_a.png", "char_b.png"])
-        self.assertIn("<Picture 2> is MARIA", cap["prompt"])
+        self.assertIn("<Picture 2> defines MARIA", cap["prompt"])
         self.assertNotIn("GHOST", cap["prompt"].splitlines()[0])
 
     def test_no_portrait_at_all_is_an_error(self):
@@ -471,7 +468,7 @@ class UnvoicedCharacterTests(TempConfigCase):
             meta, picture_names=[p["name"] for p in refs["pictures"]],
             audio_names=[a["name"] for a in refs["audios"]])
         # MUTE still acts and speaks — the model just picks their voice.
-        self.assertIn("<Audio 1> is VOICED's voice", prompt)
+        self.assertIn("<Audio 1> defines VOICED's voice", prompt)
         self.assertNotIn("MUTE's voice", prompt)
         self.assertIn('MUTE says exactly', prompt)
 
@@ -607,9 +604,9 @@ class VisualsTests(TempConfigCase):
         meta, refs = self._refs()
         prompt = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
         # The character's slot now carries a short identity hint too.
-        self.assertIn("<Picture 1> is JOE (host).", prompt)
-        self.assertIn("<Picture 2> is The studio — the place this scene happens in", prompt)
-        self.assertIn("<Picture 3> is Blue henley — what JOE is wearing", prompt)
+        self.assertIn("<Picture 1> defines JOE's face, hair and build only — JOE is host", prompt)
+        self.assertIn("<Picture 2> defines the place only", prompt)
+        self.assertIn("<Picture 3> defines the clothes JOE wears only", prompt)
 
     def test_locations_come_before_wardrobe(self):
         self._visual(name="Coat", kind="wardrobe")
@@ -777,7 +774,7 @@ class SceneContinuityTests(unittest.TestCase):
         # Shot 2: room frame IN, location asset OUT, slots renumbered densely.
         self.assertIn("scene_01_room.png", calls[1]["refs"])
         self.assertNotIn("loc.png", calls[1]["refs"])
-        self.assertIn("<Picture 2> is the room already filmed", calls[1]["prompt"])
+        self.assertIn("<Picture 2> defines the SAME room", calls[1]["prompt"])
 
     def test_later_shots_reference_the_first_shots_room(self):
         calls = self._film()
