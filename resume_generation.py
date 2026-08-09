@@ -38,6 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pipeline.llm import Scene, NEGATIVE_PROMPT, narration_language_name
 from pipeline import engines as _engines
 from pipeline import performance as _performance
+from pipeline import shot_gate
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
@@ -363,8 +364,11 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     """
     scene_meta = _performance.scene_meta(scene)
     # A two-hander is rendered as shot/reverse-shot: one face and one voice per
-    # clip, because with two of each the model swaps them (see shots_for).
-    shots = _performance.shots_for(scene_meta)
+    # clip, because with two of each the model swaps them (see shots_for). It
+    # opens on a silent wide of everyone together (swap-proof: no voices) so
+    # the scene still reads as people in one place — config-off-able.
+    shots = _performance.shots_for(
+        scene_meta, establishing=bool(cfg.get("performance_establishing", True)))
     if len(shots) > 1:
         return _render_performance_shots(
             scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
@@ -389,8 +393,10 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
     for idx, shot in enumerate(shots):
         out = work_dir / f"scene_{scene.id:02d}_shot_{idx:02d}.mp4"
         if not (out.exists() and out.stat().st_size > 10_000):
-            logger.info("Scene %d shot %d/%d: %s speaks%s",
-                        scene.id, idx + 1, len(shots), shot.get("speaker"),
+            who = ("establishing wide" if shot.get("establishing")
+                   else f"{shot.get('speaker')} speaks")
+            logger.info("Scene %d shot %d/%d: %s%s",
+                        scene.id, idx + 1, len(shots), who,
                         " (matching the first shot's room)" if room else "")
             extra = ([{"name": "the room already filmed in this scene",
                        "kind": "continuity", "path": str(room)}] if room else [])
@@ -402,8 +408,11 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
                 # The room frame IS the location, photographed. Sending the
                 # location asset alongside it wastes a slot and dilutes binding —
                 # measured: at 3 picture refs everything held (outfit, wharf,
-                # face); at 4+ the weakest refs started dropping.
-                drop_kinds=("location",) if room else ())
+                # face); at 4+ the weakest refs started dropping. The wide is
+                # over budget with two casts' wardrobe, and garment detail is
+                # invisible at that distance anyway.
+                drop_kinds=(("location",) if room else ())
+                + (("wardrobe",) if shot.get("establishing") else ()))
         parts.append(out)
         if room is None:
             # Best-effort: without it the later shots simply lose the hint.
@@ -452,13 +461,43 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
     logger.info("Scene %d: performance render (%s) — %d portraits, %d voices → %s",
                 scene.id, engine["key"], len(ref_images), len(ref_audios), clip.name)
-    generate_video_h3_ref(
-        engine, prompt, ref_images, clip,
-        ref_audios=ref_audios,
-        width=vid_width, height=vid_height,
-        duration_seconds=float(meta.get("seconds") or _performance.SCENE_SECONDS),
-        comfy_url=comfy_url,
-    )
+    def _generate(out: Path) -> Path:
+        generate_video_h3_ref(
+            engine, prompt, ref_images, out,
+            ref_audios=ref_audios,
+            width=vid_width, height=vid_height,
+            duration_seconds=float(meta.get("seconds") or _performance.SCENE_SECONDS),
+            comfy_url=comfy_url,
+        )
+        return out
+
+    _generate(clip)
+
+    # The gate: a shot that doesn't say its line is a miss, and misses get
+    # retaken with a fresh seed instead of shipped — that is what turns a
+    # stochastic model into a consistent one. Soft dependency: without
+    # faster-whisper the gate stands down. Silent shots have nothing to verify.
+    expected = _performance.spoken_text(meta)
+    if (expected and shot_gate.available()
+            and bool(cfg.get("performance_verify", True))):
+        best, transcript = shot_gate.verify(clip, expected)
+        retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
+        attempt = 0
+        while best < shot_gate.DEFAULT_THRESHOLD and attempt < retakes:
+            attempt += 1
+            logger.warning("[gate] scene %d %s: said %r (score %.2f) — retake %d/%d",
+                           scene.id, clip.name, transcript[:80], best, attempt, retakes)
+            candidate = clip.with_suffix(".retake.mp4")
+            _generate(candidate)
+            cand_score, cand_tr = shot_gate.verify(candidate, expected)
+            if cand_score > best:
+                candidate.replace(clip)
+                best, transcript = cand_score, cand_tr
+            else:
+                candidate.unlink(missing_ok=True)
+        logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
+                    "" if best >= shot_gate.DEFAULT_THRESHOLD else " (best of retakes)")
+
     # H3 renders under its own pixel cap; bring the clip back to the film's frame.
     ensure_video_resolution(clip, vid_width, vid_height)
     return clip

@@ -80,6 +80,33 @@ Settings → Infrastructure like any other engine; see [models](models.md).
     MiniMax H3 is **not licensed for use in the USA, EU, UK or South Korea**, and requires
     machine-generated disclosure and "MiniMax H3" attribution. The picker repeats this.
 
+## Consistency
+
+Consistency comes from three mechanisms, each born from a measured failure:
+
+- **One face, one voice per clip.** With two of each in a clip the model swaps
+  them — prompt wording does not fix this. Two-handers render as
+  shot/reverse-shot, and each scene opens on a **silent wide** of everyone
+  together (swap-proof: a swap needs two voices). Turn the wide off with
+  `performance_establishing: false`.
+- **A reference budget.** Measured directly: at three picture references
+  everything held (face, outfit colour, location); at four the weakest dropped.
+  The renderer enforces it — later shots swap the scene's own first frame in
+  for the location asset, and the wide drops wardrobe (invisible at that
+  distance anyway).
+- **A quality gate.** Every talking shot is transcribed (faster-whisper, CPU,
+  seconds against a ~6-minute render) and scored against its scripted line; a
+  miss is retaken with a fresh seed and the better take kept
+  (`performance_verify`, `performance_verify_retakes`, default one retake).
+  The gate verifies **speech, not picture** — a visually broken shot that says
+  its line still passes.
+
+Shots are sized to their words (~2.5 words/second plus a beat of air) rather
+than to a share of the scene, because oversized shots left the model padding
+the tail with speech nobody scripted. And cast **distinct voices** for
+co-stars: two reference voices five hertz apart will bleed into each other,
+and no prompt can separate them.
+
 ## Limits
 
 - **15 seconds is a hard ceiling** per scene, and cost grows faster than length — scenes

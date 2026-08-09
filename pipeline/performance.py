@@ -38,6 +38,11 @@ MAX_SCENE_SECONDS = 14.0
 # One audio reference per speaker, and H3 accepts at most 3 (and 9 images).
 MAX_SPEAKERS_PER_SCENE = 3
 
+# Shot sizing: ~2.5 spoken words per second, plus a beat of air. Oversized
+# shots made the model pad the tail with speech nobody scripted.
+WORDS_PER_SECOND = 2.5
+SHOT_AIR_SECONDS = 1.5
+
 _REFUSALS = ("Do not add subtitles, do not add captions, do not add any on-screen text, "
              "no watermark, no extra characters, no scene changes, no music.")
 
@@ -115,7 +120,7 @@ def _picture_label(pic) -> str:
     return pic if isinstance(pic, str) else str(pic.get("name") or "")
 
 
-def shots_for(meta: dict) -> list[dict]:
+def shots_for(meta: dict, establishing: bool = False) -> list[dict]:
     """Split a scene into single-speaker shots.
 
     H3 does not reliably bind a reference to a NAME: give it two faces and two
@@ -139,17 +144,28 @@ def shots_for(meta: dict) -> list[dict]:
         else:
             runs.append({"speaker": line["speaker"], "lines": [line]})
 
-    total_words = sum(len(l["text"].split()) for r in runs for l in r["lines"]) or 1
-    seconds = _clamp_seconds(meta.get("seconds"))
     shots = []
-    for run in runs:
-        words = sum(len(l["text"].split()) for l in run["lines"])
-        # Give each shot the share of the scene its words need, floored at the
-        # model's minimum clip length.
-        secs = max(MIN_SCENE_SECONDS, round(seconds * words / total_words, 1))
+    if establishing:
+        # A silent wide of everyone together, so the film doesn't feel like two
+        # people who never met. Swap-proof by construction: a swap needs two
+        # VOICES, and nobody speaks here.
         shots.append({
             **meta,
-            "seconds": min(secs, MAX_SCENE_SECONDS),
+            "seconds": MIN_SCENE_SECONDS,
+            "lines": [],
+            "beats": norm_beats(meta.get("beats"), MIN_SCENE_SECONDS)[:1],
+            "cast": speakers_in(lines),
+            "establishing": True,
+        })
+    for run in runs:
+        words = sum(len(l["text"].split()) for l in run["lines"])
+        # Size the shot to its WORDS (~2.5 spoken words/second plus a beat of
+        # air), not to a share of the scene. Oversized shots left the model
+        # padding the tail — where it invents speech that was never scripted.
+        secs = round(words / WORDS_PER_SECOND + SHOT_AIR_SECONDS, 1)
+        shots.append({
+            **meta,
+            "seconds": _clamp_seconds(secs),
             "lines": run["lines"],
             "speaker": run["speaker"],
             # Only the speaker is on camera: the beats describe the whole scene,
@@ -246,13 +262,25 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
             f"the line ends.")
 
     if scene_meta.get("solo"):
-        others = [n for n in (scene_meta.get("scene_cast") or [])
-                  if n != scene_meta.get("speaker")]
+        speaker = scene_meta.get("speaker")
+        others = [n for n in (scene_meta.get("scene_cast") or []) if n != speaker]
+        # Face the camera. Without this the model happily films the speaker
+        # from behind — a real render delivered a whole line to the back of a
+        # head — because the beats describe walking, not address.
+        framing = (f"{speaker} is filmed from the front in a medium close-up, "
+                   f"face fully visible to the camera for the entire shot, "
+                   f"never turning away from it")
         if others:
+            framing += (f", speaking toward {' and '.join(others)} just off "
+                        f"frame. Do not show {' or '.join(others)}")
+        blocks.append(framing + ".")
+    if scene_meta.get("establishing"):
+        names = [n for n in (scene_meta.get("cast") or []) if n]
+        if len(names) > 1:
             blocks.append(
-                f"Only {scene_meta.get('speaker')} is on camera, facing "
-                f"{' and '.join(others)} just off frame and speaking to them. "
-                f"Do not show {' or '.join(others)}.")
+                f"{' and '.join(names)} are together in the frame in a wide shot. "
+                f"Nobody speaks: every mouth stays completely closed for the "
+                f"whole shot.")
 
     # 4 — camera.
     camera = _unterminated(scene_meta.get("camera")) or \

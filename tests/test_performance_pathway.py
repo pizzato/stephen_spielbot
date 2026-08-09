@@ -194,7 +194,10 @@ class RenderWiringTests(TempConfigCase):
                       narration="", mode="performance",
                       lines=meta.get("lines", []),
                       metadata_extra={k: v for k, v in meta.items() if k != "lines"})
-        cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
+        # Establishing and the gate have their own tests; here they would run
+        # real ffmpeg over these fake clips.
+        cfg = {**backend.gapp.load_config(), "style_name": "Acted",
+               "performance_establishing": False, "performance_verify": False}
         # The continuity frame is a separate concern (SceneContinuityTests) and
         # runs real ffmpeg on these dummy clips — seconds per test.
         with mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
@@ -241,9 +244,13 @@ class RenderWiringTests(TempConfigCase):
         self.assertEqual(shots[1]["ref_audios"][0].name, "walter.wav")
         self.assertIn("<Audio 1> is CHICO's voice", shots[1]["prompt"])
 
-    def test_a_solo_shot_says_who_is_listening_off_camera(self):
+    def test_a_solo_shot_demands_the_face_and_names_the_listener(self):
+        # A real render delivered a whole line to the back of a head — the solo
+        # block must demand the face, not just name who is off frame.
         shots = self._shots(self._meta())
-        self.assertIn("Only MARIA is on camera", shots[0]["prompt"])
+        self.assertIn("MARIA is filmed from the front", shots[0]["prompt"])
+        self.assertIn("face fully visible to the camera", shots[0]["prompt"])
+        self.assertIn("speaking toward CHICO just off frame", shots[0]["prompt"])
         self.assertIn("Do not show CHICO", shots[0]["prompt"])
 
     def test_a_single_speaker_scene_still_renders_one_clip(self):
@@ -717,7 +724,9 @@ class SceneContinuityTests(unittest.TestCase):
              mock.patch.object(rg, "extract_last_frame",
                                side_effect=(RuntimeError("no ffmpeg") if frame_fails
                                             else lambda src, dst: Path(dst).write_bytes(b"png"))):
-            rg.render_performance_scene(scene, wd, {}, comfy_url="http://w:8188",
+            rg.render_performance_scene(scene, wd, {"performance_establishing": False,
+                                                    "performance_verify": False},
+                                        comfy_url="http://w:8188",
                                         vid_width=704, vid_height=1280)
         return calls
 
@@ -759,7 +768,9 @@ class SceneContinuityTests(unittest.TestCase):
              mock.patch.object(rg, "ensure_video_resolution"), \
              mock.patch.object(rg, "extract_last_frame",
                                side_effect=lambda src, dst: Path(dst).write_bytes(b"png")):
-            rg.render_performance_scene(scene, wd, {}, comfy_url="http://w:8188",
+            rg.render_performance_scene(scene, wd, {"performance_establishing": False,
+                                                    "performance_verify": False},
+                                        comfy_url="http://w:8188",
                                         vid_width=704, vid_height=1280)
         # Shot 1: location asset present, no room frame yet.
         self.assertIn("loc.png", calls[0]["refs"])

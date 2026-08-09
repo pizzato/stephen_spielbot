@@ -244,3 +244,42 @@ class IdentityBindingTests(unittest.TestCase):
         p = self._prompt([{"name": "Joe", "kind": "character"},
                           {"name": "The studio", "kind": "location"}], audios=("Joe",))
         self.assertNotIn("different people", p)
+
+
+class ShotSizingTests(unittest.TestCase):
+    def _meta(self, *texts, seconds=14):
+        return {"seconds": seconds, "cast": ["A", "B"],
+                "lines": [{"speaker": "AB"[i % 2], "text": t} for i, t in enumerate(texts)]}
+
+    def test_shots_are_sized_to_their_words_not_the_scene(self):
+        # Oversized shots made the model pad the tail — with speech nobody
+        # scripted ("keep your little chovia", heard in a real render).
+        long_line = " ".join(["word"] * 25)
+        shots = performance.shots_for(self._meta(long_line, "No."))
+        self.assertAlmostEqual(shots[0]["seconds"],
+                               25 / performance.WORDS_PER_SECOND
+                               + performance.SHOT_AIR_SECONDS, delta=0.2)
+        self.assertEqual(shots[1]["seconds"], performance.MIN_SCENE_SECONDS)
+
+    def test_establishing_wide_is_optional_and_silent(self):
+        meta = self._meta("Hello there Joe.", "Hello back.")
+        plain = performance.shots_for(meta)
+        self.assertFalse(any(s.get("establishing") for s in plain))
+        shots = performance.shots_for(meta, establishing=True)
+        wide = shots[0]
+        self.assertTrue(wide["establishing"])
+        self.assertEqual(wide["lines"], [])            # nobody speaks
+        self.assertEqual(wide["cast"], ["A", "B"])     # everyone in frame
+        self.assertEqual(len(shots), 3)
+
+    def test_establishing_prompt_promises_silence_and_company(self):
+        wide = performance.shots_for(self._meta("Hi.", "Hi."), establishing=True)[0]
+        p = performance.build_h3_prompt(wide)
+        self.assertIn("A and B are together in the frame", p)
+        self.assertIn("Nobody speaks", p)
+
+    def test_solo_prompt_demands_the_face(self):
+        shot = performance.shots_for(self._meta("Hello there my friend.", "Hi."))[0]
+        p = performance.build_h3_prompt({**shot, "scene_cast": ["A", "B"]})
+        self.assertIn("filmed from the front", p)
+        self.assertIn("face fully visible to the camera", p)

@@ -7,3 +7,4 @@ google-auth-httplib2>=0.1
 google-api-python-client>=2.100
 requests>=2.31           # X (Twitter) API integration — pipeline/x.py (issue #107)
 pillow>=10.0             # image compositing/covers — pipeline/cover.py, resume_generation.py
+faster-whisper>=1.0  # performance-shot quality gate (pipeline/shot_gate.py)
