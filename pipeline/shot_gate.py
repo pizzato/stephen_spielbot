@@ -68,6 +68,15 @@ def score(transcript: str, expected: str) -> float:
     return SequenceMatcher(None, a.split(), b.split()).ratio()
 
 
+def word_count(transcript: str) -> int:
+    return len(_norm_words(transcript).split())
+
+
+# A "silent" shot may carry a stray ASR token or two from room tone; three or
+# more recognized words is speech the model invented against instructions.
+SILENCE_MAX_WORDS = 2
+
+
 def verify(clip: Path, expected: str) -> tuple[float, str]:
     """(similarity, transcript) for a rendered shot against its scripted line."""
     transcript = transcribe(clip)

@@ -478,8 +478,40 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # stochastic model into a consistent one. Soft dependency: without
     # faster-whisper the gate stands down. Silent shots have nothing to verify.
     expected = _performance.spoken_text(meta)
-    if (expected and shot_gate.available()
-            and bool(cfg.get("performance_verify", True))):
+    verify_on = shot_gate.available() and bool(cfg.get("performance_verify", True))
+
+    # A shot with NO lines must be silent — and the model does babble into
+    # them against instructions ("and seal it in a thween", heard in a real
+    # establishing wide). Retake once; if speech survives, strip the audio:
+    # a wide with no room tone beats one where a ghost mumbles.
+    if not expected and verify_on:
+        transcript = shot_gate.transcribe(clip)
+        words = shot_gate.word_count(transcript)
+        retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
+        attempt = 0
+        while words > shot_gate.SILENCE_MAX_WORDS and attempt < retakes:
+            attempt += 1
+            logger.warning("[gate] scene %d %s: silent shot says %r — retake %d/%d",
+                           scene.id, clip.name, transcript[:80], attempt, retakes)
+            candidate = clip.with_suffix(".retake.mp4")
+            _generate(candidate)
+            cand_tr = shot_gate.transcribe(candidate)
+            if shot_gate.word_count(cand_tr) < words:
+                candidate.replace(clip)
+                transcript, words = cand_tr, shot_gate.word_count(cand_tr)
+            else:
+                candidate.unlink(missing_ok=True)
+        if words > shot_gate.SILENCE_MAX_WORDS:
+            logger.warning("[gate] scene %d %s: still speaking after retakes — muting",
+                           scene.id, clip.name)
+            silence = clip.with_suffix(".silence.wav")
+            _write_silence_wav(silence, _get_duration(clip))
+            muted = clip.with_suffix(".muted.mp4")
+            mux_video_audio(clip, silence, muted)
+            muted.replace(clip)
+            silence.unlink(missing_ok=True)
+
+    if (expected and verify_on):
         best, transcript = shot_gate.verify(clip, expected)
         retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
         attempt = 0
