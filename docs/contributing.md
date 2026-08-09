@@ -93,8 +93,8 @@ By contributing, you agree your contributions are licensed under the project's
 Making films with Stephen Spielbot? Add your channel to
 [`channels.yaml`](https://github.com/pizzato/stephen_spielbot/blob/main/channels.yaml) and
 open a pull request — that file is the only thing you need to edit. On merge, a GitHub
-Action regenerates the list in the README and the app's **About** screen. Run
-`make channels` to preview it locally.
+Action regenerates the list in the README and the app's **About** screen, and opens a
+follow-up pull request with the result. Run `make channels` to preview it locally.
 
 ## Reporting security issues
 
