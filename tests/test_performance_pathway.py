@@ -1381,3 +1381,38 @@ class ModeConversionTests(ActedSceneEditingTests):
         llm.assert_not_called()
         self.assertEqual(r["scene"]["mode"], "silent")
         self.assertEqual(r["scene"]["lines"], [])
+
+
+class BareModeFlipTests(ActedSceneEditingTests):
+    """A bare mode flip (old client, raw API) must never destroy a scene."""
+
+    def _narrated(self):
+        # Turn scene 1 into a plain narrated scene the pre-convert UI could hold.
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", mode="narration", lines=[],
+            narration="The wharf waited in the fog.",
+            image_prompt="a fog-wrapped wharf", video_prompt="slow dolly in"))
+
+    def test_flip_to_dialogue_and_back_keeps_the_narration(self):
+        self._narrated()
+        # the OLD UI's behaviour: flip the flag, send the fields it had
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", mode="dialogue", lines=[],
+            narration="The wharf waited in the fog.",
+            image_prompt="a fog-wrapped wharf", video_prompt="slow dolly in"))
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", mode="narration", lines=[], narration="",
+            image_prompt="", video_prompt=""))
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual(scene["narration"], "The wharf waited in the fog.")
+        self.assertEqual(scene["image_prompt"], "a fog-wrapped wharf")
+
+    def test_flip_to_dialogue_restores_a_stashed_take(self):
+        # dialogue content stashed earlier comes back even on a bare flip
+        self._narrated()   # leaving dialogue stashes the lines from setUp's scene
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="Talk", mode="dialogue", lines=[], narration="",
+            image_prompt="", video_prompt=""))
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual([l["text"] for l in scene["lines"]], ["You came."])
+        self.assertIn("[REFERENCE USE]", scene["video_prompt"])

@@ -3344,6 +3344,37 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         current = store.get_scene(job_id, sid) or {}
         meta = dict(current.get("metadata") or {})
         old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")}
+        # A mode change through ANY path — the convert endpoint, an old client,
+        # a raw API call — first stashes the content of the mode being left,
+        # and restores the target mode's stash when the request brings no
+        # content of its own. A bare flip must never destroy a scene again.
+        old_mode = str(meta.get("mode") or "narration").strip().lower()
+        old_mode = "dialogue" if performance_mode.is_performance_mode(old_mode) else old_mode
+        new_mode = (str(body.mode).strip().lower() or "narration") if body.mode is not None else old_mode
+        new_mode = "dialogue" if performance_mode.is_performance_mode(new_mode) else new_mode
+        if new_mode != old_mode and old_mode in _MODE_STASH_FIELDS:
+            _stash_mode_content(meta, current, old_mode)
+            stash = (meta.get("mode_stash") or {}).get(new_mode) or {}
+            if new_mode == "dialogue" and not (body.lines or meta.get("lines")):
+                for k in ("lines", "cast", "setting", "camera", "soundscape",
+                          "beats", "seconds", "prompt_override"):
+                    if stash.get(k):
+                        meta[k] = stash[k]
+                if stash.get("lines") and body.lines is not None:
+                    body.lines = list(stash["lines"])
+            elif new_mode == "narration" and not (body.narration or "").strip():
+                body.narration = stash.get("narration") or ""
+                if not (body.image_prompt or "").strip():
+                    body.image_prompt = stash.get("image_prompt") or ""
+                if not (body.video_prompt or "").strip() or \
+                        (body.video_prompt or "").startswith("["):
+                    body.video_prompt = stash.get("video_prompt") or ""
+            elif new_mode == "silent":
+                if not (body.image_prompt or "").strip():
+                    body.image_prompt = stash.get("image_prompt") or ""
+                if not (body.video_prompt or "").strip() or \
+                        (body.video_prompt or "").startswith("["):
+                    body.video_prompt = stash.get("video_prompt") or ""
         if body.voice is not None:
             voice = (body.voice or "").strip()
             if voice:
