@@ -4193,12 +4193,23 @@ def start_generation(body: GenerateBody) -> dict:
 
     n = int(body.n_scenes) if body.n_scenes else len(scene_rows)
     title = body.title or body.video_title
+
+    def _acted_row(row) -> bool:
+        return performance_mode.is_performance_mode(
+            (row.get("metadata") or {}).get("mode"))
+
     scenes = [
         Scene(
             id=int(row["id"]),
             title=row.get("title") or f"Scene {int(row['id'])}",
-            image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
-            video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
+            # An acted scene has no image prompt BY DESIGN — the title fallback
+            # is a classic-scene safety net, and back-filling it here poisoned
+            # the cover prompt with the film title (which the model then
+            # painted, misspelled, into the "text-free" background).
+            image_prompt=("" if _acted_row(row) else
+                          _apply_style_prefix(combined_style, row.get("image_prompt") or title)),
+            video_prompt=row.get("video_prompt") or ("" if _acted_row(row) else
+                                                     row.get("image_prompt") or title),
             narration=row.get("narration") or "",
             negative_prompt=video_neg,
             # Dialogue/performance fields ride in the scene metadata; dropping

@@ -1060,3 +1060,90 @@ class ActedFieldEditingTests(ActedSceneEditingTests):
         second = self.backend.job_scenes(self.job_id)["scenes"][0]["video_prompt"]
         self.assertEqual(first.count("[REFERENCE USE]"), 1)
         self.assertEqual(second.count("[REFERENCE USE]"), 1)
+
+
+class CoverPromptTests(unittest.TestCase):
+    """The cover must never see the film title, and an acted scene's subject
+    is its cast and setting — that's also what pulls the character reference
+    portraits into the cover render."""
+
+    def _mixed(self):
+        return [
+            {"id": 1, "title": "Why the Cut Stops Bleeding", "image_prompt": "",
+             "metadata": {"mode": "dialogue", "cast": ["Amelia"],
+                          "setting": "a sunny playground, a scraped knee at frame edge"}},
+            {"id": 2, "title": "The alarm", "image_prompt": "x" * 30, "metadata": {}},
+            {"id": 3, "title": "The Body Fixed Itself", "image_prompt": "",
+             "metadata": {"mode": "dialogue", "cast": ["Amelia"],
+                          "setting": "a sunny bench near the playground"}},
+        ]
+
+    def test_acted_scenes_contribute_cast_and_setting_not_their_title(self):
+        from pipeline import cover
+        aspects = cover._extract_scene_aspects(self._mixed())
+        self.assertIn("Amelia — a sunny playground", aspects)
+        # An acted scene's title paraphrases the film title — the model paints
+        # whatever words reach it, so the title must never be the fallback.
+        self.assertNotIn("Why the Cut Stops Bleeding", aspects)
+
+    def test_poisoned_prompt_regression(self):
+        # The real failure: start_generation back-filled acted scenes' empty
+        # image prompts with "style. film title", and the cover painted it.
+        import webapp.backend.main as backend
+        row = {"id": 1, "title": "S", "image_prompt": "",
+               "video_prompt": "[REFERENCE USE]\nassembled",
+               "metadata": {"mode": "dialogue", "lines": [{"speaker": "A", "text": "hi"}]}}
+        # mirror the start_generation list comprehension's per-row logic
+        acted = backend.performance_mode.is_performance_mode(row["metadata"]["mode"])
+        image_prompt = ("" if acted else
+                        backend._apply_style_prefix("Cartoons", row.get("image_prompt") or "Film Title"))
+        self.assertEqual(image_prompt, "")
+
+
+class StartGenerationActedTests(unittest.TestCase):
+    """start_generation must not back-fill acted scenes with the film title."""
+
+    def setUp(self):
+        import app as gapp
+        import webapp.backend.main as backend
+        self.backend = backend
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-acted-start-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"; self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"; cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            patch = mock.patch.object(target, attr, value)
+            patch.start(); self.addCleanup(patch.stop)
+        db = mock.patch.dict(os.environ,
+                             {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start(); self.addCleanup(db.stop)
+
+    def test_acted_scene_keeps_empty_image_prompt_through_approval(self):
+        import app as gapp
+        from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+        wd = self.output_dir / "film-20260810-000000"; wd.mkdir()
+        job_id = job_id_from_work_dir(wd)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(job_id, wd, "Film", config={})
+            store.upsert_scenes(job_id, [
+                {"id": 1, "title": "Talk", "image_prompt": "", "narration": "hi",
+                 "video_prompt": "[REFERENCE USE]\nassembled",
+                 "metadata": {"mode": "dialogue", "cast": ["A"],
+                              "lines": [{"speaker": "A", "text": "hi"}]}},
+                {"id": 2, "title": "Open", "image_prompt": "a frame",
+                 "video_prompt": "a move", "narration": "words", "metadata": {}},
+            ])
+        finally:
+            store.close()
+        with mock.patch.object(gapp, "_launch_generation_job", return_value={}):
+            self.backend.start_generation(self.backend.GenerateBody(
+                job_id=job_id, work_dir=str(wd), video_title="My Film Title"))
+        scenes = json.loads((wd / "script.json").read_text())
+        by_id = {s["id"]: s for s in scenes}
+        self.assertEqual(by_id[1]["image_prompt"], "")            # acted: untouched
+        self.assertIn("[REFERENCE USE]", by_id[1]["video_prompt"])
+        self.assertNotIn("My Film Title", by_id[1]["video_prompt"])
+        self.assertIn("a frame", by_id[2]["image_prompt"])        # narrated: as before
