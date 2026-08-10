@@ -1539,3 +1539,22 @@ class GenericReferenceTests(unittest.TestCase):
             self.gapp.fetch_visual_from_url(self.wd, vid, "https://example.com/x.png")
         vis = self.gapp.read_script_visuals(self.wd)[0]
         self.assertEqual(vis["ref_image"], f"{vid}.png")
+
+
+class CriticActedTests(ActedSceneEditingTests):
+    """The critic judges acted scenes by their spoken words, and never rewrites
+    their prose fields — the dialogue is the scene."""
+
+    def test_critic_rewrite_of_an_acted_scene_applies_title_only(self):
+        before = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.backend._apply_critic_ops(self.job_id, {
+            "rewrites": [{"id": 1, "title": "Better Title",
+                          "narration": "Prose the critic invented.",
+                          "video_prompt": "a generic motion prompt",
+                          "image_prompt": "a painted frame"}],
+            "deletes": [], "inserts": [], "order": None})
+        after = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual(after["title"], "Better Title")
+        self.assertEqual(after["narration"], before["narration"])
+        self.assertEqual(after["video_prompt"], before["video_prompt"])
+        self.assertEqual([l["text"] for l in after["lines"]], ["You came."])

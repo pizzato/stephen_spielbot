@@ -194,6 +194,7 @@ export const api = {
   addScene: (jobId, afterSceneId) => req('POST', `/jobs/${jobId}/scenes/add`, { after_scene_id: afterSceneId || 0 }),
   deleteScene: (jobId, sceneId) => req('DELETE', `/jobs/${jobId}/scenes/${sceneId}`),
   reorderScenes: (jobId, order) => req('POST', `/jobs/${jobId}/scenes/reorder`, { order }),
+  removeScenePreview: (jobId, sceneId) => req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-remove`),
   regenPreview: (jobId, sceneId, resolution, style, instruction) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}&instruction=${encodeURIComponent(instruction || '')}`),
   generateAllPreviews: (jobId, resolution, style) =>

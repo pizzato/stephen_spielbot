@@ -2541,6 +2541,23 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
             cur = by_id.get(rw["id"])
             if not cur:
                 continue
+            acted = performance_mode.is_performance_mode(
+                (cur.get("metadata") or {}).get("mode"))
+            if acted:
+                # The dialogue is the scene: prose rewrites would desync the
+                # narration mirror and the assembled prompt from the lines.
+                # Titles are fair game; the rest is the acted editor's job.
+                if not rw.get("title") or rw["title"] == cur.get("title"):
+                    continue
+                store.upsert_scene(
+                    job_id, rw["id"], title=rw["title"],
+                    image_prompt=cur.get("image_prompt") or "",
+                    video_prompt=cur.get("video_prompt") or "",
+                    narration=cur.get("narration") or "",
+                    metadata=cur.get("metadata") or {},
+                )
+                applied_rewrites += 1
+                continue
             store.upsert_scene(
                 job_id, rw["id"],
                 title=rw.get("title") or cur.get("title") or "",
@@ -2666,10 +2683,20 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
         if len(rows) < 2:
             converged = True
             break
-        scene_rows_min = [{"id": int(r["id"]), "title": r.get("title") or "",
-                           "narration": r.get("narration") or "",
-                           "image_prompt": r.get("image_prompt") or "",
-                           "video_prompt": r.get("video_prompt") or ""} for r in rows]
+        def _critic_view(r) -> dict:
+            # An acted scene's narration IS its spoken lines, which is exactly
+            # what the critic should judge for flow and repetition. Its
+            # video_prompt is the assembled H3 text — noise to the critic, and
+            # a rewrite of it would desync the prompt from the lines.
+            acted = performance_mode.is_performance_mode(
+                (r.get("metadata") or {}).get("mode"))
+            return {"id": int(r["id"]), "title": r.get("title") or "",
+                    "narration": r.get("narration") or "",
+                    "image_prompt": "" if acted else (r.get("image_prompt") or ""),
+                    "video_prompt": ("(acted scene — the characters speak this "
+                                     "on camera; visuals come from references)"
+                                     if acted else (r.get("video_prompt") or ""))}
+        scene_rows_min = [_critic_view(r) for r in rows]
         # Deterministic backstop: hand the critic any mechanically-detected
         # near-duplicate narrations so it cannot overlook them (e.g. a pair
         # involving the protected final scene).
@@ -3710,6 +3737,33 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
     wd = gapp._job_work_dir(job_id)
     hist = image_history.history(wd, int(scene_id)) if wd else None
     return {"ok": True, "preview_path": str(out), "history": hist}
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview-remove")
+def remove_scene_preview(job_id: str, scene_id: int) -> dict:
+    """Delete a scene's current first-frame image. For an acted scene that
+    stops it riding as the take's opening-composition reference; kept history
+    versions survive, so re-selecting one brings it back."""
+    wd = _job_wd_or_404(job_id)
+    sid = int(scene_id)
+    for f in (wd / f"scene_{sid:02d}_preview.png", wd / f"scene_{sid:02d}_first_frame.png"):
+        f.unlink(missing_ok=True)
+    store = DurableStore.default()
+    try:
+        row = store.get_scene(job_id, sid) or {}
+        if row:
+            store.upsert_scene(job_id, sid,
+                               title=row.get("title") or "",
+                               image_prompt=row.get("image_prompt") or "",
+                               video_prompt=row.get("video_prompt") or "",
+                               narration=row.get("narration") or "",
+                               preview_path="",
+                               metadata=dict(row.get("metadata") or {}))
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    gapp._persist_script_snapshot(wd, rows)
+    return {"ok": True}
 
 
 @api.post("/api/jobs/{job_id}/previews")

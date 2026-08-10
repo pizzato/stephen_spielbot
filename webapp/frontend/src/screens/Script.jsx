@@ -1232,7 +1232,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </div>
                   <div className="row gap-10 row--wrap mt-16">
                     {(d.cast || []).map((n, i) => {
-                      const c = characters.find((x) => x.name === n)
+                      const c = characters.find((x) => x.name === n) || castCatalogue.find((x) => x.name === n)
                       return (
                         <div key={n} className="stack gap-4" style={{ width: 86, textAlign: 'center' }}>
                           {c?.image_url
@@ -1277,6 +1277,16 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   onRegen={regen} chips={REGEN_CHIPS.image} />
                 <Button variant="ghost" block icon="wand-magic-sparkles" disabled={!d.has_preview || !!busy}
                   onClick={() => { setInpaintErr(''); setInpaint(true) }}>Edit image</Button>
+                {isActedMode(d.mode) && d.has_preview && (
+                  <Button variant="ghost" block icon="trash-can" disabled={!!busy}
+                    onClick={async () => {
+                      setError('')
+                      try {
+                        await api.removeScenePreview(job.job_id, d.id)
+                        setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, has_preview: false, preview_path: '' } : x)))
+                      } catch (e) { setError(e.message) }
+                    }}>Remove first frame</Button>
+                )}
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
                   onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
               </Card>
