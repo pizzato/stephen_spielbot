@@ -12754,4 +12754,20 @@ def health() -> dict:
 
 if FRONTEND_DIST.exists():
     from fastapi.staticfiles import StaticFiles
-    api.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+
+    class _SpaStaticFiles(StaticFiles):
+        """index.html must never be cached: it is the pointer to the hashed
+        bundle, and a browser holding a stale copy keeps loading last week's
+        app after every deploy ("do you need to restart the web server?").
+        The hashed assets themselves are immutable and can cache forever."""
+
+        def file_response(self, full_path, stat_result, scope, status_code=200):
+            resp = super().file_response(full_path, stat_result, scope, status_code)
+            name = str(full_path)
+            if name.endswith((".html", "/")) or name.endswith("index.html"):
+                resp.headers["Cache-Control"] = "no-cache"
+            elif "/assets/" in name.replace("\\", "/"):
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return resp
+
+    api.mount("/", _SpaStaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
