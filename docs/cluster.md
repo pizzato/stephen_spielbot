@@ -2,8 +2,8 @@
 
 Workers are configured in the [single config file](configuration.md) — there is no
 separate `cluster.conf`. You list your render workers under `comfy_workers`;
-`make install` deploys the containers over SSH and derives `tts_workers` and
-`echomimic_workers` from them automatically.
+`make install` deploys the containers over SSH and derives `tts_workers` from them
+automatically.
 
 ```yaml
 # ~/.config/video-generator/config.yaml
@@ -13,9 +13,6 @@ comfy_workers:           # you set these
 tts_workers:             # set by make install → containerized F5-TTS/Chatterbox
   - http://s1:8189
   - http://s2:8189
-echomimic_workers:       # set by make install → talking-head (dialogue scenes)
-  - http://s1:8190
-  - http://s2:8190
 ```
 
 Scenes are distributed across the workers in parallel, so adding a machine shortens
@@ -44,13 +41,11 @@ Each worker machine runs the same stack, sharing that machine's GPU(s):
 |---|---|---|
 | `comfyui` | 8188 | ComfyUI + PyTorch (LTX 2.3 / ACE-Step / FLUX — all native nodes) |
 | `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server |
-| `echomimic` | 8190 | EchoMimic-V3 talking-head server for dialogue scenes |
 | `autoheal` | — | Restarts any container whose GPU-aware healthcheck fails |
 
 ComfyUI models (~49 GB) are **not** baked into the images — they live on the host and are
-mounted in, so images stay small and rebuild fast. The EchoMimic weights (~27 GB) live in
-a named Docker volume, fetched from Hugging Face on first use; Chatterbox weights (~3.5 GB)
-land in the TTS container's Hugging Face cache, pre-warmed by `make install`.
+mounted in, so images stay small and rebuild fast. Chatterbox weights (~3.5 GB) land in
+the TTS container's Hugging Face cache, pre-warmed by `make install`.
 
 Full detail: [`docker/README.md`](https://github.com/pizzato/stephen_spielbot/blob/main/docker/README.md).
 

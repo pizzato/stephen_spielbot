@@ -19,6 +19,7 @@ import yaml
 
 import app
 import webapp.backend.main as backend
+from scriptstub import stub_script
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir
 
 
@@ -72,7 +73,10 @@ class TempConfigCase(unittest.TestCase):
             p = mock.patch.object(target, attr, value)
             p.start()
             self.addCleanup(p.stop)
-        db = mock.patch.dict(os.environ, {"VIDEO_GEN_DB": str(tmp / "orchestrator.sqlite3")})
+        # SPIELBOT_ORCHESTRATOR_DB, not VIDEO_GEN_DB — the wrong name meant every
+        # test through this base wrote its jobs into the REAL orchestrator DB.
+        db = mock.patch.dict(
+            os.environ, {"SPIELBOT_ORCHESTRATOR_DB": str(tmp / "orchestrator.sqlite3")})
         db.start()
         self.addCleanup(db.stop)
 
@@ -105,19 +109,17 @@ class MigrationTests(TempConfigCase):
         self.assertEqual(cfg["default_video_negative_prompt"], "")
         self.assertEqual(cfg["script_avoid"], "")
 
-    def test_script_mode_normalizes_and_mirrors(self):
+    def test_music_enabled_defaults_on_and_mirrors(self):
         self.write_config({
-            "styles": [_style("A"), _style("B", script_mode="story"),
-                       _style("C", script_mode="bogus")],
+            "styles": [_style("A"), _style("B", music_enabled=False)],
             "default_style": "B",
         })
         cfg = app.load_config()
         by_name = {s["name"]: s for s in cfg["styles"]}
-        self.assertEqual(by_name["A"]["script_mode"], "classic")   # absent → default
-        self.assertEqual(by_name["B"]["script_mode"], "story")     # preserved
-        self.assertEqual(by_name["C"]["script_mode"], "classic")   # invalid → classic
+        self.assertTrue(by_name["A"]["music_enabled"])     # absent → scored
+        self.assertFalse(by_name["B"]["music_enabled"])    # preserved
         # flat key mirrors the default style (B)
-        self.assertEqual(cfg["default_script_mode"], "story")
+        self.assertFalse(cfg["music_enabled"])
 
     def test_install_seeded_worker_lists_still_count_as_fresh(self):
         self.write_config({"comfy_workers": ["http://s1:8188"], "tts_workers": ["s1"]})
@@ -488,19 +490,18 @@ class QueueItemStyleTests(TempConfigCase):
         def fake_update(item_id, **kw):
             updates.setdefault(item_id, {}).update(kw)
 
-        with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "B-vision", [])) as gen, \
+        with stub_script(scenes, music="calm piano", style="B-vision") as (draft, divide), \
              mock.patch.object(backend.yt, "load_queue", return_value=[dict(item)]), \
              mock.patch.object(backend.yt, "update_queue_item", side_effect=fake_update), \
              mock.patch.object(backend.gapp, "_launch_generation_job") as launch:
             out = backend._start_queue_item(dict(item))
 
-        # The LLM prompt carried style B's extra instructions, visual style and
-        # motion/video style.
-        topic_arg, _n, style_hint = gen.call_args[0][:3]
+        # The story prompt carried style B's extra instructions and visuals,
+        # and the division carried its motion style.
+        topic_arg, _n = draft.call_args[0][:2]
         self.assertIn("Speak like B.", topic_arg)
-        self.assertEqual(style_hint, "B-vision")
-        self.assertEqual(gen.call_args.kwargs["video_style_hint"], "B motion")
+        self.assertEqual(draft.call_args.kwargs["style_hint"], "B-vision")
+        self.assertEqual(divide.call_args.kwargs["video_style_hint"], "B motion")
         # The render launched straight away and its job_config carries the
         # profile: style B's name, voice and resolution drive the worker.
         launch.assert_called_once()
@@ -563,8 +564,7 @@ class DescriptionSuffixTests(TempConfigCase):
         self.write_config({"styles": [_style("A")], "default_style": "A"})
         scenes = [backend.Scene(id=1, title="One", image_prompt="i", video_prompt="v",
                                 narration="n")]
-        with mock.patch.object(backend, "generate_script",
-                               return_value=(scenes, "calm piano", "A visual", [])), \
+        with stub_script(scenes, music="calm piano", style="A visual"), \
              mock.patch.object(backend.threading, "Thread") as Thread:
             backend._do_script_generate(backend.GenerateScriptBody(
                 video_title="Threaded", topic="Threaded", n_scenes=1))
@@ -1148,15 +1148,36 @@ class CharacterTests(TempConfigCase):
         # An entry already carrying a scope is never re-scoped by the migration.
         self.assertEqual(cfg["characters"][0]["style"], "Villain")
 
-    def test_no_style_imposes_no_characters(self):
+    def test_no_style_imposes_no_style_cast_but_keeps_the_global_pool(self):
+        # Global characters belong to the library, not to a style: asking for
+        # one by name in experiment mode must reuse it, not invent a duplicate
+        # with a fresh look and a randomly cast voice.
         self.write_config({
-            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"}],
+            "characters": [{"id": "char_bob", "name": "Bob", "description": "a man"},
+                           {"id": "char_vil", "name": "Villain", "description": "bad",
+                            "style": "Hero"}],
             "styles": [_style("Hero")],
             "default_style": "Hero",
             "characters_migrated_v2": True, "characters_scoped_v3": True,
         })
         cfg = app.load_config()
-        self.assertEqual(app._style_characters(cfg, app.NO_STYLE), [])
+        visible = [c["name"] for c in app._style_characters(cfg, app.NO_STYLE)]
+        self.assertEqual(visible, ["Bob"])
+
+    def test_no_style_reuses_a_global_character_instead_of_duplicating_it(self):
+        self.write_config({
+            "characters": [{"id": "char_k", "name": "Kinho", "description": "a man",
+                            "enabled": True}],
+            "styles": [_style("Hero")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        cfg = app.load_config()
+        kept = app._filter_identified_against_style(
+            [{"name": "Kinho", "description": "reinvented"},
+             {"name": "Newcomer", "description": "genuinely new"}],
+            cfg, app.NO_STYLE)
+        self.assertEqual([c["name"] for c in kept], ["Newcomer"])
 
     def test_character_sheet_lists_enabled_described_only(self):
         sheet = app._character_sheet([

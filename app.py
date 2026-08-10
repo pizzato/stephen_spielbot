@@ -148,6 +148,9 @@ _DEFAULT_SIZE_PRESETS = {
 
 
 DEFAULT_CFG = {
+    # Score the film at all. Off means no music is generated and the final cut
+    # IS the concatenation (acted scenes already carry their own sound).
+    "music_enabled": True,
     "music_vol": 18,
     "voice_vol": 100,
     "ambient_vol": 0,
@@ -188,6 +191,9 @@ DEFAULT_CFG = {
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
     # model animates each scene. Default = the incumbent LTX 2.3 path.
     "default_video_engine": "ltx23",
+    # Ref2VA model for acted scenes: portraits
+    # and dialogue instead of a first frame. Narrated films never use it.
+    "default_reference_engine": "minimax-h3-ref-w4a8",
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,
@@ -211,10 +217,8 @@ DEFAULT_CFG = {
     # Worker lists — edited from the Settings screen, stored in config.yaml.
     # comfy_workers: ComfyUI URLs (image/video/music). One job at a time each.
     # tts_workers:   hostnames for F5-TTS narration.
-    # echomimic_workers: EchoMimic-V3 talking-head URLs (dialogue/performance scenes).
     "comfy_workers": [],
     "tts_workers":   [],
-    "echomimic_workers": [],
     # UI worker reservation (issue #98): while the web UI is actively used, the
     # render holds one comfy_worker idle for cover/preview jobs; it rejoins the
     # render pool once the UI has been idle this many seconds.
@@ -240,11 +244,6 @@ DEFAULT_CFG = {
     # word budget is minutes × cadence, divided into 10–15 s scenes
     # (pipeline/cadence.py). 0 = derive the length from the legacy n_scenes.
     "default_video_minutes": 0.0,
-    # How scripts are written: "classic" generates scenes directly in batches;
-    # "story" drafts a full prose story first (outline → chapters → critique),
-    # then divides it into scenes (see pipeline/story.py). Mirrors the default
-    # style like every other STYLE_FIELD_TO_FLAT entry.
-    "default_script_mode": "classic",
     # Burn the cover into the head of the final video when a render finishes
     # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
     # and pick their own frame. Held for _seconds (1s by default; a single
@@ -408,8 +407,6 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Target video length in minutes (0 = derive from legacy n_scenes)
     "video_minutes":        "default_video_minutes",
-    # Script generation mode: "classic" (direct scenes) or "story" (story-first)
-    "script_mode":          "default_script_mode",
     # Burn the cover into the head of the final video after each render
     # ("none" | "image" | "text") — Shorts pick their own frame, not the
     # uploaded thumbnail — and how long that cover is held (seconds)
@@ -434,6 +431,8 @@ STYLE_FIELD_TO_FLAT = {
     "video_engine":         "default_video_engine",
     # Optional steps override for the MiniMax engines (0 = engine default)
     "video_steps":          "default_video_steps",
+    # Ref2VA engine for performance films — see pipeline/engines.py
+    "reference_engine":     "default_reference_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
     "tts_engine":           "default_tts_engine",
     # Narration language (multilingual TTS engines only)
@@ -450,6 +449,7 @@ STYLE_FIELD_TO_FLAT = {
     "second_pass_cfg":      "second_pass_cfg",
     "second_pass_steps":    "second_pass_steps",
     # Narrator & audio mix
+    "music_enabled":        "music_enabled",
     "music_vol":            "music_vol",
     "voice_vol":            "voice_vol",
     "ambient_vol":          "ambient_vol",
@@ -793,9 +793,9 @@ def _norm_video_minutes(value) -> float:
     return 0.0 if v <= 0 else round(max(0.25, min(cadence.MAX_MINUTES, v)), 2)
 
 
-def _norm_script_mode(value) -> str:
-    """Coerce a script-generation mode to "classic" or "story"."""
-    return "story" if value == "story" else "classic"
+def _norm_reference_engine(value) -> str:
+    """Coerce a Ref2VA engine key (performance films) to a known one."""
+    return engines.resolve_reference({}, value)["key"]
 
 
 def _norm_first_frame_cover(value) -> str:
@@ -949,12 +949,12 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
+        _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
         _coerce(row, "voice_cadence_wpm", _norm_voice_cadence_wpm)
         _coerce(row, "video_minutes", _norm_video_minutes)
-        _coerce(row, "script_mode", _norm_script_mode)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
         _coerce(row, "cover_typography", _norm_cover_typography)
@@ -2223,11 +2223,16 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
     Every style automatically inherits the GLOBAL pool (characters with no
     "style" scope). A character scoped to a style is visible to that style and
     every style below it in the hierarchy — children inherit the parent's cast.
-    An empty/unknown name resolves like style_settings (the default style);
-    the "(none)" experiment style imposes nothing, so it sees no characters."""
+    An empty/unknown name resolves like style_settings (the default style).
+
+    The "(none)" experiment style imposes no STYLE cast, but it still sees the
+    global pool: those characters belong to the library, not to a style, so
+    asking for one by name in experiment mode must reuse its look and voice
+    rather than inventing a duplicate."""
     requested = (style_name or "").strip()
     if requested == NO_STYLE:
-        return []
+        return [c for c in (cfg.get("characters") or [])
+                if isinstance(c, dict) and not c.get("style")]
     styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
     target = next((s for s in styles if s.get("name") == requested), None)
     if target is None:
@@ -2313,6 +2318,405 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
     work dir rather than the global characters directory."""
     name = Path(str(filename or "")).name
     return _script_characters_dir(work_dir) / name if name else None
+
+
+# ── Per-script visuals: locations and wardrobe ───────────────────────────────
+# A performance film drifts between scenes because nothing but words pins the
+# place or the clothes. A "visual" is a reference image with a job: a LOCATION
+# the scene happens in, or WARDROBE a character wears. They ride the same
+# <Picture N> slots as the cast (H3 takes nine), after it.
+# location = the space; wardrobe = someone's clothes; image = any other
+# reference the model should match (a prop, a vehicle, a logo…); video = the
+# same, ingested from a clip — its extracted frame is what feeds the slot.
+VISUAL_KINDS = ("location", "wardrobe", "image", "video")
+
+
+def _assets_dir() -> Path:
+    d = CONFIG_FILE.parent / "assets"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _asset_image_path(filename: str) -> Path | None:
+    name = Path(str(filename or "")).name
+    return _assets_dir() / name if name else None
+
+
+def _norm_assets(raw) -> list[dict]:
+    """Catalogue assets: the reusable half of the visual library.
+
+    Characters are the other kind and keep their own list — they carry voices,
+    aliases and casting rules these do not. Scoping matches theirs exactly: no
+    style = the global pool, a style = that style and its children."""
+    out = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        kind = str(item.get("kind") or "location").strip().lower()
+        out.append({
+            "id": str(item.get("id") or f"ast_{uuid.uuid4().hex[:8]}"),
+            "name": name,
+            "kind": kind if kind in VISUAL_KINDS else "location",
+            "description": str(item.get("description") or "").strip(),
+            "character": str(item.get("character") or "").strip(),
+            "ref_image": str(item.get("ref_image") or "").strip(),
+            "style": str(item.get("style") or "").strip(),
+            "enabled": bool(item.get("enabled", True)),
+        })
+    return out
+
+
+def style_assets(cfg: dict, style_name: str = "") -> list[dict]:
+    """Catalogue assets visible to a style — same rule as _style_characters."""
+    requested = (style_name or "").strip()
+    assets = _norm_assets(cfg.get("assets"))
+    if requested == NO_STYLE:
+        return [a for a in assets if not a.get("style")]
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None:
+        target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
+                      styles[0] if styles else None)
+    visible = {str(s.get("name") or "") for s in _style_lineage(styles, target)} if target else set()
+    return [a for a in assets if not a.get("style") or a.get("style") in visible]
+
+
+def save_assets(assets) -> dict:
+    cfg = load_config()
+    cfg["assets"] = _norm_assets(assets)
+    save_config(cfg)
+    return load_config()
+
+
+def generate_asset_image(asset_id: str, style_name: str = "", extra_prompt: str = "") -> dict:
+    """Paint a catalogue asset's reference image (same framing rules as a
+    per-script one: the space or the garments, never people)."""
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    if asset["kind"] == "wardrobe":
+        subject, framing = (f"{asset['name']}: {asset.get('description') or 'an outfit'}",
+                            "the garments alone laid flat on a plain neutral background, "
+                            "product photography, empty clothes with nobody wearing them, "
+                            "no person, no model, no mannequin, no body parts")
+    else:
+        subject, framing = (f"{asset['name']}: {asset.get('description') or 'a location'}",
+                            "wide establishing shot of the empty space, no people, no text")
+    prompt = ", ".join(x for x in (subject, framing, (extra_prompt or "").strip()) if x)
+    combined = _compose_visual_style("", cfg, style_name or asset.get("style") or "")
+    full = f"{combined}. {prompt}" if combined else prompt
+    engine = engines.resolve(cfg, style_settings(cfg, style_name or asset.get("style") or "")
+                             .get("image_engine"))
+    out = _assets_dir() / f"{asset['id']}.png"
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        pool.release(url)
+    asset["ref_image"] = out.name
+    return save_assets(assets)
+
+
+def set_asset_image(asset_id: str, raw: bytes) -> dict:
+    """Store an uploaded photo as a catalogue asset's reference image."""
+    from PIL import Image
+    cfg = load_config()
+    assets = _norm_assets(cfg.get("assets"))
+    asset = next((a for a in assets if a.get("id") == asset_id), None)
+    if asset is None:
+        raise ValueError(f"Unknown asset {asset_id!r}.")
+    out = _assets_dir() / f"{asset['id']}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    asset["ref_image"] = out.name
+    return save_assets(assets)
+
+
+def _script_visuals_path(work_dir: Path) -> Path:
+    return Path(work_dir) / "visuals.json"
+
+
+def _script_visuals_dir(work_dir: Path) -> Path:
+    return Path(work_dir) / "visuals"
+
+
+def _norm_visuals(raw) -> list[dict]:
+    out: list[dict] = []
+    for item in raw or []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        kind = str(item.get("kind") or "location").strip().lower()
+        scenes = []
+        for sid in item.get("scenes") or []:
+            try:
+                scenes.append(int(sid))
+            except (TypeError, ValueError):
+                continue
+        out.append({
+            "id": str(item.get("id") or f"vis_{uuid.uuid4().hex[:8]}"),
+            "name": name,
+            "kind": kind if kind in VISUAL_KINDS else "location",
+            "description": str(item.get("description") or "").strip(),
+            # Wardrobe belongs to someone; a location belongs to the scene.
+            "character": str(item.get("character") or "").strip(),
+            "ref_image": str(item.get("ref_image") or "").strip(),
+            # Empty = every scene. The common case (one studio for the whole
+            # film) then needs no per-scene bookkeeping at all.
+            "scenes": scenes,
+            "enabled": bool(item.get("enabled", True)),
+        })
+    return out
+
+
+def read_script_visuals(work_dir) -> list[dict]:
+    try:
+        return _norm_visuals(json.loads(_script_visuals_path(Path(work_dir)).read_text()))
+    except (OSError, ValueError):
+        return []
+
+
+def write_script_visuals(work_dir, visuals) -> list[dict]:
+    norm = _norm_visuals(visuals)
+    path = _script_visuals_path(Path(work_dir))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(norm, indent=2))
+    return norm
+
+
+def add_script_visual(work_dir, name: str = "", kind: str = "location",
+                      description: str = "", character: str = "") -> list[dict]:
+    """Append a visual; blank name gets a placeholder so the row survives
+    normalization and shows as an editable card (same rule as characters)."""
+    visuals = read_script_visuals(work_dir)
+    placeholder = {"location": "New location", "wardrobe": "New outfit",
+                   "image": "New reference", "video": "New video reference"}
+    visuals.append({"name": name.strip() or placeholder.get(kind, "New reference"),
+                    "kind": kind, "description": description, "character": character})
+    return write_script_visuals(work_dir, visuals)
+
+
+def update_script_visual(work_dir, visual_id: str, **fields) -> list[dict]:
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    for key in ("name", "kind", "description", "character", "scenes", "enabled"):
+        if key in fields and fields[key] is not None:
+            vis[key] = fields[key]
+    return write_script_visuals(work_dir, visuals)
+
+
+def delete_script_visual(work_dir, visual_id: str) -> list[dict]:
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis and vis.get("ref_image"):
+        img = _script_visual_image_path(work_dir, vis["ref_image"])
+        if img and img.exists():
+            img.unlink(missing_ok=True)
+    return write_script_visuals(work_dir, [v for v in visuals if v.get("id") != visual_id])
+
+
+_VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+
+
+def set_script_visual_media(work_dir, visual_id: str, raw: bytes,
+                            filename: str = "") -> list[dict]:
+    """Store uploaded bytes — image OR video — as a visual's reference.
+
+    A video is kept beside the visual and a representative frame (1s in, where
+    fades have usually resolved) is extracted as the reference image, since the
+    picture slots feed the model stills."""
+    if Path(str(filename or "")).suffix.lower() not in _VIDEO_EXTS:
+        return set_script_visual_image(work_dir, visual_id, raw)
+    import subprocess
+
+    from pipeline.assembler import _resolve_media_tool
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    src = d / f"{visual_id}{Path(filename).suffix.lower()}"
+    src.write_bytes(raw)
+    out = d / f"{visual_id}.png"
+    ffmpeg = _resolve_media_tool("ffmpeg")
+    proc = subprocess.run([ffmpeg, "-y", "-ss", "1", "-i", str(src),
+                          "-frames:v", "1", str(out)],
+                         capture_output=True, text=True)
+    if proc.returncode != 0 or not out.exists():
+        # A clip shorter than a second: take its first frame instead.
+        proc = subprocess.run([ffmpeg, "-y", "-i", str(src),
+                              "-frames:v", "1", str(out)],
+                             capture_output=True, text=True)
+    if proc.returncode != 0 or not out.exists():
+        src.unlink(missing_ok=True)
+        raise ValueError("Could not read that video (ffmpeg failed to extract a frame).")
+    vis["ref_image"] = out.name
+    vis["source_video"] = src.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def fetch_visual_from_url(work_dir, visual_id: str, url: str) -> list[dict]:
+    """Pull a visual's reference from a URL: a direct image or video file, or a
+    web page — where the page's og:image / og:video is what gets fetched."""
+    import re as _re
+    import urllib.request
+
+    url = (url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError("Enter an http(s) URL.")
+
+    def _get(u: str, cap: int) -> tuple[bytes, str]:
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (Spielbot)"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            data = resp.read(cap + 1)
+        if len(data) > cap:
+            raise ValueError(f"That file is over the {cap // (1024*1024)} MB limit.")
+        return data, ctype
+
+    data, ctype = _get(url, 200 * 1024 * 1024)
+    if ctype.startswith("text/html"):
+        html = data[:512 * 1024].decode("utf-8", "replace")
+        m = (_re.search(r'property=["\']og:video["\'][^>]*content=["\']([^"\']+)', html)
+             or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:video["\']', html)
+             or _re.search(r'property=["\']og:image["\'][^>]*content=["\']([^"\']+)', html)
+             or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html))
+        if not m:
+            raise ValueError("No image or video found on that page (no og:image/og:video).")
+        url = m.group(1)
+        data, ctype = _get(url, 200 * 1024 * 1024)
+
+    name = Path(url.split("?")[0]).name or "reference"
+    if ctype.startswith("video/") and Path(name).suffix.lower() not in _VIDEO_EXTS:
+        name += ".mp4"
+    return set_script_visual_media(work_dir, visual_id, data, filename=name)
+
+
+def _script_visual_image_path(work_dir, filename: str) -> Path | None:
+    name = Path(str(filename or "")).name
+    return _script_visuals_dir(Path(work_dir)) / name if name else None
+
+
+def generate_script_visual_image(work_dir, visual_id: str, style_name: str,
+                                 extra_prompt: str = "") -> list[dict]:
+    """Render a visual's reference image in the film's own look.
+
+    A location is painted as an empty establishing shot — no people — so it
+    conditions the SPACE rather than smuggling in a second cast. Wardrobe is
+    painted as the garments themselves for the same reason.
+    """
+    work_dir = Path(work_dir)
+    cfg = load_config()
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+
+    if vis["kind"] == "wardrobe":
+        subject = f"{vis['name']}: {vis.get('description') or 'an outfit'}"
+        framing = ("the garments alone laid flat on a plain neutral background, "
+                   "product photography, empty clothes with nobody wearing them, "
+                   "no person, no model, no mannequin, no body parts")
+    else:
+        subject = f"{vis['name']}: {vis.get('description') or 'a location'}"
+        framing = ("wide establishing shot of the empty space, no people, "
+                   "no text, natural lighting")
+    parts = [p for p in (subject, framing, (extra_prompt or "").strip()) if p]
+    prompt = ", ".join(parts)
+    combined = _compose_visual_style("", cfg, style_name)
+    full = f"{combined}. {prompt}" if combined else prompt
+
+    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{vis['id']}.png"
+    urls = _preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No cluster workers reachable to generate this image.")
+    pool = WorkerPool(urls)
+    url = pool.acquire()
+    try:
+        generate_with_engine(engine, full, out, width=1024, height=1024, comfy_url=url)
+    finally:
+        pool.release(url)
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def set_script_visual_image(work_dir, visual_id: str, raw: bytes) -> list[dict]:
+    """Store uploaded bytes as a visual's reference image.
+
+    A real photograph of the actual room or garment beats anything painted —
+    generating is the fallback when you do not have one, not the only way in."""
+    from PIL import Image
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    out = d / f"{visual_id}.png"
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(out, "PNG")
+    except Exception as e:
+        raise ValueError(f"Could not read that image: {e}")
+    vis["ref_image"] = out.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
+                  cfg: dict | None = None, style_name: str = "") -> list[dict]:
+    """The visuals that apply to one scene, in slot order: locations first
+    (the space), then wardrobe. A visual with no scene list applies to every
+    scene; wardrobe only applies when its character is in the scene.
+
+    The film's own visuals come first and shadow a catalogue asset of the same
+    name — same precedence as characters, so a film can override the shared
+    studio without editing the catalogue."""
+    names = {str(n).strip().lower() for n in (cast or [])}
+    own = read_script_visuals(work_dir)
+    taken = {v["name"].strip().lower() for v in own}
+    catalogue = [
+        {**a, "scenes": []}          # catalogue assets are not scene-scoped
+        for a in style_assets(cfg if cfg is not None else load_config(), style_name)
+        if a["name"].strip().lower() not in taken
+    ]
+    pool = own + catalogue
+    out = []
+    for kind in ("location", "image", "video", "wardrobe"):
+        for v in pool:
+            if not v.get("enabled", True) or v["kind"] != kind:
+                continue
+            if v["scenes"] and int(scene_id) not in v["scenes"]:
+                continue
+            if kind == "wardrobe" and v.get("character") and \
+                    v["character"].strip().lower() not in names:
+                continue
+            img = (_script_visual_image_path(work_dir, v.get("ref_image"))
+                   if v in own else _asset_image_path(v.get("ref_image")))
+            if img and img.exists():
+                out.append({**v, "_ref_path": str(img)})
+    return out
 
 
 def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:
@@ -2825,255 +3229,124 @@ def _scene_establishing_frame(work_dir: Path, sid: int, row: dict,
     return None
 
 
-def _dialogue_resolvers(cfg: dict, work_dir: Path, narrator_ref: str | None,
-                        vid_width: int = 0, vid_height: int = 0):
-    """Build (voice_ref_for, make_still, prompt_for) for dialogue scenes.
+def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
+    """Build (portrait_for, voice_for) for performance scenes (Ref2VA).
 
-    Resolves a line's speaker to (a) a cloned-voice reference WAV — the character's
-    own voice, else the style narrator — (b) the still EchoMimic animates, and
-    (c) the text prompt guiding the animation.
+    A performance scene conditions on the CHARACTERS, not on a first frame:
+    each cast member's portrait becomes a <Picture N> reference and each
+    speaker's cast voice becomes an <Audio N> one. Both resolvers take a
+    character name and return a path or None — a missing portrait just drops
+    that reference (the model then invents the look), and a missing voice lets
+    it invent the voice.
 
-    The still is always the SCENE'S FIRST FRAME (scene_NN_preview/_first_frame at
-    the job resolution — same rule as the classic video path) so the character
-    speaks *in the scene*; the speaker's portrait is only a fallback when no frame
-    exists on disk. On multi-character frames the prompt names WHO is speaking so
-    the right lips move (best-effort text guidance).
-
-    Lives here (not resume_generation) so the web backend's per-scene dialogue
-    re-render can share it — importing resume_generation would clobber the
-    backend's logging config."""
-    try:
-        chars = json.loads((work_dir / "characters.json").read_text()) or []
-    except Exception:
-        chars = []
-    # Global catalogue characters are speakable too (the per-script cast wins on
-    # a name clash) — e.g. a recurring presenter defined once in Settings.
-    seen = {str(c.get("name", "")).strip().lower() for c in chars if isinstance(c, dict)}
-    for c in (cfg.get("characters") or []):
-        if isinstance(c, dict) and str(c.get("name", "")).strip().lower() not in seen:
-            chars.append(c)
+    Lives here (not resume_generation) so the backend's per-scene re-render can
+    share it — importing resume_generation would clobber its logging config."""
+    chars = _job_characters(cfg, style_name or cfg.get("style_name") or "", work_dir)
     voices = {v["name"]: v["path"] for v in (cfg.get("voices") or []) if v.get("name")}
-    global_char_dir = Path.home() / ".config" / "video-generator" / "characters"
 
-    def _find(speaker: str):
-        s = (speaker or "").strip().lower()
-        for c in chars:
-            names = [c.get("name", "")] + list(c.get("aliases") or [])
-            if any(s == str(n).strip().lower() for n in names if str(n).strip()):
-                return c
-        return None
-
-    def voice_ref_for(speaker: str):
-        c = _find(speaker)
-        if c and c.get("voice") and c["voice"] in voices:
-            p = Path(voices[c["voice"]])
-            if p.exists():
-                logger.info("  %s speaks with voice %r", speaker, c["voice"])
-                return p
-        logger.info("  %s speaks with the narrator voice", speaker)
-        return Path(narrator_ref) if narrator_ref and Path(narrator_ref).exists() else None
-
-    def _scene_frame(scene) -> Path | None:
-        """The scene's first frame at the job resolution, if present on disk."""
-        for ext in ("_preview.png", "_first_frame.png"):
-            p = work_dir / f"scene_{scene.id:02d}{ext}"
-            if p.exists() and vid_width and vid_height and _image_matches_resolution(p, vid_width, vid_height):
-                return p
-        return None
-
-    def _portrait(scene, speaker: str) -> Path | None:
-        c = _find(speaker)
-        ref = (c or {}).get("ref_image") or ""
-        for cand in ((work_dir / "characters" / ref, global_char_dir / ref) if ref else ()):
-            if cand.exists():
-                return cand
-        return None
-
-    def make_still(scene, speaker: str, idx: int) -> Path:
-        # Per-line SHOT still (speaker close-up in the scene setting, generated at
-        # render start from the line's "shot" framing) — the best lip-sync source:
-        # face large, correct speaker, in-scene. Then the scene frame, then portrait.
-        shot = work_dir / f"scene_{scene.id:02d}_line_{idx:02d}_shot.png"
-        if shot.exists() and vid_width and vid_height and _image_matches_resolution(shot, vid_width, vid_height):
-            logger.info("  scene %d line %d: talking still = shot close-up (%s)", scene.id, idx, shot.name)
-            return shot
-        frame = _scene_frame(scene)
-        if frame is not None:
-            logger.info("  scene %d: talking still = scene first frame (%s)", scene.id, frame.name)
-            return frame
-        portrait = _portrait(scene, speaker)
-        if portrait is not None:
-            logger.info("  scene %d: no scene frame at the job resolution — %s speaks on their portrait",
-                        scene.id, speaker)
-            return portrait
-        raise RuntimeError(
-            f"dialogue speaker {speaker!r} (scene {scene.id}) has no shot still, no scene first "
-            "frame at the job resolution, and no character portrait"
-        )
-
-    def prompt_for(scene, speaker: str) -> str:
-        """Text guidance for EchoMimic: name WHO is speaking so a multi-character
-        scene frame animates the right character's lips (best-effort — the model
-        is text-guided)."""
-        c = _find(speaker)
-        who = (c or {}).get("description") or speaker
-        return (
-            f"{speaker} ({who}) is speaking, with natural facial expressions and subtle head "
-            "movement. Any other characters present listen silently, mouths closed, without talking."
-        )
-
-    return voice_ref_for, make_still, prompt_for
-
-
-def generate_dialogue_shot_stills(job_id: str, style_name: str = "",
-                                  resolution: str = "",
-                                  worker_pool: WorkerPool | None = None) -> int:
-    """Render each dialogue line's per-shot still (speaker close-up, in-scene).
-
-    Dialogue lines may carry a "shot" framing (see the dialogue schema): a close
-    view of the speaker so the talking-head model has a large, clear face to
-    animate — lip-sync quality collapses when the speaker is small in the frame.
-    Writes scene_NN_line_MM_shot.png at the job resolution (the dialogue render
-    prefers it over the scene frame); skips shots already on disk at the right
-    size. Best-effort per shot: a failed still just falls back to the scene
-    frame at render time. Returns how many stills were generated."""
-    work_dir = _job_work_dir(job_id)
-    if work_dir is None:
-        return 0
-    store = DurableStore.default()
-    try:
-        rows = store.scene_rows(job_id)
-    finally:
-        store.close()
-    cfg = load_config()
-    # (scene_row, line_idx, line_dict). Speaking shots always get a solo still —
-    # even without an explicit "shot" — so the talking head is never animated
-    # from a two-person frame. Silent shots only when they carry a framing.
-    todo: list[tuple[dict, int, dict]] = []
-    for row in rows:
-        md = row.get("metadata") or {}
-        if md.get("mode") != "dialogue":
-            continue
-        for idx, ln in enumerate(md.get("lines") or []):
-            ln = ln or {}
-            speaking = not ln.get("silent") and str(ln.get("text") or "").strip()
-            if speaking or str(ln.get("shot") or "").strip():
-                todo.append((row, idx, ln))
-    if not todo:
-        return 0
-
-    def _speaker_char(name: str) -> dict | None:
-        n = (name or "").strip().lower()
-        if not n:
+    def _find(name: str):
+        key = (name or "").strip().lower()
+        if not key:
             return None
-        for c in _job_characters(cfg, style_name, work_dir):
+        for c in chars:
             names = [c.get("name", ""), *(c.get("aliases") or [])]
-            if any(n == str(x).strip().lower() for x in names if str(x).strip()):
+            if any(key == str(n).strip().lower() for n in names if str(n).strip()):
                 return c
         return None
 
-    engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
-    # Shot stills MUST match the render resolution — the dialogue render only uses
-    # a still that matches, else it falls back to the (multi-person) scene frame.
-    # Prefer the job's own resolution over the style default. Also pick up the
-    # job's per-job visual style ("style") — the general art-direction instruction
-    # the user set at Create time — so close-ups match the scene previews (which
-    # DO include it) instead of only the profile default.
-    job_style = ""
-    try:
-        _jc = json.loads((work_dir / "job_config.json").read_text())
-        resolution = resolution or _jc.get("resolution") or ""
-        job_style = _jc.get("style") or ""
-    except Exception:
-        pass
-    img_width, img_height = _RESOLUTIONS.get(
-        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
-        (1024, 576),
-    )
-    img_width, img_height = ltx_dimensions(img_width, img_height)
-    combined_style = _compose_visual_style(job_style, cfg, style_name)
+    def portrait_for(name: str) -> Path | None:
+        c = _find(name)
+        path = Path(c["_ref_path"]) if c and c.get("_ref_path") else None
+        if path and path.exists():
+            return path
+        logger.info("  performance: no portrait for %r — H3 will invent the look", name)
+        return None
 
-    if worker_pool is None:
-        worker_urls = _preview_worker_urls()
-        if not worker_urls:
-            logger.warning("[shots] no image worker available — dialogue shots skipped")
-            return 0
-        worker_pool = WorkerPool(worker_urls)
+    def voice_for(name: str) -> Path | None:
+        c = _find(name)
+        if c and c.get("voice") and c["voice"] in voices:
+            path = Path(voices[c["voice"]])
+            if path.exists():
+                logger.info("  performance: %s speaks with voice %r", name, c["voice"])
+                return path
+        logger.info("  performance: no cast voice for %r — H3 will invent the voice", name)
+        return None
 
-    made = 0
-    # First shot still per (scene, speaker) so a character's LATER lines in the
-    # same scene reuse their first close-up — the repeated shot then matches the
-    # first exactly (correct shot/reverse-shot continuity) instead of drifting to
-    # a different-looking generation.
-    first_by_speaker: dict[tuple[int, str], Path] = {}
-    for row, idx, ln in todo:
-        sid = int(row["id"])
-        shot = str(ln.get("shot") or "").strip()
-        out = work_dir / f"scene_{sid:02d}_line_{idx:02d}_shot.png"
-        speaker = "" if ln.get("silent") else str(ln.get("speaker") or "").strip()
-        key = (sid, speaker.lower())
+    def voice_name_for(name: str) -> str:
+        c = _find(name)
+        return (c or {}).get("voice") or ""
 
-        if speaker and key in first_by_speaker:
-            prior = first_by_speaker[key]
-            if prior.exists() and prior != out:
-                shutil.copy2(prior, out)
-                logger.info("[shots] scene %d line %d reuses %s's earlier close-up (%s)",
-                            sid, idx, speaker, prior.name)
+    def looks_like(name: str) -> str:
+        """A few words of the character's appearance, for the reference-role line.
+
+        Not a full description — the portrait carries the look. This is the
+        HOOK that lets the model bind "<Picture 2>" to the right name: with
+        bare names and two same-kind references it swaps them, putting one
+        character's face on the other's part."""
+        c = _find(name) or {}
+        words = re.split(r"[,.]", (c.get("description") or "").strip())
+        return (words[0].strip() if words else "")[:80]
+
+    return portrait_for, voice_for, voice_name_for, looks_like
+
+
+def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
+                                   style_name: str = "", scene_id: int = 0) -> dict:
+    """Which references a performance scene will actually be rendered with.
+
+    Returns ``{"pictures": [...], "audios": [...]}`` where each entry carries its
+    one-based ``slot`` — the ``<Picture N>`` / ``<Audio N>`` number cited in the
+    prompt — the character it belongs to, and the file on disk. Only references
+    that resolved are listed, so the numbering always matches the slots wired
+    into the graph.
+
+    The renderer AND the editor's performance view both call this, so what the
+    screen shows is what the model receives."""
+    from pipeline import performance as _perf
+
+    portrait_for, voice_for, voice_name_for, looks_like = _performance_refs(
+        cfg, work_dir, style_name)
+    pictures, audios = [], []
+    for name in (meta.get("cast") or []):
+        if not name:
             continue
-
-        if out.exists() and _image_matches_resolution(out, img_width, img_height):
-            if speaker:
-                first_by_speaker[key] = out
+        path = portrait_for(name)
+        if path is not None:
+            pictures.append({"slot": len(pictures) + 1, "name": name,
+                             "kind": "character", "hint": looks_like(name),
+                             "path": str(path)})
+    # The scene's first-frame image, when one was made: it rides as the take's
+    # opening-composition reference. Ref2VA has no literal first-frame input,
+    # but an image reference demonstrably anchors the space and framing (the
+    # shot-splitter's continuity frame proved it).
+    frame = None
+    for cand in (Path(work_dir) / f"scene_{int(scene_id):02d}_preview.png",
+                 Path(work_dir) / f"scene_{int(scene_id):02d}_first_frame.png"):
+        if scene_id and cand.exists() and cand.stat().st_size > 0:
+            frame = cand
+            break
+    if frame is not None:
+        pictures.append({"slot": len(pictures) + 1, "name": "First frame",
+                         "kind": "frame", "path": str(frame)})
+    # Locations and wardrobe take the slots after the cast: identity first, then
+    # the space, then the clothes — so trimming to H3's nine-image cap drops the
+    # least identity-critical references rather than a face. A first frame IS
+    # the place, photographed — sending the location asset alongside it wastes
+    # a slot and dilutes binding (measured: at 3 picture refs everything held;
+    # at 4+ the weakest dropped), so the frame supersedes it.
+    for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
+        if frame is not None and vis["kind"] == "location":
             continue
-        if ln.get("silent"):
-            # Silent (motion) shot — no lip-sync, so multiple people are fine.
-            base_prompt, reference_images = _characters_prompt_and_refs(
-                shot, row, cfg, style_name, work_dir, engine=engine)
-            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-        else:
-            # Speaking shot — force a SOLO close-up of just the speaker (only their
-            # description + reference face) so EchoMimic can't animate a second
-            # person in frame.
-            char = _speaker_char(speaker)
-            desc = (char or {}).get("description", "")
-            parts = [shot] if shot else [f"{speaker} speaks in the scene."]
-            parts.append(
-                f"Solo medium shot of {speaker or 'the speaker'} — exactly ONE person, roughly "
-                "waist-up, facing the camera, with the scene's setting visible around them; "
-                "their face clearly visible and in focus (not an extreme close-up). "
-                "No other people or characters anywhere in the frame.")
-            if desc and desc.lower() not in " ".join(parts).lower():
-                parts.append(f"{speaker}: {desc}.")
-            parts.append("Keep the SAME setting, background, lighting and wardrobe as the "
-                         "establishing shot — the same room, just framed close on the speaker.")
-            base_prompt = " ".join(parts)
-            prompt = f"{combined_style}. {base_prompt}" if combined_style else base_prompt
-            # Anchor the close-up to the scene's establishing frame (so its setting
-            # matches — coherent scene) AND the speaker's reference face.
-            reference_images = []
-            establishing = _scene_establishing_frame(work_dir, sid, row, img_width, img_height)
-            if establishing:
-                reference_images.append(establishing)
-            ref = char and (char.get("_ref_path") or _character_image_path(char.get("ref_image")))
-            if ref and Path(ref).exists():
-                reference_images.append(Path(ref))
-        url = worker_pool.acquire()
-        try:
-            generate_with_engine(
-                engine, prompt, out,
-                width=img_width, height=img_height,
-                reference_images=reference_images, comfy_url=url,
-            )
-            made += 1
-            if speaker:
-                first_by_speaker[key] = out
-            logger.info("[shots] scene %d line %d shot still ready (%s)", sid, idx, out.name)
-        except Exception:
-            logger.warning("[shots] scene %d line %d shot failed — render will fall back",
-                           sid, idx, exc_info=True)
-        finally:
-            worker_pool.release(url)
-    return made
+        pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
+                         "kind": vis["kind"], "character": vis.get("character", ""),
+                         "id": vis["id"], "path": vis["_ref_path"]})
+    speakers = _perf.speakers_in(_perf.norm_lines(meta.get("lines")))
+    for name in speakers[:_perf.MAX_SPEAKERS_PER_SCENE]:
+        path = voice_for(name)
+        if path is not None:
+            audios.append({"slot": len(audios) + 1, "name": name,
+                           "voice": voice_name_for(name), "path": str(path)})
+    return {"pictures": pictures, "audios": audios}
 
 
 def _generate_active_scene_preview(
@@ -3132,7 +3405,18 @@ def _generate_active_scene_preview(
     # preview is reused as the first frame instead of regenerated at a new size.
     img_width, img_height = ltx_dimensions(img_width, img_height)
     combined_style = _compose_visual_style(style, cfg, style_name)
-    base_prompt = image_prompt or scene.get("image_prompt") or title
+    md = scene.get("metadata") or {}
+    acted_prompt = ""
+    if not (image_prompt or scene.get("image_prompt")):
+        from pipeline import performance as _perf
+        if _perf.is_performance_mode(md.get("mode")):
+            cast = [str(n) for n in (md.get("cast") or []) if str(n).strip()]
+            who = (f" {' and '.join(cast)} are in the scene, both fully visible."
+                   if len(cast) > 1 else f" {cast[0]} is in the scene." if cast else "")
+            setting = str(md.get("setting") or "").strip()
+            if setting:
+                acted_prompt = f"{setting}.{who} The very first moment of the scene, nobody speaking yet."
+    base_prompt = image_prompt or scene.get("image_prompt") or acted_prompt or title
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it,
     # and anchor featured characters to their reference image (FLUX.2 only).

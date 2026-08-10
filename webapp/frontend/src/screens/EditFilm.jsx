@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import PerformanceScenes from './PerformanceScenes.jsx'
+import ScriptVisuals from './ScriptVisuals.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -84,7 +86,11 @@ function SceneCard({
   const [videoPrompt, setVideoPrompt] = useState(scene.video_prompt || '')
   // Scene type (narration | dialogue | silent) + dialogue shots + silent
   // duration — mirrors the Script editor via the shared SceneTypeControls.
-  const [sceneType, setSceneType] = useState({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
+  const [sceneType, setSceneType] = useState({
+    mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
+    setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
+    cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+  })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [taskId, setTaskId] = useState(null)
@@ -107,7 +113,11 @@ function SceneCard({
     setVoice(scene.voice || '')
     setImagePrompt(scene.image_prompt || '')
     setVideoPrompt(scene.video_prompt || '')
-    setSceneType({ mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0 })
+    setSceneType({
+      mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
+      setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
+      cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+    })
     setEditing(false)
   }, [scene.id])
 
@@ -117,6 +127,10 @@ function SceneCard({
       await api.saveScene(jobId, scene.id, {
         title, narration, tts_text: split ? ttsText : '', voice, image_prompt: imagePrompt, video_prompt: videoPrompt,
         mode: st.mode || 'narration', lines: st.lines || [], duration: st.duration || 0,
+        // Acted-scene fields — the server assembles the video prompt from these.
+        setting: st.setting ?? null, camera: st.camera ?? null,
+        soundscape: st.soundscape ?? null, cast: st.cast ?? null,
+        beats: st.beats ?? null, seconds: st.seconds ?? null,
       })
     } catch (e) {
       setError(e.message)
@@ -412,7 +426,12 @@ function SceneCard({
                 <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={(instr) => regenField('title', instr)} chips={REGEN_CHIPS.title}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType} />
+                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType}
+                  onConvert={async (m) => {
+                    setError('')
+                    try { await api.convertSceneMode(jobId, scene.id, m); onSaved() }
+                    catch (e) { setError(e.message) }
+                  }} />
                 {(sceneType.mode || 'narration') === 'narration' && (<>
                   <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
                     <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />
@@ -438,12 +457,37 @@ function SceneCard({
                     </select>
                   </Field>
                 </>)}
+                {isActedMode(sceneType.mode) ? (
+                  <ActedPrompt prompt={videoPrompt} edited={!!scene.prompt_edited}
+                    refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    onSave={async (text) => {
+                      try {
+                        const r = await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: '', video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: text,
+                        })
+                        if (r?.scene) setVideoPrompt(r.scene.video_prompt || '')
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }}
+                    onRebuild={async () => {
+                      try {
+                        const r = await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: '', video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: '',
+                        })
+                        if (r?.scene) setVideoPrompt(r.scene.video_prompt || '')
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }} />
+                ) : (<>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>} hint="LTX — motion & camera">
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
+                </>)}
               </div>
             )}
 
@@ -465,6 +509,10 @@ function SceneCard({
                   {busy === 'narration' ? 'Rendering…' : 'Narration'}
                 </Button>
               )}
+              {/* An acted scene's frame is a reference, not a render input —
+                  Image buttons stay for narrated scenes; acted scenes get a
+                  Remove instead (the take then renders reference-only). */}
+              {!isActedMode(sceneType.mode) && (<>
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
                 label="Image" busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
@@ -472,8 +520,18 @@ function SceneCard({
                 onClick={() => { setInpaintErr(''); setInpaint(true) }}>
                 Edit image
               </Button>
+              </>)}
+              {isActedMode(sceneType.mode) && previewUrl && (
+                <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
+                  title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
+                  onClick={async () => {
+                    setError('')
+                    try { await api.removeScenePreview(jobId, scene.id); onSaved() }
+                    catch (e) { setError(e.message) }
+                  }}>Remove first frame</Button>
+              )}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
-                label="Video" busyLabel="Rendering…" busy={busy === 'video'}
+                label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
 
               <div style={{ flex: 1 }} />
@@ -1124,6 +1182,18 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
         </Card>
 
+        {data.can_remix === false && (
+          <Card span={4} padLg className="reveal reveal-d2">
+            <span className="label-sm">Audio</span>
+            <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              This film's voices and ambience were generated with the picture, in the
+              same pass — there is no separate music or narration track to re-balance,
+              re-voice or translate. Re-render a scene to change how it sounds.
+            </p>
+          </Card>
+        )}
+
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm">Re-mix audio</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Balance the levels and re-mux without re-rendering the video.</p>
@@ -1136,7 +1206,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           </div>
           <div className="mt-24"><Button variant="primary" block icon="sliders" disabled={anyBusy} onClick={remix}>{busy ? 'Re-mixing…' : 'Re-mix film'}</Button></div>
         </Card>
+        )}
 
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="microphone-lines" style={{ color: 'var(--ink-3)', width: 16 }} /> Narrator</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Change the narrator for every scene and rebuild the final audio.</p>
@@ -1154,7 +1226,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </Button>
           </div>
         </Card>
+        )}
 
+        {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm row center gap-10"><Icon name="language" style={{ color: 'var(--ink-3)', width: 16 }} /> Localize this film</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
@@ -1206,6 +1280,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             </div>
           )}
         </Card>
+        )}
 
         {editingLoc && (
           <Card span={12} padLg className="reveal reveal-d2">
@@ -1313,10 +1388,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
 // ── Characters tab ────────────────────────────────────────────────────────────
 
-function CharactersTab({ workDir, onSwitchToScenes }) {
+function CharactersTab({ workDir, onSwitchToScenes, reloadKey = 0 }) {
   const [jobId, setJobId] = useState('')
   const [scenes, setScenes] = useState([])
   const [characters, setCharacters] = useState([])
+  const [castCatalogue, setCastCatalogue] = useState([])   // style catalogue, read-only
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [charBusy, setCharBusy] = useState('')
@@ -1335,8 +1411,10 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
       if (r.job_id) {
         const c = await api.scriptCharacters(r.job_id)
         setCharacters(c.characters || [])
+        setCastCatalogue(c.catalogue || [])
       } else {
         setCharacters([])
+        setCastCatalogue([])
       }
     } catch (e) {
       setError(e.message)
@@ -1345,7 +1423,7 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
     }
   }, [workDir])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, reloadKey])
 
   // Background look generation may still be finishing — poll briefly while any
   // character is missing its image (same pattern as Script Characters).
@@ -1485,12 +1563,6 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
 
   return (
     <div>
-      <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
-        <Button variant="primary" icon="user-plus" disabled={!!charBusy || !!redoBusy} onClick={addCharacter}>
-          {charBusy === 'add' ? 'Adding…' : 'Add character'}
-        </Button>
-      </div>
-
       <Banner tone="danger">{error}</Banner>
       {charMsg && <Banner tone="ok">{charMsg}</Banner>}
       {redoBusy && (
@@ -1612,6 +1684,15 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
             </Card>
           )
         })}
+
+        {/* Catalogue members appear at the same level — the film uses them,
+            but they are shared across films, so they edit in Settings. */}
+        {castCatalogue.map((c) => (
+          <CatalogueRefCard key={`cat-${c.id || c.name}`} name={c.name} kind="Character"
+            description={c.description} imageUrl={c.image_url} icon="user"
+            voiceName={c.voice} voiceUrl={c.voice_url}
+            editHint="Settings → Characters" />
+        ))}
 
         {charLightbox && (
           <div onClick={() => setCharLightbox(null)}
@@ -1875,17 +1956,43 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
 
 // ── Unified Edit Film screen ──────────────────────────────────────────────────
 
-const EDIT_TABS = new Set(['film', 'characters', 'scenes'])
+const EDIT_TABS = new Set(['film', 'characters', 'scenes', 'performance'])
 
 export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
+  const [actedMix, setActedMix] = useState('none')   // none | some | all
+  const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
+  const [filmJobId, setFilmJobId] = useState('')
+  const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
+  // Voice library for the acted view's per-character voice picker. Without it
+  // the select has only its "invent" option — and an HTML select whose value
+  // isn't among its options silently shows the first one, reading as "no
+  // voice" for a character that HAS one.
+  const [voiceOpts, setVoiceOpts] = useState([])
+  const [voiceMeta, setVoiceMeta] = useState({})
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      const cfg = c?.config || c || {}
+      setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
+      setVoiceMeta(voiceMetaMap(cfg.voices))
+    }).catch(() => {})
+  }, [])
 
-  // Prefill page title from film scenes (lightweight enough for the head).
+  // Prefill page title from film scenes (lightweight enough for the head), and
+  // note how much of the film is acted: an ALL-acted film replaces the
+  // narration-shaped Scenes editor with the acted view; a MIXED film keeps the
+  // full Scenes list (every scene, both kinds) and adds the acted view beside it.
   useEffect(() => {
     if (!workDir) return
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
+      const acted = (s) => ['dialogue', 'performance'].includes(s.mode || s.metadata?.mode)
+      const list = r.scenes || []
+      setActedMix(list.length && list.every(acted) ? 'all'
+        : list.some(acted) ? 'some' : 'none')
+      setFilmScenes(list)
+      setFilmJobId(r.job_id || '')
     }).catch(() => {})
   }, [workDir])
 
@@ -1911,11 +2018,19 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
-          { value: 'characters', label: 'Characters' },
+          { value: 'characters', label: actedMix !== 'none' ? 'Characters & visuals' : 'Characters' },
+          // ONE look whatever the mix: the Scenes editor (every scene, every
+          // mode, shiftable between them) plus, when anything is acted, the
+          // Acted scenes view — cast slots, portraits, voices, takes.
           { value: 'scenes', label: 'Scenes' },
+          ...(actedMix !== 'none'
+            ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 
+      {tab === 'performance' && (
+        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
+      )}
       {tab === 'film' && (
         <FilmTab
           workDir={workDir}
@@ -1926,10 +2041,40 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         />
       )}
       {tab === 'characters' && (
-        <CharactersTab
-          workDir={workDir}
-          onSwitchToScenes={() => setTab('scenes')}
-        />
+        <>
+          {/* ONE bar for every reference — characters and things together —
+              leading the wall, same as the Script screen. */}
+          {actedMix !== 'none' ? (
+            <div className="bento" style={{ marginBottom: 20 }}>
+              <ScriptVisuals jobId={filmJobId}
+                onAddCharacter={filmJobId ? async () => {
+                  await api.addScriptCharacter(filmJobId, { name: '', aliases: [], description: '' })
+                  setCharReload((k) => k + 1)
+                } : undefined}
+                sceneIds={filmScenes.map((s) => s.id)}
+                castNames={[...new Set(filmScenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
+                settingHint={filmScenes.map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
+            </div>
+          ) : (
+            <div className="bento" style={{ marginBottom: 20 }}>
+              <Card span={12} well>
+                <div className="row between center">
+                  <span className="muted" style={{ fontSize: 13 }}>The people this film keeps consistent.</span>
+                  <Button variant="primary" size="sm" icon="user-plus" disabled={!filmJobId}
+                    onClick={async () => {
+                      await api.addScriptCharacter(filmJobId, { name: '', aliases: [], description: '' })
+                      setCharReload((k) => k + 1)
+                    }}>Add character</Button>
+                </div>
+              </Card>
+            </div>
+          )}
+          <CharactersTab
+            workDir={workDir}
+            reloadKey={charReload}
+            onSwitchToScenes={() => setTab('scenes')}
+          />
+        </>
       )}
       {tab === 'scenes' && (
         <ScenesTab

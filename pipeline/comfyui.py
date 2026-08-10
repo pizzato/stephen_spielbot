@@ -150,39 +150,69 @@ def _queue_prompt(workflow: dict, client_id: str, comfy_url: str = COMFYUI_URL) 
 
 
 def _poll_completion(prompt_id: str, deadline: float, comfy_url: str = COMFYUI_URL) -> None:
-    """Poll /history until the prompt completes or deadline passes."""
+    """Poll /history until the prompt completes, vanishes, or the deadline passes.
+
+    Reached when the WebSocket drops mid-job. By then the job may be GONE — a
+    restarted worker forgets both its queue and its history — and waiting out
+    the deadline for one that will never appear is indistinguishable from a hung
+    render: an H3 deadline is ~6 hours, and this loop used to spend it silent.
+    So give up as soon as the worker ANSWERS and knows nothing about the job,
+    and log while waiting so a stall is visible in the film's log.
+    """
+    absent_since: float | None = None
+    last_log = 0.0
+    started = time.time()
     while time.time() < deadline:
-        url = f"{comfy_url}/history/{prompt_id}"
+        now = time.time()
+        reachable = True
         try:
-            with urllib.request.urlopen(url, timeout=10) as resp:
+            with urllib.request.urlopen(f"{comfy_url}/history/{prompt_id}", timeout=10) as resp:
                 history = json.loads(resp.read())
             if prompt_id in history:
-                entry  = history[prompt_id]
-                status = entry.get("status", {})
+                status = history[prompt_id].get("status", {})
                 if status.get("completed"):
                     return
                 if status.get("status_str") == "error":
-                    msgs = status.get("messages", [])
-                    raise RuntimeError(f"ComfyUI job failed: {msgs}")
+                    raise RuntimeError(f"ComfyUI job failed: {status.get('messages', [])}")
+                absent_since = None
+            elif _check_queue(prompt_id, comfy_url) in ("running", "pending"):
+                absent_since = None      # still queued, just not in history yet
+            else:
+                absent_since = absent_since or now
+                if now - absent_since >= _QUEUE_ABSENT_GRACE:
+                    raise DroppedJobError(
+                        f"Job {prompt_id} is in neither the queue nor the history on "
+                        f"{comfy_url} — the worker forgot it (restart?), will re-submit")
         except urllib.error.URLError:
-            pass
+            reachable = False            # unreachable is not evidence of absence
+        if now - last_log >= _QUEUE_CHECK_INTERVAL:
+            last_log = now
+            logger.info("[comfy] job %s… history poll (websocket gone, worker %s) elapsed=%.0fs",
+                        prompt_id[:8], "reachable" if reachable else "unreachable",
+                        now - started)
         time.sleep(5)
     raise RuntimeError(f"ComfyUI timed out polling history for {prompt_id} ({comfy_url})")
 
 
 def _check_queue(prompt_id: str, comfy_url: str = COMFYUI_URL) -> str:
-    """Return 'running', 'pending', or 'absent' for prompt_id in ComfyUI's queue."""
+    """Return 'running', 'pending', 'absent', or 'unknown' for prompt_id.
+
+    'unknown' means the worker did not answer — NOT that the job is gone. A
+    ComfyUI busy loading a large model (H3's 20-34 GB checkpoints) stops serving
+    HTTP for minutes at a time; counting that as 'absent' declared healthy jobs
+    dropped and queued duplicate renders behind them.
+    """
     try:
         with urllib.request.urlopen(f"{comfy_url}/queue", timeout=10) as resp:
             queue = json.loads(resp.read())
-        for item in queue.get("queue_running", []):
-            if len(item) > 1 and item[1] == prompt_id:
-                return "running"
-        for item in queue.get("queue_pending", []):
-            if len(item) > 1 and item[1] == prompt_id:
-                return "pending"
     except Exception:
-        pass
+        return "unknown"
+    for item in queue.get("queue_running", []):
+        if len(item) > 1 and item[1] == prompt_id:
+            return "running"
+    for item in queue.get("queue_pending", []):
+        if len(item) > 1 and item[1] == prompt_id:
+            return "pending"
     return "absent"
 
 
@@ -346,6 +376,12 @@ def _wait_for_completion(
                     "[comfy] job %s… queue=%s nodes_done=%d elapsed=%.0fs",
                     prompt_id[:8], q_status, nodes_done, now - start,
                 )
+
+                # Unreachable worker: no evidence either way, so change nothing
+                # (an absence timer already running keeps its start time). The
+                # overall deadline and the GPU heartbeat still bound this.
+                if q_status == "unknown":
+                    continue
 
                 if q_status == "absent":
                     h_status = _check_history(prompt_id, comfy_url)
@@ -712,7 +748,7 @@ def generate_keyframed_clip(
 
     Single-pass, silent (no audio track). Used for a dialogue scene's establishing
     shot: first = the wide setting, last = the speaker's close-up, so the push-in
-    lands exactly on the still the talking head then animates."""
+    lands exactly on the still the next clip continues from."""
     length = _frame_count(length, duration_seconds)
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -851,6 +887,145 @@ def generate_video_h3(
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:
         raise RuntimeError(f"No output files from ComfyUI for H3 prompt {prompt_id} ({comfy_url})")
+    video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+    return _download_output(video_item, output_path, comfy_url=comfy_url)
+
+
+# H3 Ref2VA reference limits (comfy_extras/nodes_minimax_h3.py).
+H3_MAX_REF_IMAGES = 9
+H3_MAX_REF_AUDIOS = 3
+
+
+def _upload_audio(audio_path: Path, comfy_url: str = COMFYUI_URL) -> str:
+    """Upload a wav to ComfyUI input (LoadAudio reads it by name)."""
+    return _upload_input_file(audio_path, content_type="audio/wav", comfy_url=comfy_url)
+
+
+def _ref_node_id(workflow: dict) -> str:
+    for node_id, node in workflow.items():
+        if node.get("class_type") == "MiniMaxH3ReferenceToVideo":
+            return node_id
+    raise RuntimeError("Ref2VA workflow has no MiniMaxH3ReferenceToVideo node")
+
+
+def comfyui_version(comfy_url: str = COMFYUI_URL) -> tuple:
+    """The worker's ComfyUI version as a tuple, or () if it won't say."""
+    try:
+        with urllib.request.urlopen(f"{comfy_url}/system_stats", timeout=10) as resp:
+            raw = json.loads(resp.read())
+        ver = (raw.get("system") or {}).get("comfyui_version") or ""
+        return tuple(int(x) for x in re.findall(r"\d+", ver)[:3]) or ()
+    except Exception:
+        return ()
+
+
+def check_engine_supported(engine: dict, comfy_url: str = COMFYUI_URL) -> None:
+    """Refuse to render an engine the worker is too old for.
+
+    The w4a8 checkpoints need loader support from ComfyUI 0.31.0; an older
+    worker does not error — it returns BLACK FRAMES. A silent black render
+    that costs ten minutes and passes the speech gate is the worst possible
+    failure, so this is checked before queueing.
+    """
+    need = engine.get("min_comfyui")
+    if not need:
+        return
+    have = comfyui_version(comfy_url)
+    if have and have < tuple(need):
+        raise RuntimeError(
+            f"{engine['label']} needs ComfyUI >= {'.'.join(map(str, need))} but "
+            f"{comfy_url} runs {'.'.join(map(str, have))} — it would render black "
+            f"frames. Rebuild that worker (COMFYUI_REF) or pick another engine.")
+
+
+def generate_video_h3_ref(
+    engine: dict,
+    positive_prompt: str,
+    ref_images: list[Path],
+    output_path: Path,
+    ref_audios: list[Path] | None = None,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    steps: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """MiniMax H3 Ref2VA: character portraits (and optional voice clips) → a clip
+    with its own spoken dialogue. No first frame and no TTS — the model writes
+    picture and audio in one pass.
+
+    *ref_images* are character portraits, cited in the prompt as ``<Picture N>``
+    in the SAME order; *ref_audios* are voice references cited as ``<Audio N>``.
+    Both are capped at the model's limits. H3 requires at least one image or
+    video reference — audio alone is rejected.
+    """
+    if not ref_images:
+        raise ValueError("Ref2VA needs at least one reference image")
+    check_engine_supported(engine, comfy_url)
+
+    gen_w, gen_h = h3_dimensions(width, height)
+    length = h3_frame_count(duration_seconds)
+    steps = int(steps or engine.get("steps") or 20)
+    # H3 models audio jointly with video; only positive steering exists.
+    prompt, _ = _steer_audio_natural(positive_prompt, "")
+
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    images = list(ref_images)[:H3_MAX_REF_IMAGES]
+    audios = list(ref_audios or [])[:H3_MAX_REF_AUDIOS]
+    if len(ref_images) > H3_MAX_REF_IMAGES or len(ref_audios or []) > H3_MAX_REF_AUDIOS:
+        logger.warning("[comfy] Ref2VA: trimmed references to %d images / %d audios (model cap)",
+                       len(images), len(audios))
+    image_names = [_upload_image(p, comfy_url=comfy_url) for p in images]
+    audio_names = [_upload_audio(p, comfy_url=comfy_url) for p in audios]
+
+    workflow = _fill_template(_load_workflow(engine.get("workflow", "h3_ref2v.json")), {
+        "UNET_NAME":       engine["unet"],
+        "CLIP_NAME":       engine["clip"],
+        "VIDEO_VAE":       engine["video_vae"],
+        "AUDIO_VAE":       engine["audio_vae"],
+        "POSITIVE_PROMPT": prompt,
+        "WIDTH":           gen_w,
+        "HEIGHT":          gen_h,
+        "LENGTH":          length,
+        "SEED":            seed,
+        "STEPS":           steps,
+        "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
+        "LORA_NAME":       engine.get("lora") or "",
+    })
+
+    # Reference slots are autogrow inputs: the API key is the DOTTED group form
+    # ("ref_images.ref_image_0"), which is what comfy_api's finalize_prefix()
+    # looks up. A flat "ref_image_0" is silently ignored — the render succeeds
+    # with no references at all — so this must not be "simplified".
+    ref_node = workflow[_ref_node_id(workflow)]["inputs"]
+    next_id = max((int(k) for k in workflow), default=100) + 1
+    for i, name in enumerate(image_names):
+        loader = str(next_id + i)
+        workflow[loader] = {"class_type": "LoadImage", "inputs": {"image": name}}
+        ref_node[f"ref_images.ref_image_{i}"] = [loader, 0]
+    next_id += len(image_names)
+    for i, name in enumerate(audio_names):
+        loader = str(next_id + i)
+        workflow[loader] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+        ref_node[f"ref_audios.ref_audio_{i}"] = [loader, 0]
+
+    _video_timeout = _h3_timeout_seconds(gen_w, gen_h, length)
+    logger.info(
+        "[comfy] generate_video_h3_ref %dx%d length=%d steps=%d refs=%di/%da timeout=%ds",
+        gen_w, gen_h, length, steps, len(image_names), len(audio_names), _video_timeout,
+    )
+
+    client_id = str(uuid.uuid4())
+    prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=_video_timeout, comfy_url=comfy_url,
+                         heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for H3 Ref2VA prompt {prompt_id} ({comfy_url})")
     video_item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import SettingsAssets from './SettingsAssets.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
@@ -685,6 +686,7 @@ const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
   { id: 'characters', label: 'Characters' },
+  { id: 'assets', label: 'Assets' },
   { id: 'voices', label: 'Voices' },
   { id: 'channels', label: 'Channels' },
   { id: 'automation', label: 'Automation' },
@@ -1348,8 +1350,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'tts_engine':
         return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
-      case 'script_mode':
-        return v === 'story' ? 'Story-first' : 'Classic'
+      case 'reference_engine':
+        return (engineInfo?.reference_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'first_frame_cover':
         return v === 'image' || v === 'text' ? 'Cover image' : 'off'
       case 'first_frame_cover_seconds':
@@ -1578,7 +1580,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       out.youtube_fully_automated = AUTO_FLAGS.every((f) => cfg[f])
       out.comfy_workers = fromLines(toLines(cfg.comfy_workers))
       out.tts_workers = fromLines(toLines(cfg.tts_workers))
-      out.echomimic_workers = fromLines(toLines(cfg.echomimic_workers))
       const r = await api.saveConfig(out)
       setStatus('Settings saved.')
       dirtyRef.current = false; setDirty(false)   // saved — let the sync effect adopt r.config
@@ -1713,10 +1714,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="TTS workers" hint="One host per line.">
                 <textarea className="textarea" rows={2} value={toLines(cfg.tts_workers)} onChange={(e) => set('tts_workers', e.target.value)} />
                 <WorkerStatus items={workers?.tts} />
-              </Field>
-              <Field label="EchoMimic workers" hint="One URL per line (port 8190). Talking-head engine for dialogue/performance scenes.">
-                <textarea className="textarea" rows={2} value={toLines(cfg.echomimic_workers)} onChange={(e) => set('echomimic_workers', e.target.value)} />
-                <WorkerStatus items={workers?.echomimic} />
               </Field>
               <WorkerControls workers={workers} busyHost={workerBusy} onAction={controlWorker} />
               <Field label="UI worker idle timeout (min)" hint="While the UI is in use, one render worker is kept idle for cover/preview jobs; it rejoins the render pool after the UI has been idle this long.">
@@ -2161,13 +2158,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(v) => setStyleField('video_minutes', v)} />
                 <ParentVal k="video_minutes" />
               </Field>
-              <Field label="Script mode" hint="Story-first writes and judges the whole story as prose before dividing it into scenes — keeps long videos coherent (in Create you can review and edit the story before scene division). Classic generates scenes directly. Dialogue/Mixed formats always use Classic.">
-                <select className="select" value={eff.script_mode || 'classic'} onChange={(e) => setStyleField('script_mode', e.target.value)} style={{ maxWidth: 320 }}>
-                  <option value="classic">Classic — scenes directly</option>
-                  <option value="story">Story-first — draft, judge, then divide</option>
-                </select>
-                <ParentVal k="script_mode" />
-              </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
                 <ParentPreview k="visual_style" />
@@ -2369,14 +2359,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
 
-          {/* ── Video model (engine) ── */}
+          {/* ── Video models: one per kind of scene, one shared steps knob ── */}
           <Card span={6} className="reveal reveal-d3">
-            <span className="label-sm">Video model</span>
-            <div className="field__hint" style={{ marginTop: 6 }}>Which engine animates this style's scenes (image → video, with native audio). Download models under <strong>Infrastructure</strong>.</div>
+            <span className="label-sm">Video models</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              A film can hold two kinds of scene, and each kind has its own model.
+              Download models under <strong>Infrastructure</strong>.
+            </div>
             <div className="stack gap-22 mt-16">
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {engineInfo && (
-                <Field label="Scene video (I2V)">
+                <Field label="Narrated & silent scenes"
+                  hint="Animates each scene from its first-frame still, with the narrator's voice-over on top. In a MIXED film these scenes render on MiniMax H3 automatically, so the whole film matches the acted takes.">
                   <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx23'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
                     {(engineInfo.video_engines || []).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
@@ -2389,9 +2383,24 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   })()}
                 </Field>
               )}
-              {engineInfo && String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax') && (
-                <Field label="Sampling steps"
-                  hint="0 = the engine's default (Turbo: 4, base H3: 15). More steps = sharper but slower — each step is ~2.5 min per scene on a GB10; Turbo stays usable down to 4.">
+              {engineInfo && (
+                <Field label="Acted (dialogue) scenes"
+                  hint="Generates each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices. No first frame. Unused by a film with no dialogue scenes.">
+                  <select className="select" value={eff.reference_engine || ''} onChange={(e) => setStyleField('reference_engine', e.target.value)}>
+                    {(engineInfo.reference_engines || []).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label} — {e.sub}</option>
+                    ))}
+                  </select>
+                  {(engineInfo.reference_engines || []).find((e) => e.key === eff.reference_engine)?.license_note && (
+                    <div className="field__hint" style={{ marginTop: 6 }}>{(engineInfo.reference_engines).find((e) => e.key === eff.reference_engine).license_note}</div>
+                  )}
+                  <ParentVal k="reference_engine" />
+                </Field>
+              )}
+              {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
+                || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
+                <Field label="Sampling steps — every MiniMax render"
+                  hint="ONE knob for both pickers above: it overrides the step count of every MiniMax H3 render in this style — narrated-scene I2V and acted-scene Ref2VA alike. 0 = each engine's own default (Turbo: 4, the others: 15). More steps = sharper but slower (~2.5 min per step per scene on a GB10). LTX ignores it.">
                   <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
                     value={eff.video_steps ?? 0}
                     onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />
@@ -2405,6 +2414,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={6} className="reveal reveal-d3">
             <span className="label-sm">Narrator & audio</span>
             <div className="stack gap-22 mt-16">
+              <Field label="Music"
+                hint="Score every film in this style. Music is mixed in at the very end, never baked into a scene — off leaves the film with only its voices and room tone. Acted films never get a score.">
+                <Check checked={eff.music_enabled !== false}
+                  onChange={(v) => setStyleField('music_enabled', v)}
+                  label="Add background music" />
+                <ParentVal k="music_enabled" />
+              </Field>
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
                 <Field key={k} label={`${label} — ${eff[k] ?? 0}%`}>
                   <input className="slider" type="range" min={0} max={max} value={eff[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />
@@ -2442,6 +2458,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
         </>)}
+
+        {tab === 'assets' && <SettingsAssets styles={styles} />}
 
         {tab === 'characters' && (() => {
           // One library, browsed by home: a scope picker mirroring the Styles

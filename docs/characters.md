@@ -50,7 +50,7 @@ characters, deleting one re-homes them to its parent (or the global pool).
   "aliases": ["Bob", "Mr. John"],// extra match tokens (case-insensitive, word-boundary)
   "description": "a middle-aged man, short grey beard, round glasses, navy wool coat",
   "ref_image": "char_a1b2c3.png",// filename under the characters dir; "" if text-only
-  "voice": "...",                // named voice for dialogue scenes (see docs/dialogue_scenes.md)
+  "voice": "...",                // named voice for acted scenes (see docs/performance_films.md)
   "enabled": true,
   "style": "Children Story"      // "" = global pool, else the owning style
 }

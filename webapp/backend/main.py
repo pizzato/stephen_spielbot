@@ -50,6 +50,7 @@ import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
+import pipeline.performance as performance_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import cadence  # noqa: E402
@@ -148,13 +149,6 @@ def _worker_activity(cfg: dict, tasks: list[dict], reserved_comfy: int = 0) -> l
     for ep in cfg.get("tts_workers") or []:
         ep_by_wid[worker_id("tts", ep)] = ep
         fleet.append(("tts", ep))
-    # EchoMimic talking-head workers (dialogue). Without these the fleet reads
-    # "all idle" during a dialogue render — the comfy/tts pools genuinely are
-    # idle while the work runs on echomimic.
-    for ep in cfg.get("echomimic_workers") or []:
-        ep_by_wid[worker_id("echomimic", ep)] = ep
-        fleet.append(("echomimic", ep))
-
     job_by_ep: dict[str, str] = {}
     for t in tasks:
         if t.get("status") in _WORKER_RUNNING_STATUSES:
@@ -209,6 +203,15 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "mode": meta.get("mode", "narration"),
         "lines": meta.get("lines", []),
         "duration": meta.get("duration", 0),
+        # Acted-scene fields (empty on narrated scenes): the editor writes the
+        # scene through these, and the video prompt is assembled from them.
+        "setting": meta.get("setting", ""),
+        "camera": meta.get("camera", ""),
+        "soundscape": meta.get("soundscape", ""),
+        "cast": meta.get("cast", []),
+        "beats": meta.get("beats", []),
+        "seconds": meta.get("seconds", 0),
+        "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
     }
@@ -1200,8 +1203,77 @@ def _job_style_name(job_id: str) -> str:
     return _script_source_meta(job_id, "")[3]
 
 
+def _film_reference_usage(wd: Path) -> tuple[set, bool]:
+    """(cast names in any scene, film has acted scenes) — what the reference
+    wall means by "used by this video". Case-insensitive names."""
+    names: set = set()
+    has_acted = False
+    try:
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        if not rows and (wd / "script.json").exists():
+            rows = json.loads((wd / "script.json").read_text())
+        for r in rows or []:
+            md = (r.get("metadata") or {}) if isinstance(r, dict) else {}
+            if performance_mode.is_performance_mode(md.get("mode")):
+                has_acted = True
+            for n in (md.get("cast") or []):
+                if str(n).strip():
+                    names.add(str(n).strip().lower())
+            for ln in (md.get("lines") or []):
+                spk = str((ln or {}).get("speaker") or "").strip()
+                if spk:
+                    names.add(spk.lower())
+    except Exception:
+        pass
+    return names, has_acted
+
+
+def _voice_clip_url(cfg: dict, voice_name: str) -> str:
+    """A playable URL for a library voice's reference clip, or ''."""
+    for v in cfg.get("voices") or []:
+        if v.get("name") == voice_name and v.get("path"):
+            pth = Path(v["path"])
+            if pth.exists():
+                return f"/api/file?path={pth}"
+    return ""
+
+
 def _script_chars_ok(wd: Path) -> dict:
-    return {"ok": True, "characters": _script_characters_payload(wd)}
+    """Script characters (editable) plus the style's catalogue members
+    (read-only — they are shared across films, so they edit in Settings).
+    A script character shadows a same-named catalogue one."""
+    payload = _script_characters_payload(wd)
+    taken = {(c.get("name") or "").strip().lower() for c in payload}
+    used, _has_acted = _film_reference_usage(wd)
+    catalogue = []
+    try:
+        cfg = gapp.load_config()
+        style_name = _job_style_name(job_id_from_work_dir(wd))
+        for c in gapp._style_characters(cfg, style_name):
+            name_key = (c.get("name") or "").strip().lower()
+            # Only members THIS video casts — the wall shows the film's
+            # references, not the whole catalogue.
+            if name_key in taken or name_key not in used:
+                continue
+            img = gapp._character_image_path(c.get("ref_image"))
+            has = bool(img and img.exists() and img.stat().st_size > 0)
+            catalogue.append({
+                "id": c.get("id", ""), "name": c.get("name", ""),
+                "aliases": c.get("aliases") or [],
+                "description": c.get("description", ""),
+                "voice": c.get("voice", ""),
+                "voice_url": _voice_clip_url(cfg, c.get("voice", "")),
+                "has_image": has,
+                "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has else "",
+                "scope": "catalogue",
+            })
+    except Exception:
+        pass
+    return {"ok": True, "characters": payload, "catalogue": catalogue}
 
 
 @api.get("/api/jobs/{job_id}/characters")
@@ -1512,7 +1584,6 @@ def workers_status() -> dict:
     """
     from pipeline.worker_pool import queue_depth
     from pipeline.tts_worker import worker_alive as tts_alive
-    from pipeline.echomimic import worker_alive as echomimic_alive
     cfg = gapp.load_config()
 
     def probe(urls: list[str]) -> list[dict]:
@@ -1526,7 +1597,6 @@ def workers_status() -> dict:
     return {
         "comfy": probe(cfg.get("comfy_workers", [])),
         "tts": [{"endpoint": h, "up": tts_alive(h, timeout=3)} for h in cfg.get("tts_workers", [])],
-        "echomimic": [{"endpoint": h, "up": echomimic_alive(h, timeout=3)} for h in cfg.get("echomimic_workers", [])],
         "ui": _ui_worker_status(cfg),
     }
 
@@ -1552,7 +1622,7 @@ def _worker_hosts(cfg: dict) -> list[str]:
     Each host runs one docker compose stack (ComfyUI + F5-TTS) that
     scripts/worker.sh controls over SSH — same hosts `make stop W=<host>` uses."""
     hosts: list[str] = []
-    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []) + (cfg.get("echomimic_workers") or []):
+    for entry in (cfg.get("comfy_workers") or []) + (cfg.get("tts_workers") or []):
         h = _host_of(entry)
         if h and h not in hosts:
             hosts.append(h)
@@ -1623,13 +1693,13 @@ class GenerateScriptBody(BaseModel):
     style_name: str = ""
     # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
     format: str = "narration"
-    # "" (style default) | "classic" | "story" — story-first mode drafts and
-    # judges a prose story before dividing it into scenes (pipeline/story.py).
-    script_mode: str = ""
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
     auto_critic: bool = False
+    # Score this film? None = whatever the style says. Rides the create brief
+    # to the render, so the choice made at Create survives approve → queue.
+    music: bool | None = None
 
 
 # In-memory store for background script-generation tasks {task_id -> {status, ...}}.
@@ -1726,6 +1796,12 @@ def _clean_lines(raw_lines) -> list[dict]:
         row = {"speaker": str(ln.get("speaker") or "Narrator").strip() or "Narrator", "text": text}
         if shot:
             row["shot"] = shot
+        # Performance lines carry a delivery direction ("low, flat, unhurried")
+        # that shapes the read. Only set when present, so dialogue scripts stay
+        # byte-identical.
+        delivery = str(ln.get("delivery") or "").strip()
+        if delivery:
+            row["delivery"] = delivery
         out.append(row)
     return out
 
@@ -1744,38 +1820,52 @@ def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
 
 
 def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
-    """Instruction appended to the JSON script prompt so the LLM emits dialogue/
-    silent/narration scenes. None for the default narration format (no change)."""
+    """Instruction appended to the script prompts so the LLM stages scenes as
+    ACTED takes. None for the narration format (the prompts are unchanged).
+
+    An acted scene is one continuous H3 generation carrying its own voices, so
+    the shape it asks for is the one pipeline/performance.py assembles: who is
+    on screen, what they say, where, and how it sounds. The word budget is the
+    binding constraint — the model truncates a clip that runs past its length,
+    mid-sentence."""
     fmt = (fmt or "narration").strip().lower()
     if fmt not in ("dialogue", "mixed"):
         return None
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
-        f"Speakers are these existing characters ({cast}) and/or the main character(s) you "
-        "identify in the \"characters\" field. Do not invent speakers outside those."
+        f"Speakers are these existing characters ({cast}) and/or the main character(s) "
+        "in the story. Do not invent speakers outside those."
         if cast else
-        "Use the recurring character(s) you identify in the \"characters\" field as the speakers."
+        "The speakers are the story's recurring characters — identify them and use them "
+        "consistently; a scene with nobody to speak must be \"narration\" or \"silent\"."
     )
     balance = (
         "Almost every scene should be mode \"dialogue\": the characters carry the story by "
-        "speaking to the camera or to each other."
+        "speaking to camera or to each other. Use \"narration\" only where no one could "
+        "plausibly say it."
         if fmt == "dialogue" else
-        "Mix freely: use \"dialogue\" when characters speak or interact, \"narration\" for "
-        "scene-setting voice-over, and \"silent\" for pure visual beats."
+        "Mix freely: \"dialogue\" when characters speak or interact, \"narration\" for "
+        "scene-setting voice-over, \"silent\" for a pure visual beat."
     )
     return (
-        "DIALOGUE VIDEO — characters SPEAK rather than only a narrator. For EACH scene object, "
-        "add a \"mode\" field: \"dialogue\" | \"silent\" | \"narration\". "
-        "When \"mode\" is \"dialogue\", also add \"lines\": an ordered array of SHOTS, each "
-        "{\"speaker\": <character name>, \"text\": <one or two SHORT spoken sentences — keep each "
-        "line under ~20 words / 8 seconds of speech>, \"shot\": <static medium-shot framing of the "
-        "speaker — roughly waist-up with the setting around them, face clear but NOT an extreme "
-        "close-up>}, and leave \"narration\" empty. A dialogue scene plays "
-        "as a cut between these shots — the camera favors whoever speaks. "
-        "When \"silent\", leave narration empty (visuals only). "
+        "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. "
+        "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
+        "A \"dialogue\" scene also gets:\n"
+        "  \"cast\": [names on screen, AT MOST 2 — a third face makes the model swap them],\n"
+        "  \"lines\": ordered [{\"speaker\": <a cast name>, \"delivery\": <2-4 words, e.g. "
+        "\"quiet, certain\">, \"text\": <ONE short spoken sentence>}],\n"
+        "  \"setting\": one sentence — where this happens and what is around them,\n"
+        "  \"camera\": one sentence — the whole scene is ONE continuous take, so describe a "
+        "single shot and at most one move,\n"
+        "  \"soundscape\": diegetic sound only (no score),\n"
+        "and leaves \"narration\" EMPTY. "
+        "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
+        "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
+        "in the same setting rather than overfilling one. "
+        "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". "
         f"{speakers} {balance} "
-        "Still fill image_prompt and video_prompt as usual; for dialogue scenes the image_prompt "
-        "is the establishing wide shot of the setting."
+        "Still fill image_prompt and video_prompt as usual — for a dialogue scene they "
+        "describe the setting the performance happens in."
     )
 
 
@@ -1813,45 +1903,17 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     # and is stamped on the job so the render step uses the same profile.
     ss = gapp.style_settings(cfg, body.style_name)
 
-    # Story-first mode (per-style script_mode, or a body override): draft and
-    # judge the prose story, then divide it into scenes — chained inline so
-    # automation callers run the whole thing headless with no review pause.
-    if _effective_script_mode(body, ss) == "story":
-        sg = _do_story_generate(body)
-        return _do_story_divide(DivideStoryBody(
-            work_dir=sg["work_dir"], voice=body.voice,
-            resolution=body.resolution,
-            auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
-            style_name=body.style_name, auto_critic=body.auto_critic))
-
-    extra = (ss.get("extra_instructions") or "").strip()
-    llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
-
-    style_hint = body.visual_style or ss.get("visual_style", "") or None
-    video_style_hint = ss.get("video_style", "") or None
-    avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    style_cast = gapp._style_characters(cfg, body.style_name)
-    character_sheet = gapp._character_sheet(style_cast) or None
-    dialogue_note = _build_dialogue_note(body.format, [c.get("name", "") for c in style_cast])
-    # Style narration language (issue #176 part 2): narration + dialogue lines are
-    # written in the style's TTS language; prompts/titles stay English.
-    language = gapp._norm_tts_language(ss.get("tts_language"))
-    display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
-    plan = _plan_for_generate(body, ss)
-    try:
-        with _track_op("Generating script", display_topic):
-            scenes, music_desc, style, characters = generate_script(
-                llm_topic, plan["n_scenes"], style_hint, (body.video_title or "").strip() or None,
-                video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, dialogue_note=dialogue_note, language=language,
-                scene_plan=plan,
-            )
-    except Exception as e:  # surface a clean message to the client
-        raise HTTPException(500, f"Script generation failed: {str(e).splitlines()[0][:300]}")
-
-    return _persist_generated_script(body, cfg, ss, user_topic,
-                                     scenes, music_desc, style, characters,
-                                     scene_plan=plan)
+    # Every script is story-first: draft and judge the prose, then divide it
+    # into scenes in whatever mode the format asks for (narrated, acted, or a
+    # mix). Chained inline so automation callers run it headless with no
+    # review pause; the Create screen calls the two phases separately so the
+    # story can be read and edited before it becomes scenes.
+    sg = _do_story_generate(body)
+    return _do_story_divide(DivideStoryBody(
+        work_dir=sg["work_dir"], voice=body.voice,
+        resolution=body.resolution,
+        auto_approve=body.auto_approve, queue_item_id=body.queue_item_id,
+        style_name=body.style_name, auto_critic=body.auto_critic))
 
 
 def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
@@ -1913,7 +1975,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
-        "script_mode": _effective_script_mode(body, ss),
+        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -1924,7 +1986,8 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
             config={"title": display_title, "video_title": (body.video_title or "").strip(),
                     "topic": user_topic, "phase": "script_review", "style_name": ss["name"],
                     "create_brief": create_brief},
-            metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style},
+            metadata={"scene_count": len(scenes_list), "music_desc": music_desc, "style": style,
+                      "music_enabled": create_brief["music"]},
         )
         store.upsert_scenes(job_id, scenes_list)
     finally:
@@ -2001,7 +2064,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     return result
 
 
-# ── Story-first mode (per-style script_mode = "story") ───────────────────────
+# ── Story-first: the one way a script is written ─────────────────────────────
 
 class StoryChapterEdit(BaseModel):
     chapter: int
@@ -2019,20 +2082,6 @@ class DivideStoryBody(BaseModel):
     style_name: str = ""
     # Automation only — see GenerateScriptBody.auto_critic.
     auto_critic: bool = False
-
-
-def _effective_script_mode(body: GenerateScriptBody, ss: dict) -> str:
-    """The mode this generation runs with: an explicit body override wins, else
-    the style's script_mode. Dialogue/mixed formats always run classic — story
-    mode writes narration-only prose (v1)."""
-    mode = (body.script_mode or "").strip().lower()
-    if mode not in ("classic", "story"):
-        mode = ss.get("script_mode") or "classic"
-    if mode == "story" and (body.format or "narration").strip().lower() != "narration":
-        gapp.logger.warning("Story mode requested with format=%r — falling back to classic",
-                            body.format)
-        mode = "classic"
-    return mode
 
 
 def _story_path(wd: Path) -> Path:
@@ -2061,6 +2110,27 @@ def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
             target["text"] = edit.text.strip()
 
 
+def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
+    """How many scenes an ALL-ACTED film gets.
+
+    Not the narration cadence plan: acted scenes are clips capped by the video
+    model (~10 s each), not a word budget. An explicit scene count wins, then
+    the requested minutes at one scene per clip, then the style's own length."""
+    try:
+        n = int(body.n_scenes or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n > 0:
+        return n
+    try:
+        minutes = float(body.minutes or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes > 0:
+        return max(1, round(minutes * 60.0 / performance_mode.SCENE_SECONDS))
+    return int(_plan_for_generate(body, ss)["n_scenes"])
+
+
 def _do_story_generate(body: GenerateScriptBody) -> dict:
     """Story-mode phase 1: draft, judge, and revise the prose story, persist it
     as story.json (phase "story_review"), and return it for the Create review
@@ -2077,14 +2147,21 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
+    fmt = (body.format or "narration").strip().lower()
     plan = _plan_for_generate(body, ss)
+    if fmt == "dialogue":
+        # Every scene is an acted clip, so the length comes from clip count,
+        # not from a narrator's word budget.
+        plan = {**plan, "n_scenes": _acted_scene_count(body, ss)}
+    dialogue_note = _build_dialogue_note(
+        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
                 llm_topic, plan["n_scenes"], style_hint=style_hint,
                 video_title=(body.video_title or "").strip() or None,
                 character_sheet=character_sheet, avoid_hint=avoid_hint,
-                scene_plan=plan,
+                scene_plan=plan, dialogue_note=dialogue_note,
             )
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
@@ -2104,8 +2181,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "resolution": (body.resolution or "").strip() or (ss.get("resolution") or gapp._DEFAULT_RESOLUTION),
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
-        "format": "narration",
-        "script_mode": "story",
+        "format": fmt,
+        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
     }
     _write_create_brief(work_dir, create_brief)
     store = DurableStore.default()
@@ -2116,7 +2193,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                     "topic": user_topic, "phase": "story_review", "style_name": ss["name"],
                     "create_brief": create_brief},
             metadata={"scene_count": 0, "music_desc": story.get("music", ""),
-                      "style": story.get("style", "")},
+                      "style": story.get("style", ""),
+                      "music_enabled": create_brief["music"]},
         )
     finally:
         store.close()
@@ -2166,12 +2244,17 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = video_title or user_topic.splitlines()[0][:80]
+    # The format decides how the story is STAGED: narrated voice-over, acted
+    # scenes the characters speak, or a mix of both (and silent beats).
+    fmt = (brief.get("format") or "narration").strip().lower()
+    dialogue_note = _build_dialogue_note(
+        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(
                 story, style_hint=style_hint, video_title=video_title or None,
                 video_style_hint=video_style_hint, character_sheet=character_sheet,
-                avoid_hint=avoid_hint, language=language,
+                avoid_hint=avoid_hint, language=language, dialogue_note=dialogue_note,
             )
     except HTTPException:
         raise
@@ -2191,8 +2274,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         resolution=(body.resolution or brief.get("resolution") or "").strip(),
         queue_item_id=body.queue_item_id,
         style_name=ss["name"],
-        format="narration",
-        script_mode="story",
+        format=fmt,
         auto_critic=body.auto_critic,
     )
     return _persist_generated_script(gen_body, cfg, ss, user_topic,
@@ -2459,6 +2541,23 @@ def _apply_critic_ops(job_id: str, ops: dict) -> dict:
             cur = by_id.get(rw["id"])
             if not cur:
                 continue
+            acted = performance_mode.is_performance_mode(
+                (cur.get("metadata") or {}).get("mode"))
+            if acted:
+                # The dialogue is the scene: prose rewrites would desync the
+                # narration mirror and the assembled prompt from the lines.
+                # Titles are fair game; the rest is the acted editor's job.
+                if not rw.get("title") or rw["title"] == cur.get("title"):
+                    continue
+                store.upsert_scene(
+                    job_id, rw["id"], title=rw["title"],
+                    image_prompt=cur.get("image_prompt") or "",
+                    video_prompt=cur.get("video_prompt") or "",
+                    narration=cur.get("narration") or "",
+                    metadata=cur.get("metadata") or {},
+                )
+                applied_rewrites += 1
+                continue
             store.upsert_scene(
                 job_id, rw["id"],
                 title=rw.get("title") or cur.get("title") or "",
@@ -2584,10 +2683,20 @@ def _do_critic_run(job_id: str, body: CriticRunBody) -> dict:
         if len(rows) < 2:
             converged = True
             break
-        scene_rows_min = [{"id": int(r["id"]), "title": r.get("title") or "",
-                           "narration": r.get("narration") or "",
-                           "image_prompt": r.get("image_prompt") or "",
-                           "video_prompt": r.get("video_prompt") or ""} for r in rows]
+        def _critic_view(r) -> dict:
+            # An acted scene's narration IS its spoken lines, which is exactly
+            # what the critic should judge for flow and repetition. Its
+            # video_prompt is the assembled H3 text — noise to the critic, and
+            # a rewrite of it would desync the prompt from the lines.
+            acted = performance_mode.is_performance_mode(
+                (r.get("metadata") or {}).get("mode"))
+            return {"id": int(r["id"]), "title": r.get("title") or "",
+                    "narration": r.get("narration") or "",
+                    "image_prompt": "" if acted else (r.get("image_prompt") or ""),
+                    "video_prompt": ("(acted scene — the characters speak this "
+                                     "on camera; visuals come from references)"
+                                     if acted else (r.get("video_prompt") or ""))}
+        scene_rows_min = [_critic_view(r) for r in rows]
         # Deterministic backstop: hand the critic any mechanically-detected
         # near-duplicate narrations so it cannot overlook them (e.g. a pair
         # involving the protected final scene).
@@ -2815,6 +2924,350 @@ def load_script(work_dir: str = Query("")) -> dict:
                                  create_brief=create_brief)
 
 
+def _cast_member(wd: Path, cfg: dict, style_name: str, name: str) -> dict:
+    """One cast member for the performance view: who they are, whether their
+    look and voice are pinned, and whether this film can edit them.
+
+    A per-script character is this film's own, so its look and voice are edited
+    in place. A catalogue character is shared with every other film that uses
+    it, so it is reported read-only rather than silently rewritten from here."""
+    key = (name or "").strip().lower()
+
+    def _matches(c: dict) -> bool:
+        names = [c.get("name", ""), *(c.get("aliases") or [])]
+        return any(key == str(n).strip().lower() for n in names if str(n).strip())
+
+    for c in gapp._read_script_characters(wd):
+        if _matches(c):
+            return {**_character_to_json(wd, c), "name": name, "scope": "script",
+                    "editable": True}
+    for c in gapp._style_characters(cfg, style_name):
+        if _matches(c):
+            img = gapp._character_image_path(c.get("ref_image"))
+            has_image = bool(img and img.exists() and img.stat().st_size > 0)
+            return {"id": c.get("id", ""), "name": name,
+                    "description": c.get("description", ""),
+                    "voice": c.get("voice", ""), "has_image": has_image,
+                    "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                                  if has_image else ""),
+                    "scope": "catalogue", "editable": False}
+    return {"id": "", "name": name, "description": "", "voice": "",
+            "has_image": False, "image_url": "", "scope": "missing", "editable": False}
+
+
+# ── asset catalogue: reusable locations and wardrobe ─────────────────────────
+# Characters are the other kind of asset and keep their own catalogue (they
+# carry voices, aliases and casting rules these do not).
+
+class AssetsBody(BaseModel):
+    assets: list[dict]
+
+
+class AssetImageBody(BaseModel):
+    asset_id: str
+    style_name: str = ""
+    extra_prompt: str = ""
+
+
+class AssetUploadBody(BaseModel):
+    asset_id: str
+    filename: str = ""
+    data: str
+
+
+def _assets_payload(cfg: dict) -> dict:
+    out = []
+    for a in gapp._norm_assets(cfg.get("assets")):
+        img = gapp._asset_image_path(a.get("ref_image"))
+        has = bool(img and img.exists() and img.stat().st_size > 0)
+        out.append({**a, "has_image": has,
+                    "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                                  if has else "")})
+    return {"ok": True, "assets": out}
+
+
+@api.get("/api/assets")
+def list_assets() -> dict:
+    return _assets_payload(gapp.load_config())
+
+
+@api.post("/api/assets")
+def save_assets(body: AssetsBody) -> dict:
+    return _assets_payload(gapp.save_assets(body.assets))
+
+
+@api.post("/api/assets/image")
+def generate_asset_image(body: AssetImageBody) -> dict:
+    try:
+        with _track_op("Painting a reference image", body.asset_id):
+            cfg = gapp.generate_asset_image(body.asset_id, body.style_name, body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
+    return _assets_payload(cfg)
+
+
+@api.post("/api/assets/upload")
+def upload_asset_image(body: AssetUploadBody) -> dict:
+    try:
+        cfg = gapp.set_asset_image(body.asset_id, _decode_image(body.data))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _assets_payload(cfg)
+
+
+# ── per-script visuals: locations and wardrobe ───────────────────────────────
+
+class VisualCreate(BaseModel):
+    name: str = ""
+    kind: str = "location"
+    description: str = ""
+    character: str = ""
+
+
+class VisualUpdate(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    description: str | None = None
+    character: str | None = None
+    scenes: list[int] | None = None
+    enabled: bool | None = None
+
+
+class VisualImageBody(BaseModel):
+    extra_prompt: str = ""
+
+
+def _visual_to_json(wd: Path, v: dict) -> dict:
+    img = gapp._script_visual_image_path(wd, v.get("ref_image"))
+    has_image = bool(img and img.exists() and img.stat().st_size > 0)
+    return {**v, "has_image": has_image,
+            "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
+                          if has_image else "")}
+
+
+def _visuals_ok(wd: Path) -> dict:
+    """Film visuals (editable) plus the style's asset catalogue (read-only —
+    shared across films, edited in Settings → Assets). A film visual shadows a
+    same-named catalogue asset, mirroring scene_visuals' render-time rule."""
+    own = [_visual_to_json(wd, v) for v in gapp.read_script_visuals(wd)]
+    taken = {(v.get("name") or "").strip().lower() for v in own}
+    used, has_acted = _film_reference_usage(wd)
+    catalogue = []
+    try:
+        cfg = gapp.load_config()
+        style_name = _job_style_name(job_id_from_work_dir(wd))
+        for a in gapp.style_assets(cfg, style_name):
+            if (a.get("name") or "").strip().lower() in taken:
+                continue
+            img = gapp._asset_image_path(a.get("ref_image"))
+            has = bool(img and img.exists() and img.stat().st_size > 0)
+            # Only what this video's renders actually pull in: an asset feeds
+            # the slots when it has an image, the film has acted scenes, and a
+            # character-owned wardrobe's owner is in the cast (scene_visuals'
+            # own rule).
+            if not (has and has_acted and a.get("enabled", True)):
+                continue
+            if (a.get("kind") == "wardrobe" and (a.get("character") or "").strip()
+                    and a["character"].strip().lower() not in used):
+                continue
+            catalogue.append({
+                "id": a.get("id", ""), "name": a.get("name", ""),
+                "kind": a.get("kind", "location"),
+                "description": a.get("description", ""),
+                "character": a.get("character", ""),
+                "scenes": [], "enabled": a.get("enabled", True),
+                "has_image": has,
+                "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has else "",
+                "scope": "catalogue",
+            })
+    except Exception:
+        pass
+    return {"ok": True, "visuals": own, "catalogue": catalogue}
+
+
+@api.get("/api/jobs/{job_id}/visuals")
+def list_script_visuals(job_id: str) -> dict:
+    return _visuals_ok(_job_wd_or_404(job_id))
+
+
+@api.post("/api/jobs/{job_id}/visuals")
+def create_script_visual(job_id: str, body: VisualCreate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character)
+    return _visuals_ok(wd)
+
+
+@api.put("/api/jobs/{job_id}/visuals/{visual_id}")
+def edit_script_visual(job_id: str, visual_id: str, body: VisualUpdate) -> dict:
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.update_script_visual(wd, visual_id, **body.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return _visuals_ok(wd)
+
+
+@api.delete("/api/jobs/{job_id}/visuals/{visual_id}")
+def remove_script_visual(job_id: str, visual_id: str) -> dict:
+    wd = _job_wd_or_404(job_id)
+    gapp.delete_script_visual(wd, visual_id)
+    return _visuals_ok(wd)
+
+
+class VisualUpload(BaseModel):
+    filename: str = ""
+    data: str
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/upload")
+def upload_script_visual_image(job_id: str, visual_id: str, body: VisualUpload) -> dict:
+    """Use a real photo (or clip) of the thing instead of painting one.
+
+    Video uploads get a representative frame extracted — the picture slots
+    feed the model stills."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        gapp.set_script_visual_media(wd, visual_id, _decode_image(body.data),
+                                     filename=body.filename or "")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return _visuals_ok(wd)
+
+
+class VisualFromUrlBody(BaseModel):
+    url: str
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/from-url")
+def visual_from_url(job_id: str, visual_id: str, body: VisualFromUrlBody) -> dict:
+    """Fetch a visual's reference from a URL — a direct image/video file, or a
+    page whose og:image / og:video points at one. Video gets a frame extracted."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        with _track_op("Fetching reference", body.url[:60]):
+            gapp.fetch_visual_from_url(wd, visual_id, body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Fetch failed: {str(e).splitlines()[0][:200]}")
+    return _visuals_ok(wd)
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/image")
+def generate_script_visual_image(job_id: str, visual_id: str, body: VisualImageBody) -> dict:
+    wd = _job_wd_or_404(job_id)
+    _, _, _, style_name, _ = _script_source_meta(job_id, wd.name)
+    try:
+        with _track_op("Painting a reference image", wd.name):
+            gapp.generate_script_visual_image(wd, visual_id, style_name, body.extra_prompt)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    except Exception as e:
+        raise HTTPException(503, f"Image generation failed: {str(e).splitlines()[0][:200]}")
+    return _visuals_ok(wd)
+
+
+@api.get("/api/scripts/performance")
+def load_performance_script(work_dir: str = Query("")) -> dict:
+    """Everything the performance view needs for a whole film, in one payload.
+
+    Each scene comes back with its references already resolved into numbered
+    slots — <Picture 1> is this portrait, <Audio 1> is that voice clip — because
+    the prompt cites slot numbers and a screen that only showed the prompt would
+    leave you guessing which reference is which. Resolved by the same function
+    the renderer uses, so the screen and the render never disagree."""
+    if not work_dir:
+        raise HTTPException(400, "Choose a saved script.")
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Script path is outside the output folder.")
+    rows = _read_script_scenes(wd)
+    cfg = gapp.load_config()
+    _, _, _, style_name, _ = _script_source_meta(
+        job_id_from_work_dir(wd), wd.name.replace("-", " ").title())
+    ss = gapp.style_settings(cfg, style_name)
+
+    scenes = []
+    for row in rows:
+        meta = dict(row.get("metadata") or {})
+        if not performance_mode.is_performance_mode(meta.get("mode")):
+            continue
+        # A dialogue scene authored in a mixed film carries only its lines —
+        # fill in the cast/length/setting the acted render derives.
+        meta = performance_mode.acted_meta(
+            {**row, "metadata": meta, "lines": meta.get("lines") or []})
+        refs = gapp.resolve_performance_references(meta, cfg, wd, style_name,
+                                                   scene_id=int(row.get("id") or 0))
+        lines = performance_mode.norm_lines(meta.get("lines"))
+        # Every cast member, whether or not a reference resolved, so the screen
+        # can offer the look/voice controls in place. Per-script characters are
+        # editable here; catalogue ones are shared with other films, so those
+        # are shown read-only with a pointer to Settings.
+        picture_slot = {p["name"]: p["slot"] for p in refs["pictures"]}
+        audio_slot = {a["slot"]: a for a in refs["audios"]}
+        audio_by_name = {a["name"]: a for a in refs["audios"]}
+        cast = []
+        for name in (meta.get("cast") or []):
+            entry = _cast_member(wd, cfg, style_name, name)
+            entry["picture_slot"] = picture_slot.get(name)
+            aud = audio_by_name.get(name)
+            entry["audio_slot"] = aud["slot"] if aud else None
+            entry["speaks"] = name in performance_mode.speakers_in(lines)
+            cast.append(entry)
+        # The rendered clip, when there is one: the performance view doubles as
+        # the film view, so the same screen shows either the plan or the result.
+        media = _film_scene_files(wd, int(row.get("id") or 0))
+        take_history = video_history.history(wd, int(row.get("id") or 0))
+        scenes.append({
+            "id": row.get("id"),
+            "video_history": take_history,
+            "title": row.get("title") or "",
+            # Not shown, but PUT back untouched when the dialogue or prompt is
+            # edited (the scene endpoint writes every field it is given).
+            "image_prompt": row.get("image_prompt") or "",
+            "video_prompt": row.get("video_prompt") or "",
+            "narration": row.get("narration") or "",
+            "mode": meta.get("mode") or "dialogue",
+            # True once the prompt has been hand-edited: the screen then shows
+            # the override instead of re-assembling, and offers to drop it.
+            "prompt_edited": bool(meta.get("prompt_override")),
+            "video_url": media.get("video_url") or "",
+            "has_video": bool(media.get("has_video") or media.get("has_final")),
+            "seconds": meta.get("seconds") or performance_mode.SCENE_SECONDS,
+            "setting": meta.get("setting") or "",
+            "camera": meta.get("camera") or "",
+            "soundscape": meta.get("soundscape") or "",
+            "cast": cast,
+            "beats": performance_mode.norm_beats(
+                meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
+            "lines": lines,
+            # The exact text the model receives, rebuilt from the resolved slots.
+            "prompt": performance_mode.build_h3_prompt(
+                {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
+                picture_names=refs["pictures"],
+                audio_names=[a["name"] for a in refs["audios"]]),
+            "pictures": [{**p, "image_url": (f"/api/file?path={p['path']}"
+                                             f"&t={int(Path(p['path']).stat().st_mtime)}"
+                                             if p.get("path") and Path(p["path"]).exists() else "")}
+                         for p in refs["pictures"]],
+            "audios": refs["audios"],
+            # Speakers with no cast voice: H3 invents one, and it drifts between
+            # scenes. Surfaced so it is fixable before rendering.
+            "unvoiced": [n for n in performance_mode.speakers_in(lines)
+                         if n not in {a["name"] for a in refs["audios"]}],
+            "missing_portraits": [n for n in (meta.get("cast") or [])
+                                  if n not in {p["name"] for p in refs["pictures"]}],
+        })
+    from pipeline import engines as eng
+    engine = eng.resolve_reference(ss, ss.get("reference_engine"))
+    return {"work_dir": str(wd), "style_name": style_name,
+            "job_id": job_id_from_work_dir(wd),
+            "engine": {"key": engine["key"], "label": engine["label"]},
+            "scenes": scenes}
+
+
 class DuplicateScriptBody(BaseModel):
     work_dir: str
     title: str = ""
@@ -2904,6 +3357,33 @@ class SceneUpdate(BaseModel):
     mode: str | None = None
     lines: list | None = None
     duration: float | None = None
+    # Hand-edited H3 prompt for an acted scene. "" clears the override and the
+    # prompt goes back to being assembled from the scene's fields.
+    prompt: str | None = None
+    # Acted-scene fields — everything build_h3_prompt assembles the prompt FROM.
+    # Editing these is how an acted scene is written; the prompt follows.
+    setting: str | None = None
+    camera: str | None = None
+    soundscape: str | None = None
+    cast: list | None = None
+    beats: list | None = None
+    seconds: float | None = None
+
+
+def _scene_style_note(job_id: str) -> str:
+    """The style sentence prepended to an acted scene's assembled prompt."""
+    try:
+        cfg = gapp.load_config()
+        store = DurableStore.default()
+        try:
+            row = store.get_job(job_id)
+        finally:
+            store.close()
+        meta = json.loads(dict(row).get("metadata_json") or "{}") if row else {}
+        name = json.loads(dict(row).get("config_json") or "{}").get("style_name", "") if row else ""
+        return meta.get("style") or gapp.style_settings(cfg, name).get("visual_style", "") or ""
+    except Exception:
+        return ""
 
 
 @api.put("/api/jobs/{job_id}/scenes/{scene_id}")
@@ -2913,7 +3393,38 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
     try:
         current = store.get_scene(job_id, sid) or {}
         meta = dict(current.get("metadata") or {})
-        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration")}
+        old_dialogue = {k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")}
+        # A mode change through ANY path — the convert endpoint, an old client,
+        # a raw API call — first stashes the content of the mode being left,
+        # and restores the target mode's stash when the request brings no
+        # content of its own. A bare flip must never destroy a scene again.
+        old_mode = str(meta.get("mode") or "narration").strip().lower()
+        old_mode = "dialogue" if performance_mode.is_performance_mode(old_mode) else old_mode
+        new_mode = (str(body.mode).strip().lower() or "narration") if body.mode is not None else old_mode
+        new_mode = "dialogue" if performance_mode.is_performance_mode(new_mode) else new_mode
+        if new_mode != old_mode and old_mode in _MODE_STASH_FIELDS:
+            _stash_mode_content(meta, current, old_mode)
+            stash = (meta.get("mode_stash") or {}).get(new_mode) or {}
+            if new_mode == "dialogue" and not (body.lines or meta.get("lines")):
+                for k in ("lines", "cast", "setting", "camera", "soundscape",
+                          "beats", "seconds", "prompt_override"):
+                    if stash.get(k):
+                        meta[k] = stash[k]
+                if stash.get("lines") and body.lines is not None:
+                    body.lines = list(stash["lines"])
+            elif new_mode == "narration" and not (body.narration or "").strip():
+                body.narration = stash.get("narration") or ""
+                if not (body.image_prompt or "").strip():
+                    body.image_prompt = stash.get("image_prompt") or ""
+                if not (body.video_prompt or "").strip() or \
+                        (body.video_prompt or "").startswith("["):
+                    body.video_prompt = stash.get("video_prompt") or ""
+            elif new_mode == "silent":
+                if not (body.image_prompt or "").strip():
+                    body.image_prompt = stash.get("image_prompt") or ""
+                if not (body.video_prompt or "").strip() or \
+                        (body.video_prompt or "").startswith("["):
+                    body.video_prompt = stash.get("video_prompt") or ""
         if body.voice is not None:
             voice = (body.voice or "").strip()
             if voice:
@@ -2946,13 +3457,62 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["duration"] = d
             else:
                 meta.pop("duration", None)
+        if body.prompt is not None:
+            pr = (body.prompt or "").strip()
+            if pr:
+                meta["prompt_override"] = pr
+            else:
+                meta.pop("prompt_override", None)
+        for field, value in (("setting", body.setting), ("camera", body.camera),
+                             ("soundscape", body.soundscape)):
+            if value is not None:
+                text = (value or "").strip()
+                if text:
+                    meta[field] = text
+                else:
+                    meta.pop(field, None)
+        if body.cast is not None:
+            meta["cast"] = [str(n).strip() for n in body.cast if str(n).strip()]
+        if body.beats is not None:
+            meta["beats"] = performance_mode.norm_beats(
+                body.beats, float(body.seconds or meta.get("seconds")
+                                  or performance_mode.SCENE_SECONDS))
+        if body.seconds is not None:
+            secs = float(body.seconds or 0)
+            if secs > 0:
+                meta["seconds"] = secs
+            else:
+                meta.pop("seconds", None)
+        # An acted scene is written through its FIELDS: what is said becomes the
+        # narration text (nothing speaks it — TTS is skipped), and the video
+        # prompt is assembled from cast/setting/beats/lines rather than typed,
+        # so nothing has to be written twice. A hand-edited prompt still wins
+        # (build_h3_prompt honours prompt_override).
+        narration, image_prompt, video_prompt = (
+            body.narration, body.image_prompt, body.video_prompt)
+        if performance_mode.is_performance_mode(meta.get("mode")):
+            acted = performance_mode.acted_meta(
+                {"metadata": meta, "lines": meta.get("lines") or [],
+                 "video_prompt": video_prompt, "image_prompt": image_prompt})
+            meta.update({k: acted[k] for k in ("cast", "seconds", "beats", "setting")})
+            narration = performance_mode.spoken_text(acted)
+            # Cast names stand in for the slots (same as script generation) —
+            # the renderer rebuilds with the actually-resolved references.
+            video_prompt = performance_mode.build_h3_prompt(
+                acted, style_note=_scene_style_note(job_id),
+                picture_names=list(acted.get("cast") or []),
+                audio_names=performance_mode.speakers_in(
+                    acted.get("lines") or [])[:performance_mode.MAX_SPEAKERS_PER_SCENE])
+            # No image engine runs for an acted scene — the setting lives in
+            # metadata, where the prompt and the scene-visual painter read it.
+            image_prompt = ""
         store.upsert_scene(
             job_id,
             sid,
             title=body.title,
-            image_prompt=body.image_prompt,
-            video_prompt=body.video_prompt,
-            narration=body.narration,
+            image_prompt=image_prompt,
+            video_prompt=video_prompt,
+            narration=narration,
             preview_path=current.get("preview_path", ""),
             metadata=meta,
         )
@@ -2964,8 +3524,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
         gapp._persist_script_snapshot(work_dir, rows)
         # A scene whose mode/lines/duration changed must not reuse its previously
         # rendered files — the resume path skips scenes whose final already exists,
-        # which would silently serve the OLD (e.g. narrated) take.
-        if {k: meta.get(k) for k in ("mode", "lines", "duration")} != old_dialogue:
+        # which would silently serve the OLD (e.g. narrated) take. A FINISHED film
+        # keeps its clips: they are the deliverable, and the film editor re-renders
+        # the scene on request rather than leaving a hole in the cut.
+        if ({k: meta.get(k) for k in ("mode", "lines", "duration", "prompt_override")} != old_dialogue
+                and not (Path(work_dir) / "combined.mp4").exists()):
             wd = Path(work_dir)
             stale = [wd / f"scene_{sid:02d}_final.mp4", wd / f"scene_{sid:02d}_narration.wav",
                      wd / f"scene_{sid:02d}_establish.mp4"]
@@ -2975,7 +3538,12 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                     p.unlink(missing_ok=True)
                 except OSError:
                     pass
-    return {"ok": True}
+    # The saved row, so the editor can adopt the server-assembled prompt and
+    # narration without a second fetch.
+    fresh = next((r for r in rows if int(r.get("id") or 0) == sid), None)
+    return {"ok": True,
+            "scene": _scene_to_json(fresh, Path(work_dir) if work_dir else None)
+                     if fresh else None}
 
 
 # ── scene structure: add / remove / reorder (issue #193) ─────────────────────
@@ -3171,6 +3739,33 @@ def regen_scene_preview(job_id: str, scene_id: int, resolution: str = "", style:
     return {"ok": True, "preview_path": str(out), "history": hist}
 
 
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/preview-remove")
+def remove_scene_preview(job_id: str, scene_id: int) -> dict:
+    """Delete a scene's current first-frame image. For an acted scene that
+    stops it riding as the take's opening-composition reference; kept history
+    versions survive, so re-selecting one brings it back."""
+    wd = _job_wd_or_404(job_id)
+    sid = int(scene_id)
+    for f in (wd / f"scene_{sid:02d}_preview.png", wd / f"scene_{sid:02d}_first_frame.png"):
+        f.unlink(missing_ok=True)
+    store = DurableStore.default()
+    try:
+        row = store.get_scene(job_id, sid) or {}
+        if row:
+            store.upsert_scene(job_id, sid,
+                               title=row.get("title") or "",
+                               image_prompt=row.get("image_prompt") or "",
+                               video_prompt=row.get("video_prompt") or "",
+                               narration=row.get("narration") or "",
+                               preview_path="",
+                               metadata=dict(row.get("metadata") or {}))
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    gapp._persist_script_snapshot(wd, rows)
+    return {"ok": True}
+
+
 @api.post("/api/jobs/{job_id}/previews")
 def generate_all_previews(job_id: str, resolution: str = Query(""), style: str = Query(""), force: bool = Query(False)) -> dict:
     """Generate first-frame previews for all scenes (or only missing ones when force=False).
@@ -3184,8 +3779,19 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         store.close()
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
+    # An acted scene has no first frame — it is conditioned on the character
+    # portraits — so a still for one is GPU spent on an image nothing ever
+    # reads. Guarded server-side too: the render path and any older client both
+    # reach this endpoint. A mixed film still gets stills for its other scenes.
+    needs_frame = [r for r in rows
+                   if not performance_mode.is_performance_mode(
+                       (r.get("metadata") or {}).get("mode"))]
+    if not needs_frame:
+        return {"scenes": [], "generated": 0, "failed": [],
+                "skipped": "every scene is acted — none has a first frame"}
 
-    to_generate = rows if force else [r for r in rows if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
+    to_generate = needs_frame if force else [
+        r for r in needs_frame if not (r.get("preview_path") and Path(r["preview_path"]).exists())]
     failed: list[int] = []
     if to_generate:
         worker_urls = gapp._preview_worker_urls()
@@ -3413,6 +4019,9 @@ def list_engines() -> dict:
         "video_engines": eng.public_list_video(),
         "video_availability": {k: _video_avail(e) for k, e in eng.VIDEO_ENGINES.items()},
         "default_video_engine": eng.DEFAULT_VIDEO_ENGINE,
+        # Ref2VA models (performance films) — same availability map above.
+        "reference_engines": eng.public_list_reference(),
+        "default_reference_engine": eng.DEFAULT_REFERENCE_ENGINE,
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }
@@ -3674,6 +4283,293 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     return {"field": field, "value": text}
 
 
+# ── scene mode conversion (narration ⇄ dialogue ⇄ silent) ────────────────────
+# Switching a scene's type CONVERTS its content (same theme and feel, the other
+# shape) instead of leaving mismatched fields — and every mode's last content is
+# stashed in the scene metadata, so switching back RESTORES what was there
+# rather than regenerating it.
+
+_MODE_STASH_FIELDS = {
+    "narration": ("narration", "image_prompt", "video_prompt", "tts_text"),
+    "dialogue": ("lines", "cast", "setting", "camera", "soundscape",
+                 "beats", "seconds", "prompt_override"),
+    "silent": ("image_prompt", "video_prompt", "duration"),
+}
+
+
+def _stash_mode_content(meta: dict, row: dict, mode: str) -> None:
+    """Snapshot what *mode* owns into meta["mode_stash"][mode], in place."""
+    src = {**meta, "narration": row.get("narration") or "",
+           "image_prompt": row.get("image_prompt") or "",
+           "video_prompt": row.get("video_prompt") or ""}
+    stash = dict(meta.get("mode_stash") or {})
+    stash[mode] = {k: src.get(k) for k in _MODE_STASH_FIELDS[mode] if src.get(k)}
+    meta["mode_stash"] = stash
+
+
+class ConvertModeBody(BaseModel):
+    mode: str   # "narration" | "dialogue" | "silent"
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/convert-mode")
+def convert_scene_mode(job_id: str, scene_id: int, body: ConvertModeBody) -> dict:
+    sid = int(scene_id)
+    target = (body.mode or "").strip().lower()
+    if target not in _MODE_STASH_FIELDS:
+        raise HTTPException(400, f"Unknown scene mode: {body.mode!r}")
+    cfg = gapp.load_config()
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        current = store.get_scene(job_id, sid) or {}
+    finally:
+        store.close()
+    if not current:
+        raise HTTPException(404, "Scene not found.")
+    meta = dict(current.get("metadata") or {})
+    src_mode = str(meta.get("mode") or "narration").strip().lower()
+    if performance_mode.is_performance_mode(src_mode):
+        src_mode = "dialogue"
+    if src_mode == target:
+        return {"ok": True, "scene": _scene_to_json(current, gapp._job_work_dir(job_id))}
+
+    # Keep the version being left, so switching back restores it verbatim.
+    _stash_mode_content(meta, current, src_mode)
+    stashed = (meta.get("mode_stash") or {}).get(target) or {}
+
+    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
+    style_name = jc.get("style_name", "")
+    title = current.get("title") or ""
+
+    def _save(**fields) -> dict:
+        base = dict(title=title, image_prompt="", video_prompt="",
+                    narration="", mode=target)
+        if target != "dialogue":
+            base["lines"] = []      # leftover acted lines must not linger
+        if target == "narration":
+            base["duration"] = 0    # nor a silent-scene duration
+        base.update(fields)
+        # carry the updated stash through update_scene's metadata merge
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(job_id, sid, title=title,
+                               image_prompt=current.get("image_prompt") or "",
+                               video_prompt=current.get("video_prompt") or "",
+                               narration=current.get("narration") or "",
+                               preview_path=current.get("preview_path", ""),
+                               metadata=meta)
+        finally:
+            store.close()
+        return update_scene(job_id, sid, SceneUpdate(**base))
+
+    if stashed:
+        # A version of this mode already exists — restore, don't regenerate.
+        if target == "dialogue":
+            return _save(lines=list(stashed.get("lines") or []),
+                         cast=list(stashed.get("cast") or []),
+                         setting=stashed.get("setting") or "",
+                         camera=stashed.get("camera") or "",
+                         soundscape=stashed.get("soundscape") or "",
+                         beats=list(stashed.get("beats") or []),
+                         seconds=float(stashed.get("seconds") or 0),
+                         prompt=stashed.get("prompt_override") or "")
+        if target == "silent":
+            return _save(image_prompt=stashed.get("image_prompt") or "",
+                         video_prompt=stashed.get("video_prompt") or "",
+                         duration=float(stashed.get("duration") or 5))
+        return _save(narration=stashed.get("narration") or "",
+                     image_prompt=stashed.get("image_prompt") or "",
+                     video_prompt=stashed.get("video_prompt") or "",
+                     tts_text=stashed.get("tts_text") or "")
+
+    # No stash: convert the content with the LLM — same theme, the other shape.
+    video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
+    acted = performance_mode.acted_meta({"metadata": meta,
+                                         "lines": meta.get("lines") or [],
+                                         "video_prompt": current.get("video_prompt") or "",
+                                         "image_prompt": current.get("image_prompt") or ""})
+    if target == "silent":
+        # Mechanical: the visuals stay, the voice goes.
+        return _save(image_prompt=current.get("image_prompt") or acted.get("setting") or "",
+                     video_prompt=(current.get("video_prompt")
+                                   if src_mode == "narration" else acted.get("setting") or ""),
+                     duration=5)
+
+    system = ("You are a screenwriter converting one scene of a short AI-generated film "
+              "between formats WITHOUT changing its content: same beat of the story, same "
+              "theme, same feel. Return ONLY a raw JSON object — no markdown, no fences.")
+    if target == "dialogue":
+        cast_pool = ", ".join(dict.fromkeys(
+            [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
+            + [c.get("name", "") for c in gapp._job_characters(cfg, style_name,
+                                                               gapp._job_work_dir(job_id)) or []]
+        )) or "the story's characters"
+        user = (
+            f"Video title: {video_title}\nScene title: {title}\n"
+            f"NARRATED version to stage as an ACTED scene (characters speak on camera, "
+            f"one continuous ~10 second take):\n"
+            f"Narration: {current.get('narration') or ''}\n"
+            f"Visuals: {current.get('image_prompt') or ''}\n\n"
+            "Convey the SAME information and mood through spoken dialogue. Return JSON:\n"
+            f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}\n'
+            '  "setting": one sentence — where this happens (derive it from the visuals)\n'
+            '  "lines": ordered [{"speaker","delivery","text"}] — AT MOST 3 lines and 22 '
+            "spoken words TOTAL\n"
+            '  "beats": [{"t0","t1","action"}]\n'
+            '  "camera": one sentence, a single shot\n'
+            '  "soundscape": diegetic sound only, no music'
+        )
+        raw = _convert_llm_json(user, system, cfg, video_title or title)
+        lines = performance_mode.norm_lines(raw.get("lines"))
+        if not lines:
+            raise HTTPException(502, "The conversion returned no dialogue — try again.")
+        return _save(lines=lines,
+                     cast=[str(n) for n in (raw.get("cast") or []) if str(n).strip()],
+                     setting=str(raw.get("setting") or ""),
+                     camera=str(raw.get("camera") or ""),
+                     soundscape=str(raw.get("soundscape") or ""),
+                     beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
+                     seconds=0, prompt="")
+
+    # target == narration: the acted content becomes a narrated beat.
+    plan = (jc.get("create_brief") or {}).get("scene_plan") if isinstance(jc, dict) else None
+    if not (isinstance(plan, dict) and plan.get("scene_words_max")):
+        plan = gapp.style_script_plan(gapp.style_settings(cfg, style_name))
+    lines_txt = "\n".join(f'  {ln.get("speaker")}: "{ln.get("text")}"'
+                          for ln in (meta.get("lines") or []))
+    user = (
+        f"Video title: {video_title}\nScene title: {title}\n"
+        f"ACTED version to rewrite as a NARRATED scene (voice-over over a moving still):\n"
+        f"Setting: {acted.get('setting') or ''}\nDialogue:\n{lines_txt or '  (none)'}\n\n"
+        "Convey the SAME information and mood as narrator voice-over. Return JSON:\n"
+        f'  "narration": about {plan["scene_words_target"]} words, NEVER more than '
+        f'{plan["scene_words_max"]} — the scene must stay 10-15 seconds spoken\n'
+        '  "image_prompt": 60-100 word detailed STATIC first-frame description (FLUX), '
+        "no motion verbs, derived from the setting\n"
+        '  "video_prompt": 30-50 word motion description (one continuous shot)'
+    )
+    raw = _convert_llm_json(user, system, cfg, video_title or title)
+    narration = str(raw.get("narration") or "").strip()
+    if not narration:
+        raise HTTPException(502, "The conversion returned no narration — try again.")
+    image_prompt = str(raw.get("image_prompt") or acted.get("setting") or "").strip()
+    combined = gapp._compose_visual_style(json.loads(
+        _row_to_dict(job).get("metadata_json") or "{}").get("style", "") if job else "",
+        cfg, style_name)
+    return _save(narration=narration,
+                 image_prompt=_apply_style_prefix(combined, image_prompt),
+                 video_prompt=str(raw.get("video_prompt") or "").strip() or image_prompt)
+
+
+def _convert_llm_json(user: str, system: str, cfg: dict, label: str) -> dict:
+    try:
+        with _track_op("Converting scene", label):
+            text = _llm_complete(system, user, cfg, max_tokens=900).strip()
+    except Exception as e:
+        raise HTTPException(503, f"Conversion failed: {str(e).splitlines()[0][:200]}")
+    try:
+        return json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        raise HTTPException(502, "The LLM did not return a valid scene — try again.")
+
+
+class ActedRegenBody(BaseModel):
+    instruction: str = ""   # optional "tell it how" steering (Re-generate popover)
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-acted")
+def regenerate_acted_scene(job_id: str, scene_id: int,
+                           body: ActedRegenBody | None = None) -> dict:
+    """Rewrite ONE acted scene with the LLM — setting, dialogue, beats, camera,
+    sound — keeping the film's context and cast. The narrated fields have
+    per-field regen buttons; an acted scene is one coherent take, so it
+    regenerates whole. Persists through update_scene, which reassembles the
+    prompt exactly as a hand edit would."""
+    body = body or ActedRegenBody()
+    sid = int(scene_id)
+    cfg = gapp.load_config()
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        rows = store.scene_rows(job_id)
+        current = store.get_scene(job_id, sid) or {}
+    finally:
+        store.close()
+    meta = dict(current.get("metadata") or {})
+    if not performance_mode.is_performance_mode(meta.get("mode")):
+        raise HTTPException(400, "Not an acted scene — use the per-field regenerate buttons.")
+
+    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
+    jm = json.loads(_row_to_dict(job).get("metadata_json") or "{}") if job else {}
+    video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
+    topic = jc.get("topic") or ""
+    style_name = jc.get("style_name", "")
+    outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
+    cast_names = [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
+    wd = gapp._job_work_dir(job_id)
+    if wd:
+        try:
+            cast_names += [c.get("name", "") for c in
+                           json.loads((Path(wd) / "characters.json").read_text())]
+        except Exception:
+            pass
+    cast_pool = ", ".join(dict.fromkeys(n for n in cast_names if n)) or "the story's characters"
+
+    lines_now = "\n".join(f'  {ln.get("speaker")}: "{ln.get("text")}"'
+                          for ln in (meta.get("lines") or []))
+    system = ("You are a screenwriter for short, AI-generated films. "
+              "Return ONLY a raw JSON object — no markdown, no code fences, no explanation.")
+    user = (
+        f"Video title: {video_title or topic}\nTopic: {topic}\n"
+        f"Full scene outline: {outline}\n\n"
+        f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the characters "
+        f"speak on camera. Current draft:\n"
+        f'Title: {current.get("title") or ""}\nSetting: {meta.get("setting") or ""}\n'
+        f"Dialogue:\n{lines_now or '  (none)'}\n\n"
+        "Return a JSON object with exactly these keys:\n"
+        '  "title": 5-10 word scene title\n'
+        f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}\n'
+        '  "setting": one sentence — where this happens and what is around them\n'
+        '  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
+        '"text": <ONE short spoken sentence>} — AT MOST 3 lines and 22 spoken words TOTAL\n'
+        '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>}\n'
+        '  "camera": one sentence — a single shot, at most one move\n'
+        '  "soundscape": diegetic sound only, no music'
+        + _instruction_note(body.instruction)
+    )
+    try:
+        with _track_op("Regenerating acted scene", video_title or f"scene {sid}"):
+            text = _llm_complete(system, user, cfg, max_tokens=900).strip()
+    except Exception as e:
+        raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
+    try:
+        raw = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        raise HTTPException(502, "The LLM did not return a valid scene — try again.")
+
+    lines = performance_mode.norm_lines(raw.get("lines"))
+    if not lines:
+        raise HTTPException(502, "The LLM returned a scene with no dialogue — try again.")
+    return update_scene(job_id, sid, SceneUpdate(
+        title=str(raw.get("title") or current.get("title") or ""),
+        image_prompt="",
+        video_prompt=current.get("video_prompt") or "",
+        narration="",
+        mode=meta.get("mode") or "dialogue",
+        lines=lines,
+        cast=[str(n) for n in (raw.get("cast") or []) if str(n).strip()],
+        setting=str(raw.get("setting") or ""),
+        camera=str(raw.get("camera") or ""),
+        soundscape=str(raw.get("soundscape") or ""),
+        beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
+        # Length follows the new words (update_scene recomputes via acted_meta).
+        seconds=0,
+        prompt=""  # a rewrite supersedes any pinned prompt
+    ))
+
+
 def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
     """Prepend combined_style to image_prompt, skipping if already present."""
     ip = (image_prompt or "").strip()
@@ -3730,6 +4626,12 @@ def create_improve(body: BriefImproveBody) -> dict:
     except Exception as e:
         raise HTTPException(503, f"Improve failed: {str(e).splitlines()[0][:200]}")
     return {"value": text}
+
+
+def _job_music_enabled(job_id: str, ss: dict) -> bool:
+    """Whether this film gets a score: the Create-time choice, else the style."""
+    stamped = _job_meta_field(job_id, "music_enabled", None)
+    return bool(ss.get("music_enabled", True)) if stamped is None else bool(stamped)
 
 
 # ── approve & generate (launches the background pipeline) ─────────────────────
@@ -3795,12 +4697,23 @@ def start_generation(body: GenerateBody) -> dict:
 
     n = int(body.n_scenes) if body.n_scenes else len(scene_rows)
     title = body.title or body.video_title
+
+    def _acted_row(row) -> bool:
+        return performance_mode.is_performance_mode(
+            (row.get("metadata") or {}).get("mode"))
+
     scenes = [
         Scene(
             id=int(row["id"]),
             title=row.get("title") or f"Scene {int(row['id'])}",
-            image_prompt=_apply_style_prefix(combined_style, row.get("image_prompt") or title),
-            video_prompt=row.get("video_prompt") or row.get("image_prompt") or title,
+            # An acted scene has no image prompt BY DESIGN — the title fallback
+            # is a classic-scene safety net, and back-filling it here poisoned
+            # the cover prompt with the film title (which the model then
+            # painted, misspelled, into the "text-free" background).
+            image_prompt=("" if _acted_row(row) else
+                          _apply_style_prefix(combined_style, row.get("image_prompt") or title)),
+            video_prompt=row.get("video_prompt") or ("" if _acted_row(row) else
+                                                     row.get("image_prompt") or title),
             narration=row.get("narration") or "",
             negative_prompt=video_neg,
             # Dialogue/performance fields ride in the scene metadata; dropping
@@ -3825,27 +4738,21 @@ def start_generation(body: GenerateBody) -> dict:
     # blocking HTTP request). No-op when the job has no characters, and a no-op
     # fast path when previews already exist (the interactive editor already made
     # them). Best-effort: any failure falls back to the normal first-frame path.
+    # A performance film conditions on the portraits themselves and renders no
+    # first frame, so it needs the character looks but never the scene previews.
+    performance_film = bool(scenes) and all(
+        performance_mode.is_performance(s) for s in scenes)
     try:
         if gapp._job_characters(cfg, ss["name"], work_dir):
             (work_dir / "progress.json").write_text(json.dumps(
                 {"pct": 0, "msg": "Building character looks…", "ts": time.time()}))
             gapp.generate_all_script_portraits(work_dir, ss["name"])
-            (work_dir / "progress.json").write_text(json.dumps(
-                {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
-            generate_all_previews(job_id, resolution, body.style or "")
+            if not performance_film:
+                (work_dir / "progress.json").write_text(json.dumps(
+                    {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
+                generate_all_previews(job_id, resolution, body.style or "")
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
-
-    # Per-shot stills for dialogue lines (speaker close-ups in the scene setting) —
-    # the talking-head model needs a large, clear face; a wide scene frame gives
-    # poor lip-sync. Best-effort: a missing still falls back to the scene frame.
-    try:
-        made = gapp.generate_dialogue_shot_stills(job_id, ss["name"], resolution)
-        if made:
-            (work_dir / "progress.json").write_text(json.dumps(
-                {"pct": 0, "msg": f"Rendered {made} dialogue shot still(s)…", "ts": time.time()}))
-    except Exception as e:
-        gapp.logger.warning("Dialogue shot pre-build failed (non-fatal): %s", e)
 
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({
@@ -3874,6 +4781,9 @@ def start_generation(body: GenerateBody) -> dict:
         "image_engine": ss.get("image_engine"),
         # The style's video engine drives the scene I2V model (LTX / MiniMax H3).
         "video_engine": ss.get("video_engine"),
+        # Ref2VA model for performance films (portraits + dialogue, no first
+        # frame). Ignored by every narrated render.
+        "reference_engine": ss.get("reference_engine"),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).
@@ -3892,6 +4802,9 @@ def start_generation(body: GenerateBody) -> dict:
         "first_pass_steps": ss.get("first_pass_steps"),
         "second_pass_cfg": ss.get("second_pass_cfg"),
         "second_pass_steps": ss.get("second_pass_steps"),
+        # Score this film? The Create-time choice (stamped on the job) wins over
+        # the style's default; music is a final-mix ingredient either way.
+        "music_enabled": _job_music_enabled(job_id, ss),
         "music_vol": ss.get("music_vol"),
         "voice_vol": ss.get("voice_vol"),
         "ambient_vol": ss.get("ambient_vol"),
@@ -4269,8 +5182,13 @@ def remix_load(work_dir: str = Query("")) -> dict:
         raise HTTPException(404, "No job available.")
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
-    if not combined.exists() or not music.exists():
+    # A performance film has no score and no separate narration track — its
+    # audio comes out of the video model with the picture — so a missing music
+    # track is normal there, not a broken film. The mixer is reported as
+    # unavailable instead of 404ing the whole screen.
+    if not combined.exists():
         raise HTTPException(404, f"Required files not found in {wd.name}.")
+    can_remix = music.exists()
     # Preview the actual published final (full voice/music/ambient mix) — the
     # same file Publish reads. Globbing the work dir returned combined.mp4
     # (narration only, no music) before any remix existed. See issue #14.
@@ -4287,6 +5205,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
     return {
         "work_dir": str(wd),
         "final_url": _busted_file_url(final_vid),
+        # False for performance films: there is no music or narration stem to
+        # re-balance, so the mix controls have nothing to act on.
+        "can_remix": can_remix,
         "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
         "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
         "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
@@ -4317,6 +5238,9 @@ def remix_apply(body: RemixBody) -> dict:
     combined = wd / "combined.mp4"
     music = wd / "background_music.wav"
     ambient = wd / "ambient.wav"
+    if not music.exists():
+        raise HTTPException(400, "This film has no music or narration track to re-mix — "
+                                 "its audio was generated with the picture.")
     with _track_op("Remixing audio", wd.name):
         final_path, message = gapp.on_remix(
             str(combined), str(music),
@@ -9621,7 +10545,7 @@ def queue_approve(body: QueueApproveBody) -> dict:
     return {"ok": True, "queue": yt.load_queue()}
 
 
-def _job_meta_field(job_id: str, key: str, default: str = "") -> str:
+def _job_meta_field(job_id: str, key: str, default=""):
     try:
         store = DurableStore.default()
         try:
@@ -10307,9 +11231,12 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     if not scene_finals:
         raise ValueError("No rendered scenes found. Re-render scenes first.")
 
+    # Music is optional: acted films carry their voices in-picture and never
+    # get a score, and any film can switch music off — the final is then the
+    # concatenation itself. Refusing here left those films with no way to
+    # rebuild after a scene re-shoot.
     music_path = wd / "background_music.wav"
-    if not music_path.exists():
-        raise ValueError("No background music found in this film folder.")
+    music_on = bool(_film_job_config(wd).get("music_enabled", True)) and music_path.exists()
 
     final_path = gapp._final_path_for_work_dir(wd)
     combined = wd / "combined.mp4"
@@ -10322,23 +11249,39 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
 
     with _reassemble_lock(wd), _track_op(op_name, wd.name):
         from pipeline.assembler import (concatenate_scenes, ensure_video_resolution,
-                                        mix_background_music)
+                                        mix_background_music, _get_video_dimensions)
         from pipeline.comfyui import ltx_dimensions
-        concatenate_scenes(scene_finals, combined)
-        ambient = wd / "ambient.wav"
-        mix_background_music(
-            combined, music_path, final_path,
-            volume=music_vol,
-            voice_volume=voice_vol,
-            ambient_path=ambient if ambient.exists() else None,
-            ambient_volume=ambient_vol,
-        )
-        # Same normalisation the full render applies after mixing: a scene
-        # re-rendered at a rounded-off size would otherwise leave the film off
-        # its selected resolution. No-op when the concat already matches.
+        # The concat filter refuses mixed sizes, and one odd clip (e.g. a
+        # re-shoot made before dimension rounding was unified) used to fail the
+        # whole rebuild. Normalize stragglers to the film's grid first.
         res_name = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(res_name, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
-        ensure_video_resolution(final_path, *ltx_dimensions(vid_w, vid_h))
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
+        for clip in scene_finals:
+            try:
+                if _get_video_dimensions(clip) != (vid_w, vid_h):
+                    gapp.logger.info("Reassemble: normalizing %s to %dx%d",
+                                     clip.name, vid_w, vid_h)
+                    ensure_video_resolution(clip, vid_w, vid_h)
+            except Exception:
+                pass  # let the concat report it if the clip is truly broken
+        concatenate_scenes(scene_finals, combined)
+        ambient = wd / "ambient.wav"
+        if music_on:
+            mix_background_music(
+                combined, music_path, final_path,
+                volume=music_vol,
+                voice_volume=voice_vol,
+                ambient_path=ambient if ambient.exists() else None,
+                ambient_volume=ambient_vol,
+            )
+        else:
+            # No score: the clips already carry their own audio.
+            import shutil
+            shutil.copy2(combined, final_path)
+        # Same normalisation the full render applies after mixing. No-op when
+        # the concat already matches.
+        ensure_video_resolution(final_path, vid_w, vid_h)
         _maybe_burn_first_frame_cover(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,
         # so say so instead of leaving the manifest pointing at the upscale (or
@@ -10831,191 +11774,61 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         _finish_film_task_error(task_id, e)
 
 
-def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
-                           instruction: str = "") -> None:
-    """Background thread: fully re-render a DIALOGUE scene — per-shot stills,
-    per-line TTS + EchoMimic talking heads, LTX silent shots, establishing
-    push-in, concat — mirroring the full render's dialogue path
-    (resume_generation), so a dialogue scene added or edited post-render can be
-    built from the edit screen. The classic worker (_run_video_rerender) can't
-    render these: dialogue audio is per-line, there is no scene_NN_narration.wav."""
-    import shutil
+def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        instruction: str = "") -> None:
+    """Background thread: re-render an ACTED scene as one H3 Ref2VA generation.
 
-    from pipeline.assembler import fit_video_canvas
-    from pipeline.comfyui import generate_keyframed_clip, ltx_dimensions
-    from pipeline.dialogue_render import render_dialogue_scene, NARRATOR
-    from pipeline.scene_video import generate_scene_video as gen_scene_video
+    Acted scenes carry their own voices in-picture, so there is no
+    scene_NN_narration.wav for the classic worker (_run_video_rerender) to mux
+    — the whole scene is regenerated from its cast portraits and lines."""
+    from pipeline.llm import Scene
+    from resume_generation import render_performance_scene
 
     cfg = gapp.load_config()
     md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
     final_path = wd / f"scene_{sid:02d}_final.mp4"
 
     try:
-        lines = [ln for ln in (md.get("lines") or []) if isinstance(ln, dict)]
-        if not lines:
-            raise RuntimeError("Dialogue scene has no shots — add a line or a silent shot first.")
-        echo_hosts = [h for h in (cfg.get("echomimic_workers") or [])
-                      if str(h).startswith(("http://", "https://"))]
-        if not echo_hosts:
-            raise RuntimeError("No echomimic_workers configured — dialogue scenes need a talking-head worker.")
         pool = _shared_edit_render_pool()
         if pool is None:
             raise RuntimeError("No ComfyUI workers reachable.")
-        tts_host = _first_live_tts_host(cfg)
 
+        from pipeline.comfyui import ltx_dimensions
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
-        vid_w, vid_h = gapp._RESOLUTIONS.get(resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        vid_w, vid_h = gapp._RESOLUTIONS.get(
+            resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        # The full render rounds to the models' ×64 grid (1920×1080 → 1920×1024);
+        # a re-shoot at the raw size concats against the original scenes with a
+        # mismatched height and the whole reassembly fails.
         vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
-
-        _film_checkpoint(task_id)
-        # Per-shot stills (solo speaker close-ups in the scene setting) — the full
-        # render pre-builds these before rendering. Best-effort: a missing still
-        # falls back to the scene frame / portrait inside make_still.
-        _film_tasks[task_id] = {"status": "running", "step": "shots"}
-        try:
-            gapp.generate_dialogue_shot_stills(job_id_from_work_dir(wd),
-                                               jc.get("style_name") or "",
-                                               resolution, worker_pool=pool)
-        except Exception:
-            gapp.logger.warning("Dialogue shot-still pre-build failed — render falls back to the scene frame",
-                                exc_info=True)
-
-        voice_ref_for, make_still, prompt_for = gapp._dialogue_resolvers(
-            cfg, wd, jc.get("voice_ref") or "", vid_width=vid_w, vid_height=vid_h)
-
-        video_prompt = (row.get("video_prompt") or row.get("image_prompt") or "").strip()
-        style_clean = jc.get("style", "").strip().rstrip(".")
-        if style_clean and video_prompt and not video_prompt.startswith(style_clean):
-            video_prompt = f"{style_clean}. {video_prompt}"
-        # One-off steering only reaches the motion prompts (silent shots); the
-        # spoken lines are authored text and are voiced verbatim.
-        video_prompt = gapp._apply_prompt_instruction(video_prompt, instruction)
 
         scene = Scene(
             id=sid,
-            title=row.get("title") or f"Scene {sid}",
+            title=row.get("title") or "",
             image_prompt=row.get("image_prompt") or "",
-            video_prompt=video_prompt,
-            narration="",
-            negative_prompt=(jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT,
-            mode="dialogue",
-            lines=lines,
-            duration=float(md.get("duration") or 0.0),
+            video_prompt=row.get("video_prompt") or "",
+            narration=row.get("narration") or "",
+            mode=md.get("mode") or "dialogue",
+            lines=[ln for ln in (md.get("lines") or []) if isinstance(ln, dict)],
+            metadata_extra=md,
         )
+        # Guided re-generation: the user's note rides along with the prompt.
+        scene_cfg = dict(jc)
+        scene_cfg["style_name"] = jc.get("style_name") or ""
+        if instruction.strip():
+            scene_cfg["performance_instruction"] = instruction.strip()
 
-        image_engine = gapp.engines.resolve(cfg, jc.get("image_engine")
-                                            or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine"))
-        video_engine = _resolve_video_for_job(cfg, jc)
-
-        def silent_video(scene_obj, shot, still, out_clip):
-            """A silent shot (people move, no speech) as an LTX i2v clip from its
-            still — same recipe as the full render's silent_video."""
-            vp = (str((shot or {}).get("video_prompt") or "").strip()
-                  or scene_obj.video_prompt or scene_obj.image_prompt or scene_obj.title)
-            dur = float((shot or {}).get("duration") or 0) or 5.0
-            shot_scene = Scene(id=scene_obj.id, title=scene_obj.title, image_prompt="",
-                               video_prompt=vp, narration="",
-                               negative_prompt=scene_obj.negative_prompt)
-            url = _acquire_render_worker(pool, task_id)
-            try:
-                _film_checkpoint(task_id)
-                raw, _amb = gen_scene_video(
-                    shot_scene, wd, dur, vid_w, vid_h,
-                    float(jc.get("max_clip_secs", 12.0)),
-                    float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
-                    float(jc.get("first_pass_cfg", cfg.get("first_pass_cfg", 1.0))),
-                    int(jc.get("first_pass_steps", cfg.get("first_pass_steps", 8))),
-                    float(jc.get("second_pass_cfg", cfg.get("second_pass_cfg", 3.0))),
-                    int(jc.get("second_pass_steps", cfg.get("second_pass_steps", 6))),
-                    url,
-                    scene_first_frame=Path(still), image_engine=image_engine,
-                    video_engine=video_engine,
-                )
-            finally:
-                pool.release(url)
-            if Path(raw) != Path(out_clip):
-                shutil.move(str(raw), str(out_clip))
-            return Path(out_clip)
-
-        _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
-
-        def _first_shot_still(scene_obj):
-            """The first shot's solo close-up still (push-in target) — only a real
-            in-scene shot still qualifies; see resume_generation's twin."""
-            first = None
-            for ln in (scene_obj.lines or []):
-                ln = ln or {}
-                silent = bool(ln.get("silent")) and not str(ln.get("text") or "").strip()
-                if silent or str(ln.get("text") or "").strip():
-                    first = ln
-                    break
-            if first is None:
-                return None
-            speaker = "" if (bool(first.get("silent")) and not str(first.get("text") or "").strip()) \
-                else str(first.get("speaker") or NARRATOR).strip()
-            try:
-                still = make_still(scene_obj, speaker, 0)
-            except Exception:
-                return None
-            return still if still and still.name.endswith("_line_00_shot.png") else None
-
-        def establishing(scene_obj):
-            """Open on the wide establishing frame and push in to the first
-            speaker's close-up (LTX first→last keyframes) — same beat as the
-            full render, so an editor-rendered scene matches its siblings."""
-            if _establish_secs <= 0:
-                return None
-            wide = gapp._scene_establishing_frame(
-                wd, scene_obj.id, {"preview_path": row.get("preview_path") or ""}, vid_w, vid_h)
-            if wide is None:
-                return None
-            close = _first_shot_still(scene_obj)
-            if close is None or Path(close) == Path(wide):
-                return None
-            out = wd / f"scene_{scene_obj.id:02d}_establish.mp4"
-            url = _acquire_render_worker(pool, task_id)
-            try:
-                _film_checkpoint(task_id)
-                generate_keyframed_clip(
-                    first_frame_path=wide, last_frame_path=close, output_path=out,
-                    positive_prompt=(
-                        "slow cinematic push-in from the wide establishing shot toward "
-                        "the speaker, steady smooth camera move, the setting and people "
-                        "stay consistent, subtle natural motion"),
-                    negative_prompt="static, jump cut, warp, morph, distortion, flicker, "
-                                    + ((jc.get("video_negative_prompt") or "").strip() or llm.NEGATIVE_PROMPT),
-                    width=vid_w, height=vid_h,
-                    duration_seconds=_establish_secs,
-                    lora_strength=float(jc.get("lora_strength", cfg.get("lora_strength", 0.5))),
-                    comfy_url=url,
-                )
-            finally:
-                pool.release(url)
-            return out
-
-        @contextmanager
-        def line_cm(scene_obj, idx, n_lines, speaker):
-            _film_checkpoint(task_id)
-            who = "silent shot" if speaker == "silent" else f"{speaker} speaks"
-            _film_tasks[task_id] = {"status": "running",
-                                    "step": f"shot {idx + 1}/{n_lines} — {who}"}
-            yield
-
-        render_dialogue_scene(
-            scene, wd,
-            voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
-            echomimic_host=echo_hosts[0],
-            tts_host=tts_host,
-            tts_engine=jc.get("tts_engine", cfg.get("default_tts_engine", "openf5")),
-            tts_language=jc.get("tts_language", cfg.get("default_tts_language", "en")),
-            canvas=(vid_w, vid_h),
-            line_cm=line_cm, silent_video=silent_video,
-            establishing=establishing,
-        )
         _film_checkpoint(task_id)
-        # EchoMimic output is portrait-shaped; fit onto the film's canvas so the
-        # cross-scene concat gets uniform dims (same as the full render).
-        fit_video_canvas(final_path, vid_w, vid_h)
+        _film_tasks[task_id] = {"status": "running", "step": "acted scene"}
+        url = pool.acquire()
+        try:
+            render_performance_scene(scene, wd, scene_cfg, comfy_url=url,
+                                     vid_width=vid_w, vid_height=vid_h,
+                                     style_name=scene_cfg["style_name"])
+        finally:
+            pool.release(url)
+
+        _film_checkpoint(task_id)
         video_history.record(wd, sid, final_path)
         # The fresh final supersedes any legacy narration-style artifacts.
         for legacy in (f"scene_{sid:02d}_video.mp4", f"scene_{sid:02d}_clip_01.mp4",
@@ -11027,12 +11840,6 @@ def _run_dialogue_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict
         _finish_film_task_error(task_id, e)
 
 
-# Scene re-renders run as in-process daemon threads, unlike the full film
-# render's separate subprocess — a backend restart kills them silently, mid-
-# flight. This journal persists each dispatched re-render's *intent* (not its
-# progress) so startup can requeue whatever was interrupted, mirroring how a
-# killed full render resumes: the in-flight scene redoes from scratch, and the
-# atomic staging swap means nothing already on disk was lost.
 _RERENDER_JOURNAL_PATH = _ACTIVITY_LOG_PATH.parent / "rerender_journal.json"
 _rerender_journal_lock = threading.Lock()
 
@@ -11093,9 +11900,9 @@ def _run_rerender_logged(target, tid: str, wd: Path, sid: int, component: str, j
         else:
             name, st = f"Re-rendered scene {sid}", "done"
             # Learn this op's duration so the next re-render predicts its ETA.
-            # Dialogue scenes render per-line talking heads and take far longer
+            # Acted scenes render as one H3 generation and take far longer
             # than an LTX clip — keep their timings out of the "video" average.
-            timing_key = "dialogue" if target is _run_dialogue_rerender else component
+            timing_key = "dialogue" if target is _run_acted_rerender else component
             w, h = _film_job_dims(str(wd))
             film_timing.record(f"rerender_{timing_key}", end - started, width=w, height=h)
         # Full grouped/persisted history entry (under the film), like every other
@@ -11174,10 +11981,10 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_narration_rerender
     elif component == "image":
         target = _run_image_rerender
-    elif scene_mode == "dialogue":
-        # Dialogue scenes re-render the whole scene: per-line TTS + talking
-        # heads + silent LTX shots (there is no single narration wav to mux).
-        target = _run_dialogue_rerender
+    elif scene_mode in performance_mode.PERFORMANCE_MODES:
+        # Acted scenes re-render whole: one H3 generation carrying its own
+        # voices (there is no single narration wav to mux).
+        target = _run_acted_rerender
     else:
         target = _run_video_rerender
     # Persist the intent before the thread starts, so a restart in any window
@@ -12371,4 +13178,20 @@ def health() -> dict:
 
 if FRONTEND_DIST.exists():
     from fastapi.staticfiles import StaticFiles
-    api.mount("/", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")
+
+    class _SpaStaticFiles(StaticFiles):
+        """index.html must never be cached: it is the pointer to the hashed
+        bundle, and a browser holding a stale copy keeps loading last week's
+        app after every deploy ("do you need to restart the web server?").
+        The hashed assets themselves are immutable and can cache forever."""
+
+        def file_response(self, full_path, stat_result, scope, status_code=200):
+            resp = super().file_response(full_path, stat_result, scope, status_code)
+            name = str(full_path)
+            if name.endswith((".html", "/")) or name.endswith("index.html"):
+                resp.headers["Cache-Control"] = "no-cache"
+            elif "/assets/" in name.replace("\\", "/"):
+                resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+            return resp
+
+    api.mount("/", _SpaStaticFiles(directory=str(FRONTEND_DIST), html=True), name="frontend")

@@ -360,12 +360,16 @@ class ClockResetTests(TempConfigCase):
         cp.assert_called_once()
 
     def test_cadence_status_reflects_a_pending_reset(self):
-        nxt = time.time() + 7200
+        # One "now" throughout: a release stamped even seconds earlier lands on
+        # YESTERDAY when the suite runs inside the minute before midnight, and
+        # count_today is then rightly 0 — the test failed only in that window.
+        now = time.time()
+        nxt = now + 7200
         backend.pq.save_queue([
-            self._entry("d1", status="done", released=time.time() - 60, video_id="v")])
+            self._entry("d1", status="done", released=now, video_id="v")])
         backend.pq.reset_clock("youtube", "chan", next_at=nxt)
         chans, _ = backend._publish_cadence_status(
-            app.load_config(), backend.pq.load_queue(), time.time())
+            app.load_config(), backend.pq.load_queue(), now)
         info = chans["chan"]
         self.assertTrue(info["reset_pending"])
         self.assertIsNone(info["last_released"])       # voided by the reset

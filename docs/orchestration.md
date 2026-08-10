@@ -19,7 +19,7 @@ Task states: `queued`, `leased`, `running`, `succeeded`, `failed_retryable`,
 - `acquire_next_task` — expires stale leases, then atomically leases the
   highest-priority ready task whose dependencies have all succeeded, respecting
   `max_attempts`. Scheduling filters on the coarse `worker_kind` column
-  (`comfy` / `tts` / `local` / `ui` / `echomimic`).
+  (`comfy` / `tts` / `local` / `ui`).
 - `expire_leases` / `recover_incomplete_tasks` — overdue or interrupted leased/running
   tasks become `lost` (ready for retry).
 - `start_task` / `heartbeat_task` / `complete_task` / `fail_task` (retryable vs terminal
@@ -30,8 +30,9 @@ Task states: `queued`, `leased`, `running`, `succeeded`, `failed_retryable`,
 ## The generation plan
 
 `ensure_generation_plan` builds a job's task DAG: a pre-completed `story.ready` root;
-per scene image → narration → video → mux (dialogue scenes instead get per-line
-`scene.dialogue.line` echomimic tasks); a `music.generate`; and a `video.finalize`.
+per scene image → narration → video → mux (an acted scene instead gets a single
+`scene.performance.generate` task); a `music.generate` unless music is off or every scene
+is acted; and a `video.finalize`.
 Every task is stamped with a `resource_class` (e.g. `comfy:image`, `comfy:video`, `tts`)
 from config. Scenes are upserted as durable records; script-time previews let the plan
 skip already-satisfied image tasks via artifacts.
@@ -62,7 +63,7 @@ Two execution models coexist; **the monolithic path drives normal renders**:
   tasks of the job (`retry_failed_tasks`); cancel SIGTERMs the render process and marks
   the job cancelled.
 - `/api/workers/status` — live read-only probes (`up`/`busy` per worker: ComfyUI queue,
-  TTS `/health`, EchoMimic `worker_alive`). Nothing is persisted.
+  TTS `/health`). Nothing is persisted.
 - `/api/workers/control` — start/stop/restart a host's worker containers over SSH
   (`scripts/worker.sh`).
 - UI: **Progress** screen (task list with attempts and errors, status counts, per-kind

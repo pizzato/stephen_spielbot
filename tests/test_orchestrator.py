@@ -186,3 +186,89 @@ class DurableStoreTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PerformancePlanTests(unittest.TestCase):
+    """Performance films plan one Ref2VA task per scene — no image/narration/
+    mux quartet and no music (each clip carries its own audio)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.store = DurableStore(self.root / "orchestrator.sqlite3")
+        self.work_dir = self.root / "job"
+        self.work_dir.mkdir()
+        self.job_id = job_id_from_work_dir(self.work_dir)
+        self.scenes = [
+            {"id": 1, "title": "Scene 1", "image_prompt": "", "video_prompt": "<Picture 1> is X",
+             "narration": "Spoken words.",
+             "metadata": {"mode": "performance", "cast": ["X"], "seconds": 10,
+                          "lines": [{"speaker": "X", "text": "Spoken words."}]}},
+            {"id": 2, "title": "Scene 2", "image_prompt": "", "video_prompt": "<Picture 1> is X",
+             "narration": "More words.",
+             "metadata": {"mode": "performance", "cast": ["X"], "seconds": 10,
+                          "lines": [{"speaker": "X", "text": "More words."}]}},
+        ]
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _deps(self, task):
+        rows = self.store._conn.execute(
+            "SELECT depends_on_id FROM task_dependencies WHERE task_id = ?", (task,)).fetchall()
+        return sorted(r["depends_on_id"] for r in rows)
+
+    def _plan(self, scenes=None):
+        self.store.ensure_generation_plan(
+            self.job_id, self.work_dir, "Demo", scenes or self.scenes,
+            {"vid_width": 704, "vid_height": 1280,
+             "resource_classes": {"image": "comfy:image", "music": "comfy:music",
+                                  "video": "comfy:video", "narration": "tts",
+                                  "finalize": "local"}})
+        return {row["id"]: row for row in self.store.task_rows(self.job_id)}
+
+    def test_one_task_per_scene_and_no_music(self):
+        rows = self._plan()
+        kinds = sorted(r["kind"] for r in rows.values())
+        self.assertEqual(kinds, ["scene.performance.generate", "scene.performance.generate",
+                                 "story.ready", "video.finalize"])
+        self.assertIsNone(self.store.get_task(task_id(self.job_id, "music")))
+        for sid in (1, 2):
+            self.assertIsNone(self.store.get_task(task_id(self.job_id, "scene", sid, "image")))
+            self.assertIsNone(self.store.get_task(task_id(self.job_id, "scene", sid, "narration")))
+            self.assertIsNone(self.store.get_task(task_id(self.job_id, "scene", sid, "mux")))
+
+    def test_finalize_waits_on_every_scene(self):
+        self._plan()
+        self.assertEqual(self._deps(task_id(self.job_id, "final")),
+                         sorted(task_id(self.job_id, "scene", sid, "performance")
+                                for sid in (1, 2)))
+
+    def test_performance_task_payload(self):
+        self._plan()
+        task = self.store.get_task(task_id(self.job_id, "scene", 1, "performance"))
+        self.assertEqual(task.payload["resource_class"], "comfy:video")
+        self.assertEqual(task.payload["vid_width"], 704)
+        self.assertIn("<Picture 1>", task.payload["video_prompt"])
+
+    def test_narrated_films_are_unchanged(self):
+        # A film with no performance scenes must still plan music + the quartet.
+        rows = self._plan(scenes=[{"id": 1, "title": "S", "image_prompt": "img",
+                                   "video_prompt": "vid", "narration": "words"}])
+        self.assertIn(task_id(self.job_id, "music"), rows)
+        for part in ("image", "narration", "video", "mux"):
+            self.assertIn(task_id(self.job_id, "scene", 1, part), rows)
+        self.assertIn(task_id(self.job_id, "music"),
+                      self._deps(task_id(self.job_id, "final")))
+
+    def test_mixed_film_keeps_music(self):
+        # Only an all-performance film drops the score; a mixed script is a
+        # narrated film that happens to contain a performance scene.
+        mixed = [self.scenes[0],
+                 {"id": 2, "title": "S2", "image_prompt": "img", "video_prompt": "vid",
+                  "narration": "words"}]
+        rows = self._plan(scenes=mixed)
+        self.assertIn(task_id(self.job_id, "music"), rows)
+        self.assertIn(task_id(self.job_id, "scene", 1, "performance"), rows)
+        self.assertIn(task_id(self.job_id, "scene", 2, "video"), rows)

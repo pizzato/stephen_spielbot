@@ -115,7 +115,7 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
                 <span className="muted" style={{ fontSize: 13 }}>remaining</span>
               </div>
               <div className="muted mono mt-8" style={{ fontSize: 11 }}>
-                full render {eta.total_text} · {eta.workers.comfy}× comfy{eta.workers.comfy_reserved ? ` (+${eta.workers.comfy_reserved} held for UI)` : ''} · {eta.workers.tts}× tts{eta.workers.echomimic ? ` · ${eta.workers.echomimic}× echomimic` : ''}
+                full render {eta.total_text} · {eta.workers.comfy}× comfy{eta.workers.comfy_reserved ? ` (+${eta.workers.comfy_reserved} held for UI)` : ''} · {eta.workers.tts}× tts
               </div>
               {eta.confidence === 'rough' && (
                 <div className="muted mt-8" style={{ fontSize: 11.5 }}>

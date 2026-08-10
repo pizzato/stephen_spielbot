@@ -19,13 +19,18 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 ## What it does
 
-1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) writes a multi-scene script with visual prompts, narration, and a mood-matched music description
+1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) drafts and critiques the whole story as prose, you review it, and it is then divided into scenes with visual prompts, narration, and a mood-matched music description
 2. **Images** — FLUX.2 Klein (the default per-style image engine) generates each scene's first-frame still, with optional recurring [characters](docs/characters.md) kept consistent via reference images
 3. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) animates each scene from its still via ComfyUI (local or distributed workers)
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
-5. **Dialogue** — scenes can instead be talking-head [dialogue or silent scenes](docs/dialogue_scenes.md): characters speak their lines in their own cloned voices, lip-synced by EchoMimic-V3
-6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description
+5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
+6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film)
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
+
+A film's **format** decides how the story is staged: narrated throughout, entirely
+[**acted**](docs/performance_films.md) — the characters speaking on screen, no narrator and
+no music — or mixed, with acted, narrated and silent scenes side by side. Each scene then
+takes the render path its mode asks for.
 
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation, AI-suggested video ideas, per-scene editing with image
@@ -43,7 +48,7 @@ videos.
 vLLM server **or** an API key (Claude, Grok, or OpenAI) for script generation.
 **Workers** (GPU machines): Docker + the
 [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) —
-ComfyUI, TTS, and EchoMimic all run as containers that `make install` builds and
+ComfyUI and TTS run as containers that `make install` builds and
 deploys, so a worker needs no Python of its own. One machine can be both.
 
 ```bash
@@ -85,7 +90,7 @@ The source for that site is [`docs/`](docs/) — `make docs-serve` previews it l
 Guides that also read well on GitHub:
 
 - [`docs/characters.md`](docs/characters.md) — recurring characters: consistent looks, reference images, voices
-- [`docs/dialogue_scenes.md`](docs/dialogue_scenes.md) — dialogue, silent, and narration scene modes; the EchoMimic worker
+- [`docs/performance_films.md`](docs/performance_films.md) — acted scenes and performance films: portraits + dialogue straight to video, no first frame or TTS
 - [`docs/orchestration.md`](docs/orchestration.md) — the durable SQLite task layer and how renders execute
 - [`docs/youtube_setup.md`](docs/youtube_setup.md) — Google Cloud / OAuth setup for YouTube publishing
 - [`docs/x_setup.md`](docs/x_setup.md) — X (Twitter) developer app setup for posting

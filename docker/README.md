@@ -1,6 +1,6 @@
 # Containerized workers
 
-Run the GPU workers (ComfyUI + TTS + EchoMimic) as containers so a new machine
+Run the GPU workers (ComfyUI + TTS) as containers so a new machine
 joins the render fleet with one command instead of the SSH + Miniconda + rsync
 bootstrap (issue #12).
 
@@ -12,14 +12,11 @@ machine over HTTP.
 |---|---|---|
 | `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.3 / ACE-Step / FLUX — all native nodes) |
 | `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server (`pipeline/tts_server.py`) |
-| `echomimic` | 8190 | EchoMimic-V3 talking-head server for dialogue scenes (`pipeline/echomimic_server.py`) |
 | `autoheal` | — | Restarts any container whose (GPU-aware) healthcheck fails |
 
 ComfyUI models (~49 GB) are **not** baked into the image — they live on the host
-and are mounted in, so images stay small and rebuild fast. The EchoMimic weights
-(~27 GB) live in a named Docker volume, fetched from Hugging Face on first use;
-Chatterbox weights (~3.5 GB) land in the TTS container's HF cache (pre-warmed by
-`make install`).
+and are mounted in, so images stay small and rebuild fast. Chatterbox weights
+(~3.5 GB) land in the TTS container's HF cache (pre-warmed by `make install`).
 
 ## Prerequisites (per worker machine)
 
@@ -43,8 +40,7 @@ Per host it: preflights Docker + the NVIDIA toolkit; rsyncs the build context
 `docker/.env` with `MODELS_DIR=~/github/ComfyUI/models` (the host's existing
 models — **not** re-downloaded); **stops any native ComfyUI** so the container
 can take `:8188` + the GPU; `docker compose up -d --build`; waits for health.
-Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs and
-`echomimic_workers` to the `http://host:8190` URLs.
+Afterwards it rewrites `tts_workers` to the `http://host:8189` URLs.
 
 The Edit film screen's `Upscale video → AI temporal` mode runs Lightricks'
 LTX-2.3 IC-LoRA Pixel Spatial Upscaler on the render workers. The ComfyUI image
@@ -78,9 +74,6 @@ comfy_workers:            # you set these
 tts_workers:              # set by install — http:// selects the HTTP transport
   - http://s1:8189
   - http://s2:8189
-echomimic_workers:        # set by install — talking-head (dialogue scenes)
-  - http://s1:8190
-  - http://s2:8190
 ```
 
 Cover/preview regen has no dedicated worker: while the UI is in use the backend
@@ -98,7 +91,11 @@ the value must be an `http://host:8189` URL.
 | `COMFYUI_REF` | `master` | Pin ComfyUI to a tag/branch/commit for reproducible workers |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
-| `COMFYUI_PORT` / `TTS_PORT` / `ECHOMIMIC_PORT` | `8188` / `8189` / `8190` | Host ports; match them in the controller config |
+| `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |
+| `BUILDER_IMAGE` | `nvidia/cuda:13.0.1-devel-ubuntu24.04` | `-devel` image used only to compile SageAttention (needs `nvcc`); not shipped. Match `BASE_IMAGE`'s CUDA version |
+| `SAGEATTENTION_ARCHS` | `12.0;12.1` | Compute capabilities SageAttention is compiled for — `12.1` = GB10 (DGX Spark), `12.0` = sm_120 Blackwell workstation. Set **empty** on non-Blackwell GPUs to skip the build |
+| `SAGEATTENTION_REF` | `main` | Pin SageAttention to a tag/branch/commit for reproducible workers |
+| `COMFYUI_EXTRA_ARGS` | — (empty) | Extra flags appended to ComfyUI's launch. Set to `--use-sage-attention` to turn SageAttention on |
 
 Temporal AI upscaling is configured by the app and submitted to the worker's
 ComfyUI API after the finished film has been reviewed on the Remix screen. The
@@ -114,6 +111,75 @@ wheel index for your CUDA version (older GPUs: `cu124`/`cu128`, with a matching
 `nvidia/cuda:12.x-runtime-ubuntu24.04` base). If a CUDA base-image tag is missing
 for your architecture, pick another from
 [hub.docker.com/r/nvidia/cuda](https://hub.docker.com/r/nvidia/cuda/tags).
+
+### SageAttention (opt-in)
+
+[SageAttention](https://github.com/thu-ml/SageAttention) replaces attention with
+quantised INT8/FP8 kernels. It ships no aarch64/CUDA-13 wheels and PyPI's build
+does not target sm_121, so the image compiles it from source in a throwaway
+`-devel` stage and installs only the resulting wheel — the CUDA toolkit itself
+never reaches the worker. Expect the first build to take ~20 extra minutes; it
+layer-caches afterwards.
+
+Building it does **not** enable it. Turn it on per worker in `docker/.env`:
+
+```
+COMFYUI_EXTRA_ARGS=--use-sage-attention
+```
+
+then `bash scripts/worker.sh restart <host>`. The flag is global — it applies to
+LTX and FLUX renders too, not just MiniMax H3 — so A/B one worker before rolling
+it out, and check output quality as well as speed: SageAttention is an
+approximation, and the same seed will not reproduce the un-accelerated render.
+To roll back, clear the variable and restart; the kernels stay in the image,
+unused.
+
+Measured on GB10, seed held equal across workers. Two unchanged workers running
+the same job differed by 2.4 %, which is the noise floor these sit against:
+
+| Workload | Un-accelerated | SageAttention | Gain |
+|---|---|---|---|
+| MiniMax H3, 704×1280, 124 frames, 15 steps | 421.8 s | 343.0 s | **1.23×** |
+| MiniMax H3 Turbo, same clip, 4 steps | 230.4 s | 195.5 s | 1.18× |
+| FLUX.2 Klein, 2048², 4 steps | 14.91 s | 13.39 s | 1.11× |
+| FLUX.2 Klein, 1024², 4 steps | 3.23 s | 3.12 s | 1.04× — noise |
+
+The pattern is the point: attention is quadratic in token count, so the payoff
+tracks how much of the render is attention. Video-sized latents gain most, a 2K
+still gains some, and a 1K still gains nothing measurable — at that size a
+4-step render is mostly request overhead, text encode and VAE, none of which
+this touches. Don't expect a flat speedup across engines.
+
+**Video does not merely drift — it diverges.** Same seed, same everything else,
+measured as per-pixel RMSE against the un-accelerated render:
+
+| Workload | Mean RMSE | Verdict |
+|---|---|---|
+| FLUX.2 Klein, 1024² / 2048² | 4.57 / 5.64 of 255 (1.8–2.2 %) | fine detail shifts |
+| MiniMax H3, 15 steps | 19.9 of 255 (7.8 %) | a different take |
+| MiniMax H3 Turbo, 4 steps | 38.7 of 255 (15.2 %) | a different take |
+
+and within a clip it compounds — turbo's frame 20 differs by RMSE 20, frame 100
+by 49, with ~89 % of pixels off by more than two levels. Fewer steps means each
+step carries more weight, so the same per-step approximation error is damped
+less; a 4-step schedule is roughly twice as sensitive as a 15-step one.
+
+Mean brightness still tracks (H3: 137.4 vs 136.3) and no clip came back black,
+so this is a *different sample*, not a broken one — but do not expect a
+re-render to match. The operational consequence is that **a mixed fleet renders
+mixed output**: the same scene sent to a Sage worker and a non-Sage worker comes
+back as visibly different video, which matters for re-renders, per-scene retakes
+and film reassembly. Roll it out to every worker or none.
+
+When benchmarking, **change the seed between rounds**. ComfyUI caches by
+workflow hash, so re-submitting a seed a worker has already rendered returns the
+cached mp4 in well under a second and looks like an enormous speedup.
+
+Two known failure modes on GB10, both fixed by clearing `COMFYUI_EXTRA_ARGS`:
+Triton has no sm_121 support, so if the flag falls through to SageAttention's
+Triton backend the render can come out black; and a torch upgrade that changes
+the C++ ABI needs an image rebuild, since the wheel is compiled against the
+torch installed at build time.
 
 ## Build once, run everywhere (optional)
 

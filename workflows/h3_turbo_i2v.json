@@ -186,7 +186,8 @@
         0
       ],
       "lora_name": "{{LORA_NAME}}",
-      "strength": 1.0
+      "strength": 1.0,
+      "low_vram": false
     }
   }
 }

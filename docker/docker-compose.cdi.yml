@@ -28,11 +28,3 @@ services:
             - driver: cdi
               device_ids:
                 - nvidia.com/gpu=all
-  echomimic:
-    deploy:
-      resources:
-        reservations:
-          devices: !override
-            - driver: cdi
-              device_ids:
-                - nvidia.com/gpu=all

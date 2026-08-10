@@ -21,7 +21,6 @@ Six tabs: **Infrastructure**, **Styles**, **Characters**, **Voices**, **Channels
 
 - **ComfyUI workers** — one URL per line; scenes distribute across them in parallel
 - **TTS workers** — narration endpoints (port 8189, derived by `make install`)
-- **EchoMimic workers** — talking-head endpoints for dialogue scenes (port 8190)
 - **UI worker idle timeout (min)** — how long the UI must be idle before its
   [reserved render worker](../cluster.md#the-reserved-ui-worker) rejoins the pool
 - **Temporal AI upscale timeout (min)**
@@ -133,7 +132,6 @@ those scripts, so they accent the last line instead — nothing when the title f
 | Field | Effect |
 |---|---|
 | **Video length (minutes)** | The style's default runtime. The script's word budget is length × the narrator's cadence, divided into 10–15 s scenes |
-| **Script mode** | Classic or [story-first](create.md#script-mode) |
 | **Visual style** | Appended to every image prompt |
 | **Video / motion style** | Camera and subject movement guidance for video prompts |
 | **Video negative prompt** | Per-style LTX negative; blank uses the built-in quality default |
@@ -146,10 +144,26 @@ those scripts, so they accent the last line instead — nothing when the title f
 **Auto-pick exclude** keeps automation from inventing ideas in this style when topping up
 an empty queue. The manual [AI ideas](ideas.md) screen still offers it.
 
+### Video models
+
+A film can hold two kinds of scene, and each has its own model, picked side by side:
+
+| Picker | Renders |
+|---|---|
+| **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.3 or MiniMax H3 I2V). In a *mixed* film these scenes render on H3 automatically so the whole film matches the acted takes |
+| **Acted (dialogue) scenes** | Each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices (a MiniMax H3 Ref2VA variant) |
+
+**Sampling steps** beneath them is one knob for both: it overrides the step count of every
+MiniMax render in the style — narrated I2V and acted Ref2VA alike. 0 keeps each engine's
+default (Turbo 4, the others 15); LTX ignores it.
+
 ### Narrator & audio
 
 **Voice model** (the TTS engine), **narration language** — which also drives the script's
-language on multilingual engines — and **narrator voice**. Plus the audio mix.
+language on multilingual engines — and **narrator voice**. Plus the audio mix, and the
+**Music** toggle: score every film in this style, or none. Music is mixed in at the very
+end, never baked into a scene — off leaves a film with only its voices and room tone, and
+[Create](create.md#music) can override the choice per film. Acted films never get a score.
 
 **Cadence** replaces the old voice-speed multiplier: it is the narrator's speaking pace in
 **words per minute**. Each voice has a measured *natural* cadence (see the Voices tab);
@@ -196,6 +210,17 @@ image model and visual look (global characters use the default style's). Films i
 their style's cast and can add film-specific characters of their own.
 
 See [Characters](../characters.md) for how consistency is enforced across scenes.
+
+---
+
+## Assets
+
+The location and wardrobe **catalogue** — reference images that outlive one film, scoped
+to styles exactly like characters (global pool + per-style, children inherit). A film's
+[Characters & visuals](script.md#characters--visuals) wall shows the catalogue entries it
+actually uses, read-only; a film's own visual of the same name shadows the catalogue one.
+Each asset has a name, kind, description, an owning style, and a reference image —
+generated in the owning style's look or uploaded.
 
 ---
 

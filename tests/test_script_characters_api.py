@@ -15,6 +15,7 @@ from fastapi.testclient import TestClient
 import app as gapp
 from pipeline.llm import Scene
 from webapp.backend import main as backend
+from scriptstub import stub_script
 from test_styles import _style
 
 
@@ -45,8 +46,7 @@ class ScriptCharacterApiTests(unittest.TestCase):
 
     def _make_job(self, characters):
         scene = Scene(id=1, title="T", image_prompt="Caesar stands.", video_prompt="v", narration="n")
-        with mock.patch.object(backend, "generate_script",
-                               return_value=([scene], "music", "vis", characters)), \
+        with stub_script([scene], characters), \
              mock.patch.object(backend, "_describe_in_background"):
             res = backend._do_script_generate(backend.GenerateScriptBody(
                 topic="Julius Caesar", n_scenes=1, style_name="Hero"))

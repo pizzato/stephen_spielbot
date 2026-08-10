@@ -61,13 +61,13 @@ export default function Create({ seed, meta, onGenerated }) {
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
   const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
+  const [music, setMusic] = useState(true)   // score this film? (style default, overridable here)
   // Script mode ('classic' | 'story'): owned by the style, like the narrator
   // voice and visual style — locked while a style is active, editable under
   // "No style". Story-first drafts + judges a prose story, then hands off to
   // the Script screen's Story view for review and scene division. Dialogue/
   // mixed formats always run classic (story mode is v1 narration-only — the
   // backend enforces the same).
-  const [scriptMode, setScriptMode] = useState(seed?.scriptMode || 'classic')
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
@@ -80,7 +80,7 @@ export default function Create({ seed, meta, onGenerated }) {
     if (!profile) return
     setVoice(profile.voice || voiceChoices[0] || 'Default (F5-TTS)')
     setStyle(profile.visual_style || '')
-    setScriptMode(profile.script_mode === 'story' ? 'story' : 'classic')
+    setMusic(profile.music_enabled !== false)
   }, [profile, voiceChoices])
 
   // In No-style mode, keep a manually chosen voice valid if the voice list changes.
@@ -99,7 +99,6 @@ export default function Create({ seed, meta, onGenerated }) {
     // No-style free fields (locked styles re-sync voice/visuals from the profile).
     if (seed.voice) setVoice(seed.voice)
     if (seed.visualStyle) setStyle(seed.visualStyle)
-    if (seed.scriptMode) setScriptMode(seed.scriptMode)
     if (seed.autoApprove != null) setAutoApprove(!!seed.autoApprove)
   }, [seed])
 
@@ -109,7 +108,6 @@ export default function Create({ seed, meta, onGenerated }) {
     if (!seed || profile) return
     if (seed.voice) setVoice(seed.voice)
     if (seed.visualStyle) setStyle(seed.visualStyle)
-    if (seed.scriptMode) setScriptMode(seed.scriptMode)
   }, [seed, profile])
 
   useEffect(() => {
@@ -155,9 +153,9 @@ export default function Create({ seed, meta, onGenerated }) {
     } catch (e) { setError(e.message) } finally { setImproving('') }
   }
 
-  // The mode this Create run uses: the (style-synced) selection, except that
-  // non-narration formats force classic (mirrors the backend rule).
-  const effMode = format !== 'narration' ? 'classic' : (scriptMode || 'classic')
+  // An all-acted film has no room for a score: every scene already carries the
+  // voices generated with its picture.
+  const musicable = format !== 'dialogue'
 
   const generate = async () => {
     setBusy(true); setError('')
@@ -173,17 +171,13 @@ export default function Create({ seed, meta, onGenerated }) {
         format,
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
-        script_mode: effMode,
+        music: musicable && music,
       }
-      if (effMode === 'story') {
-        // Phase 1: draft the story, then open the Script screen's Story view —
-        // the draft is persisted server-side, so the review survives leaving.
-        const data = await api.generateStory(body)
-        onGenerated(data, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
-      } else {
-        const data = await api.generateScript(body)
-        onGenerated(data, { voice, resolution, autoApprove, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
-      }
+      // Phase 1: draft the story, then open the Script screen's Story view —
+      // the draft is persisted server-side, so the review survives leaving.
+      // Dividing it into scenes (phase 2) is what writes the script.
+      const data = await api.generateStory(body)
+      onGenerated(data, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: data.style_name || profile?.name || '' })
     } catch (e) {
       setError(e.message)
     } finally {
@@ -262,7 +256,7 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Format"
-              hint="Narration = classic voice-over. Dialogue = characters speak, lip-synced (needs characters with a portrait + voice). Mixed = the AI blends narration, dialogue and silent scenes.">
+              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes.">
               <div className="row gap-8">
                 {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed']].map(([f, lbl]) => (
                   <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
@@ -270,29 +264,27 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </Field>
 
-            <Field label="Script mode"
-              hint={format !== 'narration'
-                ? 'Dialogue and Mixed formats always use Classic (story-first is narration-only for now).'
-                : locked
-                  ? 'Set by the style — pick “No style” to experiment.'
-                  : 'Story-first writes and judges the whole story as prose, shows it for review, then divides it into scenes — keeps long videos coherent.'}>
-              <select className="select" value={scriptMode}
-                disabled={locked || format !== 'narration'}
-                onChange={(e) => setScriptMode(e.target.value)} style={{ maxWidth: 380 }}>
-                <option value="classic">Classic — scenes directly</option>
-                <option value="story">Story-first — draft, review, then divide</option>
-              </select>
+            <Field label="Music"
+              hint={musicable
+                ? 'Background score, mixed in at the very end. Off leaves the film with only its voices and room tone.'
+                : 'An acted film carries its own sound — the characters\u2019 voices are generated with the picture, so there is no score.'}>
+              <Check checked={musicable && music} onChange={setMusic} disabled={!musicable}
+                label="Score this film with background music" />
             </Field>
 
             <div className="row center between mt-8 row--wrap gap-16">
-              {effMode === 'story'
-                ? <span className="muted" style={{ fontSize: 12.5 }}>You'll review the story next, then divide it into scenes.</span>
-                : <Check checked={autoApprove} onChange={setAutoApprove} label="Auto-approve the script → send straight to the queue" />}
+              <div className="stack gap-4">
+                <span className="muted" style={{ fontSize: 12.5 }}>
+                  You'll review the story next, then divide it into scenes.
+                  {format === 'dialogue' && ' Each scene becomes one acted clip of about 10 seconds.'}
+                </span>
+                <Check checked={autoApprove} onChange={setAutoApprove}
+                  label="Auto-approve the scenes → straight to the queue after dividing" />
+              </div>
               <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                 disabled={!videoTitle.trim() || busy}
                 onClick={generate}>
-                {busy ? (effMode === 'story' ? 'Drafting the story…' : 'Drafting the script…')
-                  : effMode === 'story' ? '1. Draft the story →' : '1. Generate script →'}
+                {busy ? 'Drafting the story…' : '1. Draft the story →'}
               </Button>
             </div>
           </div>

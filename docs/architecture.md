@@ -7,8 +7,8 @@ machines you own.
 ┌─ Controller ───────────────────────────────┐      ┌─ Worker s1 ────────────┐
 │                                            │      │  comfyui   :8188       │
 │  webapp/frontend  React + Vite SPA         │      │  tts       :8189       │
-│         ↓ /api/*                           │ HTTP │  echomimic :8190       │
-│  webapp/backend   FastAPI  :8001  ─────────┼─────▶│  (Docker, shared GPU)  │
+│         ↓ /api/*                           │ HTTP │  (Docker, shared GPU)  │
+│  webapp/backend   FastAPI  :8001  ─────────┼─────▶│                        │
 │         ↓                                  │      └────────────────────────┘
 │  app.py           config, work dirs, jobs  │      ┌─ Worker s2 ────────────┐
 │  pipeline/*       the render stages        │─────▶│  … same stack …        │
@@ -39,11 +39,12 @@ at the top is the documented key set.
 | Module | Responsibility |
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
-| `story.py` | Story-first script mode — draft, critique, then divide into scenes |
+| `story.py` | Script generation — draft the story, critique it, then divide it into scenes |
+| `performance.py` | Performance films — acted script shape and the Ref2VA prompt assembly |
 | `engines.py` | Image engine bundles (FLUX.2 Klein, FLUX.1 schnell) for generate and edit |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission and per-scene video rendering |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |
-| `echomimic.py`, `dialogue_render.py` | Talking-head dialogue scenes |
+| `performance.py`, `shot_gate.py` | Acted scenes: the H3 prompt, and the speech gate |
 | `assembler.py`, `captions.py`, `cover.py` | Final mux, SRT captions, cover images and first-frame burns |
 | `youtube.py`, `x.py`, `publish_queue.py` | Publishing, multi-channel tokens, the cadence scheduler |
 | `engagement.py` | Comment fetching, reply drafting, the predictive model |
@@ -66,8 +67,8 @@ ready tasks from the durable graph instead of the controller pushing work.
 2. **Script** lets you edit every scene, regenerate any field, and preview first frames.
    Nothing has rendered yet.
 3. **Approve** puts the item in the queue. Starting it launches `resume_generation.py`.
-4. The render fans scenes across the ComfyUI workers, narration across the TTS workers,
-   and dialogue clips across the EchoMimic workers — in parallel, one job per worker.
+4. The render fans scenes across the ComfyUI workers and narration across the TTS
+   workers — in parallel, one job per worker.
 5. `assembler.py` muxes scenes, narration, and music into the final cut.
 6. The final lands at `~/videos/<name>.mp4`, alongside the work directory that produced it.
 

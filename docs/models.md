@@ -17,7 +17,6 @@ rebuilds.
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
 | [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
-| EchoMimic-V3 (+ Wan2.1-Fun-1.3B, chinese-wav2vec2) | ~27 GB | Talking-head dialogue scenes — fetched into the `echomimic` container volume on first use |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
 
 The **OpenF5-TTS-Base** narration weights are fetched by the TTS container on first use.
@@ -76,6 +75,8 @@ field. Three engines ship:
 | **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
 | **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
+| **MiniMax H3 33B Ref2VA** (opt-in) | Not a scene I2V engine: takes character portraits and voice clips instead of a first frame and generates picture + spoken dialogue together. Only [performance films](performance_films.md) use it | MiniMax H3 Community License |
+| **MiniMax H3 33B Ref2VA Turbo** (opt-in) | The same, with the distilled few-step LoRA — measured ~2.3× faster (10.2 min vs 22.9 min for a 10 s scene at 704×1280 on a GB10) | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 
 MiniMax H3 notes:
 
@@ -112,6 +113,39 @@ Turbo variant notes:
   checkpoints are expected upstream; swap the `lora` filename in
   `pipeline/engines.py` to pick one up.
 
+Speed knobs that sit outside the engine picker:
+
+- The base H3 workflow already runs **EasyCache** (`reuse_threshold` 0.2), which
+  skips DiT steps whose latent barely moved. It only pays off when there are
+  steps to skip, so it is wired into the base engine's 15-step path and *not*
+  into turbo's 4-step one — at 4 steps there is nothing left to reuse. Community
+  cache nodes (TeaCache, FirstBlockCache) are alternative implementations of the
+  same trick, not additions: they must not be stacked with EasyCache.
+- **SageAttention** is compiled into the worker image but off by default. It is a
+  quantised attention kernel, so it stacks with caching and helps at *any* step
+  count — including turbo. Measured on GB10 workers (704×1280, 124 frames,
+  15 steps, EasyCache 0.2, same seed both sides): **421.8 s → 343.0 s warm,
+  1.23×**; turbo the same clip, 230.4 s → 195.5 s, 1.18×. Two unchanged workers
+  rendering the same job landed within 2.4 % of each other, so the gap is the
+  kernel, not the machine. The catch is that the output is a *different take* —
+  7.8 % mean pixel RMSE at 15 steps, 15.2 % at turbo's 4 — so a mixed fleet
+  renders mixed video and it should go to every worker or none. Enable it per
+  worker with `COMFYUI_EXTRA_ARGS`; see
+  [SageAttention](https://github.com/pizzato/stephen_spielbot/blob/main/docker/README.md#sageattention-opt-in)
+  in the worker README for the flag, the quality caveat, and the rollback.
+
+Ref2VA notes ([performance films](performance_films.md)):
+
+- The Ref2VA checkpoints are siblings of the I2V ones at the same sizes and
+  quantisation, sharing the encoder and both VAEs — so adding them costs one
+  21 GB download (or 34 GB for the turbo variant), not a second full stack.
+- Turbo needs the **non-pruned** checkpoint for the same reason the I2V turbo
+  does: the pruned files drop `time_embedder` entirely and bake
+  `adaln_proj.linear.weight` to F16, and `adaln_proj` is exactly what the LoRA
+  adapts.
+- The graph needs `MiniMaxH3ReferenceToVideo`, present since ComfyUI v0.30.0
+  (the pinned worker ref), so no image rebuild is required for the base engine.
+
 Manual download:
 
 ```bash
@@ -124,6 +158,13 @@ huggingface-cli download Comfy-Org/MiniMax-H3 vae/minimax_h3_audio_vae_fp32.safe
 # minimax-h3-turbo extras (full non-pruned DiT + distillation LoRA):
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_fl2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 huggingface-cli download larryvrh/MiniMax-H3-Turbo-Lora minimax_h3_turbo_4step_ckpt500.safetensors --local-dir models/loras --local-dir-use-symlinks False
+
+# performance films — the DEFAULT w4a8 (4-bit, needs ComfyUI >= 0.31.0):
+huggingface-cli download Kijai/MiniMax-H3-experimental minimax_h3_ref2va_pruned_w4a8_mixed.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+
+# performance films — minimax-h3-ref (pruned) and minimax-h3-ref-turbo (full):
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_pruned_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 ```
 
 ## Gated weights

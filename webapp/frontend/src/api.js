@@ -166,6 +166,23 @@ export const api = {
   improveBrief: (field, title, direction, styleName, instruction) =>
     req('POST', '/create/improve', { field, title, direction, style_name: styleName || '', instruction: instruction || '' }),
   loadScript: (workDir) => req('GET', `/scripts/load?work_dir=${encodeURIComponent(workDir || '')}`),
+  // Performance films: every scene with its references already resolved into
+  // numbered <Picture N>/<Audio N> slots (see /api/scripts/performance).
+  loadPerformanceScript: (workDir) => req('GET', `/scripts/performance?work_dir=${encodeURIComponent(workDir || '')}`),
+  // Per-script visuals: locations and wardrobe, the reference images that pin
+  // where a scene happens and what people wear.
+  // Catalogue assets: locations and wardrobe reusable across films.
+  listAssets: () => req('GET', '/assets'),
+  saveAssets: (assets) => req('POST', '/assets', { assets }),
+  generateAssetImage: (assetId, styleName, extraPrompt) => req('POST', '/assets/image', { asset_id: assetId, style_name: styleName || '', extra_prompt: extraPrompt || '' }),
+  uploadAssetImage: (assetId, filename, data) => req('POST', '/assets/upload', { asset_id: assetId, filename, data }),
+  listVisuals: (jobId) => req('GET', `/jobs/${jobId}/visuals`),
+  addVisual: (jobId, body) => req('POST', `/jobs/${jobId}/visuals`, body),
+  updateVisual: (jobId, id, body) => req('PUT', `/jobs/${jobId}/visuals/${id}`, body),
+  deleteVisual: (jobId, id) => req('DELETE', `/jobs/${jobId}/visuals/${id}`),
+  generateVisualImage: (jobId, id, extraPrompt) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '' }),
+  visualFromUrl: (jobId, visualId, url) => req('POST', `/jobs/${jobId}/visuals/${visualId}/from-url`, { url }),
+  uploadVisualImage: (jobId, id, filename, data) => req('POST', `/jobs/${jobId}/visuals/${id}/upload`, { filename, data }),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
@@ -177,6 +194,7 @@ export const api = {
   addScene: (jobId, afterSceneId) => req('POST', `/jobs/${jobId}/scenes/add`, { after_scene_id: afterSceneId || 0 }),
   deleteScene: (jobId, sceneId) => req('DELETE', `/jobs/${jobId}/scenes/${sceneId}`),
   reorderScenes: (jobId, order) => req('POST', `/jobs/${jobId}/scenes/reorder`, { order }),
+  removeScenePreview: (jobId, sceneId) => req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview-remove`),
   regenPreview: (jobId, sceneId, resolution, style, instruction) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/preview?resolution=${encodeURIComponent(resolution || '')}&style=${encodeURIComponent(style || '')}&instruction=${encodeURIComponent(instruction || '')}`),
   generateAllPreviews: (jobId, resolution, style) =>
@@ -194,6 +212,14 @@ export const api = {
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/inpaint`, { mask, prompt, denoise }),
   regenField: (jobId, sceneId, field, body) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-field?field=${encodeURIComponent(field)}`, body),
+  // Acted scenes regenerate WHOLE (one coherent take): setting, dialogue,
+  // beats, camera, sound — the prompt reassembles server-side.
+  regenActedScene: (jobId, sceneId, instruction) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-acted`, { instruction: instruction || '' }),
+  // Switching a scene's type converts the content (same theme, other shape)
+  // and stashes the version being left, so switching back restores it.
+  convertSceneMode: (jobId, sceneId, mode) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/convert-mode`, { mode }),
 
   startGeneration: (body) => req('POST', '/jobs/generate', body),
   getProgress: (workDir) => req('GET', `/progress?work_dir=${encodeURIComponent(workDir || '')}`),

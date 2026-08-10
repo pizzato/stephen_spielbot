@@ -199,7 +199,7 @@ story_outline:
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
-    ${title_line}Plan the story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes.${style_note}${avoid_note}${character_note}
+    ${title_line}Plan the story as exactly ${n_chapters} chapters that together will become ${n_scenes} video scenes.${style_note}${avoid_note}${character_note}${dialogue_note}
 
 
 story_chapter:
@@ -372,7 +372,7 @@ story_divide:
     ${chapter_text}
 
     Previous scenes for narrative continuity:
-    ${ctx_str}${video_style_note}${avoid_note}${character_note}${language_note}${conclusion_note}
+    ${ctx_str}${video_style_note}${avoid_note}${character_note}${language_note}${dialogue_note}${conclusion_note}
 
     Generate scene objects with IDs ${batch_start}–${batch_end}.
 

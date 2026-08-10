@@ -37,11 +37,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from pipeline.llm import Scene, NEGATIVE_PROMPT, narration_language_name
 from pipeline import engines as _engines
+from pipeline import performance as _performance
+from pipeline import shot_gate
 from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
-    concat_audio, concatenate_scenes,
+    concat_audio, concatenate_scenes, extract_last_frame,
     ensure_video_resolution, mix_background_music,
     fit_video_canvas,
     write_silence_wav as _write_silence_wav,
@@ -60,7 +62,7 @@ from pipeline import ui_activity
 # Resolution name → (w, h) map. Import the canonical table from app rather than
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
-from app import _RESOLUTIONS, _DEFAULT_RESOLUTION, _dialogue_resolvers
+from app import _RESOLUTIONS, _DEFAULT_RESOLUTION
 from app import build_cover_generation as _build_cover_generation
 from pipeline.cover import (
     burn_cover_into_first_frame as _burn_first_frame,
@@ -86,6 +88,8 @@ def _image_matches_resolution(path: Path, width: int, height: int) -> bool:
 
 _WORKER_ERR_KEYWORDS = ("timed out", "not reachable", "URLError", "Connection refused",
                         "ConnectionRefused", "RemoteDisconnected")
+# Per-scene render attempts, each on a freshly acquired worker.
+_MAX_SCENE_ATTEMPTS = 3
 _PROGRESS_STORE: DurableStore | None = None
 _PROGRESS_JOB_ID: str | None = None
 
@@ -345,8 +349,316 @@ def write_progress(status_file: Path, pct: float, msg: str) -> None:
 
 _SILENT_DEFAULT_SECS = 5.0
 
-# _write_silence_wav and _dialogue_resolvers moved to pipeline.assembler / app so
-# the web backend's per-scene dialogue re-render shares them (imported above).
+# _write_silence_wav lives in pipeline.assembler so the web backend's
+# per-scene re-render shares it (imported above).
+
+
+def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
+                             comfy_url: str, vid_width: int, vid_height: int,
+                             style_name: str = "") -> Path:
+    """Render ONE performance scene: character portraits + dialogue → a clip that
+    already contains its own speech. Returns the finished scene_NN_final.mp4.
+
+    Shared with the backend's per-scene re-render, so it takes everything it
+    needs as arguments and touches no module state.
+    """
+    # Fills in cast/length/setting for a dialogue scene authored in a MIXED
+    # film, where only the lines and the classic prompts exist.
+    scene_meta = _performance.acted_meta(scene)
+    # One scene = ONE generation, whole conversation in a single continuous
+    # clip (the user's call: shot/reverse-shot splitting kept identities safe
+    # but broke scenes apart). The splitter remains available per config
+    # (performance_shot_split) for content where identity outranks flow;
+    # in one-clip mode the identity locks and the gate carry the swap risk.
+    if bool(cfg.get("performance_shot_split", False)):
+        shots = _performance.shots_for(
+            scene_meta, establishing=bool(cfg.get("performance_establishing", True)))
+    else:
+        shots = [dict(scene_meta)]
+    if len(shots) > 1:
+        return _render_performance_shots(
+            scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
+            vid_width=vid_width, vid_height=vid_height, style_name=style_name)
+    return _render_performance_clip(
+        scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
+        comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
+        style_name=style_name)
+
+
+def unify_mixed_engine(video_engine: dict, cfg: dict, *, has_acted: bool,
+                       has_classic: bool) -> dict:
+    """The video engine a MIXED film's narrated scenes render on.
+
+    H3 acted takes cut against LTX narrated clips read as two different
+    productions — colour, grain and motion all shift shot to shot. When a film
+    mixes the two kinds, the narrated scenes render on H3 I2V so the whole
+    film is one look. A style already on a MiniMax engine keeps its own pick
+    (e.g. turbo); an unmixed film is untouched.
+    """
+    if has_acted and has_classic and video_engine.get("family") != "minimax":
+        unified = _engines.resolve_video(cfg, "minimax-h3")
+        logger.info("Mixed film: narrated scenes render on %s to match the acted takes",
+                    unified.get("label"))
+        return unified
+    return video_engine
+
+
+def render_acted_scene(scene, work_dir: Path, cfg: dict, *, store, durable_job_id: str,
+                       worker_pool: WorkerPool, vid_width: int, vid_height: int) -> Path:
+    """Render one acted (dialogue) scene, retrying on a fresh worker.
+
+    A worker that cannot run the engine at all — model not downloaded there,
+    ComfyUI too old for w4a8 — fails instantly and would fail again, so it is
+    dropped from the pool rather than burning the scene's retries.
+    """
+    final = work_dir / f"scene_{scene.id:02d}_final.mp4"
+    if final.exists() and final.stat().st_size > 10_000:
+        logger.info("Scene %d: already rendered — skipping", scene.id)
+        return final
+
+    t_id = task_id(durable_job_id, "scene", scene.id, "performance")
+    lease_secs = int(_engines.resolve_reference(
+        cfg, cfg.get("reference_engine")).get("lease_seconds") or 14400)
+    last_err: Exception | None = None
+    for attempt in range(1, _MAX_SCENE_ATTEMPTS + 1):
+        if not worker_pool.has_healthy():
+            raise RuntimeError(f"All workers failed — last error: {last_err}")
+        url = worker_pool.acquire()
+        try:
+            store.register_worker(worker_id("comfy", url), "comfy", url)
+            with TaskRun(store, t_id, worker_id_value=worker_id("comfy", url),
+                         lease_seconds=lease_secs, retryable=True,
+                         start_message=f"acted scene {scene.id}") as run:
+                out = render_performance_scene(
+                    scene, work_dir, cfg, comfy_url=url,
+                    vid_width=vid_width, vid_height=vid_height,
+                    style_name=cfg.get("style_name") or "")
+                store.record_artifact(durable_job_id, t_id, "scene_final", out,
+                                      duration_seconds=_get_duration(out))
+                run.complete({"path": str(out)}, "acted scene rendered")
+            return out
+        except Exception as e:
+            last_err = e
+            worker_fault = (isinstance(e, StuckJobError)
+                            or any(k in str(e) for k in _WORKER_ERR_KEYWORDS)
+                            or "not in list" in str(e))
+            if worker_fault:
+                logger.warning("Worker %s cannot render scene %d (%d/%d): %s — removing",
+                               url, scene.id, attempt, _MAX_SCENE_ATTEMPTS, str(e)[:200])
+                worker_pool.mark_failed(url)
+            else:
+                logger.warning("Scene %d failed on %s (%d/%d): %s — retrying",
+                               scene.id, url, attempt, _MAX_SCENE_ATTEMPTS, str(e)[:200])
+                if attempt < _MAX_SCENE_ATTEMPTS:
+                    time.sleep(5)
+        finally:
+            worker_pool.release(url)
+    raise RuntimeError(f"Scene {scene.id} failed after {_MAX_SCENE_ATTEMPTS} attempts: {last_err}")
+
+
+def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_url,
+                              vid_width, vid_height, style_name) -> Path:
+    """Render each single-speaker shot, then join them into the scene.
+
+    Every shot is an independent generation, so left alone they each invent
+    their own room and the scene appears to teleport between cuts. The first
+    shot's own last frame is fed to the rest as a continuity reference: the
+    reverse angle is then demonstrably the same space, furniture and light.
+    """
+    parts = []
+    room: Path | None = None
+    for idx, shot in enumerate(shots):
+        out = work_dir / f"scene_{scene.id:02d}_shot_{idx:02d}.mp4"
+        if not (out.exists() and out.stat().st_size > 10_000):
+            who = ("establishing wide" if shot.get("establishing")
+                   else f"{shot.get('speaker')} speaks")
+            logger.info("Scene %d shot %d/%d: %s%s",
+                        scene.id, idx + 1, len(shots), who,
+                        " (matching the first shot's room)" if room else "")
+            extra = ([{"name": "the room already filmed in this scene",
+                       "kind": "continuity", "path": str(room)}] if room else [])
+            _render_performance_clip(
+                scene, {**shot, "scene_cast": _performance.speakers_in(
+                    _performance.norm_lines(scene_meta.get("lines")))},
+                work_dir, cfg, out, comfy_url=comfy_url, vid_width=vid_width,
+                vid_height=vid_height, style_name=style_name, extra_pictures=extra,
+                # The room frame IS the location, photographed. Sending the
+                # location asset alongside it wastes a slot and dilutes binding —
+                # measured: at 3 picture refs everything held (outfit, wharf,
+                # face); at 4+ the weakest refs started dropping. The wide is
+                # over budget with two casts' wardrobe, and garment detail is
+                # invisible at that distance anyway.
+                drop_kinds=(("location",) if room else ())
+                + (("wardrobe",) if shot.get("establishing") else ()))
+        parts.append(out)
+        if room is None:
+            # Best-effort: without it the later shots simply lose the hint.
+            candidate = work_dir / f"scene_{scene.id:02d}_room.png"
+            try:
+                extract_last_frame(out, candidate)
+                room = candidate
+            except Exception as exc:
+                logger.warning("Scene %d: no continuity frame (%s)", scene.id, exc)
+    final = work_dir / f"scene_{scene.id:02d}_final.mp4"
+    concatenate_scenes(parts, final)
+    return final
+
+
+def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
+                             vid_width, vid_height, style_name,
+                             extra_pictures: list[dict] | None = None,
+                             drop_kinds: tuple = ()) -> Path:
+    from pipeline.comfyui import generate_video_h3_ref
+    from app import resolve_performance_references
+
+    # The SAME resolver the editor's performance view calls, so the slots shown
+    # on screen are the slots wired into the graph.
+    refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    if drop_kinds:
+        kept = [p for p in refs["pictures"] if p.get("kind") not in drop_kinds]
+        refs["pictures"] = [{**p, "slot": i + 1} for i, p in enumerate(kept)]
+    for pic in (extra_pictures or []):
+        refs["pictures"].append({**pic, "slot": len(refs["pictures"]) + 1})
+    # Passed whole: build_h3_prompt reads each reference's kind to give it the
+    # right job (keep the face / keep the space / keep the garments).
+    picture_names = refs["pictures"]
+    ref_images = [Path(p["path"]) for p in refs["pictures"]]
+    audio_names = [a["name"] for a in refs["audios"]]
+    ref_audios = [Path(a["path"]) for a in refs["audios"]]
+
+    if not ref_images:
+        raise RuntimeError(
+            f"Scene {scene.id}: no character portrait resolved for cast "
+            f"{meta.get('cast')} — Ref2VA needs at least one reference image "
+            "(generate the character look images first)")
+
+    prompt = _performance.build_h3_prompt(
+        meta, style_note=cfg.get("style", ""),
+        picture_names=picture_names, audio_names=audio_names)
+    engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
+    logger.info("Scene %d: performance render (%s) — %d portraits, %d voices → %s",
+                scene.id, engine["key"], len(ref_images), len(ref_audios), clip.name)
+    def _generate(out: Path) -> Path:
+        generate_video_h3_ref(
+            engine, prompt, ref_images, out,
+            ref_audios=ref_audios,
+            width=vid_width, height=vid_height,
+            duration_seconds=_performance.render_seconds(meta),
+            comfy_url=comfy_url,
+        )
+        return out
+
+    _generate(clip)
+
+    # The gate: a shot that doesn't say its line is a miss, and misses get
+    # retaken with a fresh seed instead of shipped — that is what turns a
+    # stochastic model into a consistent one. Soft dependency: without
+    # faster-whisper the gate stands down. Silent shots have nothing to verify.
+    expected = _performance.spoken_text(meta)
+    verify_on = shot_gate.available() and bool(cfg.get("performance_verify", True))
+
+    # A shot with NO lines must be silent — and the model does babble into
+    # them against instructions ("and seal it in a thween", heard in a real
+    # establishing wide). Retake once; if speech survives, strip the audio:
+    # a wide with no room tone beats one where a ghost mumbles.
+    if not expected and verify_on:
+        transcript = shot_gate.transcribe(clip)
+        words = shot_gate.word_count(transcript)
+        retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
+        attempt = 0
+        while words > shot_gate.SILENCE_MAX_WORDS and attempt < retakes:
+            attempt += 1
+            logger.warning("[gate] scene %d %s: silent shot says %r — retake %d/%d",
+                           scene.id, clip.name, transcript[:80], attempt, retakes)
+            candidate = clip.with_suffix(".retake.mp4")
+            _generate(candidate)
+            cand_tr = shot_gate.transcribe(candidate)
+            if shot_gate.word_count(cand_tr) < words:
+                candidate.replace(clip)
+                transcript, words = cand_tr, shot_gate.word_count(cand_tr)
+            else:
+                candidate.unlink(missing_ok=True)
+        if words > shot_gate.SILENCE_MAX_WORDS:
+            logger.warning("[gate] scene %d %s: still speaking after retakes — muting",
+                           scene.id, clip.name)
+            silence = clip.with_suffix(".silence.wav")
+            _write_silence_wav(silence, _get_duration(clip))
+            muted = clip.with_suffix(".muted.mp4")
+            mux_video_audio(clip, silence, muted)
+            muted.replace(clip)
+            silence.unlink(missing_ok=True)
+
+    if (expected and verify_on):
+        best, transcript = shot_gate.verify(clip, expected)
+        retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
+        attempt = 0
+        while best < shot_gate.DEFAULT_THRESHOLD and attempt < retakes:
+            attempt += 1
+            logger.warning("[gate] scene %d %s: said %r (score %.2f) — retake %d/%d",
+                           scene.id, clip.name, transcript[:80], best, attempt, retakes)
+            candidate = clip.with_suffix(".retake.mp4")
+            _generate(candidate)
+            cand_score, cand_tr = shot_gate.verify(candidate, expected)
+            if cand_score > best:
+                candidate.replace(clip)
+                best, transcript = cand_score, cand_tr
+            else:
+                candidate.unlink(missing_ok=True)
+        logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
+                    "" if best >= shot_gate.DEFAULT_THRESHOLD else " (best of retakes)")
+
+    # H3 renders under its own pixel cap; bring the clip back to the film's frame.
+    ensure_video_resolution(clip, vid_width, vid_height)
+    return clip
+
+
+def generate_cover_image(work_dir: Path, cfg: dict, scenes: list, *, image_engine: dict,
+                        worker_pool: WorkerPool, vid_width: int, vid_height: int,
+                        title: str) -> Path | None:
+    """Paint the film's cover, or return None if it already exists / fails.
+
+    Extracted from the narrated flow so performance films get one too: without
+    a cover the film shows up blank in Films and has no thumbnail to publish.
+    Non-fatal by design — a finished film with no cover beats a failed render.
+    """
+    cover_path = work_dir / "cover.png"
+    video_title = cfg.get("video_title", "").strip() or title
+    style_clean = cfg.get("style", "").strip()
+    if cover_path.exists():
+        logger.info("Cover image already exists, skipping: %s", cover_path)
+        return cover_path
+
+    logger.info("Generating YouTube cover image for %r", video_title)
+    _cover_url: str | None = None
+    cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
+    # Cover typography: paint a TEXT-FREE background, then composite the title
+    # with real fonts on top — the model never draws (or misspells) a letter.
+    typo = _norm_cover_typography(cfg.get("cover_typography")
+                                  or cfg.get("default_cover_typography"))
+    cover_prompt, cover_refs = _build_cover_generation(
+        work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
+        extra_style=style_clean, text_position=typo["position"],
+        engine=image_engine)
+    try:
+        _cover_url = worker_pool.acquire()
+        generate_with_engine(
+            image_engine, cover_prompt, work_dir / _COVER_BG_NAME,
+            width=cover_w, height=cover_h, comfy_url=_cover_url,
+            reference_images=cover_refs or None,
+        )
+        worker_pool.release(_cover_url)
+        _cover_url = None
+        _apply_cover_typography(work_dir, typo, video_title)
+        logger.info("Cover image saved: %s", cover_path)
+        return cover_path
+    except Exception as cover_err:
+        logger.warning("Cover image generation failed (non-fatal): %s", cover_err)
+        if _cover_url is not None:
+            try:
+                worker_pool.release(_cover_url)
+            except Exception:
+                pass
+        return None
 
 
 def main(work_dir: Path) -> None:
@@ -482,21 +794,28 @@ def main(work_dir: Path) -> None:
 
     write_progress(status_file, 0, "Resume: starting…")
 
-    # ── Dialogue/performance scenes (talking-head via EchoMimic) ─────────────
-    # Rendered up front to scene_NN_final.mp4; the narration/video/mux phases then
-    # skip them (they operate on classic_scenes / find the final already present).
-    # A narration-only script has dialogue_scenes == [] and classic_scenes ==
-    # scenes, so everything below runs exactly as before.
-    dialogue_scenes = [s for s in scenes if getattr(s, "mode", "narration") == "dialogue" and (s.lines or [])]
-    classic_scenes = [s for s in scenes if s not in dialogue_scenes]
+    # ── Dialogue scenes (acted, via H3 Ref2VA) ───────────────────────────────
+    # Rendered up front to scene_NN_final.mp4; the narration/video/mux phases
+    # then skip them (they operate on classic_scenes). A narration-only script
+    # has dialogue_scenes == [] and classic_scenes == scenes, so everything
+    # below runs exactly as before — which is what makes MIXED films work: each
+    # scene takes the path its mode asks for.
+    dialogue_scenes = [s for s in scenes
+                       if _performance.is_performance(s) and (s.lines or [])]
+    acted_ids = {s.id for s in dialogue_scenes}
+    classic_scenes = [s for s in scenes if s.id not in acted_ids]
     dialogue_durs: dict[int, float] = {}
-    total_lines = sum(len(s.lines or []) for s in dialogue_scenes)
+    # One production, one look: a mixed film's narrated scenes join the acted
+    # takes on H3 rather than cutting between two different video models.
+    video_engine = unify_mixed_engine(video_engine, cfg,
+                                      has_acted=bool(dialogue_scenes),
+                                      has_classic=bool(classic_scenes))
 
-    # Progress bands. Dialogue lines dominate a dialogue film's wall-clock, so
-    # the dialogue phase gets a share of the bar proportional to its weight;
+    # Progress bands. Acted scenes dominate a dialogue film's wall-clock, so the
+    # dialogue phase gets a share of the bar proportional to its weight;
     # narration-only jobs keep the exact historical bands (invariant).
     if dialogue_scenes:
-        units_dlg, units_classic = 5 * total_lines, 3 * len(classic_scenes)
+        units_dlg, units_classic = 8 * len(dialogue_scenes), 3 * len(classic_scenes)
         dlg_end = min(85.0, max(12.0, 2 + 88.0 * units_dlg / max(1, units_dlg + units_classic)))
         tts_band = (dlg_end, dlg_end + 0.18 * (92.0 - dlg_end))
         video_band = (tts_band[1], 92.0)
@@ -507,187 +826,32 @@ def main(work_dir: Path) -> None:
     n_classic = max(1, len(classic_scenes))
 
     if dialogue_scenes:
-        from contextlib import contextmanager
-
-        from pipeline.dialogue_render import render_dialogue_scene, NARRATOR
-        from pipeline.timing import humanize_eta
-
-        echo_hosts = [h for h in (cfg.get("echomimic_workers") or []) if str(h).startswith(("http://", "https://"))]
-        if not echo_hosts:
-            raise RuntimeError("Dialogue scenes present but no echomimic_workers are configured")
-        if not tts_hosts:
-            raise RuntimeError("Dialogue scenes need a TTS worker but none are configured")
-        voice_ref_for, make_still, prompt_for = _dialogue_resolvers(
-            cfg, work_dir, voice_ref_str, vid_width=vid_width, vid_height=vid_height)
-        tts_host = tts_hosts[0]
-        timing_table = store.timing_table()
-        lines_done = [0]
+        done_dlg = [0]
         _dlg_lock = threading.Lock()
 
-        def _line_pct() -> float:
-            return 2 + (dlg_end - 2) * (lines_done[0] / max(1, total_lines))
+        def _render_dialogue(scene: Scene) -> tuple[int, float]:
+            with _dlg_lock:
+                pct = 2 + (dlg_end - 2) * (done_dlg[0] / max(1, len(dialogue_scenes)))
+                write_progress(status_file, pct,
+                               f"Acted scene {scene.id} of {len(scenes)} "
+                               f"({done_dlg[0]} done)")
+            out = render_acted_scene(
+                scene, work_dir, plan_cfg, store=store, durable_job_id=durable_job_id,
+                worker_pool=worker_pool, vid_width=vid_width, vid_height=vid_height)
+            with _dlg_lock:
+                done_dlg[0] += 1
+            return scene.id, _get_duration(out)
 
-        def _make_line_cm(host):
-            """A per-scene shot wrapper bound to that scene's echomimic host, so
-            concurrently-rendering scenes each record the right worker. Shared
-            counter + progress writes are locked (scenes run on separate threads)."""
-            @contextmanager
-            def line_cm(scene, idx, n_lines, speaker):
-                silent = (speaker == "silent")
-                who = "a silent motion shot" if silent else f"{speaker} speaks"
-                t_id = task_id(durable_job_id, "scene", scene.id, f"line-{idx}")
-                payload = {"work_dir": str(work_dir), "scene_id": scene.id, "line_index": idx,
-                           "speaker": "" if silent else speaker, "silent": silent,
-                           "vid_width": vid_width, "vid_height": vid_height,
-                           "resource_class": "comfy:video" if silent else "echomimic"}
-                # Upsert — jobs planned before per-line tasks existed lack the row.
-                store.create_task(t_id, durable_job_id, "scene.dialogue.line",
-                                  f"Scene {scene.id} · {who} ({idx + 1}/{n_lines})",
-                                  worker_kind="comfy" if silent else "echomimic", payload=payload, max_attempts=2)
-                sig = timing_signature("scene.dialogue.line", payload)
-                entry = timing_table.get(sig) if sig else None
-                est = (f" — ~{humanize_eta(entry['avg_seconds']).lstrip('~')} for this shot"
-                       if entry and entry.get("sample_count") else "")
-                with _dlg_lock:
-                    write_progress(status_file, _line_pct(),
-                                   f"Dialogue · scene {scene.id}: {who} "
-                                   f"(shot {lines_done[0] + 1}/{total_lines}){est}")
-                wid = worker_id("comfy", worker_pool.urls[0]) if silent else worker_id("echomimic", host)
-                with TaskRun(store, t_id, worker_id_value=wid, lease_seconds=7200,
-                             start_message=f"{who} — shot {idx + 1}/{n_lines}") as run:
-                    yield
-                    run.complete({"scene_id": scene.id, "line_index": idx}, "shot rendered")
-                with _dlg_lock:
-                    lines_done[0] += 1
-                    write_progress(status_file, _line_pct(),
-                                   f"Dialogue · scene {scene.id}: {who} done "
-                                   f"({lines_done[0]}/{total_lines} shots)")
-            return line_cm
-
-        def silent_video(scene, shot, still, out_clip):
-            """Render a silent shot (people move, no speech) as an LTX i2v clip
-            from its still, reusing the classic scene-video path."""
-            vp = (str((shot or {}).get("video_prompt") or "").strip()
-                  or scene.video_prompt or scene.image_prompt or scene.title)
-            dur = float((shot or {}).get("duration") or 0) or _SILENT_DEFAULT_SECS
-            shot_scene = Scene(id=scene.id, title=scene.title, image_prompt="",
-                               video_prompt=vp, narration="", negative_prompt=NEGATIVE_PROMPT)
-            url = worker_pool.acquire()
-            try:
-                raw, _amb = _generate_scene_video(
-                    shot_scene, work_dir, dur, vid_width, vid_height,
-                    max_clip_secs, lora_strength, first_pass_cfg, first_pass_steps,
-                    second_pass_cfg, second_pass_steps, url,
-                    scene_first_frame=Path(still), image_engine=image_engine,
-                    video_engine=video_engine,
-                )
-            finally:
-                worker_pool.release(url)
-            if Path(raw) != Path(out_clip):
-                shutil.move(str(raw), str(out_clip))
-            return Path(out_clip)
-
-        from app import _scene_establishing_frame
-        from pipeline.comfyui import generate_keyframed_clip
-        _establish_secs = float(cfg.get("dialogue_establishing_seconds", 2.5) or 0)
-
-        def _first_shot_still(scene):
-            """The first talking shot's solo close-up still — the frame the scene's
-            first talking-head line then animates. Only a real in-scene shot still
-            (not the multi-person scene frame or a portrait) is a good push-in
-            target, so anything else returns None."""
-            first = None
-            for ln in (scene.lines or []):
-                ln = ln or {}
-                silent = bool(ln.get("silent")) and not str(ln.get("text") or "").strip()
-                if silent or str(ln.get("text") or "").strip():
-                    first = ln
-                    break
-            if first is None:
-                return None
-            speaker = "" if (bool(first.get("silent")) and not str(first.get("text") or "").strip()) \
-                else str(first.get("speaker") or NARRATOR).strip()
-            try:
-                still = make_still(scene, speaker, 0)
-            except Exception:
-                return None
-            return still if still and still.name.endswith("_line_00_shot.png") else None
-
-        def establishing(scene):
-            """Open on the scene's wide establishing frame and push the camera in to
-            the first speaker's close-up — a REAL LTX first→last keyframe move, so
-            the setting is shown first, never lost, and the push lands exactly on the
-            still the talking head then animates (seamless arrival)."""
-            if _establish_secs <= 0:
-                return None
-            wide = _scene_establishing_frame(
-                work_dir, scene.id, {"preview_path": getattr(scene, "preview_path", "")},
-                vid_width, vid_height)
-            if wide is None:
-                return None
-            close = _first_shot_still(scene)
-            # No distinct in-scene close-up to push toward (the talking head would
-            # animate the wide frame itself) — skip the beat rather than render a
-            # pointless hold.
-            if close is None or Path(close) == Path(wide):
-                return None
-            out = work_dir / f"scene_{scene.id:02d}_establish.mp4"
-            url = worker_pool.acquire()
-            try:
-                generate_keyframed_clip(
-                    first_frame_path=wide, last_frame_path=close, output_path=out,
-                    positive_prompt=(
-                        "slow cinematic push-in from the wide establishing shot toward "
-                        "the speaker, steady smooth camera move, the setting and people "
-                        "stay consistent, subtle natural motion"),
-                    negative_prompt="static, jump cut, warp, morph, distortion, flicker, "
-                                    + ((cfg.get("video_negative_prompt") or "").strip() or NEGATIVE_PROMPT),
-                    width=vid_width, height=vid_height,
-                    duration_seconds=_establish_secs,
-                    lora_strength=lora_strength, comfy_url=url,
-                )
-            finally:
-                worker_pool.release(url)
-            return out
-
-        def _render_one(i: int, s: Scene) -> tuple[int, float]:
-            host = echo_hosts[i % len(echo_hosts)]
-            final = work_dir / f"scene_{s.id:02d}_final.mp4"
-            if not (final.exists() and final.stat().st_size > 10_000):
-                render_dialogue_scene(
-                    s, work_dir,
-                    voice_ref_for=voice_ref_for, make_still=make_still, prompt_for=prompt_for,
-                    echomimic_host=host,
-                    tts_host=tts_host, tts_engine=tts_engine, tts_language=tts_language,
-                    canvas=(vid_width, vid_height),
-                    line_cm=_make_line_cm(host), silent_video=silent_video,
-                    establishing=establishing,
-                )
-            else:
-                with _dlg_lock:
-                    lines_done[0] += len(s.lines or [])  # resumed scene — lines already done
-            # EchoMimic output is portrait-shaped; fit it onto the film's canvas
-            # (blurred pillarbox) so the cross-scene concat gets uniform dims.
-            fit_video_canvas(final, vid_width, vid_height)
-            return s.id, _get_duration(final)
-
-        # Render scenes CONCURRENTLY, one per echomimic worker, so the whole
-        # fleet is used instead of a single busy worker while the rest idle.
-        n_parallel = max(1, min(len(echo_hosts), len(dialogue_scenes)))
+        n_parallel = max(1, min(len(worker_pool.urls), len(dialogue_scenes)))
         write_progress(status_file, 1,
-                       f"Rendering {len(dialogue_scenes)} dialogue scene(s) across "
-                       f"{n_parallel} worker(s) — {total_lines} shot(s)…")
+                       f"Rendering {len(dialogue_scenes)} acted scene(s) across "
+                       f"{n_parallel} worker(s)…")
         dlg_pool = concurrent.futures.ThreadPoolExecutor(max_workers=n_parallel)
         try:
-            futs = {dlg_pool.submit(_render_one, i, s): s for i, s in enumerate(dialogue_scenes)}
-            done_scenes = 0
+            futs = {dlg_pool.submit(_render_dialogue, s): s for s in dialogue_scenes}
             for fut in concurrent.futures.as_completed(futs):
                 sid, dur = fut.result()
                 dialogue_durs[sid] = dur
-                done_scenes += 1
-                with _dlg_lock:
-                    write_progress(status_file, _line_pct(),
-                                   f"Dialogue scene {sid} assembled ({done_scenes}/{len(dialogue_scenes)})")
         finally:
             dlg_pool.shutdown(wait=True)
 
@@ -776,11 +940,24 @@ def main(work_dir: Path) -> None:
     write_progress(status_file, tts_band[1], f"Narrations done — {total_dur:.0f}s, generating video…")
 
     # ── Background music (20–35%) ────────────────────────────────────────────
+    # Optional per style/film. Music is a FINAL-MIX ingredient only — it is
+    # never baked into a scene — so switching it off simply skips generation
+    # and the mix passes the concatenated audio straight through.
     music_dur  = max(total_dur * 1.05, 30.0)
     music_path = work_dir / "background_music.wav"
     title = title or (scenes[0].title.split(":")[0] if scenes else "Australia")
+    music_on = bool(cfg.get("music_enabled", True))
 
-    if music_path.exists() and music_path.stat().st_size > 10_000:
+    if not music_on:
+        logger.info("Music is off for this film — skipping generation")
+        write_progress(status_file, tts_band[1], "Music off — generating video…")
+        music_task = task_id(durable_job_id, "music")
+        try:
+            store.complete_task(music_task, result={"skipped": "music disabled"},
+                                message="music off")
+        except Exception:
+            logger.debug("No music task to complete (planned without one)")
+    elif music_path.exists() and music_path.stat().st_size > 10_000:
         logger.info("Music already exists (%.1f MB), skipping", music_path.stat().st_size / 1024 / 1024)
         music_task = task_id(durable_job_id, "music")
         store.complete_task(
@@ -860,56 +1037,15 @@ def main(work_dir: Path) -> None:
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
     cover_path = work_dir / "cover.png"
-    video_title = cfg.get("video_title", "").strip() or title
-    style_clean = cfg.get("style", "").strip()
-
-    if not cover_path.exists():
-        logger.info("Generating YouTube cover image for '%s'", video_title)
-        _cover_url: str | None = None
-        cover_w, cover_h = _cover_dimensions(vid_width, vid_height)
-        # Cover typography: paint a TEXT-FREE background, then composite the
-        # title with real fonts on top — the model never draws (or misspells)
-        # a single letter. The artwork uses image_engine — the SAME resolved
-        # engine as the scene stills — plus the same composed visual style and
-        # character reference conditioning, so the cover reads as a frame from
-        # the same production.
-        typo = _norm_cover_typography(cfg.get("cover_typography")
-                                      or cfg.get("default_cover_typography"))
-        cover_prompt, cover_refs = _build_cover_generation(
-            work_dir, cfg, cfg.get("style_name") or "", scenes=scenes,
-            extra_style=style_clean, text_position=typo["position"],
-            engine=image_engine)
-        try:
-            _cover_url = worker_pool.acquire()
-            generate_with_engine(
-                image_engine,
-                cover_prompt,
-                work_dir / _COVER_BG_NAME,
-                width=cover_w,
-                height=cover_h,
-                comfy_url=_cover_url,
-                reference_images=cover_refs or None,
-            )
-            worker_pool.release(_cover_url)
-            _cover_url = None
-            _apply_cover_typography(work_dir, typo, video_title)
-            logger.info("Cover image saved: %s", cover_path)
-        except Exception as _cover_err:
-            logger.warning("Cover image generation failed (non-fatal): %s", _cover_err)
-            if _cover_url is not None:
-                try:
-                    worker_pool.release(_cover_url)
-                except Exception:
-                    pass
-    else:
-        logger.info("Cover image already exists, skipping: %s", cover_path)
+    generate_cover_image(work_dir, cfg, scenes, image_engine=image_engine,
+                         worker_pool=worker_pool, vid_width=vid_width,
+                         vid_height=vid_height, title=title)
 
     write_progress(status_file, video_band[0], "Music ready. Generating scene videos…")
 
     # ── Video generation (35–90%) ────────────────────────────────────────────
     scene_raws_map: dict[int, Path] = {}
     scene_ambient_map: dict[int, Path | None] = {}
-    _MAX_SCENE_ATTEMPTS = 3
 
     def _run_scene(scene: Scene) -> tuple[int, Path, Path | None]:
         existing = work_dir / f"scene_{scene.id:02d}_video.mp4"
@@ -1211,12 +1347,19 @@ def main(work_dir: Path) -> None:
     ) as final_run:
         concatenate_scenes(scene_finals, combined)
 
-        write_progress(status_file, 95, f"Mixing audio (voice {voice_vol*100:.0f}%, music {music_vol*100:.0f}%)…")
-        mix_background_music(
-            combined, music_path, final_path,
-            volume=music_vol, voice_volume=voice_vol,
-            ambient_path=ambient_path, ambient_volume=ambient_vol,
-        )
+        if music_on and music_path.exists():
+            write_progress(status_file, 95,
+                           f"Mixing audio (voice {voice_vol*100:.0f}%, music {music_vol*100:.0f}%)…")
+            mix_background_music(
+                combined, music_path, final_path,
+                volume=music_vol, voice_volume=voice_vol,
+                ambient_path=ambient_path, ambient_volume=ambient_vol,
+            )
+        else:
+            # No score: the clips already carry their own audio, so the final
+            # IS the concatenation. (Acted scenes have voices in-picture.)
+            write_progress(status_file, 95, "No music — finishing the cut…")
+            shutil.copy2(combined, final_path)
         ensure_video_resolution(final_path, vid_width, vid_height)
         # Per-style automation: burn the cover into the head of the film —
         # YouTube Shorts ignore uploaded thumbnails and pick their own frame.

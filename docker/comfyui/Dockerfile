@@ -12,14 +12,63 @@
 #                      TORCH_INDEX_URL=https://download.pytorch.org/whl/cu124
 # The image is multi-arch (amd64 + arm64/sbsa).
 ARG BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
+# PyTorch wheel index matching the base CUDA. Leave empty if the base image
+# already ships torch (e.g. an NGC PyTorch base).
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+# torch spec shared by the SageAttention builder and the runtime stage — the
+# compiled extension links against torch's C++ ABI, so both must resolve to the
+# same wheel. Versions float by default; pin for reproducible builds, e.g.:
+#   --build-arg TORCH_SPEC="torch==<ver> torchvision==<ver> torchaudio==<ver>"
+ARG TORCH_SPEC="torch torchvision torchaudio"
+
+# ── SageAttention builder ────────────────────────────────────────────────────
+# SageAttention ships no aarch64/CUDA-13 wheels and PyPI's sdist is not built
+# for sm_121 (GB10), so it is compiled here from source. This needs nvcc, which
+# the -runtime base image does not carry — hence a -devel builder stage that
+# emits a wheel, keeping the ~5 GB CUDA toolkit out of the shipped worker.
+ARG BUILDER_IMAGE=nvidia/cuda:13.0.1-devel-ubuntu24.04
+FROM ${BUILDER_IMAGE} AS sage-builder
+ARG TORCH_INDEX_URL
+ARG TORCH_SPEC
+# Compute capabilities to emit. 12.1 = GB10 (DGX Spark), 12.0 = sm_120 Blackwell
+# workstation cards. Set empty to skip the build entirely (non-Blackwell GPUs,
+# where SageAttention's Blackwell kernels do not apply).
+ARG SAGEATTENTION_ARCHS="12.0;12.1"
+# Pin for reproducible workers: a tag, branch, or commit SHA.
+ARG SAGEATTENTION_REF=main
+# --no-build-isolation below is load-bearing: SageAttention's setup.py imports
+# torch to discover the CUDA extension toolchain, and PEP 517's isolated build
+# env has no torch in it. Without the flag the build dies with a bare
+# "ModuleNotFoundError: No module named 'torch'" that reads like a CUDA-13
+# incompatibility and isn't one.
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1
+
+RUN mkdir -p /wheels
+RUN if [ -n "${SAGEATTENTION_ARCHS}" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends \
+            git python3 python3-dev python3-pip \
+        && rm -rf /var/lib/apt/lists/* \
+        && if [ -n "${TORCH_INDEX_URL}" ]; then \
+               pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
+           fi \
+        && pip install setuptools wheel packaging ninja \
+        && git clone https://github.com/thu-ml/SageAttention.git /src/SageAttention \
+        && git -C /src/SageAttention checkout "${SAGEATTENTION_REF}" \
+        && cd /src/SageAttention \
+        && TORCH_CUDA_ARCH_LIST="${SAGEATTENTION_ARCHS}" \
+           EXT_PARALLEL=4 NVCC_APPEND_FLAGS="--threads 8" MAX_JOBS=8 \
+           pip wheel . --no-deps --no-build-isolation --wheel-dir /wheels; \
+    fi
+
 FROM ${BASE_IMAGE}
 
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
 # v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3).
-ARG COMFYUI_REF=v0.30.0
-# PyTorch wheel index matching the base CUDA. Leave empty if the base image
-# already ships torch (e.g. an NGC PyTorch base).
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
+ARG COMFYUI_REF=v0.31.1
+ARG TORCH_INDEX_URL
+ARG TORCH_SPEC
 
 # PIP_BREAK_SYSTEM_PACKAGES: Ubuntu 24.04 marks the system env "externally
 # managed" (PEP 668); we install into it on purpose inside this container.
@@ -43,13 +92,25 @@ WORKDIR /opt/ComfyUI
 RUN git fetch --tags --force origin && git checkout "${COMFYUI_REF}"
 
 # torch first (ComfyUI's requirements.txt does not pin it), then ComfyUI deps.
-# Versions float by default; pin for reproducible builds, e.g.:
-#   --build-arg TORCH_SPEC="torch==<ver> torchvision==<ver> torchaudio==<ver>"
-ARG TORCH_SPEC="torch torchvision torchaudio"
 RUN if [ -n "${TORCH_INDEX_URL}" ]; then \
         pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
     fi \
     && pip install -r requirements.txt
+
+# SageAttention, compiled for this image's arch list in the builder stage above.
+# Installed AFTER torch and ComfyUI's requirements on purpose: `pip install
+# sageattention` from PyPI silently shadows a locally built extension, so the
+# wheel must land last and nothing may pull the package name again afterwards.
+# Enabled per-worker at launch, not here — see COMFYUI_EXTRA_ARGS in
+# docker/docker-compose.yml.
+COPY --from=sage-builder /wheels /tmp/sage-wheels
+RUN if ls /tmp/sage-wheels/*.whl >/dev/null 2>&1; then \
+        pip install /tmp/sage-wheels/*.whl \
+        && python3 -c "from sageattention import sageattn; print('sageattention OK:', sageattn.__module__)"; \
+    else \
+        echo "SageAttention not built (SAGEATTENTION_ARCHS empty) — skipping"; \
+    fi \
+    && rm -rf /tmp/sage-wheels
 
 # Video Helper Suite: load/save MP4s for Remix upscale without a local CLI.
 RUN git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git \
@@ -123,8 +184,15 @@ PY
 
 # MiniMax-H3 Turbo nodes (MiniMaxH3TurboLoRA + the dual-schedule few-step
 # sampler) for the opt-in minimax-h3-turbo engine. Pure-Python, no extra deps.
-RUN git clone --depth=1 https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
-        custom_nodes/ComfyUI-MiniMax-H3-Turbo
+# PINNED: this repo adds required node inputs without warning — 55fee86 made
+# `low_vram` mandatory on MiniMaxH3TurboLoRA, and an unpinned clone silently
+# broke every turbo render on rebuilt workers while old ones kept going
+# ("Required input is missing: low_vram"). Bump this deliberately, checking
+# workflows/h3_turbo_i2v.json still satisfies the node's inputs.
+ARG H3_TURBO_NODES_REF=55fee864dd7b2976b1c4ce3c3d5f7968f181409f
+RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
+        custom_nodes/ComfyUI-MiniMax-H3-Turbo \
+    && git -C custom_nodes/ComfyUI-MiniMax-H3-Turbo checkout "${H3_TURBO_NODES_REF}"
 
 EXPOSE 8188
 

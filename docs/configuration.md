@@ -56,8 +56,6 @@ comfy_workers:
   - http://s1:8188
 tts_workers:
   - http://s1:8189
-echomimic_workers:
-  - http://s1:8190
 ```
 
 ## The highlights
@@ -68,7 +66,7 @@ The Settings screen covers everything; this is the short list of what people cha
 |---|---|
 | ComfyUI workers | One URL per line — scenes are distributed across them in parallel |
 | TTS workers | F5-TTS/Chatterbox endpoints for parallel narration (port 8189, derived by `make install`) |
-| EchoMimic workers | Talking-head endpoints for dialogue scenes (port 8190, derived by `make install`) |
+| Music | Score films in this style (per-film override in Create); music is mixed in at the very end |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |

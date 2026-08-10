@@ -2,7 +2,9 @@
 
 `#/edit/<film>` — `#/remix/<film>` is a deep-link alias for the same screen.
 
-Post-production on a finished film. Three tabs: **Film**, **Characters**, **Scenes**.
+Post-production on a finished film. Tabs: **Film**, **Characters & visuals** (plain
+**Characters** on films with no acted scenes), **Scenes** — and **Acted scenes** whenever
+the film has any.
 
 Nothing here re-renders the whole film. Every operation touches the smallest thing it can
 and re-muxes the final cut atomically when it's done.
@@ -95,12 +97,14 @@ re-muxes with your current levels. Every generated track is kept in a version st
 
 ---
 
-## Characters
+## Characters & visuals
 
-The film's cast, same fields as the [Script](script.md#characters) view: name, aliases,
-appearance, voice, and a reference look. **Save to catalogue** copies one into
-[Settings → Characters](settings.md#characters) under the film's style (that style and
-its children reuse it). **Open Scenes** jumps to the scene list to assign them.
+The same reference wall as the [Script screen](script.md#characters--visuals): one bar
+adds **character · location · wardrobe · image · video**, the film's own entries are
+editable cards, and the catalogue members the film uses appear read-only with their
+portraits and voice clips. Visual cards take generated images, uploads, pasted images, or
+a URL. **Save to catalogue** copies a film character into
+[Settings → Characters](settings.md#characters) under the film's style.
 
 See [Characters](../characters.md) for how consistency actually works.
 
@@ -135,7 +139,7 @@ narration.
 
 ### Re-rendering a scene
 
-Four buttons, each doing only its own part:
+Each button does only its own part. A narrated scene has:
 
 | Button | Re-renders |
 |---|---|
@@ -144,13 +148,22 @@ Four buttons, each doing only its own part:
 | **Edit image** | Masked inpaint — draw a region, describe the fix |
 | **Video** | Just this scene's clip (takes an instruction) |
 
+An **acted** scene trades the Image buttons for **Remove first frame** (its frame is a
+reference, not a render input — see [acted scenes](../performance_films.md)), and its
+Video button reads **Shoot again**: the whole take re-renders from the references. The
+**scene type** switch converts a scene between narration, dialogue and silent — same
+theme, the other shape — and keeps the version you leave, so switching back restores it.
+
+**Reassemble film** (top of the list) re-cuts the published final from the scene parts —
+after re-shoots, take picks, or reorders — re-mixing music only where the film has it.
+
 ### Version history
 
 Two strips under each scene: **image takes** and **video takes**. Click one to select it,
 or delete the ones you don't want. Selecting a take re-muxes the final film atomically, so
 there's never a half-updated video on disk.
 
-Video takes keep the last three.
+Video takes keep the last ten (plus whichever is selected).
 
 ### Restructuring
 
@@ -159,3 +172,12 @@ The chevrons move a scene up or down; **Delete** removes it. Both re-cut the fin
 !!! tip "Re-renders are queued, not fired in parallel"
     Scene re-renders share the render pool, so hitting several at once won't overload a
     worker — they queue, and survive a restart.
+
+---
+
+## Acted scenes
+
+The acted view from the [Script screen](script.md#acted-scenes), with each scene's
+rendered clip in it: cast slots with portraits and voices, reference thumbnails, the
+editable dialogue and assembled prompt, **Re-generate scene**, **Shoot this scene again**,
+the **Takes** strip (every re-shoot kept), and **Reassemble film**.

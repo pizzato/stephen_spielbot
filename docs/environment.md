@@ -32,7 +32,6 @@ the config file.
 | `TTS_TIMEOUT` | `300` | Per-narration TTS timeout, in seconds |
 | `OPENF5_REPO` | `mrfakename/OpenF5-TTS-Base` | Hugging Face repo for the narration weights — mirror or pin it, but keep it Apache/CC-BY licensed |
 | `CHATTERBOX_REPO` | `ResembleAI/chatterbox` | Hugging Face repo for the Chatterbox weights — keep it MIT licensed |
-| `ECHOMIMIC_TIMEOUT` | `7200` | Per-clip talking-head (EchoMimic) timeout, in seconds |
 
 See [model licensing](tts_licensing.md) before pointing these at other weights.
 

@@ -71,7 +71,7 @@ class Scene:
     # text and no explicit mode is narration — existing scripts are unchanged.
     mode: str = "narration"
     # dialogue lines: ordered [{"speaker": <character name|"Narrator">, "text": str}].
-    # Each line renders as a talking-head shot (EchoMimic) in the speaker's voice.
+    # The whole scene renders as one acted H3 generation in the cast's voices.
     lines: list = field(default_factory=list)
     # explicit length (seconds) for silent scenes that have no audio to time from.
     duration: float = 0.0
@@ -730,7 +730,7 @@ def _fill_empty_narrations(call_fn, scenes: list[Scene],
 def _norm_scene_lines(item: dict) -> list[dict]:
     """Validated shot sequence for a dialogue scene.
 
-    A shot is either SPEAKING — {speaker, text, shot?} rendered as a talking head
+    A shot is either SPEAKING — {speaker, text, shot?} performed on camera
     — or SILENT — {silent: true, shot?, video_prompt?, duration} rendered as a
     motion clip (people move, no speech). Empty rows are dropped."""
     raw = item.get("lines")

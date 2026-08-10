@@ -65,14 +65,14 @@ class EnsureStylesHierarchyTests(TempConfigCase):
     def test_child_override_is_still_coerced(self):
         self.write_config({
             "styles": [_style("BHOB"),
-                       _child("BHOB Story", "BHOB", script_mode="bogus",
+                       _child("BHOB Story", "BHOB", tts_engine="not-a-model",
                               image_engine="not-an-engine")],
             "default_style": "BHOB",
         })
         cfg = app.load_config()
         child = next(s for s in cfg["styles"] if s["name"] == "BHOB Story")
-        self.assertEqual(child["script_mode"], "classic")
-        self.assertEqual(sorted(child), ["image_engine", "name", "parent", "script_mode"])
+        self.assertEqual(child["tts_engine"], app.tts_engines.DEFAULT_TTS_ENGINE)
+        self.assertEqual(sorted(child), ["image_engine", "name", "parent", "tts_engine"])
 
     def test_self_parent_is_dropped_and_densified(self):
         self.write_config({

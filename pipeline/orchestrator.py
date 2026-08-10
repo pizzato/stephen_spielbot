@@ -102,14 +102,20 @@ TIMING_KIND_LABELS = {
     "scene.image.generate": "image",
     "scene.video.generate": "video",
     "scene.narration.generate": "narration",
-    "scene.dialogue.line": "dialogue line",
+    "scene.performance.generate": "acted scene",
     "music.generate": "music",
     "scene.video.mux": "mux",
     "video.finalize": "finalize",
 }
 
+# Scene modes that render as ONE acted H3 generation carrying their own audio.
+# "dialogue" is the current spelling; "performance" is what older scripts wrote.
+# (Duplicated from pipeline.performance on purpose — this module stays
+# dependency-free so the controller DB can be used standalone.)
+ACTED_SCENE_MODES = {"dialogue", "performance"}
+
 # Labels whose duration depends on output resolution (the rest are flat).
-TIMING_RES_SENSITIVE = {"image", "video", "finalize", "dialogue line"}
+TIMING_RES_SENSITIVE = {"image", "video", "finalize", "acted scene"}
 
 
 def timing_signature(kind: str, payload: dict[str, Any] | None) -> str | None:
@@ -308,18 +314,22 @@ class DurableStore:
     ) -> None:
         ts = now_ts()
         with self._lock:
+            # config/metadata None means "leave what is stored" — callers that
+            # only want to ensure the row exists (e.g. the cover endpoint) were
+            # silently WIPING the job's config (style_name, create_brief) on
+            # every call. Pass {} to clear deliberately.
             self._conn.execute(
                 """
                 INSERT INTO jobs (
                     id, work_dir, title, status, config_json, metadata_json,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, '{}'), ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     work_dir=excluded.work_dir,
                     title=excluded.title,
-                    config_json=excluded.config_json,
-                    metadata_json=excluded.metadata_json,
+                    config_json=COALESCE(?, jobs.config_json),
+                    metadata_json=COALESCE(?, jobs.metadata_json),
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -327,10 +337,12 @@ class DurableStore:
                     str(Path(work_dir).expanduser().resolve()),
                     title or "",
                     status,
-                    json_dumps(config),
-                    json_dumps(metadata),
+                    None if config is None else json_dumps(config),
+                    None if metadata is None else json_dumps(metadata),
                     ts,
                     ts,
+                    None if config is None else json_dumps(config),
+                    None if metadata is None else json_dumps(metadata),
                 ),
             )
 
@@ -521,29 +533,27 @@ class DurableStore:
             }
             scene_payload.update({k: v for k, v in common_scene_payload.items() if v is not None})
 
-            # Dialogue scenes render as one talking-head generation per line
-            # (EchoMimic) — plan those as real tasks so the progress/ETA system
-            # sees them; the narration/image/video/mux quartet never runs for a
-            # dialogue scene and would sit "queued" forever, poisoning the ETA.
+            # An acted scene ("dialogue"/"performance") renders as ONE H3 Ref2VA
+            # generation carrying its own voices — no first frame, no TTS, no
+            # mux — so it gets one real task and the quartet below is skipped
+            # (queued-forever tasks poison the ETA).
             scene_md = _scene_value(scene, "metadata", {}) or {}
             dlg_lines = scene_md.get("lines") or []
-            if scene_md.get("mode") == "dialogue" and dlg_lines:
-                for idx, ln in enumerate(dlg_lines):
-                    line_task = task_id(job_id, "scene", sid, f"line-{idx}")
-                    self.create_task(
-                        line_task,
-                        job_id,
-                        "scene.dialogue.line",
-                        f"Scene {sid} · {str((ln or {}).get('speaker') or 'line')} speaks ({idx + 1}/{len(dlg_lines)})",
-                        worker_kind="echomimic",
-                        payload={**scene_payload, "line_index": idx,
-                                 "speaker": str((ln or {}).get("speaker") or ""),
-                                 "resource_class": "echomimic"},
-                        dependencies=[root],
-                        priority=30 + sid,
-                        max_attempts=2,
-                    )
-                    mux_task_ids.append(line_task)  # finalize waits on these
+            if scene_md.get("mode") in ACTED_SCENE_MODES and dlg_lines:
+                perf_task = task_id(job_id, "scene", sid, "performance")
+                self.create_task(
+                    perf_task,
+                    job_id,
+                    "scene.performance.generate",
+                    f"Scene {sid} performance",
+                    worker_kind="comfy",
+                    payload={**scene_payload,
+                             "resource_class": resource_classes.get("video", "comfy:video")},
+                    dependencies=[root],
+                    priority=40 + sid,
+                    max_attempts=3,
+                )
+                mux_task_ids.append(perf_task)  # finalize waits on these
                 continue
 
             image_task = task_id(job_id, "scene", sid, "image")
@@ -607,24 +617,33 @@ class DurableStore:
                 max_attempts=2,
             )
 
-        music_task = task_id(job_id, "music")
-        self.create_task(
-            music_task,
-            job_id,
-            "music.generate",
-            "Background music",
-            worker_kind="comfy",
-            payload={
-                "work_dir": str(work_dir),
-                "title": title,
-                "music_desc": config.get("music_desc", ""),
-                "output_path": str(Path(work_dir) / "background_music.wav"),
-                "resource_class": resource_classes.get("music", "comfy:music"),
-            },
-            dependencies=narration_task_ids or [root],
-            priority=30,
-            max_attempts=3,
-        )
+        # Music is optional per style/film, and an all-acted film has no score
+        # by nature — every clip brings its own audio out of the same forward
+        # pass. Either way: no task, so nothing sits queued forever.
+        all_acted = bool(scene_items) and all(
+            (_scene_value(s, "metadata", {}) or {}).get("mode") in ACTED_SCENE_MODES
+            for s in scene_items)
+        music_tasks: list[str] = []
+        if config.get("music_enabled", True) and not all_acted:
+            music_task = task_id(job_id, "music")
+            music_tasks.append(music_task)
+            self.create_task(
+                music_task,
+                job_id,
+                "music.generate",
+                "Background music",
+                worker_kind="comfy",
+                payload={
+                    "work_dir": str(work_dir),
+                    "title": title,
+                    "music_desc": config.get("music_desc", ""),
+                    "output_path": str(Path(work_dir) / "background_music.wav"),
+                    "resource_class": resource_classes.get("music", "comfy:music"),
+                },
+                dependencies=narration_task_ids or [root],
+                priority=30,
+                max_attempts=3,
+            )
 
         final_task = task_id(job_id, "final")
         self.create_task(
@@ -645,7 +664,7 @@ class DurableStore:
                 "vid_height": config.get("vid_height"),
                 "resource_class": resource_classes.get("finalize", "local"),
             },
-            dependencies=[music_task, *mux_task_ids],
+            dependencies=[*music_tasks, *mux_task_ids],
             priority=200,
             max_attempts=2,
         )
