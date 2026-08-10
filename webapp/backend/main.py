@@ -3169,8 +3169,10 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         # The rendered clip, when there is one: the performance view doubles as
         # the film view, so the same screen shows either the plan or the result.
         media = _film_scene_files(wd, int(row.get("id") or 0))
+        take_history = video_history.history(wd, int(row.get("id") or 0))
         scenes.append({
             "id": row.get("id"),
+            "video_history": take_history,
             "title": row.get("title") or "",
             # Not shown, but PUT back untouched when the dialogue or prompt is
             # edited (the scene endpoint writes every field it is given).

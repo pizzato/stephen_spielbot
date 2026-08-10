@@ -93,7 +93,9 @@ instruction. An acted scene is one coherent take, so it regenerates whole rather
 field by field; a pinned prompt is superseded by the rewrite.
 
 Editing a scene of a film that has already rendered keeps the existing clip — it is the
-deliverable — and offers **Shoot this scene again** to re-render just that scene.
+deliverable — and offers **Shoot this scene again** to re-render just that scene. Every
+re-shoot is kept as a **take** (the last ten, plus whichever is selected): a strip under
+the player flips between them, and the selected take is what Reassemble puts in the film.
 
 ## Rendering
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fileUrl } from '../api.js'
-import { Card, Button, Banner, Icon, GuidedRegenButton, ActedPrompt, voiceLabel } from '../components.jsx'
+import { Card, Button, Banner, Icon, GuidedRegenButton, ActedPrompt, VideoVersionStrip, voiceLabel } from '../components.jsx'
 
 // Performance films are conditioned on CHARACTERS, not on a scene still, and the
 // prompt refers to them by slot number ("<Picture 1>", "<Audio 1>"). Showing the
@@ -170,12 +170,19 @@ function SceneEditor({ scene, jobId, onSaved }) {
 
 function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged }) {
   const [reshoot, setReshoot] = useState('')
+  const [takeBusy, setTakeBusy] = useState(false)
   const rerender = async (instruction) => {
     setReshoot('busy')
     try {
       await api.rerenderFilmScene(workDir, scene.id, 'video', instruction)
       setReshoot('queued')
     } catch (e) { setReshoot(e.message) }
+  }
+  // Every re-shoot is kept as a take; flipping swaps the canonical final, so
+  // Reassemble picks up whichever take is selected.
+  const takeOp = async (fn) => {
+    setTakeBusy(true)
+    try { await fn(); await onChanged() } catch (e) { setReshoot(e.message) } finally { setTakeBusy(false) }
   }
   return (
     <Card span={12} className="stack gap-16">
@@ -207,6 +214,12 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
               <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
             )}
           </div>
+          <VideoVersionStrip versions={scene.video_history?.versions}
+            selected={scene.video_history?.selected}
+            onSelect={(vid) => takeOp(() => api.selectFilmVideo(workDir, scene.id, vid))}
+            onDelete={(vid) => takeOp(() => api.deleteFilmVideo(workDir, scene.id, vid))}
+            aspect="9 / 16" busy={takeBusy || reshoot === 'busy'}
+            label="Takes" hint="every re-shoot is kept — click to use" />
         </div>
       )}
 

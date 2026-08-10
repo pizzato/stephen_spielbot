@@ -960,6 +960,15 @@ class ActedSceneEditingTests(unittest.TestCase):
         self.assertIn("[REFERENCE USE]", scene["prompt"] + "[REFERENCE USE]")
         self.assertNotEqual(scene["prompt"], "Pinned.")
 
+    def test_the_acted_view_carries_the_take_history(self):
+        # Every re-shoot is kept as a take; the acted view must show them.
+        from pipeline import video_history
+        self._save()   # persists script.json, which the acted view reads
+        video_history.record(self.wd, 1, self.wd / "scene_01_final.mp4")
+        scene = self._scene()
+        self.assertIn("video_history", scene)
+        self.assertEqual(len(scene["video_history"]["versions"]), 1)
+
     def test_a_finished_film_keeps_its_clip_through_an_edit(self):
         # The take is the deliverable — the film editor re-shoots on request.
         (self.wd / "combined.mp4").write_bytes(b"x" * 20_000)

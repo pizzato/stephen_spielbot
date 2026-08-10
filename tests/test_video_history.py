@@ -54,18 +54,19 @@ def test_record_appends_and_selects_newest(tmp_path):
     assert sorted(by_id.values()) == [b"one", b"two"]
 
 
-def test_record_prunes_to_last_three_and_deletes_files(tmp_path):
-    for tag in (b"v1", b"v2", b"v3", b"v4", b"v5"):
-        _write(_final(tmp_path), tag)
+def test_record_prunes_to_the_cap_and_deletes_files(tmp_path):
+    n = vh._MAX_VERSIONS + 2
+    for i in range(1, n + 1):
+        _write(_final(tmp_path), f"v{i}".encode())
         vh.record(tmp_path, 1, _final(tmp_path))
 
     h = vh.history(tmp_path, 1)
-    assert len(h["versions"]) == 3                       # only the last 3 kept
-    contents = sorted(Path(v["path"]).read_bytes() for v in h["versions"])
-    assert contents == [b"v3", b"v4", b"v5"]
+    assert len(h["versions"]) == vh._MAX_VERSIONS        # only the cap kept
+    contents = {Path(v["path"]).read_bytes() for v in h["versions"]}
+    assert contents == {f"v{i}".encode() for i in range(3, n + 1)}
     # The pruned take files are gone from disk, not just the manifest.
     kept = {p.name for p in (tmp_path / "video_history").glob("*.mp4")}
-    assert len(kept) == 3
+    assert len(kept) == vh._MAX_VERSIONS
 
 
 def test_select_copies_chosen_take_onto_canonical_final(tmp_path):

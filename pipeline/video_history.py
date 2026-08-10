@@ -29,7 +29,10 @@ from pathlib import Path
 
 _MANIFEST = "video_history.json"
 _SUBDIR = "video_history"
-_MAX_VERSIONS = 3
+# 10, not 3: acted (H3) takes cost ~6 minutes of GPU each — "every re-shoot is
+# kept" has to actually mean it. Still capped so a re-roll marathon can't eat
+# the disk; the selected take is always kept regardless.
+_MAX_VERSIONS = 10
 _LOCK = threading.Lock()
 
 
