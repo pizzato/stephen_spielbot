@@ -314,6 +314,15 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
         </div>
       </Card>
       {assembleMsg && <Banner tone="ok">{assembleMsg}</Banner>}
+      {/* Scenery & wardrobe reference images — the <Picture N> slots beyond the
+          portraits. They apply to every scene, so they come BEFORE the scenes:
+          buried under the cards, nobody found them. */}
+      {showVisuals && data.scenes.length > 0 && (
+        <ScriptVisuals jobId={jobId || data.job_id}
+          sceneIds={data.scenes.map((s) => s.id)}
+          castNames={[...new Set(data.scenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
+          settingHint={data.scenes[0]?.setting || ''} />
+      )}
       {data.scenes.map((s) => (
         <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId || data.job_id}
           workDir={workDir}
@@ -323,14 +332,7 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
         <Card span={12} well><p className="muted" style={{ fontSize: 13, margin: 0 }}>
           This script has no performance scenes.</p></Card>
       )}
-      {/* Scenery & wardrobe reference images — the <Picture N> slots beyond the
-          portraits. The film editor has no other home for them. */}
-      {showVisuals && data.scenes.length > 0 && (
-        <ScriptVisuals jobId={jobId || data.job_id}
-          sceneIds={data.scenes.map((s) => s.id)}
-          castNames={[...new Set(data.scenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
-          settingHint={data.scenes[0]?.setting || ''} />
-      )}
+
     </>
   )
 }
