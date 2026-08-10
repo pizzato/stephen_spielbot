@@ -1233,7 +1233,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <Card className="reveal reveal-d2">
                   <span className="label-sm">References</span>
                   <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                    An acted scene renders from these — no first frame is painted.
+                    An acted scene renders from these references.
                   </div>
                   <div className="row gap-10 row--wrap mt-16">
                     {(d.cast || []).map((n, i) => {
@@ -1254,9 +1254,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     managed in <strong>Characters &amp; visuals</strong>.
                   </div>
                 </Card>
-              ) : (
+              ) : null}
               <Card className="reveal reveal-d2">
                 <span className="label-sm">First frame</span>
+                {isActedMode(d.mode) && (
+                  <div className="muted mt-8" style={{ fontSize: 12, lineHeight: 1.5 }}>
+                    Optional for an acted scene: painted from the <strong>setting</strong> with
+                    the cast anchored to their portraits, and passed to the take as its
+                    opening-composition reference — it anchors the space and framing
+                    (faces and voices still come from their own references).
+                  </div>
+                )}
                 <div className="mt-16" onClick={() => d.has_preview && openLightbox()}
                   style={{ position: 'relative', borderRadius: 'var(--r-md)', overflow: 'hidden', aspectRatio: aspect, background: 'var(--paper-2)', cursor: d.has_preview ? 'zoom-in' : 'default' }}>
                   {d.has_preview
@@ -1277,7 +1285,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <VersionStrip versions={d.history?.versions} selected={d.history?.selected}
                   onSelect={selectVersion} onDelete={deleteVersion} aspect={aspect} busy={busy === 'preview' || busy === 'inpaint'} />
               </Card>
-              )}
               <Card well className="reveal reveal-d3">
                 <div className="row center gap-10">
                   <Icon name="circle-info" style={{ color: 'var(--ink-3)' }} />

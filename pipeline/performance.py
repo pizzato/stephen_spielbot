@@ -250,6 +250,11 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
         return (f"defines the place only — keep the space, layout, furnishings "
                 f"and lighting exactly as shown. It contains no people and adds "
                 f"none")
+    if kind == "frame":
+        return ("defines the scene's OPENING IMAGE — the space, light, framing "
+                "and where everyone stands. Begin the take looking like this "
+                "picture. Faces come from the portrait references only, voices "
+                "from the audio references only")
     if kind == "continuity":
         return (f"defines the SAME room, furniture, lighting and time of day "
                 f"already filmed in this scene — this shot is another angle of "

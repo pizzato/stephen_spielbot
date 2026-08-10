@@ -73,6 +73,16 @@ and **sound** — in the [Script editor](manual/script.md) like any other scene.
 scenes* view adds the resolved references: the portrait that IS `<Picture 1>`, the voice
 clip that IS `<Audio 1>`.
 
+**A first frame, optionally.** An acted scene can carry a first-frame image like a
+narrated one: on the Script screen its card paints the image from the scene's *setting*
+with the cast anchored to their portraits (or use Edit image / upload). Ref2VA has no
+literal first-frame input — the image rides as the take's **opening-composition
+reference**: a `<Picture N>` whose authority is the space, light, framing and where
+everyone stands, while faces and voices stay bound to their own references. When a scene
+has one, it supersedes the location asset for that scene (the frame IS the place,
+photographed), keeping the reference budget tight — measured, three picture references
+hold; more and the weakest starts dropping.
+
 **Scenery and wardrobe** reference images — the `<Picture N>` slots beyond the portraits —
 live with the characters, under **Characters & visuals**, on both the Script screen and the
 film's edit screen. Everything the film renders from appears there at the same level:

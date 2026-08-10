@@ -3231,10 +3231,28 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
             pictures.append({"slot": len(pictures) + 1, "name": name,
                              "kind": "character", "hint": looks_like(name),
                              "path": str(path)})
+    # The scene's first-frame image, when one was made: it rides as the take's
+    # opening-composition reference. Ref2VA has no literal first-frame input,
+    # but an image reference demonstrably anchors the space and framing (the
+    # shot-splitter's continuity frame proved it).
+    frame = None
+    for cand in (Path(work_dir) / f"scene_{int(scene_id):02d}_preview.png",
+                 Path(work_dir) / f"scene_{int(scene_id):02d}_first_frame.png"):
+        if scene_id and cand.exists() and cand.stat().st_size > 0:
+            frame = cand
+            break
+    if frame is not None:
+        pictures.append({"slot": len(pictures) + 1, "name": "First frame",
+                         "kind": "frame", "path": str(frame)})
     # Locations and wardrobe take the slots after the cast: identity first, then
     # the space, then the clothes — so trimming to H3's nine-image cap drops the
-    # least identity-critical references rather than a face.
+    # least identity-critical references rather than a face. A first frame IS
+    # the place, photographed — sending the location asset alongside it wastes
+    # a slot and dilutes binding (measured: at 3 picture refs everything held;
+    # at 4+ the weakest dropped), so the frame supersedes it.
     for vis in scene_visuals(work_dir, scene_id, meta.get("cast"), cfg, style_name):
+        if frame is not None and vis["kind"] == "location":
+            continue
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
                          "kind": vis["kind"], "character": vis.get("character", ""),
                          "id": vis["id"], "path": vis["_ref_path"]})
@@ -3303,7 +3321,18 @@ def _generate_active_scene_preview(
     # preview is reused as the first frame instead of regenerated at a new size.
     img_width, img_height = ltx_dimensions(img_width, img_height)
     combined_style = _compose_visual_style(style, cfg, style_name)
-    base_prompt = image_prompt or scene.get("image_prompt") or title
+    md = scene.get("metadata") or {}
+    acted_prompt = ""
+    if not (image_prompt or scene.get("image_prompt")):
+        from pipeline import performance as _perf
+        if _perf.is_performance_mode(md.get("mode")):
+            cast = [str(n) for n in (md.get("cast") or []) if str(n).strip()]
+            who = (f" {' and '.join(cast)} are in the scene, both fully visible."
+                   if len(cast) > 1 else f" {cast[0]} is in the scene." if cast else "")
+            setting = str(md.get("setting") or "").strip()
+            if setting:
+                acted_prompt = f"{setting}.{who} The very first moment of the scene, nobody speaking yet."
+    base_prompt = image_prompt or scene.get("image_prompt") or acted_prompt or title
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it,
     # and anchor featured characters to their reference image (FLUX.2 only).

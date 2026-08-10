@@ -1416,3 +1416,58 @@ class BareModeFlipTests(ActedSceneEditingTests):
         scene = self.backend.job_scenes(self.job_id)["scenes"][0]
         self.assertEqual([l["text"] for l in scene["lines"]], ["You came."])
         self.assertIn("[REFERENCE USE]", scene["video_prompt"])
+
+
+class FirstFrameReferenceTests(unittest.TestCase):
+    """An acted scene's first-frame image rides as its opening-composition
+    reference — and supersedes the location asset (the frame IS the place)."""
+
+    def setUp(self):
+        import app as gapp
+        self.gapp = gapp
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-frame-ref-")
+        self.addCleanup(tmp.cleanup)
+        self.wd = Path(tmp.name)
+        (self.wd / "characters.json").write_text(json.dumps([
+            {"id": "c1", "name": "Ana", "description": "a sailor",
+             "ref_image": "c1.png", "enabled": True}]))
+        d = self.wd / "characters"; d.mkdir()
+        (d / "c1.png").write_bytes(b"png")
+        cfg_file = self.wd / "config.yaml"; cfg_file.write_text("{}")
+        mock.patch.object(gapp, "CONFIG_FILE", cfg_file).start()
+        self.addCleanup(mock.patch.stopall)
+
+    def _resolve(self, scene_id=1):
+        return self.gapp.resolve_performance_references(
+            {"cast": ["Ana"], "lines": [{"speaker": "Ana", "text": "hi"}]},
+            {"voices": []}, self.wd, "", scene_id=scene_id)
+
+    def test_a_preview_image_becomes_the_frame_reference(self):
+        (self.wd / "scene_01_preview.png").write_bytes(b"png")
+        pics = self._resolve()["pictures"]
+        self.assertEqual([(p["kind"], p["slot"]) for p in pics],
+                         [("character", 1), ("frame", 2)])
+
+    def test_no_preview_no_frame_slot(self):
+        pics = self._resolve()["pictures"]
+        self.assertEqual([p["kind"] for p in pics], ["character"])
+
+    def test_the_frame_supersedes_the_location_visual(self):
+        (self.wd / "scene_01_preview.png").write_bytes(b"png")
+        vis_dir = self.wd / "visuals"; vis_dir.mkdir()
+        (vis_dir / "v1.png").write_bytes(b"png")
+        (self.wd / "visuals.json").write_text(json.dumps([
+            {"id": "v1", "name": "Wharf", "kind": "location", "description": "",
+             "ref_image": "v1.png", "scenes": [], "enabled": True},
+            {"id": "v2", "name": "Coat", "kind": "wardrobe", "character": "Ana",
+             "description": "", "ref_image": "v1.png", "scenes": [], "enabled": True}]))
+        kinds = [p["kind"] for p in self._resolve()["pictures"]]
+        self.assertIn("frame", kinds)
+        self.assertIn("wardrobe", kinds)      # wardrobe still rides
+        self.assertNotIn("location", kinds)   # the frame IS the place
+
+    def test_frame_role_is_bounded(self):
+        from pipeline import performance as perf
+        role = perf.picture_role({"name": "First frame", "kind": "frame"})
+        self.assertIn("OPENING IMAGE", role)
+        self.assertIn("portrait references only", role)
