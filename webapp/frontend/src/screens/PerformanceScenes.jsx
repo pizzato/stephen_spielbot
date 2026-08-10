@@ -58,6 +58,10 @@ function CastMember({ c, picture, audio, jobId, voiceOpts, voiceMeta, onChanged 
           <select className="input" value={c.voice || ''} disabled={!editable || !!busy}
             onChange={(e) => run('voice', () => api.updateScriptCharacter(jobId, c.id, { voice: e.target.value }))}>
             <option value="">Let the model invent it</option>
+            {/* The assigned voice always appears, even when the library list
+                hasn't loaded — otherwise the select silently shows "invent"
+                for a character that HAS a voice. */}
+            {c.voice && !voiceOpts.includes(c.voice) && <option value={c.voice}>{c.voice}</option>}
             {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
           </select>
           {!c.voice && (

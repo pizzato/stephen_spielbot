@@ -1940,6 +1940,19 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
   const [actedMix, setActedMix] = useState('none')   // none | some | all
+  // Voice library for the acted view's per-character voice picker. Without it
+  // the select has only its "invent" option — and an HTML select whose value
+  // isn't among its options silently shows the first one, reading as "no
+  // voice" for a character that HAS one.
+  const [voiceOpts, setVoiceOpts] = useState([])
+  const [voiceMeta, setVoiceMeta] = useState({})
+  useEffect(() => {
+    api.getConfig().then((c) => {
+      const cfg = c?.config || c || {}
+      setVoiceOpts((cfg.voices || []).map((v) => v?.name).filter(Boolean))
+      setVoiceMeta(voiceMetaMap(cfg.voices))
+    }).catch(() => {})
+  }, [])
 
   // Prefill page title from film scenes (lightweight enough for the head), and
   // note how much of the film is acted: an ALL-acted film replaces the
@@ -1991,7 +2004,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       </div>
 
       {tab === 'performance' && (
-        <PerformanceScenes workDir={workDir} />
+        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
       )}
       {tab === 'film' && (
         <FilmTab
