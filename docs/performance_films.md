@@ -75,8 +75,12 @@ clip that IS `<Audio 1>`.
 
 **Scenery and wardrobe** reference images — the `<Picture N>` slots beyond the portraits —
 live with the characters, under **Characters & visuals**, on both the Script screen and the
-film's edit screen. A film's own visuals shadow same-named [assets](manual/settings.md)
-from the style's shared catalogue; both feed the prompt the moment they have an image.
+film's edit screen. Everything the film renders from appears there at the same level:
+the script's own characters and visuals (editable), and the style catalogue's (marked
+*catalogue*, read-only — shared across films, they edit in Settings). A film's own visuals
+shadow same-named [assets](manual/settings.md) from the catalogue; both feed the prompt the
+moment they have an image. Each acted scene's card also shows its resolved references as
+thumbnails — the portraits, location and wardrobe that exact take renders from.
 
 The **video prompt is read-only and assembled from those fields**, so nothing is written
 twice. **Edit prompt** pins hand-written text instead: the fields stop rebuilding it, and

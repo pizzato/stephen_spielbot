@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -1377,6 +1377,7 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
   const [jobId, setJobId] = useState('')
   const [scenes, setScenes] = useState([])
   const [characters, setCharacters] = useState([])
+  const [castCatalogue, setCastCatalogue] = useState([])   // style catalogue, read-only
   const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState('')
   const [charBusy, setCharBusy] = useState('')
@@ -1395,8 +1396,10 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
       if (r.job_id) {
         const c = await api.scriptCharacters(r.job_id)
         setCharacters(c.characters || [])
+        setCastCatalogue(c.catalogue || [])
       } else {
         setCharacters([])
+        setCastCatalogue([])
       }
     } catch (e) {
       setError(e.message)
@@ -1672,6 +1675,14 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
             </Card>
           )
         })}
+
+        {/* Catalogue members appear at the same level — the film uses them,
+            but they are shared across films, so they edit in Settings. */}
+        {castCatalogue.map((c) => (
+          <CatalogueRefCard key={`cat-${c.id || c.name}`} name={c.name} kind="Character"
+            description={c.description} imageUrl={c.image_url} icon="user"
+            editHint="Settings → Characters" />
+        ))}
 
         {charLightbox && (
           <div onClick={() => setCharLightbox(null)}

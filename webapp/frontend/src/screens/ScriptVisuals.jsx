@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api } from '../api.js'
-import { Card, Field, Button, Icon, Banner, GuidedRegenButton } from '../components.jsx'
+import { Card, Field, Button, Icon, Banner, GuidedRegenButton, CatalogueRefCard } from '../components.jsx'
 
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
   const r = new FileReader()
@@ -100,12 +100,17 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
 
 export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], settingHint = '' }) {
   const [visuals, setVisuals] = useState([])
+  const [catalogue, setCatalogue] = useState([])
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
   const load = async () => {
     if (!jobId) return
-    try { setVisuals((await api.listVisuals(jobId)).visuals || []) } catch (e) { setError(e.message) }
+    try {
+      const r = await api.listVisuals(jobId)
+      setVisuals(r.visuals || [])
+      setCatalogue(r.catalogue || [])
+    } catch (e) { setError(e.message) }
   }
   useEffect(() => { load() }, [jobId])
 
@@ -143,7 +148,16 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
         <VisualCard key={v.id} v={v} jobId={jobId} sceneIds={sceneIds} castNames={castNames}
           onChanged={load} onError={setError} />
       ))}
-      {!visuals.length && (
+      {/* Catalogue assets sit at the same level as the film's own — they feed
+          the same <Picture N> slots — but edit in Settings, not here. */}
+      {catalogue.map((a) => (
+        <CatalogueRefCard key={`cat-${a.id}`} name={a.name}
+          kind={a.kind === 'wardrobe' ? 'Wardrobe' : 'Location'}
+          description={a.description} imageUrl={a.image_url}
+          icon={a.kind === 'wardrobe' ? 'shirt' : 'location-dot'}
+          editHint="Settings → Assets" />
+      ))}
+      {!visuals.length && !catalogue.length && (
         <Card span={12} well><p className="muted" style={{ fontSize: 13, margin: 0 }}>
           No locations or wardrobe yet.</p></Card>
       )}

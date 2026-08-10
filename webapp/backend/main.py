@@ -1204,7 +1204,32 @@ def _job_style_name(job_id: str) -> str:
 
 
 def _script_chars_ok(wd: Path) -> dict:
-    return {"ok": True, "characters": _script_characters_payload(wd)}
+    """Script characters (editable) plus the style's catalogue members
+    (read-only — they are shared across films, so they edit in Settings).
+    A script character shadows a same-named catalogue one."""
+    payload = _script_characters_payload(wd)
+    taken = {(c.get("name") or "").strip().lower() for c in payload}
+    catalogue = []
+    try:
+        cfg = gapp.load_config()
+        style_name = _job_style_name(job_id_from_work_dir(wd))
+        for c in gapp._style_characters(cfg, style_name):
+            if (c.get("name") or "").strip().lower() in taken:
+                continue
+            img = gapp._character_image_path(c.get("ref_image"))
+            has = bool(img and img.exists() and img.stat().st_size > 0)
+            catalogue.append({
+                "id": c.get("id", ""), "name": c.get("name", ""),
+                "aliases": c.get("aliases") or [],
+                "description": c.get("description", ""),
+                "voice": c.get("voice", ""),
+                "has_image": has,
+                "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has else "",
+                "scope": "catalogue",
+            })
+    except Exception:
+        pass
+    return {"ok": True, "characters": payload, "catalogue": catalogue}
 
 
 @api.get("/api/jobs/{job_id}/characters")
@@ -2952,8 +2977,33 @@ def _visual_to_json(wd: Path, v: dict) -> dict:
 
 
 def _visuals_ok(wd: Path) -> dict:
-    return {"ok": True, "visuals": [_visual_to_json(wd, v)
-                                    for v in gapp.read_script_visuals(wd)]}
+    """Film visuals (editable) plus the style's asset catalogue (read-only —
+    shared across films, edited in Settings → Assets). A film visual shadows a
+    same-named catalogue asset, mirroring scene_visuals' render-time rule."""
+    own = [_visual_to_json(wd, v) for v in gapp.read_script_visuals(wd)]
+    taken = {(v.get("name") or "").strip().lower() for v in own}
+    catalogue = []
+    try:
+        cfg = gapp.load_config()
+        style_name = _job_style_name(job_id_from_work_dir(wd))
+        for a in gapp.style_assets(cfg, style_name):
+            if (a.get("name") or "").strip().lower() in taken:
+                continue
+            img = gapp._asset_image_path(a.get("ref_image"))
+            has = bool(img and img.exists() and img.stat().st_size > 0)
+            catalogue.append({
+                "id": a.get("id", ""), "name": a.get("name", ""),
+                "kind": a.get("kind", "location"),
+                "description": a.get("description", ""),
+                "character": a.get("character", ""),
+                "scenes": [], "enabled": a.get("enabled", True),
+                "has_image": has,
+                "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has else "",
+                "scope": "catalogue",
+            })
+    except Exception:
+        pass
+    return {"ok": True, "visuals": own, "catalogue": catalogue}
 
 
 @api.get("/api/jobs/{job_id}/visuals")
@@ -3092,7 +3142,10 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
                 {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
                 picture_names=refs["pictures"],
                 audio_names=[a["name"] for a in refs["audios"]]),
-            "pictures": refs["pictures"],
+            "pictures": [{**p, "image_url": (f"/api/file?path={p['path']}"
+                                             f"&t={int(Path(p['path']).stat().st_mtime)}"
+                                             if p.get("path") and Path(p["path"]).exists() else "")}
+                         for p in refs["pictures"]],
             "audios": refs["audios"],
             # Speakers with no cast voice: H3 invents one, and it drifts between
             # scenes. Surfaced so it is fixable before rendering.

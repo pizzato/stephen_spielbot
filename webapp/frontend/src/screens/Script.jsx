@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, fmtDuration, DurationInput } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -76,6 +76,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [voiceOpts, setVoiceOpts] = useState([])
   const [voiceMeta, setVoiceMeta] = useState({})
   const [globalCast, setGlobalCast] = useState([])
+  const [castCatalogue, setCastCatalogue] = useState([])   // style catalogue, read-only
   const [castStyles, setCastStyles] = useState({ styles: [], defaultStyle: '' })
   useEffect(() => {
     api.getConfig().then((c) => {
@@ -315,7 +316,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (view !== 'characters' || !job?.job_id) return
     let alive = true
     api.scriptCharacters(job.job_id)
-      .then((r) => { if (alive) setCharacters(r.characters || []) })
+      .then((r) => { if (alive) { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []) } })
       .catch(() => { /* keep the snapshot */ })
     return () => { alive = false }
   }, [view, job?.job_id])
@@ -844,12 +845,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
-          {view === 'characters' && job && someActed && (
-        <ScriptVisuals jobId={job.job_id}
-          sceneIds={(job.scenes || []).map((s) => s.id)}
-          castNames={[...new Set((job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
-          settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
-      )}
 
       {view === 'performance' && job && (
             <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
@@ -1453,6 +1448,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </Card>
             )
           })}
+
+          {/* Catalogue members and the film's locations & wardrobe sit at the
+              SAME level as the script's own characters — one reference wall. */}
+          {castCatalogue.map((c) => (
+            <CatalogueRefCard key={`cat-${c.id || c.name}`} name={c.name} kind="Character"
+              description={c.description} imageUrl={c.image_url} icon="user"
+              editHint="Settings → Characters" />
+          ))}
+          {someActed && (
+            <ScriptVisuals jobId={job.job_id}
+              sceneIds={(job.scenes || []).map((s) => s.id)}
+              castNames={[...new Set([...castCatalogue.map((c) => c.name),
+                ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
+              settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
+          )}
 
           {charLightbox && (
             <div onClick={() => setCharLightbox(null)}

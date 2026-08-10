@@ -219,6 +219,26 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
             picture={scene.pictures.find((p) => p.name === c.name)}
             jobId={jobId} voiceOpts={voiceOpts} voiceMeta={voiceMeta} onChanged={onChanged} />
         ))}
+        {/* The scene's other references — location, wardrobe, continuity — as
+            small pictures, so every <Picture N> the take renders from is
+            visible on the card, not just the people. */}
+        {scene.pictures.filter((p) => p.kind && p.kind !== 'character').map((p) => (
+          <div key={`ref-${p.slot}`} className="stack gap-8" style={{ width: 110 }}>
+            <span className="label-sm">Picture {p.slot}</span>
+            {p.image_url
+              ? <img src={p.image_url} alt={p.name}
+                  style={{ width: 104, height: 104, objectFit: 'cover', borderRadius: 10,
+                           border: '1px solid var(--line, #ddd)' }} />
+              : <div style={{ width: 104, height: 104, borderRadius: 10, display: 'flex',
+                              alignItems: 'center', justifyContent: 'center',
+                              background: 'var(--well, rgba(127,127,127,.10))',
+                              border: '1px dashed var(--line, #ccc)' }}>
+                  <Icon name={p.kind === 'wardrobe' ? 'shirt' : 'location-dot'}
+                    style={{ color: 'var(--ink-3)', fontSize: 20 }} />
+                </div>}
+            <span className="muted" style={{ fontSize: 11.5 }}>{p.name} · {p.kind}</span>
+          </div>
+        ))}
       </div>
 
       {(scene.missing_portraits.length > 0 || scene.unvoiced.length > 0) && (

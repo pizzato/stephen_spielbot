@@ -543,6 +543,36 @@ export function Check({ checked, onChange, label, disabled }) {
   )
 }
 
+// A reference that comes from the shared catalogue: shown at the same level
+// as the film's own, but read-only — it is shared across films, so it edits
+// in Settings (Characters or Assets).
+export function CatalogueRefCard({ name, kind, description, imageUrl, icon, editHint }) {
+  return (
+    <Card span={4} className="stack gap-10">
+      <div className="row between center">
+        <span className="label-sm">{kind}</span>
+        <Chip tone="neutral" dot>catalogue</Chip>
+      </div>
+      {imageUrl
+        ? <img src={imageUrl} alt={name}
+            style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 10 }} />
+        : <div style={{ width: '100%', aspectRatio: '1', borderRadius: 10, display: 'flex',
+                        alignItems: 'center', justifyContent: 'center',
+                        background: 'var(--well, rgba(127,127,127,.10))',
+                        border: '1px dashed var(--line, #ccc)' }}>
+            <Icon name={icon} style={{ color: 'var(--ink-3)', fontSize: 26 }} />
+          </div>}
+      <div>
+        <span style={{ fontSize: 13.5, fontWeight: 600 }}>{name}</span>
+        {description && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{description}</div>}
+      </div>
+      <span className="muted" style={{ fontSize: 11.5 }}>
+        Shared across films — edit in <strong>{editHint}</strong>.
+      </span>
+    </Card>
+  )
+}
+
 export function ProgressBar({ pct }) {
   return <div className="pbar"><div className="pbar__fill" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}></div></div>
 }
