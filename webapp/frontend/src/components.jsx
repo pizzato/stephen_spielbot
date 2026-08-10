@@ -546,7 +546,7 @@ export function Check({ checked, onChange, label, disabled }) {
 // A reference that comes from the shared catalogue: shown at the same level
 // as the film's own, but read-only — it is shared across films, so it edits
 // in Settings (Characters or Assets).
-export function CatalogueRefCard({ name, kind, description, imageUrl, icon, editHint }) {
+export function CatalogueRefCard({ name, kind, description, imageUrl, icon, editHint, voiceName, voiceUrl }) {
   return (
     <Card span={4} className="stack gap-10">
       <div className="row between center">
@@ -566,6 +566,14 @@ export function CatalogueRefCard({ name, kind, description, imageUrl, icon, edit
         <span style={{ fontSize: 13.5, fontWeight: 600 }}>{name}</span>
         {description && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{description}</div>}
       </div>
+      {/* The audio reference is as real as the picture: this clip is what the
+          character's voice is cloned from in every acted scene. */}
+      {voiceName && (
+        <div className="stack gap-4">
+          <span className="label-sm">Voice · {voiceName}</span>
+          {voiceUrl && <audio controls preload="none" src={voiceUrl} style={{ width: '100%', height: 32 }} />}
+        </div>
+      )}
       <span className="muted" style={{ fontSize: 11.5 }}>
         Shared across films — edit in <strong>{editHint}</strong>.
       </span>

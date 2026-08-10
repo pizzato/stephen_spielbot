@@ -1203,18 +1203,61 @@ def _job_style_name(job_id: str) -> str:
     return _script_source_meta(job_id, "")[3]
 
 
+def _film_reference_usage(wd: Path) -> tuple[set, bool]:
+    """(cast names in any scene, film has acted scenes) — what the reference
+    wall means by "used by this video". Case-insensitive names."""
+    names: set = set()
+    has_acted = False
+    try:
+        store = DurableStore.default()
+        try:
+            rows = store.scene_rows(job_id_from_work_dir(wd))
+        finally:
+            store.close()
+        if not rows and (wd / "script.json").exists():
+            rows = json.loads((wd / "script.json").read_text())
+        for r in rows or []:
+            md = (r.get("metadata") or {}) if isinstance(r, dict) else {}
+            if performance_mode.is_performance_mode(md.get("mode")):
+                has_acted = True
+            for n in (md.get("cast") or []):
+                if str(n).strip():
+                    names.add(str(n).strip().lower())
+            for ln in (md.get("lines") or []):
+                spk = str((ln or {}).get("speaker") or "").strip()
+                if spk:
+                    names.add(spk.lower())
+    except Exception:
+        pass
+    return names, has_acted
+
+
+def _voice_clip_url(cfg: dict, voice_name: str) -> str:
+    """A playable URL for a library voice's reference clip, or ''."""
+    for v in cfg.get("voices") or []:
+        if v.get("name") == voice_name and v.get("path"):
+            pth = Path(v["path"])
+            if pth.exists():
+                return f"/api/file?path={pth}"
+    return ""
+
+
 def _script_chars_ok(wd: Path) -> dict:
     """Script characters (editable) plus the style's catalogue members
     (read-only — they are shared across films, so they edit in Settings).
     A script character shadows a same-named catalogue one."""
     payload = _script_characters_payload(wd)
     taken = {(c.get("name") or "").strip().lower() for c in payload}
+    used, _has_acted = _film_reference_usage(wd)
     catalogue = []
     try:
         cfg = gapp.load_config()
         style_name = _job_style_name(job_id_from_work_dir(wd))
         for c in gapp._style_characters(cfg, style_name):
-            if (c.get("name") or "").strip().lower() in taken:
+            name_key = (c.get("name") or "").strip().lower()
+            # Only members THIS video casts — the wall shows the film's
+            # references, not the whole catalogue.
+            if name_key in taken or name_key not in used:
                 continue
             img = gapp._character_image_path(c.get("ref_image"))
             has = bool(img and img.exists() and img.stat().st_size > 0)
@@ -1223,6 +1266,7 @@ def _script_chars_ok(wd: Path) -> dict:
                 "aliases": c.get("aliases") or [],
                 "description": c.get("description", ""),
                 "voice": c.get("voice", ""),
+                "voice_url": _voice_clip_url(cfg, c.get("voice", "")),
                 "has_image": has,
                 "image_url": f"/api/file?path={img}&t={int(img.stat().st_mtime)}" if has else "",
                 "scope": "catalogue",
@@ -2982,6 +3026,7 @@ def _visuals_ok(wd: Path) -> dict:
     same-named catalogue asset, mirroring scene_visuals' render-time rule."""
     own = [_visual_to_json(wd, v) for v in gapp.read_script_visuals(wd)]
     taken = {(v.get("name") or "").strip().lower() for v in own}
+    used, has_acted = _film_reference_usage(wd)
     catalogue = []
     try:
         cfg = gapp.load_config()
@@ -2991,6 +3036,15 @@ def _visuals_ok(wd: Path) -> dict:
                 continue
             img = gapp._asset_image_path(a.get("ref_image"))
             has = bool(img and img.exists() and img.stat().st_size > 0)
+            # Only what this video's renders actually pull in: an asset feeds
+            # the slots when it has an image, the film has acted scenes, and a
+            # character-owned wardrobe's owner is in the cast (scene_visuals'
+            # own rule).
+            if not (has and has_acted and a.get("enabled", True)):
+                continue
+            if (a.get("kind") == "wardrobe" and (a.get("character") or "").strip()
+                    and a["character"].strip().lower() not in used):
+                continue
             catalogue.append({
                 "id": a.get("id", ""), "name": a.get("name", ""),
                 "kind": a.get("kind", "location"),

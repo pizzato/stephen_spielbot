@@ -1454,6 +1454,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           {castCatalogue.map((c) => (
             <CatalogueRefCard key={`cat-${c.id || c.name}`} name={c.name} kind="Character"
               description={c.description} imageUrl={c.image_url} icon="user"
+              voiceName={c.voice} voiceUrl={c.voice_url}
               editHint="Settings → Characters" />
           ))}
           {someActed && (
