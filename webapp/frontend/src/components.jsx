@@ -146,7 +146,7 @@ function BeatRows({ beats, seconds, onChange, onCommit }) {
   )
 }
 
-export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommit }) {
+export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommit, onConvert }) {
   // onChange(patch, commit): merge patch into the scene; when commit is true the
   // parent persists the merged value immediately (discrete edits). Text inputs
   // pass commit=false and persist on blur via onCommit(). Passing the computed
@@ -169,17 +169,32 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
     ;[next[i], next[j]] = [next[j], next[i]]
     onChange({ lines: next }, true)
   }
-  const setMode = (m) => onChange({ mode: m }, true)
+  const [converting, setConverting] = useState(false)
+  const setMode = async (m) => {
+    if (m === mode || (m === 'dialogue' && isActedMode(mode))) return
+    if (onConvert) {
+      // Conversion keeps the theme and the old version: the server rewrites
+      // the content into the other shape (or restores the stashed one).
+      setConverting(true)
+      try { await onConvert(m) } finally { setConverting(false) }
+    } else {
+      onChange({ mode: m }, true)
+    }
+  }
   const speakerOpts = [...new Set([...cast, ...castOpts].filter(Boolean))]
 
   return (
     <>
-      <Field label="Scene type" hint="Narration = voice-over over a still that moves. Dialogue = the characters act and speak on camera, in one take. Silent = visuals only, no voice.">
-        <div className="row gap-8">
+      <Field label="Scene type"
+        hint={onConvert
+          ? 'Switching converts the scene — same theme and feel, the other shape — and keeps the version you leave: switch back and it is restored, not redone.'
+          : 'Narration = voice-over over a still that moves. Dialogue = the characters act and speak on camera, in one take. Silent = visuals only, no voice.'}>
+        <div className="row gap-8 center">
           {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
             <Button key={m} variant={(m === 'dialogue' ? isActedMode(mode) : mode === m) ? 'primary' : 'ghost'}
-              onClick={() => setMode(m)}>{lbl}</Button>
+              disabled={converting} onClick={() => setMode(m)}>{lbl}</Button>
           ))}
+          {converting && <span className="muted" style={{ fontSize: 12.5 }}><Icon name="spinner" spin /> Converting…</span>}
         </div>
       </Field>
 

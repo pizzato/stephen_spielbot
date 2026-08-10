@@ -426,7 +426,12 @@ function SceneCard({
                 <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={(instr) => regenField('title', instr)} chips={REGEN_CHIPS.title}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType} />
+                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType}
+                  onConvert={async (m) => {
+                    setError('')
+                    try { await api.convertSceneMode(jobId, scene.id, m); onSaved() }
+                    catch (e) { setError(e.message) }
+                  }} />
                 {(sceneType.mode || 'narration') === 'narration' && (<>
                   <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
                     <textarea className="textarea" rows={3} value={narration} onChange={(e) => setNarration(e.target.value)} />

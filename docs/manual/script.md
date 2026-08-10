@@ -89,7 +89,11 @@ reordering is safe.
 ### The fields
 
 Above the fields sits the **scene type** control — narration, dialogue, or silent — and
-the fields below change with it.
+the fields below change with it. Switching the type **converts** the scene: the LLM
+rewrites the content into the other shape with the same theme and feel (a narrated beat
+becomes lines the characters speak, and vice versa). The version you leave is kept —
+switch back and it is restored exactly as it was, no rework. This works on the Script
+screen and on a film's edit screen alike.
 
 A **narrated or silent** scene has:
 

@@ -1166,7 +1166,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
                 <SceneTypeControls scene={d} castOpts={castOpts}
                   onChange={(patch, commit) => { patchScene(patch); if (commit) persist(cur, { ...scenes[cur], ...patch }) }}
-                  onCommit={() => persist(cur)} />
+                  onCommit={() => persist(cur)}
+                  onConvert={async (m) => {
+                    setError('')
+                    try {
+                      const r = await api.convertSceneMode(job.job_id, d.id, m)
+                      if (r?.scene) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...r.scene } : x)))
+                    } catch (e) { setError(e.message) }
+                  }} />
 
                 {(d.mode || 'narration') === 'narration' && (
                   <Field label={fieldLabel('Narration', 'narration', 'microphone-lines')}>

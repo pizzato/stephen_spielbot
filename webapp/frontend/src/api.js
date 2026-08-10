@@ -214,6 +214,10 @@ export const api = {
   // beats, camera, sound — the prompt reassembles server-side.
   regenActedScene: (jobId, sceneId, instruction) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-acted`, { instruction: instruction || '' }),
+  // Switching a scene's type converts the content (same theme, other shape)
+  // and stashes the version being left, so switching back restores it.
+  convertSceneMode: (jobId, sceneId, mode) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/convert-mode`, { mode }),
 
   startGeneration: (body) => req('POST', '/jobs/generate', body),
   getProgress: (workDir) => req('GET', `/progress?work_dir=${encodeURIComponent(workDir || '')}`),

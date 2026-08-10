@@ -4175,6 +4175,197 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     return {"field": field, "value": text}
 
 
+# ── scene mode conversion (narration ⇄ dialogue ⇄ silent) ────────────────────
+# Switching a scene's type CONVERTS its content (same theme and feel, the other
+# shape) instead of leaving mismatched fields — and every mode's last content is
+# stashed in the scene metadata, so switching back RESTORES what was there
+# rather than regenerating it.
+
+_MODE_STASH_FIELDS = {
+    "narration": ("narration", "image_prompt", "video_prompt", "tts_text"),
+    "dialogue": ("lines", "cast", "setting", "camera", "soundscape",
+                 "beats", "seconds", "prompt_override"),
+    "silent": ("image_prompt", "video_prompt", "duration"),
+}
+
+
+def _stash_mode_content(meta: dict, row: dict, mode: str) -> None:
+    """Snapshot what *mode* owns into meta["mode_stash"][mode], in place."""
+    src = {**meta, "narration": row.get("narration") or "",
+           "image_prompt": row.get("image_prompt") or "",
+           "video_prompt": row.get("video_prompt") or ""}
+    stash = dict(meta.get("mode_stash") or {})
+    stash[mode] = {k: src.get(k) for k in _MODE_STASH_FIELDS[mode] if src.get(k)}
+    meta["mode_stash"] = stash
+
+
+class ConvertModeBody(BaseModel):
+    mode: str   # "narration" | "dialogue" | "silent"
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/convert-mode")
+def convert_scene_mode(job_id: str, scene_id: int, body: ConvertModeBody) -> dict:
+    sid = int(scene_id)
+    target = (body.mode or "").strip().lower()
+    if target not in _MODE_STASH_FIELDS:
+        raise HTTPException(400, f"Unknown scene mode: {body.mode!r}")
+    cfg = gapp.load_config()
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        current = store.get_scene(job_id, sid) or {}
+    finally:
+        store.close()
+    if not current:
+        raise HTTPException(404, "Scene not found.")
+    meta = dict(current.get("metadata") or {})
+    src_mode = str(meta.get("mode") or "narration").strip().lower()
+    if performance_mode.is_performance_mode(src_mode):
+        src_mode = "dialogue"
+    if src_mode == target:
+        return {"ok": True, "scene": _scene_to_json(current, gapp._job_work_dir(job_id))}
+
+    # Keep the version being left, so switching back restores it verbatim.
+    _stash_mode_content(meta, current, src_mode)
+    stashed = (meta.get("mode_stash") or {}).get(target) or {}
+
+    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
+    style_name = jc.get("style_name", "")
+    title = current.get("title") or ""
+
+    def _save(**fields) -> dict:
+        base = dict(title=title, image_prompt="", video_prompt="",
+                    narration="", mode=target)
+        if target != "dialogue":
+            base["lines"] = []      # leftover acted lines must not linger
+        if target == "narration":
+            base["duration"] = 0    # nor a silent-scene duration
+        base.update(fields)
+        # carry the updated stash through update_scene's metadata merge
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(job_id, sid, title=title,
+                               image_prompt=current.get("image_prompt") or "",
+                               video_prompt=current.get("video_prompt") or "",
+                               narration=current.get("narration") or "",
+                               preview_path=current.get("preview_path", ""),
+                               metadata=meta)
+        finally:
+            store.close()
+        return update_scene(job_id, sid, SceneUpdate(**base))
+
+    if stashed:
+        # A version of this mode already exists — restore, don't regenerate.
+        if target == "dialogue":
+            return _save(lines=list(stashed.get("lines") or []),
+                         cast=list(stashed.get("cast") or []),
+                         setting=stashed.get("setting") or "",
+                         camera=stashed.get("camera") or "",
+                         soundscape=stashed.get("soundscape") or "",
+                         beats=list(stashed.get("beats") or []),
+                         seconds=float(stashed.get("seconds") or 0),
+                         prompt=stashed.get("prompt_override") or "")
+        if target == "silent":
+            return _save(image_prompt=stashed.get("image_prompt") or "",
+                         video_prompt=stashed.get("video_prompt") or "",
+                         duration=float(stashed.get("duration") or 5))
+        return _save(narration=stashed.get("narration") or "",
+                     image_prompt=stashed.get("image_prompt") or "",
+                     video_prompt=stashed.get("video_prompt") or "",
+                     tts_text=stashed.get("tts_text") or "")
+
+    # No stash: convert the content with the LLM — same theme, the other shape.
+    video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
+    acted = performance_mode.acted_meta({"metadata": meta,
+                                         "lines": meta.get("lines") or [],
+                                         "video_prompt": current.get("video_prompt") or "",
+                                         "image_prompt": current.get("image_prompt") or ""})
+    if target == "silent":
+        # Mechanical: the visuals stay, the voice goes.
+        return _save(image_prompt=current.get("image_prompt") or acted.get("setting") or "",
+                     video_prompt=(current.get("video_prompt")
+                                   if src_mode == "narration" else acted.get("setting") or ""),
+                     duration=5)
+
+    system = ("You are a screenwriter converting one scene of a short AI-generated film "
+              "between formats WITHOUT changing its content: same beat of the story, same "
+              "theme, same feel. Return ONLY a raw JSON object — no markdown, no fences.")
+    if target == "dialogue":
+        cast_pool = ", ".join(dict.fromkeys(
+            [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
+            + [c.get("name", "") for c in gapp._job_characters(cfg, style_name,
+                                                               gapp._job_work_dir(job_id)) or []]
+        )) or "the story's characters"
+        user = (
+            f"Video title: {video_title}\nScene title: {title}\n"
+            f"NARRATED version to stage as an ACTED scene (characters speak on camera, "
+            f"one continuous ~10 second take):\n"
+            f"Narration: {current.get('narration') or ''}\n"
+            f"Visuals: {current.get('image_prompt') or ''}\n\n"
+            "Convey the SAME information and mood through spoken dialogue. Return JSON:\n"
+            f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}\n'
+            '  "setting": one sentence — where this happens (derive it from the visuals)\n'
+            '  "lines": ordered [{"speaker","delivery","text"}] — AT MOST 3 lines and 22 '
+            "spoken words TOTAL\n"
+            '  "beats": [{"t0","t1","action"}]\n'
+            '  "camera": one sentence, a single shot\n'
+            '  "soundscape": diegetic sound only, no music'
+        )
+        raw = _convert_llm_json(user, system, cfg, video_title or title)
+        lines = performance_mode.norm_lines(raw.get("lines"))
+        if not lines:
+            raise HTTPException(502, "The conversion returned no dialogue — try again.")
+        return _save(lines=lines,
+                     cast=[str(n) for n in (raw.get("cast") or []) if str(n).strip()],
+                     setting=str(raw.get("setting") or ""),
+                     camera=str(raw.get("camera") or ""),
+                     soundscape=str(raw.get("soundscape") or ""),
+                     beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
+                     seconds=0, prompt="")
+
+    # target == narration: the acted content becomes a narrated beat.
+    plan = (jc.get("create_brief") or {}).get("scene_plan") if isinstance(jc, dict) else None
+    if not (isinstance(plan, dict) and plan.get("scene_words_max")):
+        plan = gapp.style_script_plan(gapp.style_settings(cfg, style_name))
+    lines_txt = "\n".join(f'  {ln.get("speaker")}: "{ln.get("text")}"'
+                          for ln in (meta.get("lines") or []))
+    user = (
+        f"Video title: {video_title}\nScene title: {title}\n"
+        f"ACTED version to rewrite as a NARRATED scene (voice-over over a moving still):\n"
+        f"Setting: {acted.get('setting') or ''}\nDialogue:\n{lines_txt or '  (none)'}\n\n"
+        "Convey the SAME information and mood as narrator voice-over. Return JSON:\n"
+        f'  "narration": about {plan["scene_words_target"]} words, NEVER more than '
+        f'{plan["scene_words_max"]} — the scene must stay 10-15 seconds spoken\n'
+        '  "image_prompt": 60-100 word detailed STATIC first-frame description (FLUX), '
+        "no motion verbs, derived from the setting\n"
+        '  "video_prompt": 30-50 word motion description (one continuous shot)'
+    )
+    raw = _convert_llm_json(user, system, cfg, video_title or title)
+    narration = str(raw.get("narration") or "").strip()
+    if not narration:
+        raise HTTPException(502, "The conversion returned no narration — try again.")
+    image_prompt = str(raw.get("image_prompt") or acted.get("setting") or "").strip()
+    combined = gapp._compose_visual_style(json.loads(
+        _row_to_dict(job).get("metadata_json") or "{}").get("style", "") if job else "",
+        cfg, style_name)
+    return _save(narration=narration,
+                 image_prompt=_apply_style_prefix(combined, image_prompt),
+                 video_prompt=str(raw.get("video_prompt") or "").strip() or image_prompt)
+
+
+def _convert_llm_json(user: str, system: str, cfg: dict, label: str) -> dict:
+    try:
+        with _track_op("Converting scene", label):
+            text = _llm_complete(system, user, cfg, max_tokens=900).strip()
+    except Exception as e:
+        raise HTTPException(503, f"Conversion failed: {str(e).splitlines()[0][:200]}")
+    try:
+        return json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        raise HTTPException(502, "The LLM did not return a valid scene — try again.")
+
+
 class ActedRegenBody(BaseModel):
     instruction: str = ""   # optional "tell it how" steering (Re-generate popover)
 

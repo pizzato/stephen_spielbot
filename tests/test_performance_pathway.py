@@ -1298,3 +1298,86 @@ class ReassembleActedTests(unittest.TestCase):
              mock.patch.object(self.backend, "_maybe_burn_first_frame_cover"):
             self.backend._reassemble_film_core(self.wd)
         mix.assert_not_called()
+
+
+class ModeConversionTests(ActedSceneEditingTests):
+    """Switching a scene's type converts the content and keeps every version."""
+
+    _TO_NARRATION = json.dumps({
+        "narration": "Ana waited on the fog-wrapped wharf, and at last he came.",
+        "image_prompt": "A fog-wrapped wharf before dawn, empty boards, one figure waiting",
+        "video_prompt": "slow dolly toward the waiting figure",
+    })
+    _TO_DIALOGUE = json.dumps({
+        "cast": ["Ana"],
+        "setting": "a fog-wrapped wharf before dawn",
+        "lines": [{"speaker": "Ana", "delivery": "quiet", "text": "You came."}],
+        "beats": [{"t0": 0, "t1": 4, "action": "Ana turns"}],
+        "camera": "locked wide",
+        "soundscape": "water on pilings",
+    })
+
+    def _convert(self, mode, reply=None):
+        if reply is None:
+            return self.backend.convert_scene_mode(
+                self.job_id, 1, self.backend.ConvertModeBody(mode=mode))
+        with mock.patch.object(self.backend, "_llm_complete", return_value=reply) as llm:
+            r = self.backend.convert_scene_mode(
+                self.job_id, 1, self.backend.ConvertModeBody(mode=mode))
+        return r, llm
+
+    def test_dialogue_to_narration_converts_the_content(self):
+        r, llm = self._convert("narration", self._TO_NARRATION)
+        scene = r["scene"]
+        self.assertEqual(scene["mode"], "narration")
+        self.assertIn("at last he came", scene["narration"])
+        self.assertTrue(scene["image_prompt"])
+        self.assertEqual(scene["lines"], [])
+        self.assertEqual(llm.call_count, 1)
+        # the dialogue that was left is stashed, not lost
+        row_meta = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertTrue(llm.called)
+
+    def test_switching_back_restores_the_old_version_without_the_llm(self):
+        self._convert("narration", self._TO_NARRATION)
+        with mock.patch.object(self.backend, "_llm_complete") as llm:
+            r = self.backend.convert_scene_mode(
+                self.job_id, 1, self.backend.ConvertModeBody(mode="dialogue"))
+        llm.assert_not_called()
+        scene = r["scene"]
+        self.assertEqual([l["text"] for l in scene["lines"]], ["You came."])
+        self.assertIn("[REFERENCE USE]", scene["video_prompt"])
+        # …and back again: the narration version returns verbatim, LLM-free.
+        with mock.patch.object(self.backend, "_llm_complete") as llm2:
+            r2 = self.backend.convert_scene_mode(
+                self.job_id, 1, self.backend.ConvertModeBody(mode="narration"))
+        llm2.assert_not_called()
+        self.assertIn("at last he came", r2["scene"]["narration"])
+
+    def test_narration_to_dialogue_stages_the_beat(self):
+        self._convert("narration", self._TO_NARRATION)
+        # wipe the dialogue stash so the conversion must actually convert
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            row = store.get_scene(self.job_id, 1)
+            meta = dict(row["metadata"]); meta.pop("mode_stash", None)
+            store.upsert_scene(self.job_id, 1, title=row["title"], image_prompt=row["image_prompt"],
+                               video_prompt=row["video_prompt"], narration=row["narration"],
+                               metadata=meta)
+        finally:
+            store.close()
+        r, llm = self._convert("dialogue", self._TO_DIALOGUE)
+        scene = r["scene"]
+        self.assertEqual(scene["mode"], "dialogue")
+        self.assertEqual(scene["cast"], ["Ana"])
+        self.assertIn("You came.", scene["video_prompt"])
+        self.assertEqual(llm.call_count, 1)
+
+    def test_to_silent_is_mechanical(self):
+        with mock.patch.object(self.backend, "_llm_complete") as llm:
+            r = self.backend.convert_scene_mode(
+                self.job_id, 1, self.backend.ConvertModeBody(mode="silent"))
+        llm.assert_not_called()
+        self.assertEqual(r["scene"]["mode"], "silent")
+        self.assertEqual(r["scene"]["lines"], [])
