@@ -1378,7 +1378,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
 // ── Characters tab ────────────────────────────────────────────────────────────
 
-function CharactersTab({ workDir, onSwitchToScenes }) {
+function CharactersTab({ workDir, onSwitchToScenes, reloadKey = 0 }) {
   const [jobId, setJobId] = useState('')
   const [scenes, setScenes] = useState([])
   const [characters, setCharacters] = useState([])
@@ -1413,7 +1413,7 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
     }
   }, [workDir])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load() }, [load, reloadKey])
 
   // Background look generation may still be finishing — poll briefly while any
   // character is missing its image (same pattern as Script Characters).
@@ -1553,12 +1553,6 @@ function CharactersTab({ workDir, onSwitchToScenes }) {
 
   return (
     <div>
-      <div className="row gap-10 row--wrap" style={{ marginBottom: 16 }}>
-        <Button variant="primary" icon="user-plus" disabled={!!charBusy || !!redoBusy} onClick={addCharacter}>
-          {charBusy === 'add' ? 'Adding…' : 'Add character'}
-        </Button>
-      </div>
-
       <Banner tone="danger">{error}</Banner>
       {charMsg && <Banner tone="ok">{charMsg}</Banner>}
       {redoBusy && (
@@ -1960,6 +1954,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   const [actedMix, setActedMix] = useState('none')   // none | some | all
   const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
   const [filmJobId, setFilmJobId] = useState('')
+  const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
   // Voice library for the acted view's per-character voice picker. Without it
   // the select has only its "invent" option — and an HTML select whose value
   // isn't among its options silently shows the first one, reading as "no
@@ -2039,20 +2034,38 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       )}
       {tab === 'characters' && (
         <>
-          <CharactersTab
-            workDir={workDir}
-            onSwitchToScenes={() => setTab('scenes')}
-          />
-          {/* Scenery & wardrobe live with the characters — every reference
-              image in one place, same as the Script screen. */}
-          {actedMix !== 'none' && (
-            <div className="mt-24">
+          {/* ONE bar for every reference — characters and things together —
+              leading the wall, same as the Script screen. */}
+          {actedMix !== 'none' ? (
+            <div className="bento" style={{ marginBottom: 20 }}>
               <ScriptVisuals jobId={filmJobId}
+                onAddCharacter={filmJobId ? async () => {
+                  await api.addScriptCharacter(filmJobId, { name: '', aliases: [], description: '' })
+                  setCharReload((k) => k + 1)
+                } : undefined}
                 sceneIds={filmScenes.map((s) => s.id)}
                 castNames={[...new Set(filmScenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
                 settingHint={filmScenes.map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
             </div>
+          ) : (
+            <div className="bento" style={{ marginBottom: 20 }}>
+              <Card span={12} well>
+                <div className="row between center">
+                  <span className="muted" style={{ fontSize: 13 }}>The people this film keeps consistent.</span>
+                  <Button variant="primary" size="sm" icon="user-plus" disabled={!filmJobId}
+                    onClick={async () => {
+                      await api.addScriptCharacter(filmJobId, { name: '', aliases: [], description: '' })
+                      setCharReload((k) => k + 1)
+                    }}>Add character</Button>
+                </div>
+              </Card>
+            </div>
           )}
+          <CharactersTab
+            workDir={workDir}
+            reloadKey={charReload}
+            onSwitchToScenes={() => setTab('scenes')}
+          />
         </>
       )}
       {tab === 'scenes' && (

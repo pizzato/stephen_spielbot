@@ -181,6 +181,7 @@ export const api = {
   updateVisual: (jobId, id, body) => req('PUT', `/jobs/${jobId}/visuals/${id}`, body),
   deleteVisual: (jobId, id) => req('DELETE', `/jobs/${jobId}/visuals/${id}`),
   generateVisualImage: (jobId, id, extraPrompt) => req('POST', `/jobs/${jobId}/visuals/${id}/image`, { extra_prompt: extraPrompt || '' }),
+  visualFromUrl: (jobId, visualId, url) => req('POST', `/jobs/${jobId}/visuals/${visualId}/from-url`, { url }),
   uploadVisualImage: (jobId, id, filename, data) => req('POST', `/jobs/${jobId}/visuals/${id}/upload`, { filename, data }),
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.

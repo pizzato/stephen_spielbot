@@ -850,11 +850,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
               onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? 'Save to queue slot' : 'Approve → render'}</Button>
           )}
-          {view === 'characters' && job && (
-            <Button variant="primary" icon="user-plus" disabled={!!charBusy} onClick={addCharacter}>
-              {charBusy === 'add' ? 'Adding…' : 'Add character'}
-            </Button>
-          )}
         </div>
       </div>
 
@@ -1379,6 +1374,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
           </Card>
 
+          {someActed ? (
+            <ScriptVisuals jobId={job.job_id}
+              onAddCharacter={addCharacter} addingCharacter={charBusy === 'add'}
+              sceneIds={(job.scenes || []).map((s) => s.id)}
+              castNames={[...new Set([...castCatalogue.map((c) => c.name),
+                ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
+              settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
+          ) : (
+            <Card span={12} well>
+              <div className="row between center">
+                <span className="muted" style={{ fontSize: 13 }}>The people this film keeps consistent.</span>
+                <Button variant="primary" size="sm" icon="user-plus" disabled={!!charBusy}
+                  onClick={addCharacter}>{charBusy === 'add' ? 'Adding…' : 'Add character'}</Button>
+              </div>
+            </Card>
+          )}
+
           {characters.length === 0 && (
             <Card span={12} well className="reveal reveal-d2">
               <p className="muted" style={{ fontSize: 13, margin: 0 }}>
@@ -1471,14 +1483,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               voiceName={c.voice} voiceUrl={c.voice_url}
               editHint="Settings → Characters" />
           ))}
-          {someActed && (
-            <ScriptVisuals jobId={job.job_id}
-              sceneIds={(job.scenes || []).map((s) => s.id)}
-              castNames={[...new Set([...castCatalogue.map((c) => c.name),
-                ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
-              settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
-          )}
-
           {charLightbox && (
             <div onClick={() => setCharLightbox(null)}
               style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,.82)', zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, cursor: 'zoom-out' }}>

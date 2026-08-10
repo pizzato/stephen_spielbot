@@ -259,6 +259,10 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
         return (f"defines the SAME room, furniture, lighting and time of day "
                 f"already filmed in this scene — this shot is another angle of "
                 f"that exact space; do not redecorate or move to a new place")
+    if kind in ("image", "video"):
+        what = _clean(pic.get("description")) or name or "this reference"
+        return (f"defines {what} only — match it exactly where it appears in "
+                f"the scene. It adds no people and controls nothing else")
     if kind == "wardrobe":
         owner = (pic.get("character") or "").strip()
         who = f"the clothes {owner} wears" if owner else "the wardrobe"

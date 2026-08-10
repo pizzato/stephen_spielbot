@@ -83,9 +83,13 @@ has one, it supersedes the location asset for that scene (the frame IS the place
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping.
 
-**Scenery and wardrobe** reference images — the `<Picture N>` slots beyond the portraits —
-live with the characters, under **Characters & visuals**, on both the Script screen and the
-film's edit screen. Everything the film renders from appears there at the same level:
+**Scenery, wardrobe, and free-form references** — the `<Picture N>` slots beyond the
+portraits — live with the characters, under **Characters & visuals**, on both the Script
+screen and the film's edit screen. One bar adds them all: **character, location, wardrobe,
+image** (any other thing the model should match — a prop, a vehicle, a logo; the
+description tells the model what it is), and **video** (a clip whose extracted frame feeds
+the slot). Every card takes an upload, a **pasted** image, or a **URL** — a direct file
+link or a page, whose `og:image` / `og:video` is fetched. Everything the film renders from appears there at the same level:
 the script's own characters and visuals (editable), and the style catalogue's (marked
 *catalogue*, read-only — shared across films, they edit in Settings). A film's own visuals
 shadow same-named [assets](manual/settings.md) from the catalogue; both feed the prompt the

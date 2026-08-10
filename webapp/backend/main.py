@@ -3096,12 +3096,35 @@ class VisualUpload(BaseModel):
 
 @api.post("/api/jobs/{job_id}/visuals/{visual_id}/upload")
 def upload_script_visual_image(job_id: str, visual_id: str, body: VisualUpload) -> dict:
-    """Use a real photo of the room or the garment instead of painting one."""
+    """Use a real photo (or clip) of the thing instead of painting one.
+
+    Video uploads get a representative frame extracted — the picture slots
+    feed the model stills."""
     wd = _job_wd_or_404(job_id)
     try:
-        gapp.set_script_visual_image(wd, visual_id, _decode_image(body.data))
+        gapp.set_script_visual_media(wd, visual_id, _decode_image(body.data),
+                                     filename=body.filename or "")
     except ValueError as e:
         raise HTTPException(400, str(e))
+    return _visuals_ok(wd)
+
+
+class VisualFromUrlBody(BaseModel):
+    url: str
+
+
+@api.post("/api/jobs/{job_id}/visuals/{visual_id}/from-url")
+def visual_from_url(job_id: str, visual_id: str, body: VisualFromUrlBody) -> dict:
+    """Fetch a visual's reference from a URL — a direct image/video file, or a
+    page whose og:image / og:video points at one. Video gets a frame extracted."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        with _track_op("Fetching reference", body.url[:60]):
+            gapp.fetch_visual_from_url(wd, visual_id, body.url)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(502, f"Fetch failed: {str(e).splitlines()[0][:200]}")
     return _visuals_ok(wd)
 
 

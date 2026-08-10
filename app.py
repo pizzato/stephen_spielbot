@@ -2325,7 +2325,10 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
 # place or the clothes. A "visual" is a reference image with a job: a LOCATION
 # the scene happens in, or WARDROBE a character wears. They ride the same
 # <Picture N> slots as the cast (H3 takes nine), after it.
-VISUAL_KINDS = ("location", "wardrobe")
+# location = the space; wardrobe = someone's clothes; image = any other
+# reference the model should match (a prop, a vehicle, a logo…); video = the
+# same, ingested from a clip — its extracted frame is what feeds the slot.
+VISUAL_KINDS = ("location", "wardrobe", "image", "video")
 
 
 def _assets_dir() -> Path:
@@ -2500,7 +2503,9 @@ def add_script_visual(work_dir, name: str = "", kind: str = "location",
     """Append a visual; blank name gets a placeholder so the row survives
     normalization and shows as an editable card (same rule as characters)."""
     visuals = read_script_visuals(work_dir)
-    visuals.append({"name": name.strip() or ("New location" if kind == "location" else "New outfit"),
+    placeholder = {"location": "New location", "wardrobe": "New outfit",
+                   "image": "New reference", "video": "New video reference"}
+    visuals.append({"name": name.strip() or placeholder.get(kind, "New reference"),
                     "kind": kind, "description": description, "character": character})
     return write_script_visuals(work_dir, visuals)
 
@@ -2524,6 +2529,85 @@ def delete_script_visual(work_dir, visual_id: str) -> list[dict]:
         if img and img.exists():
             img.unlink(missing_ok=True)
     return write_script_visuals(work_dir, [v for v in visuals if v.get("id") != visual_id])
+
+
+_VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+
+
+def set_script_visual_media(work_dir, visual_id: str, raw: bytes,
+                            filename: str = "") -> list[dict]:
+    """Store uploaded bytes — image OR video — as a visual's reference.
+
+    A video is kept beside the visual and a representative frame (1s in, where
+    fades have usually resolved) is extracted as the reference image, since the
+    picture slots feed the model stills."""
+    if Path(str(filename or "")).suffix.lower() not in _VIDEO_EXTS:
+        return set_script_visual_image(work_dir, visual_id, raw)
+    import subprocess
+
+    from pipeline.assembler import _resolve_media_tool
+    work_dir = Path(work_dir)
+    visuals = read_script_visuals(work_dir)
+    vis = next((v for v in visuals if v.get("id") == visual_id), None)
+    if vis is None:
+        raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+    d = _script_visuals_dir(work_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    src = d / f"{visual_id}{Path(filename).suffix.lower()}"
+    src.write_bytes(raw)
+    out = d / f"{visual_id}.png"
+    ffmpeg = _resolve_media_tool("ffmpeg")
+    proc = subprocess.run([ffmpeg, "-y", "-ss", "1", "-i", str(src),
+                          "-frames:v", "1", str(out)],
+                         capture_output=True, text=True)
+    if proc.returncode != 0 or not out.exists():
+        # A clip shorter than a second: take its first frame instead.
+        proc = subprocess.run([ffmpeg, "-y", "-i", str(src),
+                              "-frames:v", "1", str(out)],
+                             capture_output=True, text=True)
+    if proc.returncode != 0 or not out.exists():
+        src.unlink(missing_ok=True)
+        raise ValueError("Could not read that video (ffmpeg failed to extract a frame).")
+    vis["ref_image"] = out.name
+    vis["source_video"] = src.name
+    return write_script_visuals(work_dir, visuals)
+
+
+def fetch_visual_from_url(work_dir, visual_id: str, url: str) -> list[dict]:
+    """Pull a visual's reference from a URL: a direct image or video file, or a
+    web page — where the page's og:image / og:video is what gets fetched."""
+    import re as _re
+    import urllib.request
+
+    url = (url or "").strip()
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError("Enter an http(s) URL.")
+
+    def _get(u: str, cap: int) -> tuple[bytes, str]:
+        req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 (Spielbot)"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+            data = resp.read(cap + 1)
+        if len(data) > cap:
+            raise ValueError(f"That file is over the {cap // (1024*1024)} MB limit.")
+        return data, ctype
+
+    data, ctype = _get(url, 200 * 1024 * 1024)
+    if ctype.startswith("text/html"):
+        html = data[:512 * 1024].decode("utf-8", "replace")
+        m = (_re.search(r'property=["\']og:video["\'][^>]*content=["\']([^"\']+)', html)
+             or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:video["\']', html)
+             or _re.search(r'property=["\']og:image["\'][^>]*content=["\']([^"\']+)', html)
+             or _re.search(r'content=["\']([^"\']+)["\'][^>]*property=["\']og:image["\']', html))
+        if not m:
+            raise ValueError("No image or video found on that page (no og:image/og:video).")
+        url = m.group(1)
+        data, ctype = _get(url, 200 * 1024 * 1024)
+
+    name = Path(url.split("?")[0]).name or "reference"
+    if ctype.startswith("video/") and Path(name).suffix.lower() not in _VIDEO_EXTS:
+        name += ".mp4"
+    return set_script_visual_media(work_dir, visual_id, data, filename=name)
 
 
 def _script_visual_image_path(work_dir, filename: str) -> Path | None:
@@ -2619,7 +2703,7 @@ def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
     ]
     pool = own + catalogue
     out = []
-    for kind in ("location", "wardrobe"):
+    for kind in ("location", "image", "video", "wardrobe"):
         for v in pool:
             if not v.get("enabled", True) or v["kind"] != kind:
                 continue

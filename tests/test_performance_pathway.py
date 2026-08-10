@@ -1471,3 +1471,71 @@ class FirstFrameReferenceTests(unittest.TestCase):
         role = perf.picture_role({"name": "First frame", "kind": "frame"})
         self.assertIn("OPENING IMAGE", role)
         self.assertIn("portrait references only", role)
+
+
+class GenericReferenceTests(unittest.TestCase):
+    """Free-form image/video references and URL ingest."""
+
+    def setUp(self):
+        import app as gapp
+        self.gapp = gapp
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-generic-ref-")
+        self.addCleanup(tmp.cleanup)
+        self.wd = Path(tmp.name)
+
+    def _png(self):
+        import io
+        from PIL import Image
+        buf = io.BytesIO()
+        Image.new("RGB", (32, 32), "red").save(buf, "PNG")
+        return buf.getvalue()
+
+    def test_image_and_video_are_legal_kinds_that_feed_scene_slots(self):
+        self.gapp.add_script_visual(self.wd, "Red bicycle", "image", "a red bicycle")
+        vid = self.gapp.read_script_visuals(self.wd)[0]["id"]
+        self.gapp.set_script_visual_media(self.wd, vid, self._png(), filename="bike.png")
+        vis = self.gapp.scene_visuals(self.wd, 1, ["Ana"], {"assets": []}, "")
+        self.assertEqual([v["kind"] for v in vis], ["image"])
+        from pipeline import performance as perf
+        role = perf.picture_role(vis[0])
+        self.assertIn("a red bicycle", role)
+        self.assertIn("adds no people", role)
+
+    def test_a_video_upload_extracts_its_frame(self):
+        import subprocess
+        from pipeline.assembler import _resolve_media_tool
+        clip = self.wd / "src.mp4"
+        subprocess.run([_resolve_media_tool("ffmpeg"), "-y", "-f", "lavfi",
+                        "-i", "color=c=blue:s=64x64:d=2", str(clip)],
+                       capture_output=True, check=True)
+        self.gapp.add_script_visual(self.wd, "Ref clip", "video")
+        vid = self.gapp.read_script_visuals(self.wd)[0]["id"]
+        self.gapp.set_script_visual_media(self.wd, vid, clip.read_bytes(), filename="src.mp4")
+        vis = self.gapp.read_script_visuals(self.wd)[0]
+        self.assertTrue(vis["ref_image"].endswith(".png"))
+        frame = self.gapp._script_visual_image_path(self.wd, vis["ref_image"])
+        self.assertTrue(frame.exists() and frame.stat().st_size > 0)
+        # …and it resolves into the scene's picture slots like any image.
+        slots = self.gapp.scene_visuals(self.wd, 1, [], {"assets": []}, "")
+        self.assertEqual([v["kind"] for v in slots], ["video"])
+
+    def test_url_fetch_rejects_non_http(self):
+        self.gapp.add_script_visual(self.wd, "X", "image")
+        vid = self.gapp.read_script_visuals(self.wd)[0]["id"]
+        with self.assertRaises(ValueError):
+            self.gapp.fetch_visual_from_url(self.wd, vid, "file:///etc/passwd")
+
+    def test_url_fetch_direct_image(self):
+        png = self._png()
+        class Resp:
+            headers = {"Content-Type": "image/png"}
+            def read(self, n): return png
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+        self.gapp.add_script_visual(self.wd, "X", "image")
+        vid = self.gapp.read_script_visuals(self.wd)[0]["id"]
+        import urllib.request
+        with mock.patch.object(urllib.request, "urlopen", return_value=Resp()):
+            self.gapp.fetch_visual_from_url(self.wd, vid, "https://example.com/x.png")
+        vis = self.gapp.read_script_visuals(self.wd)[0]
+        self.assertEqual(vis["ref_image"], f"{vid}.png")
