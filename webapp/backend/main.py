@@ -10950,8 +10950,22 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
 
     with _reassemble_lock(wd), _track_op(op_name, wd.name):
         from pipeline.assembler import (concatenate_scenes, ensure_video_resolution,
-                                        mix_background_music)
+                                        mix_background_music, _get_video_dimensions)
         from pipeline.comfyui import ltx_dimensions
+        # The concat filter refuses mixed sizes, and one odd clip (e.g. a
+        # re-shoot made before dimension rounding was unified) used to fail the
+        # whole rebuild. Normalize stragglers to the film's grid first.
+        res_name = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(res_name, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
+        for clip in scene_finals:
+            try:
+                if _get_video_dimensions(clip) != (vid_w, vid_h):
+                    gapp.logger.info("Reassemble: normalizing %s to %dx%d",
+                                     clip.name, vid_w, vid_h)
+                    ensure_video_resolution(clip, vid_w, vid_h)
+            except Exception:
+                pass  # let the concat report it if the clip is truly broken
         concatenate_scenes(scene_finals, combined)
         ambient = wd / "ambient.wav"
         if music_on:
@@ -10966,12 +10980,9 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
             # No score: the clips already carry their own audio.
             import shutil
             shutil.copy2(combined, final_path)
-        # Same normalisation the full render applies after mixing: a scene
-        # re-rendered at a rounded-off size would otherwise leave the film off
-        # its selected resolution. No-op when the concat already matches.
-        res_name = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
-        vid_w, vid_h = gapp._RESOLUTIONS.get(res_name, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
-        ensure_video_resolution(final_path, *ltx_dimensions(vid_w, vid_h))
+        # Same normalisation the full render applies after mixing. No-op when
+        # the concat already matches.
+        ensure_video_resolution(final_path, vid_w, vid_h)
         _maybe_burn_first_frame_cover(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,
         # so say so instead of leaving the manifest pointing at the upscale (or
@@ -11483,9 +11494,14 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         if pool is None:
             raise RuntimeError("No ComfyUI workers reachable.")
 
+        from pipeline.comfyui import ltx_dimensions
         resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
         vid_w, vid_h = gapp._RESOLUTIONS.get(
             resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        # The full render rounds to the models' ×64 grid (1920×1080 → 1920×1024);
+        # a re-shoot at the raw size concats against the original scenes with a
+        # mismatched height and the whole reassembly fails.
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
 
         scene = Scene(
             id=sid,
