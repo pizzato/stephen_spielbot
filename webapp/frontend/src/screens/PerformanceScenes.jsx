@@ -261,6 +261,18 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [assembling, setAssembling] = useState(false)
+  const [assembleMsg, setAssembleMsg] = useState('')
+
+  // Re-shot a scene? The published final still holds the old take until the
+  // film is reassembled — same action as the classic Scenes tab.
+  const reassemble = async () => {
+    setAssembling(true); setError(''); setAssembleMsg('')
+    try {
+      const r = await api.reassembleFilm(workDir)
+      setAssembleMsg(`Film reassembled from ${r.scene_count} scene(s).${r.note ? ' ' + r.note : ''}`)
+    } catch (e) { setError(e.message) } finally { setAssembling(false) }
+  }
 
   const load = async () => {
     if (!workDir) return
@@ -288,11 +300,19 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
             {data.scenes.length} acted scene{data.scenes.length === 1 ? '' : 's'} · characters speak
             on screen · no narrator, no music · <strong>{data.engine?.label}</strong>
           </span>
-          <Button variant="ghost" icon="rotate" disabled={busy} onClick={load}>
-            {busy ? 'Refreshing…' : 'Refresh'}
-          </Button>
+          <div className="row gap-8 center">
+            {data.scenes.some((s) => s.has_video) && (
+              <Button variant="primary" icon="circle-nodes" disabled={assembling || busy} onClick={reassemble}>
+                {assembling ? 'Assembling…' : 'Reassemble film'}
+              </Button>
+            )}
+            <Button variant="ghost" icon="rotate" disabled={busy} onClick={load}>
+              {busy ? 'Refreshing…' : 'Refresh'}
+            </Button>
+          </div>
         </div>
       </Card>
+      {assembleMsg && <Banner tone="ok">{assembleMsg}</Banner>}
       {data.scenes.map((s) => (
         <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId || data.job_id}
           workDir={workDir}

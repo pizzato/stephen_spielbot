@@ -10823,9 +10823,12 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     if not scene_finals:
         raise ValueError("No rendered scenes found. Re-render scenes first.")
 
+    # Music is optional: acted films carry their voices in-picture and never
+    # get a score, and any film can switch music off — the final is then the
+    # concatenation itself. Refusing here left those films with no way to
+    # rebuild after a scene re-shoot.
     music_path = wd / "background_music.wav"
-    if not music_path.exists():
-        raise ValueError("No background music found in this film folder.")
+    music_on = bool(_film_job_config(wd).get("music_enabled", True)) and music_path.exists()
 
     final_path = gapp._final_path_for_work_dir(wd)
     combined = wd / "combined.mp4"
@@ -10842,13 +10845,18 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
         from pipeline.comfyui import ltx_dimensions
         concatenate_scenes(scene_finals, combined)
         ambient = wd / "ambient.wav"
-        mix_background_music(
-            combined, music_path, final_path,
-            volume=music_vol,
-            voice_volume=voice_vol,
-            ambient_path=ambient if ambient.exists() else None,
-            ambient_volume=ambient_vol,
-        )
+        if music_on:
+            mix_background_music(
+                combined, music_path, final_path,
+                volume=music_vol,
+                voice_volume=voice_vol,
+                ambient_path=ambient if ambient.exists() else None,
+                ambient_volume=ambient_vol,
+            )
+        else:
+            # No score: the clips already carry their own audio.
+            import shutil
+            shutil.copy2(combined, final_path)
         # Same normalisation the full render applies after mixing: a scene
         # re-rendered at a rounded-off size would otherwise leave the film off
         # its selected resolution. No-op when the concat already matches.

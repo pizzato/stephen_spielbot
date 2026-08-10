@@ -1228,3 +1228,64 @@ class ActedSceneRegenTests(ActedSceneEditingTests):
         # the original scene survived untouched
         scene = self.backend.job_scenes(self.job_id)["scenes"][0]
         self.assertEqual([l["text"] for l in scene["lines"]], ["You came."])
+
+
+class ReassembleActedTests(unittest.TestCase):
+    """A film without a score can still be reassembled after a re-shoot."""
+
+    def setUp(self):
+        import app as gapp
+        import webapp.backend.main as backend
+        self.backend = backend
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-reassemble-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"; self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"; cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            patch = mock.patch.object(target, attr, value)
+            patch.start(); self.addCleanup(patch.stop)
+        db = mock.patch.dict(os.environ,
+                             {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start(); self.addCleanup(db.stop)
+
+        from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+        self.wd = self.output_dir / "acted-film-20260810-000000"; self.wd.mkdir()
+        (self.wd / "scene_01_final.mp4").write_bytes(b"x" * 20_000)
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(job_id_from_work_dir(self.wd), self.wd, "F", config={})
+            store.upsert_scenes(job_id_from_work_dir(self.wd), [
+                {"id": 1, "title": "T", "image_prompt": "", "video_prompt": "p",
+                 "narration": "", "metadata": {"mode": "dialogue",
+                                               "lines": [{"speaker": "A", "text": "hi"}]}}])
+        finally:
+            store.close()
+
+    def test_no_music_reassembles_to_the_concat(self):
+        # No background_music.wav on disk — the acted film never got a score.
+        def fake_concat(clips, out):
+            Path(out).write_bytes(b"concat")
+        with mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.mix_background_music") as mix, \
+             mock.patch("pipeline.assembler.ensure_video_resolution"), \
+             mock.patch.object(self.backend, "_maybe_burn_first_frame_cover"):
+            n = self.backend._reassemble_film_core(self.wd)
+        self.assertEqual(n, 1)
+        mix.assert_not_called()
+        final = self.backend.gapp._final_path_for_work_dir(self.wd)
+        self.assertEqual(final.read_bytes(), b"concat")
+        self.assertTrue((self.wd / "combined.mp4").exists())
+
+    def test_music_off_skips_the_mix_even_with_a_score_on_disk(self):
+        (self.wd / "background_music.wav").write_bytes(b"wav")
+        (self.wd / "job_config.json").write_text(json.dumps({"music_enabled": False}))
+        def fake_concat(clips, out):
+            Path(out).write_bytes(b"concat")
+        with mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.mix_background_music") as mix, \
+             mock.patch("pipeline.assembler.ensure_video_resolution"), \
+             mock.patch.object(self.backend, "_maybe_burn_first_frame_cover"):
+            self.backend._reassemble_film_core(self.wd)
+        mix.assert_not_called()
