@@ -26,7 +26,7 @@ ones. A single scene can also be switched to *dialogue* in the
 
 The script is written story-first either way: the prose story comes first, and the division
 into scenes is what stages it as performance. The video model is picked per style
-(Settings → a style → **Acted scene video model**; see below).
+(Settings → a style → **Video models → Acted (dialogue) scenes**; see below).
 
 A scene written as dialogue in a mixed script only carries its lines — the cast comes from
 who speaks, the length from what they say, and the setting from the scene's own video
@@ -102,7 +102,15 @@ than the style's usual video engine — H3 acted takes cut against LTX clips rea
 different productions, with colour and motion shifting shot to shot. A style already on a
 MiniMax engine keeps its own pick; unmixed films are untouched.
 
-### Video model
+### Video models
+
+A style carries **two video model pickers**, side by side under *Video models*, because a
+film can hold two kinds of scene:
+
+- **Narrated & silent scenes** — the I2V engine (LTX 2.3 or MiniMax H3) that animates each
+  scene from its first-frame still.
+- **Acted (dialogue) scenes** — the Ref2VA engine that performs each acted scene from
+  portraits and voices. Always a MiniMax H3 variant:
 
 | Engine | Speed | Notes |
 |---|---|---|
@@ -115,6 +123,10 @@ energy 4.2 for w4a8 against turbo's 5.5 (and 6.1 at 8 steps), with the base
 engine at 4.4 — the "over-sharpened" look is the distillation, not the step
 count, and w4a8 avoids it at turbo's wall clock. Download them from
 Settings → Infrastructure like any other engine; see [models](models.md).
+
+**Sampling steps** is ONE knob beneath both pickers: it overrides the step count of every
+MiniMax H3 render in the style — narrated-scene I2V and acted-scene Ref2VA alike. 0 keeps
+each engine's own default (Turbo 4, the others 15); LTX ignores it.
 
 !!! warning "w4a8 needs ComfyUI ≥ 0.31.0 on every worker"
     Below that version the checkpoint does not error — it renders **black

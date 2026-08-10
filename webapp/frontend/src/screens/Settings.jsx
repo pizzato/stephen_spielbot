@@ -2158,17 +2158,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(v) => setStyleField('video_minutes', v)} />
                 <ParentVal k="video_minutes" />
               </Field>
-              <Field label="Acted scene video model" hint="Generates each acted (dialogue) scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices. No first frame is rendered. Unused by a film with no dialogue scenes.">
-                <select className="select" value={eff.reference_engine || ''} onChange={(e) => setStyleField('reference_engine', e.target.value)} style={{ maxWidth: 420 }}>
-                  {(engineInfo?.reference_engines || []).map((e) => (
-                    <option key={e.key} value={e.key}>{e.label} — {e.sub}</option>
-                  ))}
-                </select>
-                {(engineInfo?.reference_engines || []).find((e) => e.key === eff.reference_engine)?.license_note && (
-                  <div className="hint mt-8">{(engineInfo.reference_engines).find((e) => e.key === eff.reference_engine).license_note}</div>
-                )}
-                <ParentVal k="reference_engine" />
-              </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
                 <ParentPreview k="visual_style" />
@@ -2370,14 +2359,18 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             </div>
           </Card>
 
-          {/* ── Video model (engine) ── */}
+          {/* ── Video models: one per kind of scene, one shared steps knob ── */}
           <Card span={6} className="reveal reveal-d3">
-            <span className="label-sm">Video model</span>
-            <div className="field__hint" style={{ marginTop: 6 }}>Which engine animates this style's scenes (image → video, with native audio). Download models under <strong>Infrastructure</strong>.</div>
+            <span className="label-sm">Video models</span>
+            <div className="field__hint" style={{ marginTop: 6 }}>
+              A film can hold two kinds of scene, and each kind has its own model.
+              Download models under <strong>Infrastructure</strong>.
+            </div>
             <div className="stack gap-22 mt-16">
               {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
               {engineInfo && (
-                <Field label="Scene video (I2V)">
+                <Field label="Narrated & silent scenes"
+                  hint="Animates each scene from its first-frame still, with the narrator's voice-over on top. In a MIXED film these scenes render on MiniMax H3 automatically, so the whole film matches the acted takes.">
                   <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx23'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
                     {(engineInfo.video_engines || []).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
@@ -2390,9 +2383,24 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   })()}
                 </Field>
               )}
-              {engineInfo && String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax') && (
-                <Field label="Sampling steps"
-                  hint="0 = the engine's default (Turbo: 4, base H3: 15). More steps = sharper but slower — each step is ~2.5 min per scene on a GB10; Turbo stays usable down to 4.">
+              {engineInfo && (
+                <Field label="Acted (dialogue) scenes"
+                  hint="Generates each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices. No first frame. Unused by a film with no dialogue scenes.">
+                  <select className="select" value={eff.reference_engine || ''} onChange={(e) => setStyleField('reference_engine', e.target.value)}>
+                    {(engineInfo.reference_engines || []).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label} — {e.sub}</option>
+                    ))}
+                  </select>
+                  {(engineInfo.reference_engines || []).find((e) => e.key === eff.reference_engine)?.license_note && (
+                    <div className="field__hint" style={{ marginTop: 6 }}>{(engineInfo.reference_engines).find((e) => e.key === eff.reference_engine).license_note}</div>
+                  )}
+                  <ParentVal k="reference_engine" />
+                </Field>
+              )}
+              {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
+                || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
+                <Field label="Sampling steps — every MiniMax render"
+                  hint="ONE knob for both pickers above: it overrides the step count of every MiniMax H3 render in this style — narrated-scene I2V and acted-scene Ref2VA alike. 0 = each engine's own default (Turbo: 4, the others: 15). More steps = sharper but slower (~2.5 min per step per scene on a GB10). LTX ignores it.">
                   <input className="input" type="number" min={0} max={50} style={{ width: 120 }}
                     value={eff.video_steps ?? 0}
                     onChange={(e) => setStyleField('video_steps', Math.max(0, Math.min(50, Math.round(+e.target.value || 0))))} />
