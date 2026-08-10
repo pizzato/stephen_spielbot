@@ -1169,3 +1169,62 @@ class MixedEngineTests(unittest.TestCase):
     def test_unmixed_films_are_untouched(self):
         self.assertEqual(self._unify("ltx23", has_acted=False, has_classic=True)["key"], "ltx23")
         self.assertEqual(self._unify("ltx23", has_acted=True, has_classic=False)["key"], "ltx23")
+
+
+class ActedSceneRegenTests(ActedSceneEditingTests):
+    """One button rewrites the whole acted take via the LLM."""
+
+    _REPLY = json.dumps({
+        "title": "You Are Late",
+        "cast": ["Ana"],
+        "setting": "a rain-soaked bus stop at night",
+        "lines": [{"speaker": "Ana", "delivery": "sharp, hurt", "text": "You are late again."}],
+        "beats": [{"t0": 0, "t1": 4, "action": "Ana checks the empty road"}],
+        "camera": "locked medium shot",
+        "soundscape": "rain on the shelter roof",
+    })
+
+    def test_regenerates_the_whole_take_and_reassembles_the_prompt(self):
+        with mock.patch.object(self.backend, "_llm_complete", return_value=self._REPLY):
+            r = self.backend.regenerate_acted_scene(
+                self.job_id, 1, self.backend.ActedRegenBody(instruction="make it tense"))
+        scene = r["scene"]
+        self.assertEqual(scene["title"], "You Are Late")
+        self.assertEqual([l["text"] for l in scene["lines"]], ["You are late again."])
+        for piece in ("rain-soaked bus stop", "rain on the shelter roof",
+                      "You are late again.", "[0s-4s]"):
+            self.assertIn(piece, scene["video_prompt"])
+        self.assertEqual(scene["image_prompt"], "")
+
+    def test_a_pinned_prompt_is_superseded_by_the_rewrite(self):
+        self._save(prompt="Pinned by hand.")
+        with mock.patch.object(self.backend, "_llm_complete", return_value=self._REPLY):
+            r = self.backend.regenerate_acted_scene(self.job_id, 1,
+                                                    self.backend.ActedRegenBody())
+        self.assertFalse(r["scene"]["prompt_edited"])
+        self.assertNotEqual(r["scene"]["video_prompt"], "Pinned by hand.")
+
+    def test_a_narrated_scene_is_refused(self):
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(self.job_id, 2, title="N", image_prompt="i",
+                               video_prompt="v", narration="n", metadata={})
+        finally:
+            store.close()
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            self.backend.regenerate_acted_scene(self.job_id, 2, self.backend.ActedRegenBody())
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_garbage_from_the_llm_is_a_clean_error_not_a_wipe(self):
+        from fastapi import HTTPException
+        for reply in ("not json at all", json.dumps({"title": "x", "lines": []})):
+            with mock.patch.object(self.backend, "_llm_complete", return_value=reply):
+                with self.assertRaises(HTTPException) as ctx:
+                    self.backend.regenerate_acted_scene(self.job_id, 1,
+                                                        self.backend.ActedRegenBody())
+            self.assertEqual(ctx.exception.status_code, 502)
+        # the original scene survived untouched
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual([l["text"] for l in scene["lines"]], ["You came."])

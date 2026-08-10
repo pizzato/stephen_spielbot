@@ -4066,6 +4066,102 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
     return {"field": field, "value": text}
 
 
+class ActedRegenBody(BaseModel):
+    instruction: str = ""   # optional "tell it how" steering (Re-generate popover)
+
+
+@api.post("/api/jobs/{job_id}/scenes/{scene_id}/regenerate-acted")
+def regenerate_acted_scene(job_id: str, scene_id: int,
+                           body: ActedRegenBody | None = None) -> dict:
+    """Rewrite ONE acted scene with the LLM — setting, dialogue, beats, camera,
+    sound — keeping the film's context and cast. The narrated fields have
+    per-field regen buttons; an acted scene is one coherent take, so it
+    regenerates whole. Persists through update_scene, which reassembles the
+    prompt exactly as a hand edit would."""
+    body = body or ActedRegenBody()
+    sid = int(scene_id)
+    cfg = gapp.load_config()
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        rows = store.scene_rows(job_id)
+        current = store.get_scene(job_id, sid) or {}
+    finally:
+        store.close()
+    meta = dict(current.get("metadata") or {})
+    if not performance_mode.is_performance_mode(meta.get("mode")):
+        raise HTTPException(400, "Not an acted scene — use the per-field regenerate buttons.")
+
+    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
+    jm = json.loads(_row_to_dict(job).get("metadata_json") or "{}") if job else {}
+    video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
+    topic = jc.get("topic") or ""
+    style_name = jc.get("style_name", "")
+    outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
+    cast_names = [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
+    wd = gapp._job_work_dir(job_id)
+    if wd:
+        try:
+            cast_names += [c.get("name", "") for c in
+                           json.loads((Path(wd) / "characters.json").read_text())]
+        except Exception:
+            pass
+    cast_pool = ", ".join(dict.fromkeys(n for n in cast_names if n)) or "the story's characters"
+
+    lines_now = "\n".join(f'  {ln.get("speaker")}: "{ln.get("text")}"'
+                          for ln in (meta.get("lines") or []))
+    system = ("You are a screenwriter for short, AI-generated films. "
+              "Return ONLY a raw JSON object — no markdown, no code fences, no explanation.")
+    user = (
+        f"Video title: {video_title or topic}\nTopic: {topic}\n"
+        f"Full scene outline: {outline}\n\n"
+        f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the characters "
+        f"speak on camera. Current draft:\n"
+        f'Title: {current.get("title") or ""}\nSetting: {meta.get("setting") or ""}\n'
+        f"Dialogue:\n{lines_now or '  (none)'}\n\n"
+        "Return a JSON object with exactly these keys:\n"
+        '  "title": 5-10 word scene title\n'
+        f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}\n'
+        '  "setting": one sentence — where this happens and what is around them\n'
+        '  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
+        '"text": <ONE short spoken sentence>} — AT MOST 3 lines and 22 spoken words TOTAL\n'
+        '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>}\n'
+        '  "camera": one sentence — a single shot, at most one move\n'
+        '  "soundscape": diegetic sound only, no music'
+        + _instruction_note(body.instruction)
+    )
+    try:
+        with _track_op("Regenerating acted scene", video_title or f"scene {sid}"):
+            text = _llm_complete(system, user, cfg, max_tokens=900).strip()
+    except Exception as e:
+        raise HTTPException(503, f"Regeneration failed: {str(e).splitlines()[0][:200]}")
+    try:
+        raw = json.loads(text[text.index("{"):text.rindex("}") + 1])
+    except Exception:
+        raise HTTPException(502, "The LLM did not return a valid scene — try again.")
+
+    lines = performance_mode.norm_lines(raw.get("lines"))
+    if not lines:
+        raise HTTPException(502, "The LLM returned a scene with no dialogue — try again.")
+    return update_scene(job_id, sid, SceneUpdate(
+        title=str(raw.get("title") or current.get("title") or ""),
+        image_prompt="",
+        video_prompt=current.get("video_prompt") or "",
+        narration="",
+        mode=meta.get("mode") or "dialogue",
+        lines=lines,
+        cast=[str(n) for n in (raw.get("cast") or []) if str(n).strip()],
+        setting=str(raw.get("setting") or ""),
+        camera=str(raw.get("camera") or ""),
+        soundscape=str(raw.get("soundscape") or ""),
+        beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
+        # Length follows the new words (update_scene recomputes via acted_meta).
+        seconds=0,
+        prompt=""  # a rewrite supersedes any pinned prompt
+    ))
+
+
 def _apply_style_prefix(combined_style: str, image_prompt: str) -> str:
     """Prepend combined_style to image_prompt, skipping if already present."""
     ip = (image_prompt or "").strip()

@@ -210,6 +210,10 @@ export const api = {
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/inpaint`, { mask, prompt, denoise }),
   regenField: (jobId, sceneId, field, body) =>
     req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-field?field=${encodeURIComponent(field)}`, body),
+  // Acted scenes regenerate WHOLE (one coherent take): setting, dialogue,
+  // beats, camera, sound — the prompt reassembles server-side.
+  regenActedScene: (jobId, sceneId, instruction) =>
+    req('POST', `/jobs/${jobId}/scenes/${sceneId}/regenerate-acted`, { instruction: instruction || '' }),
 
   startGeneration: (body) => req('POST', '/jobs/generate', body),
   getProgress: (workDir) => req('GET', `/progress?work_dir=${encodeURIComponent(workDir || '')}`),

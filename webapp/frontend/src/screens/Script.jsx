@@ -1191,10 +1191,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 )}
 
                 {isActedMode(d.mode) ? (
-                  <ActedPrompt prompt={d.video_prompt || ''} edited={!!d.prompt_edited}
+                  <>
+                    <div>
+                      <GuidedRegenButton variant="ghost" icon="rotate-right"
+                        label="Re-generate scene" busyLabel="Rewriting…"
+                        busy={busy === 'acted-regen'} disabled={!!busy}
+                        chips={['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+                        onRegen={async (instr) => {
+                          setBusy('acted-regen'); setError('')
+                          try {
+                            const r = await api.regenActedScene(job.job_id, d.id, instr)
+                            if (r?.scene) setScenes((arr) => arr.map((x, i) => (i === cur ? { ...x, ...r.scene } : x)))
+                          } catch (e) { setError(e.message) } finally { setBusy('') }
+                        }} />
+                      <div className="muted mt-8" style={{ fontSize: 12 }}>
+                        Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
+                      </div>
+                    </div>
+                    <ActedPrompt prompt={d.video_prompt || ''} edited={!!d.prompt_edited}
                     refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                     onSave={(text) => savePromptOverride(text)}
                     onRebuild={() => savePromptOverride('')} />
+                  </>
                 ) : (
                   <>
                     <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">

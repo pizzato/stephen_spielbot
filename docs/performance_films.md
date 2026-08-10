@@ -78,6 +78,11 @@ twice. **Edit prompt** pins hand-written text instead: the fields stop rebuildin
 the render sends exactly what is on screen. **Rebuild from the fields** drops the override
 again.
 
+**Re-generate scene** rewrites the whole take with the LLM — dialogue, action, setting,
+camera, sound — keeping the film's context and cast, optionally steered by a free-text
+instruction. An acted scene is one coherent take, so it regenerates whole rather than
+field by field; a pinned prompt is superseded by the rewrite.
+
 Editing a scene of a film that has already rendered keeps the existing clip — it is the
 deliverable — and offers **Shoot this scene again** to re-render just that scene.
 

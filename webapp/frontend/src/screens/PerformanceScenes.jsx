@@ -110,6 +110,20 @@ function SceneEditor({ scene, jobId, onSaved }) {
   return (
     <>
       {err && <Banner tone="danger">{err}</Banner>}
+      <div>
+        <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
+          label="Re-generate scene" busyLabel="Rewriting…"
+          busy={busy === 'regen'} disabled={!!busy || !jobId}
+          chips={['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+          onRegen={async (instr) => {
+            setBusy('regen'); setErr('')
+            try { await api.regenActedScene(jobId, scene.id, instr); await onSaved() }
+            catch (e) { setErr(e.message) } finally { setBusy('') }
+          }} />
+        <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>
+          Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
+        </span>
+      </div>
       <div className="stack gap-10">
         <div className="row between center">
           <span className="label-sm">Dialogue</span>
