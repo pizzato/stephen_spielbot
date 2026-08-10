@@ -253,9 +253,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     // review + division; anything with scenes lands on Cover as before.
     if (!job?.job_id) return
     const hasScenes = (job.scenes || []).length
-    const everyActed = hasScenes && (job.scenes || []).every(
-      (s) => s.mode === 'dialogue' || s.mode === 'performance')
-    setView(everyActed ? 'performance' : hasScenes ? 'cover' : 'story')
+    setView(hasScenes ? 'cover' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -884,13 +882,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           { value: 'scripts', label: 'Scripts' },
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           { value: 'cover', label: 'Cover' },
-          ...(allActed
-            ? [{ value: 'characters', label: 'Characters & visuals' },
-               { value: 'performance', label: 'Scenes' }]
-            : [{ value: 'characters', label: someActed ? 'Characters & visuals' : 'Characters' },
-               { value: 'scenes', label: 'Scenes' },
-               // Mixed film: the acted scenes get their cast slots and prompts.
-               ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : [])]),
+          // ONE look whatever the mix: the Scenes editor (where every scene
+          // can shift mode) plus, when anything is acted, the Acted scenes
+          // view with its cast slots, takes and prompts.
+          { value: 'characters', label: someActed ? 'Characters & visuals' : 'Characters' },
+          { value: 'scenes', label: 'Scenes' },
+          ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 

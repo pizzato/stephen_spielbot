@@ -250,6 +250,11 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
                     style={{ color: 'var(--ink-3)', fontSize: 20 }} />
                 </div>}
             <span className="muted" style={{ fontSize: 11.5 }}>{p.name} · {p.kind}</span>
+            {p.kind === 'frame' && (
+              <Button variant="quiet" size="sm" icon="trash-can" disabled={!!takeBusy}
+                title="Remove the first frame — the take renders from portraits and visuals only"
+                onClick={() => takeOp(() => api.removeScenePreview(jobId, scene.id))} />
+            )}
           </div>
         ))}
       </div>

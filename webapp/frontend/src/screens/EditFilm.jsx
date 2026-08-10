@@ -509,8 +509,9 @@ function SceneCard({
                   {busy === 'narration' ? 'Rendering…' : 'Narration'}
                 </Button>
               )}
-              {/* An acted scene has no first frame — Image buttons would paint
-                  a still nothing reads. Video re-shoots the whole take. */}
+              {/* An acted scene's frame is a reference, not a render input —
+                  Image buttons stay for narrated scenes; acted scenes get a
+                  Remove instead (the take then renders reference-only). */}
               {!isActedMode(sceneType.mode) && (<>
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
                 label="Image" busyLabel="Rendering…" busy={busy === 'image'}
@@ -520,6 +521,15 @@ function SceneCard({
                 Edit image
               </Button>
               </>)}
+              {isActedMode(sceneType.mode) && previewUrl && (
+                <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
+                  title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
+                  onClick={async () => {
+                    setError('')
+                    try { await api.removeScenePreview(jobId, scene.id); onSaved() }
+                    catch (e) { setError(e.message) }
+                  }}>Remove first frame</Button>
+              )}
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
                 label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
@@ -2009,14 +2019,12 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
           { value: 'characters', label: actedMix !== 'none' ? 'Characters & visuals' : 'Characters' },
-          // An all-acted film has no stills, narration or per-scene re-voice,
-          // so the narration-shaped Scenes editor is replaced by the acted view.
-          // A mixed film keeps Scenes (ALL scenes, both kinds) and adds the
-          // acted view — cast slots, portraits, voices — as its own tab.
-          ...(actedMix === 'all' ? [{ value: 'performance', label: 'Scenes' }]
-            : [{ value: 'scenes', label: 'Scenes' },
-               ...(actedMix === 'some'
-                 ? [{ value: 'performance', label: 'Acted scenes' }] : [])]),
+          // ONE look whatever the mix: the Scenes editor (every scene, every
+          // mode, shiftable between them) plus, when anything is acted, the
+          // Acted scenes view — cast slots, portraits, voices, takes.
+          { value: 'scenes', label: 'Scenes' },
+          ...(actedMix !== 'none'
+            ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 
