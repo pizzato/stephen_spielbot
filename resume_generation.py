@@ -385,6 +385,24 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
         style_name=style_name)
 
 
+def unify_mixed_engine(video_engine: dict, cfg: dict, *, has_acted: bool,
+                       has_classic: bool) -> dict:
+    """The video engine a MIXED film's narrated scenes render on.
+
+    H3 acted takes cut against LTX narrated clips read as two different
+    productions — colour, grain and motion all shift shot to shot. When a film
+    mixes the two kinds, the narrated scenes render on H3 I2V so the whole
+    film is one look. A style already on a MiniMax engine keeps its own pick
+    (e.g. turbo); an unmixed film is untouched.
+    """
+    if has_acted and has_classic and video_engine.get("family") != "minimax":
+        unified = _engines.resolve_video(cfg, "minimax-h3")
+        logger.info("Mixed film: narrated scenes render on %s to match the acted takes",
+                    unified.get("label"))
+        return unified
+    return video_engine
+
+
 def render_acted_scene(scene, work_dir: Path, cfg: dict, *, store, durable_job_id: str,
                        worker_pool: WorkerPool, vid_width: int, vid_height: int) -> Path:
     """Render one acted (dialogue) scene, retrying on a fresh worker.
@@ -787,6 +805,11 @@ def main(work_dir: Path) -> None:
     acted_ids = {s.id for s in dialogue_scenes}
     classic_scenes = [s for s in scenes if s.id not in acted_ids]
     dialogue_durs: dict[int, float] = {}
+    # One production, one look: a mixed film's narrated scenes join the acted
+    # takes on H3 rather than cutting between two different video models.
+    video_engine = unify_mixed_engine(video_engine, cfg,
+                                      has_acted=bool(dialogue_scenes),
+                                      has_classic=bool(classic_scenes))
 
     # Progress bands. Acted scenes dominate a dialogue film's wall-clock, so the
     # dialogue phase gets a share of the bar proportional to its weight;

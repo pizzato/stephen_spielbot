@@ -92,6 +92,11 @@ everything, keeping each clip's own audio.
 (Settings → *Narrator & audio* → **Music**) or per film (Create → **Music**), and the
 final cut is the concatenation itself. An all-acted film never plans a score at all.
 
+**One production, one look.** A mixed film's narrated scenes render on **H3 I2V** rather
+than the style's usual video engine — H3 acted takes cut against LTX clips read as two
+different productions, with colour and motion shifting shot to shot. A style already on a
+MiniMax engine keeps its own pick; unmixed films are untouched.
+
 ### Video model
 
 | Engine | Speed | Notes |

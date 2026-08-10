@@ -314,18 +314,22 @@ class DurableStore:
     ) -> None:
         ts = now_ts()
         with self._lock:
+            # config/metadata None means "leave what is stored" — callers that
+            # only want to ensure the row exists (e.g. the cover endpoint) were
+            # silently WIPING the job's config (style_name, create_brief) on
+            # every call. Pass {} to clear deliberately.
             self._conn.execute(
                 """
                 INSERT INTO jobs (
                     id, work_dir, title, status, config_json, metadata_json,
                     created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, COALESCE(?, '{}'), COALESCE(?, '{}'), ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     work_dir=excluded.work_dir,
                     title=excluded.title,
-                    config_json=excluded.config_json,
-                    metadata_json=excluded.metadata_json,
+                    config_json=COALESCE(?, jobs.config_json),
+                    metadata_json=COALESCE(?, jobs.metadata_json),
                     updated_at=excluded.updated_at
                 """,
                 (
@@ -333,10 +337,12 @@ class DurableStore:
                     str(Path(work_dir).expanduser().resolve()),
                     title or "",
                     status,
-                    json_dumps(config),
-                    json_dumps(metadata),
+                    None if config is None else json_dumps(config),
+                    None if metadata is None else json_dumps(metadata),
                     ts,
                     ts,
+                    None if config is None else json_dumps(config),
+                    None if metadata is None else json_dumps(metadata),
                 ),
             )
 
