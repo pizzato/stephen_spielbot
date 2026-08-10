@@ -5,6 +5,7 @@ import {
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
+import ScriptVisuals from './ScriptVisuals.jsx'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -1940,6 +1941,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
   const [actedMix, setActedMix] = useState('none')   // none | some | all
+  const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
+  const [filmJobId, setFilmJobId] = useState('')
   // Voice library for the acted view's per-character voice picker. Without it
   // the select has only its "invent" option — and an HTML select whose value
   // isn't among its options silently shows the first one, reading as "no
@@ -1966,6 +1969,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       const list = r.scenes || []
       setActedMix(list.length && list.every(acted) ? 'all'
         : list.some(acted) ? 'some' : 'none')
+      setFilmScenes(list)
+      setFilmJobId(r.job_id || '')
     }).catch(() => {})
   }, [workDir])
 
@@ -1991,7 +1996,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
-          { value: 'characters', label: 'Characters' },
+          { value: 'characters', label: actedMix !== 'none' ? 'Characters & visuals' : 'Characters' },
           // An all-acted film has no stills, narration or per-scene re-voice,
           // so the narration-shaped Scenes editor is replaced by the acted view.
           // A mixed film keeps Scenes (ALL scenes, both kinds) and adds the
@@ -2004,7 +2009,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       </div>
 
       {tab === 'performance' && (
-        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} showVisuals />
+        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
       )}
       {tab === 'film' && (
         <FilmTab
@@ -2016,10 +2021,22 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         />
       )}
       {tab === 'characters' && (
-        <CharactersTab
-          workDir={workDir}
-          onSwitchToScenes={() => setTab('scenes')}
-        />
+        <>
+          <CharactersTab
+            workDir={workDir}
+            onSwitchToScenes={() => setTab('scenes')}
+          />
+          {/* Scenery & wardrobe live with the characters — every reference
+              image in one place, same as the Script screen. */}
+          {actedMix !== 'none' && (
+            <div className="mt-24">
+              <ScriptVisuals jobId={filmJobId}
+                sceneIds={filmScenes.map((s) => s.id)}
+                castNames={[...new Set(filmScenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
+                settingHint={filmScenes.map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
+            </div>
+          )}
+        </>
       )}
       {tab === 'scenes' && (
         <ScenesTab

@@ -74,10 +74,9 @@ scenes* view adds the resolved references: the portrait that IS `<Picture 1>`, t
 clip that IS `<Audio 1>`.
 
 **Scenery and wardrobe** reference images — the `<Picture N>` slots beyond the portraits —
-are managed under **Characters & visuals** on the Script screen, and directly inside
-**Acted scenes** on the film's edit screen. A film's own visuals shadow same-named
-[assets](manual/settings.md) from the style's shared catalogue; both feed the prompt the
-moment they have an image.
+live with the characters, under **Characters & visuals**, on both the Script screen and the
+film's edit screen. A film's own visuals shadow same-named [assets](manual/settings.md)
+from the style's shared catalogue; both feed the prompt the moment they have an image.
 
 The **video prompt is read-only and assembled from those fields**, so nothing is written
 twice. **Edit prompt** pins hand-written text instead: the fields stop rebuilding it, and

@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { api, fileUrl } from '../api.js'
 import { Card, Button, Banner, Icon, GuidedRegenButton, ActedPrompt, voiceLabel } from '../components.jsx'
-import ScriptVisuals from './ScriptVisuals.jsx'
 
 // Performance films are conditioned on CHARACTERS, not on a scene still, and the
 // prompt refers to them by slot number ("<Picture 1>", "<Audio 1>"). Showing the
@@ -258,7 +257,7 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
   )
 }
 
-export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voiceMeta = {}, showVisuals = false }) {
+export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voiceMeta = {} }) {
   const [data, setData] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -314,15 +313,6 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
         </div>
       </Card>
       {assembleMsg && <Banner tone="ok">{assembleMsg}</Banner>}
-      {/* Scenery & wardrobe reference images — the <Picture N> slots beyond the
-          portraits. They apply to every scene, so they come BEFORE the scenes:
-          buried under the cards, nobody found them. */}
-      {showVisuals && data.scenes.length > 0 && (
-        <ScriptVisuals jobId={jobId || data.job_id}
-          sceneIds={data.scenes.map((s) => s.id)}
-          castNames={[...new Set(data.scenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
-          settingHint={data.scenes[0]?.setting || ''} />
-      )}
       {data.scenes.map((s) => (
         <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId || data.job_id}
           workDir={workDir}
