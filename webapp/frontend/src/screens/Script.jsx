@@ -313,7 +313,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // effect above never re-seeds), and background passes keep adding looks.
   // Re-pull the list from the server whenever the tab is opened.
   useEffect(() => {
-    if (view !== 'characters' || !job?.job_id) return
+    // Not gated on the Characters tab: the Scenes tab's References card needs
+    // the catalogue portraits too (most casts are catalogue members).
+    if (!job?.job_id) return
     let alive = true
     api.scriptCharacters(job.job_id)
       .then((r) => { if (alive) { setCharacters(r.characters || []); setCastCatalogue(r.catalogue || []) } })
