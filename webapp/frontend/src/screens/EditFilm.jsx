@@ -2004,7 +2004,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       </div>
 
       {tab === 'performance' && (
-        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
+        <PerformanceScenes workDir={workDir} voiceOpts={voiceOpts} voiceMeta={voiceMeta} showVisuals />
       )}
       {tab === 'film' && (
         <FilmTab

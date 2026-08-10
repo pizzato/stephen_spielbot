@@ -844,11 +844,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 onClick={approve}>{busy === 'generate' ? 'Approving…' : job.queue_item_id ? '2. Save to queue slot' : '2. Approve → queue'}</Button>
             </>
           )}
-          {view === 'characters' && job && allActed && (
+          {view === 'characters' && job && someActed && (
         <ScriptVisuals jobId={job.job_id}
           sceneIds={(job.scenes || []).map((s) => s.id)}
           castNames={[...new Set((job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
-          settingHint={(job.scenes || [])[0]?.metadata?.setting || ''} />
+          settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
       )}
 
       {view === 'performance' && job && (
@@ -895,7 +895,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           ...(allActed
             ? [{ value: 'characters', label: 'Characters & visuals' },
                { value: 'performance', label: 'Scenes' }]
-            : [{ value: 'characters', label: 'Characters' },
+            : [{ value: 'characters', label: someActed ? 'Characters & visuals' : 'Characters' },
                { value: 'scenes', label: 'Scenes' },
                // Mixed film: the acted scenes get their cast slots and prompts.
                ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : [])]),
@@ -1248,8 +1248,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     {!(d.cast || []).length && <span className="muted" style={{ fontSize: 12.5 }}>No one on screen yet — pick the cast on the left.</span>}
                   </div>
                   <div className="muted mt-16" style={{ fontSize: 12 }}>
-                    Portraits and voices are managed in <strong>Characters</strong>; scenery and
-                    wardrobe reference images in <strong>{allActed ? 'Characters & visuals' : 'Acted scenes'}</strong>.
+                    Portraits, voices, and the scenery &amp; wardrobe reference images are
+                    managed in <strong>Characters &amp; visuals</strong>.
                   </div>
                 </Card>
               ) : (
