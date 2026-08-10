@@ -5,8 +5,9 @@
 The review gate. Everything the render will do is decided here, and nothing has touched a
 GPU yet except the scene preview images you ask for.
 
-Five views along the top: **Scripts**, **Story**, **Cover**,
-**Characters**, **Scenes**.
+Views along the top: **Scripts**, **Story**, **Cover**, **Characters** (which becomes
+**Characters & visuals** when the film has acted scenes), **Scenes** — and, for films with
+acted scenes, **Acted scenes**.
 
 ## Scripts
 
@@ -50,9 +51,19 @@ Everything that isn't a scene:
 The page header carries **Save**, **Re-draft** (back to [Create](create.md) with this
 film's brief restored), and **Delete**.
 
-## Characters
+## Characters & visuals
 
-The cast for this film — see [Characters](../characters.md) for the full mechanism.
+Every reference the film renders from, on one wall, with **one bar to add them all**:
+character, location, wardrobe, free-form **image** (any other thing the model should
+match — its description tells the model what it is), and **video** (a clip whose
+extracted frame feeds the slot). Each visual card takes a generated image, an upload,
+a **pasted** image, or a **URL** — a direct file link or a page whose `og:image` /
+`og:video` points at one.
+
+Catalogue members the film uses — characters with their portraits *and voice clips*,
+[assets](settings.md#assets) that feed its slots — appear at the same level, marked
+*catalogue* and read-only: they are shared across films, so they edit in Settings. See
+[Characters](../characters.md) for the consistency mechanism.
 
 Each character has:
 
@@ -113,7 +124,7 @@ through different fields — and each is stated once, in its proper place:
 | Field | Feeds |
 |---|---|
 | **On screen** | Who appears, in order — the first is `<Picture 1>`, the second `<Picture 2>` (their portraits are the references; keep it to two) |
-| **Setting** | The scenery the model builds — an acted scene has no first frame or image prompt |
+| **Setting** | The scenery the model builds — and the prompt behind the optional first frame |
 | **Dialogue** | The lines, each with a speaker and a delivery note, acted in that character's own voice |
 | **Action** | Timed beats — each reaches the model as a `[2s-6s]` window |
 | **Camera / Sound** | One continuous shot; diegetic sound only |
@@ -121,7 +132,19 @@ through different fields — and each is stated once, in its proper place:
 The **video prompt is read-only**: it is assembled from those fields (never write the same
 thing twice), with a legend above it saying which reference each `<Picture N>` number is.
 **Edit prompt** pins hand-written text instead — the fields stop rebuilding it until you
-**Rebuild from the fields**.
+**Rebuild from the fields**. **Re-generate scene** rewrites the whole take with the LLM
+(dialogue, action, setting — same theme, optionally steered), and the sidebar's References
+card shows the resolved portraits. An acted scene's **first frame is optional**: painted
+from the setting with the cast anchored to their portraits, it rides as the take's
+opening-composition reference — and **Remove first frame** drops it again.
+
+## Acted scenes
+
+For films with acted scenes, a second view shows each one as a single card: the portrait
+that IS `<Picture 1>`, the voice clip that IS `<Audio 1>`, reference thumbnails, the
+editable dialogue, the assembled prompt, the rendered take with its **Takes** strip (every
+re-shoot is kept — click one to use it), **Shoot this scene again**, and **Reassemble
+film** once takes have changed.
 
 !!! note "Spoken text"
     A scene can have narration text that differs from what the voice reads — useful for
