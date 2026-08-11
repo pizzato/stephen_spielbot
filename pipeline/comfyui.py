@@ -1031,6 +1031,110 @@ def generate_video_h3_ref(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
+# Frames the Motion Context node pins across a join. 22 is the node's default
+# and what the GB10 measurements used: the join then reads as ordinary motion
+# (6.17 RMSE against a 6.53 p90) where a cut measures 21.68.
+H3_CHAIN_CONTEXT_FRAMES = 22
+H3_CHAIN_AUDIO_FRAMES = 22
+
+
+def h3_chain_split(duration_seconds: float | None) -> list[float]:
+    """Sampled per-clip seconds for a chained scene delivering *duration_seconds*.
+
+    Each join pins frames that arrive at the head of the following clip and are
+    trimmed before concatenation, so every clip after the first must SAMPLE
+    longer than it delivers."""
+    from pipeline import cadence
+    want = float(duration_seconds or H3_MIN_SECONDS)
+    n = max(1, int(cadence.CHAIN_CLIPS))
+    if n == 1:
+        return [want]
+    per = want / n
+    return [per] + [per + cadence.CHAIN_JOIN_SECS] * (n - 1)
+
+
+def generate_video_h3_chained(
+    engine: dict,
+    positive_prompt: str,
+    first_frame_path: Path,
+    output_path: Path,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    duration_seconds: float | None = None,
+    steps: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """One scene rendered as several H3 clips joined by H3 Motion Context.
+
+    Lets a scene run past H3_MAX_SECONDS: clip 2 continues clip 1's motion and
+    audio instead of cutting. Needs the ComfyUI-H3-Motion-Context nodes on the
+    worker (docker/comfyui/Dockerfile, H3_MOTION_CONTEXT_REF) — without them
+    ComfyUI rejects the graph rather than silently rendering an unchained clip.
+    """
+    from pipeline.assembler import _concat_video_chunks
+
+    parts = h3_chain_split(duration_seconds)
+    if len(parts) == 1:
+        return generate_video_h3(engine, positive_prompt, first_frame_path,
+                                 output_path, width=width, height=height, seed=seed,
+                                 duration_seconds=parts[0], steps=steps,
+                                 comfy_url=comfy_url)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    gen_w, gen_h = h3_dimensions(width, height)
+    steps = int(steps or engine.get("steps") or 20)
+    prompt, _ = _steer_audio_natural(positive_prompt, "")
+    image_name = _upload_image(first_frame_path, comfy_url=comfy_url)
+    # Unique per call: two scenes chaining at once on one worker must not share
+    # a context file, or clip 2 of one continues the other scene's motion.
+    token = f"h3_context/{uuid.uuid4().hex[:12]}"
+
+    chunks: list[Path] = []
+    try:
+        for idx, secs in enumerate(parts, start=1):
+            length = h3_frame_count(secs)
+            repl = {
+                "UNET_NAME": engine["unet"], "CLIP_NAME": engine["clip"],
+                "VIDEO_VAE": engine["video_vae"], "AUDIO_VAE": engine["audio_vae"],
+                "POSITIVE_PROMPT": prompt, "WIDTH": gen_w, "HEIGHT": gen_h,
+                "LENGTH": length, "SEED": seed + idx, "STEPS": steps,
+                "IMAGE_NAME": image_name,
+                "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
+                "LORA_NAME": engine.get("lora") or "",
+                "CONTEXT_PREFIX": token, "CLIP_INDEX": idx,
+            }
+            if idx == 1:
+                wf_name = "h3_i2v_chain_a.json"
+            else:
+                wf_name = "h3_i2v_chain_b.json"
+                repl["CONTEXT_LENGTH"] = str(H3_CHAIN_CONTEXT_FRAMES)
+                repl["AUDIO_CONTEXT_LENGTH"] = H3_CHAIN_AUDIO_FRAMES
+                repl["CONTEXT_LATENT_PATH"] = f"{token}_{idx - 1:05d}.safetensors"
+            workflow = _fill_template(_load_workflow(wf_name), repl)
+
+            timeout = _h3_timeout_seconds(gen_w, gen_h, length)
+            logger.info("[comfy] h3 chain clip %d/%d %dx%d length=%d steps=%d",
+                        idx, len(parts), gen_w, gen_h, length, steps)
+            client_id = str(uuid.uuid4())
+            prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+            _wait_for_completion(prompt_id, client_id, timeout=timeout,
+                                 comfy_url=comfy_url,
+                                 heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
+            outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+            if not outputs:
+                raise RuntimeError(
+                    f"No output from H3 chain clip {idx}/{len(parts)} ({comfy_url})")
+            item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+            chunk = output_path.with_name(f"{output_path.stem}.chain{idx}.mp4")
+            chunks.append(_download_output(item, chunk, comfy_url=comfy_url))
+        return _concat_video_chunks(chunks, output_path)
+    finally:
+        for chunk in chunks:
+            chunk.unlink(missing_ok=True)
+
+
 def generate_video_with_engine(
     video_engine: dict | None,
     positive_prompt: str,
@@ -1047,6 +1151,7 @@ def generate_video_with_engine(
     first_pass_steps: int = 8,
     second_pass_cfg: float = 1.0,
     second_pass_steps: int = 6,
+    chained: bool = False,
     comfy_url: str = COMFYUI_URL,
 ) -> Path:
     """Route a scene's I2V render to the style's video engine.
@@ -1054,9 +1159,14 @@ def generate_video_with_engine(
     None or family "ltx" → the LTX 2.3 two-pass path, unchanged; family
     "minimax" → MiniMax H3, where the negative prompt and the LTX pass tuning
     knobs don't apply (H3 is CFG-free single-pass).
+
+    *chained* (the style's ``h3_chain_scenes``) renders a MiniMax scene as two
+    clips joined by H3 Motion Context so it can run past H3_MAX_SECONDS. It is
+    ignored by LTX, which continues clips natively.
     """
     if video_engine and video_engine.get("family") == "minimax":
-        return generate_video_h3(
+        render = generate_video_h3_chained if chained else generate_video_h3
+        return render(
             video_engine, positive_prompt, first_frame_path, output_path,
             width=width, height=height, seed=seed,
             duration_seconds=duration_seconds, comfy_url=comfy_url,

@@ -27,6 +27,10 @@ services:
         # Set empty on non-Blackwell GPUs to skip the ~20 min kernel build.
         SAGEATTENTION_ARCHS: ${SAGEATTENTION_ARCHS-12.0;12.1}
         SAGEATTENTION_REF: ${SAGEATTENTION_REF:-main}
+        # H3 clip chaining nodes (Settings → Styles → Chained scenes). Pinned:
+        # this pack patches ComfyUI's H3 internals at runtime, so it must never
+        # float. Set empty in docker/.env to leave the nodes out entirely.
+        H3_MOTION_CONTEXT_REF: ${H3_MOTION_CONTEXT_REF-c140ae99b8c38f782ebd8564c267b42aacade6a4}
     image: spielbot-comfyui:latest
     # fp16 accumulation speeds up bf16 GEMMs on Blackwell (GB10) with no
     # observed quality cost; part of the H3 speed pass. Overrides the image CMD.

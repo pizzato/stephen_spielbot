@@ -113,6 +113,35 @@ Turbo variant notes:
   checkpoints are expected upstream; swap the `lora` filename in
   `pipeline/engines.py` to pick one up.
 
+### Chained scenes
+
+H3 renders at most ~15 s in one pass, and that is what caps a scene. Turning on
+**Settings → Styles → Chained scenes** renders each scene as two clips joined by
+[H3 Motion Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context):
+the second continues the first's motion and audio instead of cutting, so a scene
+can run to about 29 s.
+
+The script is planned to match, which is the point of the toggle — the same
+runtime becomes **fewer, longer scenes**, each carrying roughly twice the
+narration. A four-minute film goes from ~20 scenes of ~30 words to ~10 scenes of
+~58 words; total narration is unchanged.
+
+Measured on a GB10 worker:
+
+- The join reads as movement, not an edit — 6.17 RMSE against a 6.53 p90 for
+  ordinary adjacent frames, where an unrelated cut measures 21.68.
+- It costs about **22 % more render time per delivered second**. Each clip after
+  the first pins frames to carry motion across; they arrive at its head and are
+  trimmed before concatenation, so it samples more than it delivers. The planner
+  already accounts for this (`cadence.CHAIN_JOIN_SECS`).
+- Audio is the weaker half. One chained dialogue take came back with a 1.2 s run
+  of digital silence shortly after the join, longer than any pause in the
+  unchained clip. Review the sound on chained films before publishing.
+
+Workers need the nodes baked in — build with `H3_MOTION_CONTEXT_REF` set (see
+`docker/README.md`). Without them ComfyUI rejects the chained graph outright
+rather than quietly rendering an unchained clip.
+
 Speed knobs that sit outside the engine picker:
 
 - The base H3 workflow already runs **EasyCache** (`reuse_threshold` 0.2), which

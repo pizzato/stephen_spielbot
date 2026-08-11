@@ -52,6 +52,30 @@ SCENE_MIN_SECS = 10.0
 SCENE_MAX_SECS = 15.0
 SCENE_TARGET_SECS = 12.0
 
+# Chained scenes (styles with ``h3_chain_scenes`` on). H3 cannot render past
+# SCENE_MAX_SECS in one pass, but two clips can be joined by H3 Motion Context
+# so the seam reads as motion rather than a cut, letting one scene run about
+# twice as long. The join costs the frames it pins to carry motion across:
+# those arrive at the head of the second clip and are trimmed before
+# concatenation, so a chained scene DELIVERS less than it sampled. Measured on
+# GB10 at the node's 22-frame default — 294 sampled, 272 delivered.
+CHAIN_CLIPS = 2
+CHAIN_JOIN_SECS = 22 / 24.0
+
+
+def scene_window(chained: bool = False) -> tuple[float, float, float]:
+    """(min, target, max) seconds of narration for one scene.
+
+    Unchained is the model's own 10–15 s contract. Chained multiplies it by
+    CHAIN_CLIPS and pays CHAIN_JOIN_SECS per join, so callers budget against
+    what a scene actually delivers rather than what it sampled."""
+    if not chained:
+        return SCENE_MIN_SECS, SCENE_TARGET_SECS, SCENE_MAX_SECS
+    lost = CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
+    return (SCENE_MIN_SECS * CHAIN_CLIPS - lost,
+            SCENE_TARGET_SECS * CHAIN_CLIPS - lost,
+            SCENE_MAX_SECS * CHAIN_CLIPS - lost)
+
 # Mirror of generate_narration's speed clamp.
 SPEED_MIN, SPEED_MAX = 0.3, 2.0
 
@@ -61,6 +85,12 @@ LEGACY_SCENE_SECS = 9.0
 
 # Longest plannable video: the MAX_SCENES cap (200) at the scene target.
 MAX_MINUTES = 200 * SCENE_TARGET_SECS / 60.0
+
+
+def max_minutes(chained: bool = False) -> float:
+    """MAX_MINUTES for the given chaining mode — chained scenes are longer, so
+    the same 200-scene cap reaches further."""
+    return 200 * scene_window(chained)[1] / 60.0
 
 # Sanity range for measured cadences — samples outside are discarded (a
 # mis-measured duration, a transcript mismatch, a silence-heavy take).
@@ -274,21 +304,25 @@ def effective_wpm(settings: dict) -> tuple[float, bool]:
 # ── Length planning ───────────────────────────────────────────────────────────
 
 def plan_script(minutes: float, wpm: float,
-                sentence_pause: float = 0.0) -> dict:
+                sentence_pause: float = 0.0, chained: bool = False) -> dict:
     """Turn a target length into a word budget and per-scene word caps.
 
-    Each scene is SCENE_MIN–SCENE_MAX seconds of audio; when the style splices
+    Each scene is one scene_window() of audio; when the style splices
     ``sentence_pause`` silence between sentences (~one gap per scene at 1–2
     sentences a scene), that silence eats into the scene's word room. Values
     are words, so they hold for any cadence.
+
+    With *chained* on, the same runtime is planned as fewer, longer scenes —
+    each carrying proportionally more narration.
     """
-    minutes = max(0.25, min(MAX_MINUTES, float(minutes or 0)))
+    secs_min, secs_target, secs_max = scene_window(chained)
+    minutes = max(0.25, min(max_minutes(chained), float(minutes or 0)))
     wpm = float(wpm) if wpm and wpm > 0 else DEFAULT_WPM
-    gap = max(0.0, min(float(sentence_pause or 0.0), SCENE_MIN_SECS / 2))
-    n_scenes = max(1, round(minutes * 60.0 / SCENE_TARGET_SECS))
-    words_target = max(1, round(wpm * (SCENE_TARGET_SECS - gap) / 60.0))
-    words_max = max(words_target, math.floor(wpm * (SCENE_MAX_SECS - gap) / 60.0))
-    words_min = max(1, min(words_target, math.ceil(wpm * (SCENE_MIN_SECS - gap) / 60.0)))
+    gap = max(0.0, min(float(sentence_pause or 0.0), secs_min / 2))
+    n_scenes = max(1, round(minutes * 60.0 / secs_target))
+    words_target = max(1, round(wpm * (secs_target - gap) / 60.0))
+    words_max = max(words_target, math.floor(wpm * (secs_max - gap) / 60.0))
+    words_min = max(1, min(words_target, math.ceil(wpm * (secs_min - gap) / 60.0)))
     return {
         "minutes": round(minutes, 2),
         "wpm": round(wpm, 1),
@@ -298,19 +332,21 @@ def plan_script(minutes: float, wpm: float,
         "scene_words_target": words_target,
         "scene_words_min": words_min,
         "scene_words_max": words_max,
-        "scene_secs_min": SCENE_MIN_SECS,
-        "scene_secs_max": SCENE_MAX_SECS,
+        "scene_secs_min": secs_min,
+        "scene_secs_max": secs_max,
+        "chained": bool(chained),
     }
 
 
 def plan_for_scenes(n_scenes: int, wpm: float,
-                    sentence_pause: float = 0.0) -> dict:
+                    sentence_pause: float = 0.0, chained: bool = False) -> dict:
     """A plan pinned to an explicit scene count (redraft/legacy paths)."""
     n = max(1, int(n_scenes))
-    plan = plan_script(n * SCENE_TARGET_SECS / 60.0, wpm, sentence_pause)
+    _, secs_target, _ = scene_window(chained)
+    plan = plan_script(n * secs_target / 60.0, wpm, sentence_pause, chained)
     plan["n_scenes"] = n
     plan["words_total"] = n * plan["scene_words_target"]
-    plan["minutes"] = round(n * SCENE_TARGET_SECS / 60.0, 2)
+    plan["minutes"] = round(n * secs_target / 60.0, 2)
     return plan
 
 

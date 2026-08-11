@@ -197,6 +197,11 @@ DEFAULT_CFG = {
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,
+    # Chained H3 scenes: render a scene as two clips joined by H3 Motion
+    # Context instead of one, so it can run ~29 s instead of the model's ~15 s
+    # ceiling. The planner then writes FEWER, LONGER scenes for the same
+    # runtime. MiniMax engines only — LTX chains natively and ignores this.
+    "default_h3_chain_scenes": False,
     # TTS engine per style (see pipeline/tts_engines.py): which narration model
     # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
     "default_tts_engine":   "openf5",
@@ -431,6 +436,8 @@ STYLE_FIELD_TO_FLAT = {
     "video_engine":         "default_video_engine",
     # Optional steps override for the MiniMax engines (0 = engine default)
     "video_steps":          "default_video_steps",
+    # Chain two H3 clips per scene so scenes can run past the model's ceiling
+    "h3_chain_scenes":      "default_h3_chain_scenes",
     # Ref2VA engine for performance films — see pipeline/engines.py
     "reference_engine":     "default_reference_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
@@ -798,6 +805,13 @@ def _norm_reference_engine(value) -> str:
     return engines.resolve_reference({}, value)["key"]
 
 
+def _norm_h3_chain_scenes(value) -> bool:
+    """Coerce the chained-scenes toggle to a plain bool (YAML/JSON/form)."""
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
 def _norm_first_frame_cover(value) -> str:
     """Coerce a first-frame cover mode to "none" | "image" | "text"."""
     from pipeline.cover import norm_first_frame_cover
@@ -949,6 +963,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "edit_engine", lambda v: _norm_engine(v, "edit"))
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
+        _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
@@ -1256,12 +1271,17 @@ def style_script_plan(ss: dict, minutes: float | None = None,
         pause = float(ss.get("tts_sentence_pause") or 0)
     except (TypeError, ValueError):
         pause = 0.0
+    # Chained scenes widen the per-scene window, so the same runtime is planned
+    # as fewer scenes each carrying proportionally more narration. Only the
+    # MiniMax engines chain; LTX has its own continuation and ignores the flag.
+    chained = bool(ss.get("h3_chain_scenes")) and \
+        str(ss.get("video_engine") or "").startswith("minimax-h3")
     if minutes and float(minutes) > 0:
-        plan = cadence.plan_script(float(minutes), wpm, pause)
+        plan = cadence.plan_script(float(minutes), wpm, pause, chained)
     elif n_scenes and int(n_scenes) > 0:
-        plan = cadence.plan_for_scenes(int(n_scenes), wpm, pause)
+        plan = cadence.plan_for_scenes(int(n_scenes), wpm, pause, chained)
     else:
-        plan = cadence.plan_script(style_video_minutes(ss), wpm, pause)
+        plan = cadence.plan_script(style_video_minutes(ss), wpm, pause, chained)
     plan["n_scenes"] = min(plan["n_scenes"], MAX_SCENES)
     plan["wpm_measured"] = measured
     plan["voice"] = ss.get("voice") or ""

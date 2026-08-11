@@ -33,6 +33,7 @@ def generate_scene_video(
     image_engine: dict | None = None,
     on_first_frame: Callable[[Path], None] | None = None,
     video_engine: dict | None = None,
+    chained: bool = False,
 ) -> tuple[Path, Path | None]:
     """Generate one video clip for the full scene: image-engine first frame plus I2V.
 
@@ -87,6 +88,7 @@ def generate_scene_video(
         first_pass_steps=first_pass_steps,
         second_pass_cfg=second_pass_cfg,
         second_pass_steps=second_pass_steps,
+        chained=chained,
         comfy_url=comfy_url,
     )
     if video_engine and video_engine.get("family") == "minimax":

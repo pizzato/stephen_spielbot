@@ -745,6 +745,12 @@ def main(work_dir: Path) -> None:
                 video_key = s.get("video_engine")
                 break
     video_engine = _engines.resolve_video(cfg, video_key or cfg.get("default_video_engine"))
+    # Chained scenes (h3_chain_scenes): render each scene as two H3 clips joined
+    # by Motion Context so it can run past the model's ceiling. MiniMax only —
+    # LTX continues natively. Must agree with app.scene_plan_for_settings, which
+    # planned FEWER, LONGER scenes off the same flag.
+    chain_scenes = (bool(cfg.get("h3_chain_scenes"))
+                    and video_engine.get("family") == "minimax")
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 
@@ -1172,6 +1178,7 @@ def main(work_dir: Path) -> None:
                         image_engine=image_engine,
                         on_first_frame=_finish_image,
                         video_engine=video_engine,
+                        chained=chain_scenes,
                     )
                     store.record_artifact(
                         durable_job_id,
