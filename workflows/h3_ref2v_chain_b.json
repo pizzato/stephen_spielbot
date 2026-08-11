@@ -235,8 +235,8 @@
         "12",
         0
       ],
-      "filename_prefix": "h3_context/ref",
-      "clip_index": 2
+      "filename_prefix": "{{CONTEXT_PREFIX}}",
+      "clip_index": "{{CLIP_INDEX}}"
     }
   }
 }

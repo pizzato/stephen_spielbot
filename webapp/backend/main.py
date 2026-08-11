@@ -11637,6 +11637,19 @@ def _resolve_video_for_job(cfg: dict, jc: dict) -> dict:
         jc.get("video_engine") or ss.get("video_engine"))
 
 
+def _chain_scenes_for_job(cfg: dict, jc: dict) -> bool:
+    """Whether a work-dir job's scenes are chained H3 clips.
+
+    Re-rendering one scene must chain exactly as the original render did, or
+    the take comes back at roughly half the length and desyncs the film."""
+    ss = gapp.style_settings(cfg, jc.get("style_name") or "")
+    flag = jc.get("h3_chain_scenes")
+    if flag is None:
+        flag = ss.get("h3_chain_scenes")
+    return (bool(flag)
+            and _resolve_video_for_job(cfg, jc).get("family") == "minimax")
+
+
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                         instruction: str = "") -> None:
     """Background thread: re-render video from the existing first frame → mux.
@@ -11750,6 +11763,7 @@ def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                 gapp.engines.resolve(cfg, jc.get("image_engine")
                                      or gapp.style_settings(cfg, jc.get("style_name") or "").get("image_engine")),
                 video_engine=_resolve_video_for_job(cfg, jc),
+                chained=_chain_scenes_for_job(cfg, jc),
             )
         finally:
             pool.release(url)

@@ -75,6 +75,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | Image engine | Per-style generate and edit engines; default FLUX.2 Klein |
 | Video engine | Per-style scene I2V model — `ltx23` (default) or the opt-in `minimax-h3` / `minimax-h3-turbo` (see [Models → Video engines](models.md#video-engines-per-style)) |
 | Sampling steps | MiniMax engines only: overrides the engine's step count (0 = engine default — Turbo 4, base H3 15). More steps = sharper but slower |
+| Chained scenes | MiniMax engines only: render each scene as **two** clips joined by H3 Motion Context, so a scene can run ~29 s instead of H3's ~15 s ceiling. Scripts are planned to match — fewer scenes, roughly twice the narration in each. Needs the Motion Context nodes on the workers (see [Models](models.md#chained-scenes)) |
 | Resolution | Portrait FHD (1080×1920) by default; landscape / portrait / square presets from 512×288 to 1920×1080 |
 | Render quality | First-pass and second-pass steps — higher is slower and more detailed |
 
