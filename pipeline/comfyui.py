@@ -1031,6 +1031,116 @@ def generate_video_h3_ref(
     return _download_output(video_item, output_path, comfy_url=comfy_url)
 
 
+def generate_video_h3_ref_chained(
+    engine: dict,
+    prompts: list[str],
+    ref_images: list[Path],
+    output_path: Path,
+    ref_audios: list[Path] | None = None,
+    width: int = DEFAULT_WIDTH,
+    height: int = DEFAULT_HEIGHT,
+    seed: int | None = None,
+    durations: list[float] | None = None,
+    steps: int | None = None,
+    comfy_url: str = COMFYUI_URL,
+) -> Path:
+    """One acted scene rendered as several Ref2VA clips joined by H3 Motion
+    Context — the long-dialogue path past H3_MAX_SECONDS.
+
+    *prompts* carries one prompt per clip (each with only its own lines — see
+    performance.split_lines_for_chain) and *durations* the DELIVERED seconds
+    per clip; every clip after the first samples CHAIN_JOIN_SECS longer to pay
+    for the pinned frames it trims. Portraits and voice references are wired
+    into every clip identically, so faces and voices cannot drift mid-scene.
+    """
+    from pipeline import cadence
+    from pipeline.assembler import _concat_video_chunks
+
+    if not ref_images:
+        raise ValueError("Ref2VA needs at least one reference image")
+    check_engine_supported(engine, comfy_url)
+    if len(prompts) == 1:
+        return generate_video_h3_ref(
+            engine, prompts[0], ref_images, output_path, ref_audios=ref_audios,
+            width=width, height=height, seed=seed,
+            duration_seconds=(durations or [None])[0], steps=steps,
+            comfy_url=comfy_url)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    gen_w, gen_h = h3_dimensions(width, height)
+    steps = int(steps or engine.get("steps") or 20)
+    images = list(ref_images)[:H3_MAX_REF_IMAGES]
+    audios = list(ref_audios or [])[:H3_MAX_REF_AUDIOS]
+    image_names = [_upload_image(p, comfy_url=comfy_url) for p in images]
+    audio_names = [_upload_audio(p, comfy_url=comfy_url) for p in audios]
+    durations = list(durations or [None] * len(prompts))
+    # Unique per call: concurrent chained scenes on one worker must not read
+    # each other's context latent.
+    token = f"h3_context/{uuid.uuid4().hex[:12]}"
+
+    chunks: list[Path] = []
+    try:
+        for idx, (prompt_text, secs) in enumerate(zip(prompts, durations), start=1):
+            prompt_text, _ = _steer_audio_natural(prompt_text, "")
+            sample_secs = float(secs or H3_MIN_SECONDS)
+            if idx > 1:
+                sample_secs += cadence.CHAIN_JOIN_SECS
+            length = h3_frame_count(sample_secs)
+            repl = {
+                "UNET_NAME": engine["unet"], "CLIP_NAME": engine["clip"],
+                "VIDEO_VAE": engine["video_vae"], "AUDIO_VAE": engine["audio_vae"],
+                "POSITIVE_PROMPT": prompt_text, "WIDTH": gen_w, "HEIGHT": gen_h,
+                "LENGTH": length, "SEED": seed + idx, "STEPS": steps,
+                "EASYCACHE_THRESHOLD": float(engine.get("easycache_threshold") or 0.2),
+                "LORA_NAME": engine.get("lora") or "",
+                "CONTEXT_PREFIX": token, "CLIP_INDEX": idx,
+            }
+            if idx == 1:
+                wf_name = "h3_ref2v_chain_a.json"
+            else:
+                wf_name = "h3_ref2v_chain_b.json"
+                repl["CONTEXT_LENGTH"] = str(H3_CHAIN_CONTEXT_FRAMES)
+                repl["AUDIO_CONTEXT_LENGTH"] = H3_CHAIN_AUDIO_FRAMES
+                repl["CONTEXT_LATENT_PATH"] = f"{token}_{idx - 1:05d}.safetensors"
+            workflow = _fill_template(_load_workflow(wf_name), repl)
+
+            # Same dotted autogrow keys as generate_video_h3_ref — a flat key
+            # is silently ignored and the render succeeds with no references.
+            ref_node = workflow[_ref_node_id(workflow)]["inputs"]
+            next_id = max((int(k) for k in workflow), default=100) + 1
+            for i, name in enumerate(image_names):
+                loader = str(next_id + i)
+                workflow[loader] = {"class_type": "LoadImage", "inputs": {"image": name}}
+                ref_node[f"ref_images.ref_image_{i}"] = [loader, 0]
+            next_id += len(image_names)
+            for i, name in enumerate(audio_names):
+                loader = str(next_id + i)
+                workflow[loader] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+                ref_node[f"ref_audios.ref_audio_{i}"] = [loader, 0]
+
+            timeout = _h3_timeout_seconds(gen_w, gen_h, length)
+            logger.info("[comfy] h3 ref chain clip %d/%d %dx%d length=%d steps=%d refs=%di/%da",
+                        idx, len(prompts), gen_w, gen_h, length, steps,
+                        len(image_names), len(audio_names))
+            client_id = str(uuid.uuid4())
+            prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+            _wait_for_completion(prompt_id, client_id, timeout=timeout,
+                                 comfy_url=comfy_url,
+                                 heartbeat_warmup=_H3_HEARTBEAT_WARMUP)
+            outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+            if not outputs:
+                raise RuntimeError(
+                    f"No output from H3 ref chain clip {idx}/{len(prompts)} ({comfy_url})")
+            item = next((o for o in outputs if o.get("type") == "output"), outputs[0])
+            chunk = output_path.with_name(f"{output_path.stem}.chain{idx}.mp4")
+            chunks.append(_download_output(item, chunk, comfy_url=comfy_url))
+        return _concat_video_chunks(chunks, output_path)
+    finally:
+        for chunk in chunks:
+            chunk.unlink(missing_ok=True)
+
+
 # Frames the Motion Context node pins across a join. 22 is the node's default
 # and what the GB10 measurements used: the join then reads as ordinary motion
 # (6.17 RMSE against a 6.53 p90) where a cut measures 21.68.

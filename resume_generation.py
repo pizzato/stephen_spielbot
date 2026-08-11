@@ -507,7 +507,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                              vid_width, vid_height, style_name,
                              extra_pictures: list[dict] | None = None,
                              drop_kinds: tuple = ()) -> Path:
-    from pipeline.comfyui import generate_video_h3_ref
+    from pipeline.comfyui import generate_video_h3_ref, generate_video_h3_ref_chained
     from app import resolve_performance_references
 
     # The SAME resolver the editor's performance view calls, so the slots shown
@@ -531,20 +531,52 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             f"{meta.get('cast')} — Ref2VA needs at least one reference image "
             "(generate the character look images first)")
 
-    prompt = _performance.build_h3_prompt(
-        meta, style_note=cfg.get("style", ""),
-        picture_names=picture_names, audio_names=audio_names)
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
-    logger.info("Scene %d: performance render (%s) — %d portraits, %d voices → %s",
-                scene.id, engine["key"], len(ref_images), len(ref_audios), clip.name)
+    # Chained acted scenes (h3_chain_scenes): dialogue longer than one clip is
+    # shot as two Ref2VA clips joined by H3 Motion Context instead of being
+    # split. Reference engines are always MiniMax, so the toggle alone decides
+    # — but a scene that already fits one clip renders single-clip either way
+    # rather than paying the join's ~22% overhead for nothing. Flat key first
+    # (stamped into job_config), styles lookup for older job dirs.
+    chain_flag = cfg.get("h3_chain_scenes")
+    if chain_flag is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or style_name or ""):
+                chain_flag = s.get("h3_chain_scenes")
+                break
+    chained = bool(chain_flag)
+    if chained and _performance.content_seconds(meta) > _performance.acted_limits(False)[1]:
+        sub_metas = _performance.split_lines_for_chain(meta)
+        chained = len(sub_metas) > 1
+    else:
+        chained, sub_metas = False, [meta]
+    prompts = [
+        _performance.build_h3_prompt(
+            m, style_note=cfg.get("style", ""),
+            picture_names=picture_names, audio_names=audio_names)
+        for m in sub_metas
+    ]
+    logger.info("Scene %d: performance render (%s%s) — %d portraits, %d voices → %s",
+                scene.id, engine["key"],
+                f", chained x{len(sub_metas)}" if chained else "",
+                len(ref_images), len(ref_audios), clip.name)
     def _generate(out: Path) -> Path:
-        generate_video_h3_ref(
-            engine, prompt, ref_images, out,
-            ref_audios=ref_audios,
-            width=vid_width, height=vid_height,
-            duration_seconds=_performance.render_seconds(meta),
-            comfy_url=comfy_url,
-        )
+        if chained:
+            generate_video_h3_ref_chained(
+                engine, prompts, ref_images, out,
+                ref_audios=ref_audios,
+                width=vid_width, height=vid_height,
+                durations=[_performance.render_seconds(m) for m in sub_metas],
+                comfy_url=comfy_url,
+            )
+        else:
+            generate_video_h3_ref(
+                engine, prompts[0], ref_images, out,
+                ref_audios=ref_audios,
+                width=vid_width, height=vid_height,
+                duration_seconds=_performance.render_seconds(meta),
+                comfy_url=comfy_url,
+            )
         return out
 
     _generate(clip)
@@ -746,11 +778,20 @@ def main(work_dir: Path) -> None:
                 break
     video_engine = _engines.resolve_video(cfg, video_key or cfg.get("default_video_engine"))
     # Chained scenes (h3_chain_scenes): render each scene as two H3 clips joined
-    # by Motion Context so it can run past the model's ceiling. MiniMax only —
-    # LTX continues natively. Must agree with app.scene_plan_for_settings, which
-    # planned FEWER, LONGER scenes off the same flag.
-    chain_scenes = (bool(cfg.get("h3_chain_scenes"))
-                    and video_engine.get("family") == "minimax")
+    # by Motion Context so it can run past the model's ceiling. Same fallback
+    # as the engines above — newer job dirs stamp the resolved key, older ones
+    # need the styles lookup (the flat key only mirrors the DEFAULT style, so
+    # reading cfg flat alone silently ignores any per-style toggle).
+    chain_flag = cfg.get("h3_chain_scenes")
+    if chain_flag is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
+                chain_flag = s.get("h3_chain_scenes")
+                break
+    # Narrated scenes: MiniMax only — LTX continues natively. Must agree with
+    # app.scene_plan_for_settings, which planned FEWER, LONGER scenes off the
+    # same flag.
+    chain_scenes = bool(chain_flag) and video_engine.get("family") == "minimax"
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 

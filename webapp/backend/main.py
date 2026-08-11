@@ -1846,7 +1846,8 @@ def _story_format_note(fmt: str) -> str | None:
     return None
 
 
-def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
+def _build_dialogue_note(fmt: str, cast_names: list[str],
+                         chained: bool = False) -> str | None:
     """Instruction appended to the script prompts so the LLM stages scenes as
     ACTED takes. None for the narration format (the prompts are unchanged).
 
@@ -1854,7 +1855,10 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
     the shape it asks for is the one pipeline/performance.py assembles: who is
     on screen, what they say, where, and how it sounds. The word budget is the
     binding constraint — the model truncates a clip that runs past its length,
-    mid-sentence."""
+    mid-sentence. *chained* (h3_chain_scenes) roughly doubles that budget: the
+    renderer shoots long scenes as two joined clips, so without the bigger
+    budget here the LLM keeps writing single-clip scenes and nothing ever
+    chains."""
     fmt = (fmt or "narration").strip().lower()
     if fmt not in ("dialogue", "mixed"):
         return None
@@ -1895,9 +1899,15 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
         "single shot and at most one move,\n"
         "  \"soundscape\": diegetic sound only (no score),\n"
         "and leaves \"narration\" EMPTY. "
-        "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
-        "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
-        "in the same setting rather than overfilling one. "
+        + ("HARD BUDGET: the take runs about 20 seconds, so keep a dialogue scene to AT MOST "
+           "6 lines and 45 spoken words TOTAL — a real exchange, not a fragment — and split "
+           "anything longer across consecutive scenes in the same setting rather than "
+           "overfilling one. "
+           if chained else
+           "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
+           "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
+           "in the same setting rather than overfilling one. ")
+        +
         "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". "
         f"{speakers} {balance} {instructions_rule} "
         "Still fill image_prompt and video_prompt as usual — for a dialogue scene they "
@@ -2281,7 +2291,8 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # scenes the characters speak, or a mix of both (and silent beats).
     fmt = (brief.get("format") or "narration").strip().lower()
     dialogue_note = _build_dialogue_note(
-        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
+        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])],
+        chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")))
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(
@@ -4818,6 +4829,11 @@ def start_generation(body: GenerateBody) -> dict:
         # Ref2VA model for performance films (portraits + dialogue, no first
         # frame). Ignored by every narrated render.
         "reference_engine": ss.get("reference_engine"),
+        # Chained H3 scenes. Stamped like every other per-style render key —
+        # resume_generation reads the merged job config FLAT, so an unstamped
+        # key silently falls back to the flat default and a per-style toggle
+        # never reaches the render.
+        "h3_chain_scenes": gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).

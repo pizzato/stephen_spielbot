@@ -95,3 +95,54 @@ class TestChainSplit(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestActedChaining(unittest.TestCase):
+    """h3_chain_scenes covers acted scenes too — reference engines are always
+    MiniMax, so the toggle alone decides (no LTX carve-out)."""
+
+    def _long_meta(self):
+        w = "word " * 14
+        return {"title": "Test", "lines": [
+            {"speaker": "Kinho", "text": w}, {"speaker": "Joe", "text": w},
+            {"speaker": "Kinho", "text": w}]}
+
+    def test_acted_limits_stretch_like_narrated(self):
+        from pipeline import performance as p
+        lo, hi = p.acted_limits(True)
+        lost = cadence.CHAIN_JOIN_SECS * (cadence.CHAIN_CLIPS - 1)
+        self.assertAlmostEqual(lo, p.MAX_SCENE_SECONDS * cadence.CHAIN_CLIPS - lost)
+        self.assertAlmostEqual(hi, p.H3_CEILING_SECONDS * cadence.CHAIN_CLIPS - lost)
+
+    def test_long_dialogue_stays_one_scene_when_chained(self):
+        from pipeline import performance as p
+        meta = self._long_meta()
+        self.assertGreater(len(p.split_overloaded(meta)), 1)
+        self.assertEqual(len(p.split_overloaded(meta, chained=True)), 1)
+
+    def test_chain_halves_carry_all_lines_in_order(self):
+        from pipeline import performance as p
+        meta = self._long_meta()
+        halves = p.split_lines_for_chain(meta)
+        self.assertEqual(len(halves), 2)
+        from pipeline.performance import norm_lines
+        rejoined = [l["text"] for h in halves for l in h["lines"]]
+        self.assertEqual(rejoined, [l["text"] for l in norm_lines(meta["lines"])])
+        # continuation clips must not restate the opening action beat
+        self.assertEqual(halves[1].get("beats"), [])
+
+    def test_render_seconds_uses_chained_ceiling(self):
+        from pipeline import performance as p
+        meta = self._long_meta()
+        self.assertEqual(p.render_seconds(meta), p.H3_CEILING_SECONDS)
+        self.assertGreater(p.render_seconds(meta, chained=True), p.H3_CEILING_SECONDS)
+
+    def test_plan_carries_the_acted_flag_independently(self):
+        # An LTX narrated style with the toggle on: narration stays unchained,
+        # acted scenes chain.
+        import app as gapp
+        ss = {"h3_chain_scenes": True, "video_engine": "ltx23",
+              "video_minutes": 4.0}
+        plan = gapp.style_script_plan(ss)
+        self.assertFalse(plan["chained"])
+        self.assertTrue(plan["chained_acted"])

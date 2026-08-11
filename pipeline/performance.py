@@ -37,6 +37,24 @@ MIN_SCENE_SECONDS = 5.0
 MAX_SCENE_SECONDS = 12.0
 H3_CEILING_SECONDS = 15.0
 
+
+def acted_limits(chained: bool = False) -> tuple[float, float]:
+    """(split threshold, render ceiling) in seconds for one acted scene.
+
+    Unchained is the single-clip contract above. Chained (h3_chain_scenes)
+    renders a scene as cadence.CHAIN_CLIPS clips joined by H3 Motion Context,
+    so both limits stretch by the clip count minus the pinned frames each join
+    trims — the same arithmetic cadence.scene_window() applies to narrated
+    scenes. Reference engines are always MiniMax, so unlike narrated scenes
+    there is no LTX carve-out: the toggle alone decides."""
+    if not chained:
+        return MAX_SCENE_SECONDS, H3_CEILING_SECONDS
+    from pipeline import cadence
+    lost = cadence.CHAIN_JOIN_SECS * (cadence.CHAIN_CLIPS - 1)
+    return (MAX_SCENE_SECONDS * cadence.CHAIN_CLIPS - lost,
+            H3_CEILING_SECONDS * cadence.CHAIN_CLIPS - lost)
+
+
 # One audio reference per speaker, and H3 accepts at most 3 (and 9 images).
 MAX_SPEAKERS_PER_SCENE = 3
 
@@ -123,29 +141,34 @@ def content_seconds(meta: dict) -> float:
     return words / WORDS_PER_SECOND + 1.0 * turns + 1.0
 
 
-def render_seconds(meta: dict) -> float:
+def render_seconds(meta: dict, chained: bool = False) -> float:
     """The clip length a shot is actually rendered at: never below what its
-    words need, never above the model's hard ceiling. A scene that needs more
-    than the ceiling will still truncate — the script-side split exists so
-    that never happens; this is the last line of defence."""
+    words need, never above the ceiling. A scene that needs more than the
+    ceiling will still truncate — the script-side split exists so that never
+    happens; this is the last line of defence. *chained* raises the ceiling to
+    the two-clip window (acted_limits)."""
+    _, ceiling = acted_limits(chained)
     if norm_lines(meta.get("lines")):
         # Content wins outright when there are lines: a stored guess used as a
         # floor pads the clip, and padding is where the model invents speech.
-        return min(H3_CEILING_SECONDS, max(MIN_SCENE_SECONDS, content_seconds(meta)))
-    return min(H3_CEILING_SECONDS, _clamp_seconds(meta.get("seconds")))
+        return min(ceiling, max(MIN_SCENE_SECONDS, content_seconds(meta)))
+    return min(ceiling, _clamp_seconds(meta.get("seconds")))
 
 
-def split_overloaded(raw_scene: dict) -> list[dict]:
+def split_overloaded(raw_scene: dict, chained: bool = False) -> list[dict]:
     """Split a scene whose dialogue cannot fit one clip into consecutive
     scenes: same setting, cast and sound, lines divided at speaker turns.
-    More short scenes beat one long truncated one."""
+    More short scenes beat one long truncated one. *chained* raises the
+    threshold to the two-clip window, so dialogue that previously became two
+    or three scenes stays one longer take."""
+    max_secs, _ = acted_limits(chained)
     lines = norm_lines(raw_scene.get("lines"))
-    if not lines or content_seconds({"lines": lines}) <= MAX_SCENE_SECONDS:
+    if not lines or content_seconds({"lines": lines}) <= max_secs:
         return [raw_scene]
     parts: list[list[dict]] = [[]]
     for line in lines:
         candidate = parts[-1] + [line]
-        if parts[-1] and content_seconds({"lines": candidate}) > MAX_SCENE_SECONDS:
+        if parts[-1] and content_seconds({"lines": candidate}) > max_secs:
             parts.append([line])
         else:
             parts[-1] = candidate
@@ -160,6 +183,38 @@ def split_overloaded(raw_scene: dict) -> list[dict]:
         out.append(piece)
     logger.info("Scene %r needs %.1fs of dialogue — split into %d scenes",
                 raw_scene.get("title"), content_seconds({"lines": lines}), len(out))
+    return out
+
+
+def split_lines_for_chain(meta: dict, n_clips: int = 2) -> list[dict]:
+    """Divide one chained scene's dialogue into *n_clips* consecutive sub-metas.
+
+    Each clip of a chained render needs a prompt carrying only ITS lines — a
+    12 s clip prompted with 24 s of dialogue rushes and truncates, which is the
+    exact failure chaining exists to avoid. Lines split at speaker turns where
+    possible, balancing spoken seconds; setting, cast, sound and title stay
+    shared so the clips read as one take. Returns [meta] unchanged when there
+    is nothing to split."""
+    lines = norm_lines(meta.get("lines"))
+    if len(lines) < 2 or n_clips < 2:
+        return [meta]
+    total = content_seconds({"lines": lines})
+    parts: list[list[dict]] = [[]]
+    for line in lines:
+        if (len(parts) < n_clips and parts[-1]
+                and content_seconds({"lines": parts[-1]}) >= total / n_clips):
+            parts.append([])
+        parts[-1].append(line)
+    out = []
+    for i, chunk in enumerate(parts):
+        piece = dict(meta)
+        piece["lines"] = chunk
+        piece["seconds"] = content_seconds({"lines": chunk})
+        if i > 0:
+            # Continuation clips inherit the space from the pinned frames; a
+            # fresh action beat would fight them.
+            piece["beats"] = []
+        out.append(piece)
     return out
 
 

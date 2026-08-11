@@ -2407,13 +2407,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="video_steps" />
                 </Field>
               )}
-              {engineInfo && String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax') && (
+              {engineInfo && (
                 <Field label="Chained scenes — longer than H3 can render in one pass"
-                  hint="H3 tops out near 15 s a clip. With this on each scene is rendered as TWO clips joined by H3 Motion Context, so the second continues the first's motion and audio instead of cutting, and a scene can run to ~29 s. Scripts are planned to match: fewer scenes, each carrying about twice the narration, for the same video length. Costs ~22% more render time per delivered second — the join pins frames that are then trimmed — and the workers must have the Motion Context nodes baked in. LTX ignores it (it continues clips natively).">
+                  hint="H3 tops out near 15 s a clip. With this on, a scene that needs more is rendered as TWO clips joined by H3 Motion Context — the second continues the first's motion and audio instead of cutting — so scenes can run to ~29 s. It always covers ACTED scenes (dialogue renders through MiniMax Ref2VA in every style), and narrated scenes too when the video engine above is MiniMax; LTX narrated scenes ignore it (LTX continues clips natively). Scripts are planned to match: fewer, longer scenes — narration carries about twice the words, and dialogue that used to split into two scenes stays one take. Costs ~22% more render time per delivered second on the scenes that chain, and the workers must have the Motion Context nodes baked in.">
                   <label className="check">
                     <input type="checkbox" checked={!!eff.h3_chain_scenes}
                       onChange={(e) => setStyleField('h3_chain_scenes', e.target.checked)} />
-                    <span>Render each scene as two chained clips</span>
+                    <span>Render long scenes as two chained clips</span>
                   </label>
                   <ParentVal k="h3_chain_scenes" />
                 </Field>

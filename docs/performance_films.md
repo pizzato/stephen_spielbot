@@ -201,8 +201,11 @@ and no prompt can separate them.
 
 ## Limits
 
-- **15 seconds is a hard ceiling** per scene, and cost grows faster than length — scenes
-  are written to ~10 s.
+- **15 seconds is a hard ceiling** per single-clip scene, and cost grows faster than
+  length — scenes are written to ~10 s. With **Chained scenes** on (see
+  [Models → Chained scenes](models.md#chained-scenes)) a dialogue scene may run to
+  ~29 s: it is shot as two clips joined by H3 Motion Context, the script budget
+  doubles, and exchanges that used to split into consecutive scenes stay one take.
 - **One voice reference bleeds onto other speakers** in the same clip. Give every speaker
   their own voice (the model accepts 3 per scene), or write scenes with one speaker.
 - **Nine portraits and three voices** per scene, maximum.
