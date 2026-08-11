@@ -223,6 +223,13 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </div>
       )}
 
+      {/* A take-op failure (e.g. removing the first frame) must be visible even
+          before the scene has a rendered take — the block above only exists
+          once there is a video. */}
+      {!scene.has_video && reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
+        <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
+      )}
+
       {/* ── Cast: each numbered slot IS the portrait / the voice clip, and the
              look and voice are set right here rather than in another tab. ── */}
       <div className="row gap-16 row--wrap" style={{ alignItems: 'flex-start' }}>
