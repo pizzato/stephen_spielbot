@@ -194,6 +194,27 @@ RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
         custom_nodes/ComfyUI-MiniMax-H3-Turbo \
     && git -C custom_nodes/ComfyUI-MiniMax-H3-Turbo checkout "${H3_TURBO_NODES_REF}"
 
+# H3 Motion Context — EXPERIMENTAL, off by default. Chains H3 clips so clip B
+# continues clip A's motion and audio, which is the only way past the model's
+# 15 s ceiling (pipeline/comfyui.py: H3_MAX_SECONDS) without a hard cut.
+#
+# It earns its default-off setting: it monkey-patches ComfyUI's H3 internals
+# (comfy.ldm.minimax.model.PackedLayout.__init__ and extra_conds) to lift a
+# restriction on interior keyframe anchors. The patch self-tests against the
+# installed ComfyUI first and refuses if anything moved, and it stands down if
+# another pack already patched the same spot — but a ComfyUI bump can still
+# silently drop the feature, so a rebuild wants a chained render to prove it.
+# GPL-3.0, unlike everything else in this image; keep that in mind before
+# redistributing the built image.
+ARG H3_MOTION_CONTEXT_REF=
+RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
+        git clone https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context.git \
+            custom_nodes/ComfyUI-H3-Motion-Context \
+        && git -C custom_nodes/ComfyUI-H3-Motion-Context checkout "${H3_MOTION_CONTEXT_REF}"; \
+    else \
+        echo "H3 Motion Context not installed (H3_MOTION_CONTEXT_REF empty)"; \
+    fi
+
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~49 GB).
