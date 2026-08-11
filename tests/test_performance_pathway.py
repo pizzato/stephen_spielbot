@@ -1558,3 +1558,66 @@ class CriticActedTests(ActedSceneEditingTests):
         self.assertEqual(after["narration"], before["narration"])
         self.assertEqual(after["video_prompt"], before["video_prompt"])
         self.assertEqual([l["text"] for l in after["lines"]], ["You came."])
+
+
+class FirstFrameRemoveTests(ActedSceneEditingTests):
+    """Remove first frame must actually LOOK removed: the film editor shows the
+    image-history selection when there is one, so history must report nothing
+    selected once the canonical frame files are gone — else the frame appears
+    un-removable even though the render already dropped it."""
+
+    def _make_frame(self):
+        from pipeline import image_history
+        preview = self.wd / "scene_01_preview.png"
+        preview.write_bytes(b"frame-one")
+        image_history.record(self.wd, 1, preview)
+        preview.write_bytes(b"frame-two")
+        image_history.record(self.wd, 1, preview)
+        (self.wd / "scene_01_first_frame.png").write_bytes(b"frame-two")
+
+    def test_remove_clears_the_frame_everywhere_the_ui_looks(self):
+        self._make_frame()
+        self._save()   # persists script.json for the acted view
+        self.backend.remove_scene_preview(self.job_id, 1)
+        # the canonical files are gone, so the take renders reference-only …
+        self.assertFalse((self.wd / "scene_01_preview.png").exists())
+        self.assertFalse((self.wd / "scene_01_first_frame.png").exists())
+        self.assertNotIn("frame", [p["kind"] for p in self._scene()["pictures"]])
+        # … and the film editor agrees: no preview, and NO history version
+        # claiming to be the current frame (versions stay re-selectable).
+        row = self.backend.film_scenes(work_dir=str(self.wd))["scenes"][0]
+        self.assertEqual(row["preview_path"], "")
+        self.assertEqual(len(row["history"]["versions"]), 2)
+        self.assertIsNone(row["history"]["selected"])
+
+    def test_reselecting_a_kept_version_bringss_the_frame_back(self):
+        self._make_frame()
+        self._save()
+        self.backend.remove_scene_preview(self.job_id, 1)
+        vid = self.backend.film_scenes(
+            work_dir=str(self.wd))["scenes"][0]["history"]["versions"][0]["id"]
+        self.backend.select_scene_preview(
+            self.job_id, 1, self.backend.PreviewSelectBody(version_id=vid))
+        self.assertTrue((self.wd / "scene_01_preview.png").exists())
+        row = self.backend.film_scenes(work_dir=str(self.wd))["scenes"][0]
+        self.assertEqual(row["history"]["selected"], vid)
+        self.assertIn("frame", [p["kind"] for p in self._scene()["pictures"]])
+
+    def test_remove_never_wipes_a_script_that_lives_only_on_disk(self):
+        # Older films keep their scenes only in script.json; with no store rows
+        # the snapshot write would replace the film's one copy with [].
+        self._make_frame()
+        self._save()
+        script = self.wd / "script.json"
+        before = script.read_text()
+        self.assertIn("Talk", before)
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            store._conn.execute("DELETE FROM scenes")   # simulate a pre-store film
+            store._conn.commit()
+        finally:
+            store.close()
+        self.backend.remove_scene_preview(self.job_id, 1)
+        self.assertFalse((self.wd / "scene_01_preview.png").exists())
+        self.assertEqual(script.read_text(), before)

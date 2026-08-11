@@ -3800,7 +3800,10 @@ def remove_scene_preview(job_id: str, scene_id: int) -> dict:
         rows = store.scene_rows(job_id)
     finally:
         store.close()
-    gapp._persist_script_snapshot(wd, rows)
+    # A film whose scenes live only in script.json has no store rows — writing
+    # the empty snapshot would wipe the script it is the sole copy of.
+    if rows:
+        gapp._persist_script_snapshot(wd, rows)
     return {"ok": True}
 
 

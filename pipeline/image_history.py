@@ -192,6 +192,13 @@ def history(work_dir: Path, scene_id: int) -> dict:
     valid = {v["id"] for v in versions}
     if selected not in valid:
         selected = versions[-1]["id"] if versions else None
+    # "Selected" means "the canonical preview holds this image". After Remove
+    # first frame deletes the canonical files, nothing is selected — reporting
+    # one anyway makes the film editor keep showing a frame the render no
+    # longer uses, so the removal looks like it did nothing.
+    if selected is not None and not _canonical_preview(work_dir, scene_id).exists() \
+            and not _canonical_first_frame(work_dir, scene_id).exists():
+        selected = None
     return {"versions": versions, "selected": selected}
 
 
