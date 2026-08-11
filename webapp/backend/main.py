@@ -11847,7 +11847,12 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             metadata_extra=md,
         )
         # Guided re-generation: the user's note rides along with the prompt.
-        scene_cfg = dict(jc)
+        # Live config UNDER the job's overrides — the same merge the full render
+        # uses (resume_generation.load_job_config). job_config.json alone has no
+        # "styles" list, and without the style hierarchy a catalogue character
+        # scoped to a parent style (e.g. BHOB's David Attenbot re-shot from a
+        # child style's film) resolves NO portrait and Ref2VA refuses the scene.
+        scene_cfg = {**cfg, **jc}
         scene_cfg["style_name"] = jc.get("style_name") or ""
         if instruction.strip():
             scene_cfg["performance_instruction"] = instruction.strip()
