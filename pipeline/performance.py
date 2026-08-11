@@ -247,18 +247,18 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
     name, kind = pic.get("name", ""), pic.get("kind", "character")
     hint = _clean(pic.get("hint"))
     if kind == "location":
-        return (f"defines the place only — keep the space, layout, furnishings "
-                f"and lighting exactly as shown. It contains no people and adds "
-                f"none")
+        return ("defines the place only — keep the space, layout, furnishings "
+                "and lighting exactly as shown. It contains no people and adds "
+                "none")
     if kind == "frame":
         return ("defines the scene's OPENING IMAGE — the space, light, framing "
                 "and where everyone stands. Begin the take looking like this "
                 "picture. Faces come from the portrait references only, voices "
                 "from the audio references only")
     if kind == "continuity":
-        return (f"defines the SAME room, furniture, lighting and time of day "
-                f"already filmed in this scene — this shot is another angle of "
-                f"that exact space; do not redecorate or move to a new place")
+        return ("defines the SAME room, furniture, lighting and time of day "
+                "already filmed in this scene — this shot is another angle of "
+                "that exact space; do not redecorate or move to a new place")
     if kind in ("image", "video"):
         what = _clean(pic.get("description")) or name or "this reference"
         return (f"defines {what} only — match it exactly where it appears in "

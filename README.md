@@ -104,13 +104,14 @@ Guides that also read well on GitHub:
 - [Stephen Spielbot (@StephenSpielbot)](https://www.youtube.com/@StephenSpielbot) — YouTube · The original
 - [A Brief History of Botkind (@BHOBk)](https://www.youtube.com/@BHOBk) — YouTube
 - [A Brief History of Botkind (@aBHOBk)](https://x.com/aBHOBk) — X
+- [Amelia and the World (@AmeliaAndTheWorld)](https://www.youtube.com/@AmeliaAndTheWorld) — YouTube
 <!-- CHANNELS:END -->
 
 Making films with Stephen Spielbot? Add your channel to
 [`channels.yaml`](channels.yaml) and open a pull request — that file is the only
 thing you need to edit. On merge, a GitHub Action regenerates this list and the
-app's **About** screen. Run `make channels` if you want to preview the result
-locally.
+app's **About** screen, and opens a follow-up pull request with the result. Run
+`make channels` if you want to preview the result locally.
 
 ## License
 

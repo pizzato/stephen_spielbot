@@ -1334,8 +1334,6 @@ class ModeConversionTests(ActedSceneEditingTests):
         self.assertTrue(scene["image_prompt"])
         self.assertEqual(scene["lines"], [])
         self.assertEqual(llm.call_count, 1)
-        # the dialogue that was left is stashed, not lost
-        row_meta = self.backend.job_scenes(self.job_id)["scenes"][0]
         self.assertTrue(llm.called)
 
     def test_switching_back_restores_the_old_version_without_the_llm(self):
@@ -1558,3 +1556,122 @@ class CriticActedTests(ActedSceneEditingTests):
         self.assertEqual(after["narration"], before["narration"])
         self.assertEqual(after["video_prompt"], before["video_prompt"])
         self.assertEqual([l["text"] for l in after["lines"]], ["You came."])
+
+
+class FirstFrameRemoveTests(ActedSceneEditingTests):
+    """Remove first frame must actually LOOK removed: the film editor shows the
+    image-history selection when there is one, so history must report nothing
+    selected once the canonical frame files are gone — else the frame appears
+    un-removable even though the render already dropped it."""
+
+    def _make_frame(self):
+        from pipeline import image_history
+        preview = self.wd / "scene_01_preview.png"
+        preview.write_bytes(b"frame-one")
+        image_history.record(self.wd, 1, preview)
+        preview.write_bytes(b"frame-two")
+        image_history.record(self.wd, 1, preview)
+        (self.wd / "scene_01_first_frame.png").write_bytes(b"frame-two")
+
+    def test_remove_clears_the_frame_everywhere_the_ui_looks(self):
+        self._make_frame()
+        self._save()   # persists script.json for the acted view
+        self.backend.remove_scene_preview(self.job_id, 1)
+        # the canonical files are gone, so the take renders reference-only …
+        self.assertFalse((self.wd / "scene_01_preview.png").exists())
+        self.assertFalse((self.wd / "scene_01_first_frame.png").exists())
+        self.assertNotIn("frame", [p["kind"] for p in self._scene()["pictures"]])
+        # … and the film editor agrees: no preview, and NO history version
+        # claiming to be the current frame (versions stay re-selectable).
+        row = self.backend.film_scenes(work_dir=str(self.wd))["scenes"][0]
+        self.assertEqual(row["preview_path"], "")
+        self.assertEqual(len(row["history"]["versions"]), 2)
+        self.assertIsNone(row["history"]["selected"])
+
+    def test_reselecting_a_kept_version_bringss_the_frame_back(self):
+        self._make_frame()
+        self._save()
+        self.backend.remove_scene_preview(self.job_id, 1)
+        vid = self.backend.film_scenes(
+            work_dir=str(self.wd))["scenes"][0]["history"]["versions"][0]["id"]
+        self.backend.select_scene_preview(
+            self.job_id, 1, self.backend.PreviewSelectBody(version_id=vid))
+        self.assertTrue((self.wd / "scene_01_preview.png").exists())
+        row = self.backend.film_scenes(work_dir=str(self.wd))["scenes"][0]
+        self.assertEqual(row["history"]["selected"], vid)
+        self.assertIn("frame", [p["kind"] for p in self._scene()["pictures"]])
+
+    def test_remove_never_wipes_a_script_that_lives_only_on_disk(self):
+        # Older films keep their scenes only in script.json; with no store rows
+        # the snapshot write would replace the film's one copy with [].
+        self._make_frame()
+        self._save()
+        script = self.wd / "script.json"
+        before = script.read_text()
+        self.assertIn("Talk", before)
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            store._conn.execute("DELETE FROM scenes")   # simulate a pre-store film
+            store._conn.commit()
+        finally:
+            store.close()
+        self.backend.remove_scene_preview(self.job_id, 1)
+        self.assertFalse((self.wd / "scene_01_preview.png").exists())
+        self.assertEqual(script.read_text(), before)
+
+
+class ActedRerenderConfigTests(TempConfigCase):
+    """Shoot again must see the style hierarchy: job_config.json alone carries
+    no "styles" list, and without it a catalogue character scoped to a PARENT
+    style resolves no portrait — Ref2VA then refuses the whole scene."""
+
+    def setUp(self):
+        super().setUp()
+        chars_dir = self.config_file.parent / "characters"
+        chars_dir.mkdir(parents=True)
+        (chars_dir / "c1.png").write_bytes(b"png")
+        self.write_config({
+            "styles": [_style("BHOB"), {**_style("David Attenbot"), "parent": "BHOB"}],
+            "default_style": "BHOB",
+            "characters": [{"id": "c1", "name": "David Attenbot", "style": "BHOB",
+                            "description": "a robot naturalist", "ref_image": "c1.png",
+                            "enabled": True}],
+            "characters_migrated_v2": True,
+        })
+        mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir).start()
+        self.addCleanup(mock.patch.stopall)
+        self.wd = self.output_dir / "film-20260811-114725"
+        self.wd.mkdir()
+        (self.wd / "job_config.json").write_text(json.dumps({
+            "style_name": "David Attenbot", "resolution": "",
+            "characters": [{"id": "c1", "name": "David Attenbot", "style": "BHOB",
+                            "description": "a robot naturalist", "ref_image": "c1.png",
+                            "enabled": True}],
+        }))
+        (self.wd / "characters.json").write_text("[]")
+
+    def test_shoot_again_resolves_a_parent_scoped_portrait(self):
+        meta = {"mode": "dialogue", "cast": ["David Attenbot"],
+                "lines": [{"speaker": "David Attenbot", "text": "Hello."}]}
+        row = {"id": 9, "title": "Talk", "image_prompt": "", "video_prompt": "",
+               "narration": "", "metadata": meta}
+        seen = {}
+
+        def fake_render(scene, wd, cfg, **kw):
+            seen["cfg"] = cfg
+            seen["style_name"] = kw.get("style_name")
+            (wd / "scene_09_final.mp4").write_bytes(b"mp4")
+
+        pool = mock.MagicMock()
+        pool.acquire.return_value = "http://w:8188"
+        with mock.patch.object(backend, "_shared_edit_render_pool", return_value=pool), \
+             mock.patch("resume_generation.render_performance_scene", fake_render):
+            backend._run_acted_rerender("t1", self.wd, 9, backend._film_job_config(self.wd), row)
+
+        self.assertEqual(backend._film_tasks["t1"]["status"], "done")
+        # The cfg handed to the render must resolve the parent-scoped portrait —
+        # exactly what resolve_performance_references will do with it.
+        refs = backend.gapp.resolve_performance_references(
+            meta, seen["cfg"], self.wd, seen["style_name"], scene_id=9)
+        self.assertIn("character", [p["kind"] for p in refs["pictures"]])

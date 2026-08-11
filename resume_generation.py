@@ -45,7 +45,6 @@ from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     concat_audio, concatenate_scenes, extract_last_frame,
     ensure_video_resolution, mix_background_music,
-    fit_video_canvas,
     write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
@@ -54,7 +53,7 @@ from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 from pipeline.orchestrator import (
     DurableStore, TaskRun,
     JOB_DONE, JOB_ERROR, JOB_RUNNING,
-    job_id_from_work_dir, task_id, worker_id, timing_signature,
+    job_id_from_work_dir, task_id, worker_id,
 )
 from pipeline.scene_video import generate_scene_video as _generate_scene_video
 from pipeline.worker_pool import WorkerPool, alive_workers

@@ -48,7 +48,7 @@ import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
-from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
+from pipeline.llm import generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
 import pipeline.performance as performance_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
@@ -1819,6 +1819,33 @@ def _scene_snapshot_row(s, image_prompt: str | None = None) -> dict:
     return row
 
 
+def _story_format_note(fmt: str) -> str | None:
+    """Draft-stage counterpart of _build_dialogue_note: tells the story draft
+    WHO will tell it, with none of the scene schema or clip budgets — those
+    bind at the divide step, where the story becomes scenes. The draft must
+    come out well-formed whatever the film's length."""
+    fmt = (fmt or "narration").strip().lower()
+    if fmt == "dialogue":
+        return (
+            "PERFORMED STORY: this story will be acted ON CAMERA by its characters "
+            "speaking — there is no narrator reading it. Plan recurring characters who "
+            "can carry the story in spoken exchanges (never return an empty characters "
+            "array), and write chapter summaries whose beats live in what people say "
+            "and do. Ignore any video length or scene limits while drafting — the "
+            "story is divided into scenes afterwards."
+        )
+    if fmt == "mixed":
+        return (
+            "MIXED STORY: this story will be staged as a mix of narrated voice-over "
+            "AND characters speaking on camera. Plan recurring characters who can "
+            "speak (never return an empty characters array), and let the chapter "
+            "summaries flag natural moments of spoken exchange alongside the "
+            "narration. Ignore any video length or scene limits while drafting — the "
+            "story is divided into scenes afterwards."
+        )
+    return None
+
+
 def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
     """Instruction appended to the script prompts so the LLM stages scenes as
     ACTED takes. None for the narration format (the prompts are unchanged).
@@ -1844,8 +1871,17 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
         "speaking to camera or to each other. Use \"narration\" only where no one could "
         "plausibly say it."
         if fmt == "dialogue" else
-        "Mix freely: \"dialogue\" when characters speak or interact, \"narration\" for "
-        "scene-setting voice-over, \"silent\" for a pure visual beat."
+        "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
+        "scene-setting voice-over, \"silent\" for a pure visual beat. A mixed film must "
+        "actually MIX — acted dialogue scenes AND narrated scenes both appear, spread "
+        "through the film rather than clustered; if every scene comes back the same mode "
+        "the division has failed the brief."
+    )
+    instructions_rule = (
+        "The TOPIC/DIRECTION outranks this mode balance: when it asks the narrator to "
+        "introduce themselves, address the viewer, or say specific things, stage those "
+        "beats as \"narration\" scenes carrying exactly that content — never drop them "
+        "and never reassign the narrator's own words to a character."
     )
     return (
         "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. "
@@ -1863,7 +1899,7 @@ def _build_dialogue_note(fmt: str, cast_names: list[str]) -> str | None:
         "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
         "in the same setting rather than overfilling one. "
         "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". "
-        f"{speakers} {balance} "
+        f"{speakers} {balance} {instructions_rule} "
         "Still fill image_prompt and video_prompt as usual — for a dialogue scene they "
         "describe the setting the performance happens in."
     )
@@ -1897,11 +1933,6 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     user_topic = (body.topic or "").strip() or (body.video_title or "").strip()
     if not user_topic:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
-
-    cfg = gapp.load_config()
-    # Style profile (issue #66): drives extra instructions + visual style here,
-    # and is stamped on the job so the render step uses the same profile.
-    ss = gapp.style_settings(cfg, body.style_name)
 
     # Every script is story-first: draft and judge the prose, then divide it
     # into scenes in whatever mode the format asks for (narrated, acted, or a
@@ -2153,8 +2184,10 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         # Every scene is an acted clip, so the length comes from clip count,
         # not from a narrator's word budget.
         plan = {**plan, "n_scenes": _acted_scene_count(body, ss)}
-    dialogue_note = _build_dialogue_note(
-        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])])
+    # The draft only learns WHO tells the story (acted / mixed); the acted
+    # scene schema and clip budgets bind at the divide step, so the prose
+    # comes out well-formed whatever the film's length.
+    dialogue_note = _story_format_note(fmt)
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
@@ -3206,7 +3239,6 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         # editable here; catalogue ones are shared with other films, so those
         # are shown read-only with a pointer to Settings.
         picture_slot = {p["name"]: p["slot"] for p in refs["pictures"]}
-        audio_slot = {a["slot"]: a for a in refs["audios"]}
         audio_by_name = {a["name"]: a for a in refs["audios"]}
         cast = []
         for name in (meta.get("cast") or []):
@@ -3762,7 +3794,10 @@ def remove_scene_preview(job_id: str, scene_id: int) -> dict:
         rows = store.scene_rows(job_id)
     finally:
         store.close()
-    gapp._persist_script_snapshot(wd, rows)
+    # A film whose scenes live only in script.json has no store rows — writing
+    # the empty snapshot would wipe the script it is the sole copy of.
+    if rows:
+        gapp._persist_script_snapshot(wd, rows)
     return {"ok": True}
 
 
@@ -4502,7 +4537,6 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         raise HTTPException(400, "Not an acted scene — use the per-field regenerate buttons.")
 
     jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
-    jm = json.loads(_row_to_dict(job).get("metadata_json") or "{}") if job else {}
     video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
     topic = jc.get("topic") or ""
     style_name = jc.get("style_name", "")
@@ -11827,7 +11861,12 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             metadata_extra=md,
         )
         # Guided re-generation: the user's note rides along with the prompt.
-        scene_cfg = dict(jc)
+        # Live config UNDER the job's overrides — the same merge the full render
+        # uses (resume_generation.load_job_config). job_config.json alone has no
+        # "styles" list, and without the style hierarchy a catalogue character
+        # scoped to a parent style (e.g. BHOB's David Attenbot re-shot from a
+        # child style's film) resolves NO portrait and Ref2VA refuses the scene.
+        scene_cfg = {**cfg, **jc}
         scene_cfg["style_name"] = jc.get("style_name") or ""
         if instruction.strip():
             scene_cfg["performance_instruction"] = instruction.strip()

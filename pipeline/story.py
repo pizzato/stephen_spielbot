@@ -12,8 +12,9 @@ Every step is a one-shot ``_chat_complete`` call, so the mode works on all
 four backends (claude/grok/openai/local) through a single code path. The
 classic batched generators in pipeline/llm.py are untouched.
 
-Dialogue/mixed formats are not supported here — callers fall back to classic
-generation for those (narration-only scenes come out of ``divide_story``).
+Dialogue/mixed formats ride the same path: the prose story is drafted with no
+scene or length constraints, and the divide step stages it as acted scenes
+(see the *dialogue_note* on ``divide_story``).
 """
 from __future__ import annotations
 
@@ -163,7 +164,10 @@ def generate_story(title: str, n_scenes: int,
                       n_scenes=n_scenes, n_chapters=n_chapters,
                       style_note=style_note, avoid_note=avoid_note,
                       character_note=character_note, dialogue_note=dialogue_str),
-        600 + 120 * n_chapters, "story outline",
+        # The floor covers the fixed keys (style + music + two full character
+        # objects) regardless of chapter count — a one-chapter film's outline
+        # is not a small response.
+        1500 + 150 * n_chapters, "story outline",
     )
     outer = _parse_claude_response(raw, "story outline")
     raw_chapters = [c for c in (outer.get("chapters") or []) if isinstance(c, dict)]
@@ -328,7 +332,7 @@ def redraft_story(story: dict, n_scenes: int,
                       n_scenes=n_scenes, n_chapters=n_chapters, old_n_scenes=old_n_scenes,
                       avoid_note=avoid_note, character_note=character_note,
                       story_str=story_str),
-        600 + 120 * n_chapters, "story redraft outline",
+        1500 + 150 * n_chapters, "story redraft outline",
     )
     outer = _parse_claude_response(raw, "story redraft outline")
     raw_chapters = [c for c in (outer.get("chapters") or []) if isinstance(c, dict)]

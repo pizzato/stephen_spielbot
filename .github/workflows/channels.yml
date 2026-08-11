@@ -6,7 +6,9 @@ name: Sync channels list
 #
 # On a pull request it only validates, so a malformed entry fails the check
 # before merge (and fork PRs need no write access). On merge to main it
-# regenerates and commits the result, so contributors only ever edit one file.
+# regenerates and opens a follow-up pull request with the result, so
+# contributors only ever edit one file. It cannot push to main directly —
+# branch protection rejects that (GH006) — hence the follow-up PR.
 on:
   push:
     branches: [main]
@@ -27,11 +29,12 @@ jobs:
   sync:
     name: Render channels.yaml
     runs-on: ubuntu-latest
-    # Needed by the post-merge commit step below. `permissions` takes no
+    # Needed by the post-merge pull request step below. `permissions` takes no
     # expressions, so it is granted for both events; only the push run writes,
     # and GitHub downgrades the token to read-only for pull requests from forks.
     permissions:
       contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v7
 
@@ -47,9 +50,14 @@ jobs:
         run: python scripts/gen_channels.py
 
       # The generator is deterministic, so a diff here means channels.yaml
-      # changed and the rendered copies need to catch up.
-      - name: Commit regenerated files
+      # changed and the rendered copies need to catch up. main is protected, so
+      # the result goes onto a fixed branch and into a pull request for a human
+      # to merge; re-running force-updates that branch and reuses the open PR.
+      - name: Open sync pull request
         if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BRANCH: chore/sync-channels
         run: |
           if [ -z "$(git status --porcelain README.md webapp/frontend/src/channels.json)" ]; then
             echo "Already up to date."
@@ -57,6 +65,14 @@ jobs:
           fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$BRANCH"
           git add README.md webapp/frontend/src/channels.json
-          git commit -m "chore: sync channels list from channels.yaml [skip ci]"
-          git push
+          git commit -m "chore: sync channels list from channels.yaml"
+          git push --force origin "$BRANCH"
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')" ]; then
+            echo "Existing pull request updated."
+            exit 0
+          fi
+          gh pr create --base main --head "$BRANCH" \
+            --title "chore: sync channels list from channels.yaml" \
+            --body "Regenerated \`README.md\` and \`webapp/frontend/src/channels.json\` from \`channels.yaml\` after ${{ github.sha }}."

@@ -24,9 +24,15 @@ the way through, or **Mixed** to let the writer place acted scenes among narrate
 ones. A single scene can also be switched to *dialogue* in the
 [Script editor](manual/script.md) — any scene with dialogue lines is acted, wherever it sits.
 
-The script is written story-first either way: the prose story comes first, and the division
-into scenes is what stages it as performance. The video model is picked per style
-(Settings → a style → **Video models → Acted (dialogue) scenes**; see below).
+The script is written story-first either way: the prose story is drafted with no scene or
+clip-length constraints — whatever the film's size, the draft only learns that its
+characters will speak on camera — and the division into scenes is what stages it as
+performance, applying the per-clip budgets. Instructions in the topic aimed at the
+narrator (say, asking the narrator to introduce themselves) survive that staging: they
+stay narration scenes rather than being dropped or handed to a character, and a *Mixed*
+film is required to genuinely mix acted and narrated scenes throughout. The video model
+is picked per style (Settings → a style → **Video models → Acted (dialogue) scenes**; see
+below).
 
 A scene written as dialogue in a mixed script only carries its lines — the cast comes from
 who speaks, the length from what they say, and the setting from the scene's own video

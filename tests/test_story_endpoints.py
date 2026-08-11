@@ -58,6 +58,7 @@ class StoryEndpointTests(TempConfigCase):
 
     def test_narration_asks_for_no_dialogue(self):
         self.assertIsNone(backend._build_dialogue_note("narration", []))
+        self.assertIsNone(backend._story_format_note("narration"))
 
     def test_an_acted_format_carries_its_note_into_both_phases(self):
         body = backend.GenerateScriptBody(video_title="Dlg", topic="A topic",
@@ -68,10 +69,25 @@ class StoryEndpointTests(TempConfigCase):
              mock.patch.object(backend.story_mode, "divide_story",
                                return_value=(_fake_scenes(2), "m", "st", [])) as div:
             backend._do_script_generate(body)
-        # the story must come back with people who can speak …
-        self.assertIn("ACTED SCENES", gen.call_args.kwargs["dialogue_note"])
-        # … and the division stages them as acted scenes
-        self.assertIn("ACTED SCENES", div.call_args.kwargs["dialogue_note"])
+        # the draft learns only WHO tells the story — people who can speak —
+        # with none of the scene schema or clip budgets …
+        draft_note = gen.call_args.kwargs["dialogue_note"]
+        self.assertIn("PERFORMED STORY", draft_note)
+        self.assertNotIn("HARD BUDGET", draft_note)
+        # … the division is where the acted scene schema and budgets bind
+        divide_note = div.call_args.kwargs["dialogue_note"]
+        self.assertIn("ACTED SCENES", divide_note)
+        self.assertIn("HARD BUDGET", divide_note)
+
+    def test_divide_note_keeps_topic_instructions_and_mixing(self):
+        # the narrator's own beats (e.g. a topic-requested self-introduction)
+        # survive the mode balance, and a mixed film must actually mix
+        dlg = backend._build_dialogue_note("dialogue", ["Kinho"])
+        self.assertIn("TOPIC/DIRECTION outranks", dlg)
+        mixed = backend._build_dialogue_note("mixed", ["Kinho"])
+        self.assertIn("TOPIC/DIRECTION outranks", mixed)
+        self.assertIn("actually MIX", mixed)
+        self.assertIn("MIXED STORY", backend._story_format_note("mixed"))
 
     def test_an_all_acted_film_is_measured_in_clips_not_words(self):
         # 1 minute of narration is ~10 scenes of words; 1 minute of acted film
