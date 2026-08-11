@@ -48,7 +48,7 @@ import pipeline.llm as llm  # noqa: E402
 import pipeline.engagement as eng  # noqa: E402
 import pipeline.c2pa as _c2pa  # noqa: E402
 import pipeline.prompts as _prompts  # noqa: E402
-from pipeline.llm import generate_script, generate_video_suggestions, Scene  # noqa: E402
+from pipeline.llm import generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
 import pipeline.performance as performance_mode  # noqa: E402
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
@@ -1934,11 +1934,6 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
     if not user_topic:
         raise HTTPException(400, "Enter a video title or describe what you want to create.")
 
-    cfg = gapp.load_config()
-    # Style profile (issue #66): drives extra instructions + visual style here,
-    # and is stamped on the job so the render step uses the same profile.
-    ss = gapp.style_settings(cfg, body.style_name)
-
     # Every script is story-first: draft and judge the prose, then divide it
     # into scenes in whatever mode the format asks for (narrated, acted, or a
     # mix). Chained inline so automation callers run it headless with no
@@ -3244,7 +3239,6 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         # editable here; catalogue ones are shared with other films, so those
         # are shown read-only with a pointer to Settings.
         picture_slot = {p["name"]: p["slot"] for p in refs["pictures"]}
-        audio_slot = {a["slot"]: a for a in refs["audios"]}
         audio_by_name = {a["name"]: a for a in refs["audios"]}
         cast = []
         for name in (meta.get("cast") or []):
@@ -4543,7 +4537,6 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         raise HTTPException(400, "Not an acted scene — use the per-field regenerate buttons.")
 
     jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
-    jm = json.loads(_row_to_dict(job).get("metadata_json") or "{}") if job else {}
     video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
     topic = jc.get("topic") or ""
     style_name = jc.get("style_name", "")

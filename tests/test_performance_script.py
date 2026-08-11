@@ -1,7 +1,5 @@
 """Acted scenes: the prompt they assemble into, and the shape they take."""
-import json
 import unittest
-from unittest import mock
 
 from pipeline import performance
 
@@ -252,7 +250,6 @@ class ShotSizingTests(unittest.TestCase):
 
     def test_establishing_prompt_promises_silence_and_company(self):
         wide = performance.shots_for(self._meta("Hi.", "Hi."), establishing=True)[0]
-        p = performance.build_h3_prompt(wide)
         p2 = performance.build_h3_prompt(
             wide, picture_names=[{"name": "A", "kind": "character"},
                                  {"name": "B", "kind": "character"}])

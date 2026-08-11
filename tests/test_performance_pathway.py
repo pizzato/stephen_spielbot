@@ -1334,8 +1334,6 @@ class ModeConversionTests(ActedSceneEditingTests):
         self.assertTrue(scene["image_prompt"])
         self.assertEqual(scene["lines"], [])
         self.assertEqual(llm.call_count, 1)
-        # the dialogue that was left is stashed, not lost
-        row_meta = self.backend.job_scenes(self.job_id)["scenes"][0]
         self.assertTrue(llm.called)
 
     def test_switching_back_restores_the_old_version_without_the_llm(self):
