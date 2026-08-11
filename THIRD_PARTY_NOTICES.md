@@ -69,6 +69,7 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI-VideoHelperSuite](https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite) | `docker/comfyui` | GPL-3.0 |
 | [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `docker/comfyui` (cloned + patched at build time) | LTX-2 Community License Agreement |
 | [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) | `docker/comfyui` | Apache-2.0 |
+| [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context) | `docker/comfyui` (pinned; omit with an empty `H3_MOTION_CONTEXT_REF`) | GPL-3.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
 

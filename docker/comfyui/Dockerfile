@@ -194,19 +194,23 @@ RUN git clone https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo.git \
         custom_nodes/ComfyUI-MiniMax-H3-Turbo \
     && git -C custom_nodes/ComfyUI-MiniMax-H3-Turbo checkout "${H3_TURBO_NODES_REF}"
 
-# H3 Motion Context — EXPERIMENTAL, off by default. Chains H3 clips so clip B
-# continues clip A's motion and audio, which is the only way past the model's
-# 15 s ceiling (pipeline/comfyui.py: H3_MAX_SECONDS) without a hard cut.
+# H3 Motion Context — chains H3 clips so clip B continues clip A's motion and
+# audio, the only way past the model's 15 s ceiling (pipeline/comfyui.py:
+# H3_MAX_SECONDS) without a hard cut. Installed by default so any worker can
+# serve a chained render; using it is still per style (h3_chain_scenes, off by
+# default), because chaining changes the take, not just its length.
 #
-# It earns its default-off setting: it monkey-patches ComfyUI's H3 internals
+# PINNED, and deliberately: it monkey-patches ComfyUI's H3 internals
 # (comfy.ldm.minimax.model.PackedLayout.__init__ and extra_conds) to lift a
 # restriction on interior keyframe anchors. The patch self-tests against the
-# installed ComfyUI first and refuses if anything moved, and it stands down if
-# another pack already patched the same spot — but a ComfyUI bump can still
-# silently drop the feature, so a rebuild wants a chained render to prove it.
-# GPL-3.0, unlike everything else in this image; keep that in mind before
-# redistributing the built image.
-ARG H3_MOTION_CONTEXT_REF=
+# installed ComfyUI and refuses if anything moved, and stands down if another
+# pack already owns that patch — so it fails loudly rather than silently
+# rendering an unchained clip. Bumping ComfyUI still wants a chained render to
+# prove the patch survived. Set empty to leave the nodes out entirely.
+#
+# GPL-3.0, unlike everything else in this image — relevant when redistributing
+# the built image.
+ARG H3_MOTION_CONTEXT_REF=c140ae99b8c38f782ebd8564c267b42aacade6a4
 RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
         git clone https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context.git \
             custom_nodes/ComfyUI-H3-Motion-Context \

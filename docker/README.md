@@ -96,6 +96,7 @@ the value must be an `http://host:8189` URL.
 | `SAGEATTENTION_ARCHS` | `12.0;12.1` | Compute capabilities SageAttention is compiled for — `12.1` = GB10 (DGX Spark), `12.0` = sm_120 Blackwell workstation. Set **empty** on non-Blackwell GPUs to skip the build |
 | `SAGEATTENTION_REF` | `main` | Pin SageAttention to a tag/branch/commit for reproducible workers |
 | `COMFYUI_EXTRA_ARGS` | — (empty) | Extra flags appended to ComfyUI's launch. Set to `--use-sage-attention` to turn SageAttention on |
+| `H3_MOTION_CONTEXT_REF` | pinned SHA | H3 clip-chaining nodes behind **Settings → Styles → Chained scenes**. Pinned on purpose — the pack patches ComfyUI's H3 internals at runtime, so it must never float. Set **empty** to leave the nodes out of the image |
 
 Temporal AI upscaling is configured by the app and submitted to the worker's
 ComfyUI API after the finished film has been reviewed on the Remix screen. The
