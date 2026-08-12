@@ -1285,6 +1285,11 @@ def style_script_plan(ss: dict, minutes: float | None = None,
     plan["n_scenes"] = min(plan["n_scenes"], MAX_SCENES)
     plan["wpm_measured"] = measured
     plan["voice"] = ss.get("voice") or ""
+    # Acted scenes always render through a MiniMax reference engine (there is
+    # no LTX Ref2VA), so their chaining follows the toggle alone — an LTX
+    # narrated style still chains its dialogue scenes. The acted split in
+    # story.py reads this key.
+    plan["chained_acted"] = bool(ss.get("h3_chain_scenes"))
     return plan
 
 F5TTS_DEFAULT_OPTION = "Default (F5-TTS)"

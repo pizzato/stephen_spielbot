@@ -123,8 +123,19 @@ can run to about 29 s.
 
 The script is planned to match, which is the point of the toggle — the same
 runtime becomes **fewer, longer scenes**, each carrying roughly twice the
-narration. A four-minute film goes from ~20 scenes of ~30 words to ~10 scenes of
-~58 words; total narration is unchanged.
+content. A four-minute narrated film goes from ~20 scenes of ~30 words to ~10
+scenes of ~58 words; total narration is unchanged.
+
+It covers both kinds of scene, on different gates:
+
+- **Narrated scenes** chain when the style's *video engine* is MiniMax. LTX
+  narrated scenes ignore the toggle — LTX continues clips natively.
+- **Acted scenes** (dialogue, rendered through Ref2VA) chain on the toggle
+  alone — reference engines are always MiniMax, so even an LTX-narrated style
+  chains its dialogue. The script budget doubles (~6 lines / ~45 spoken words
+  per dialogue scene instead of 3 / 22), exchanges that used to split into two
+  scenes stay one continuous take, and a scene that still fits one clip renders
+  single-clip rather than paying the join overhead for nothing.
 
 Measured on a GB10 worker:
 

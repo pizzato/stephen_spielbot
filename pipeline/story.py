@@ -443,7 +443,8 @@ def divide_story(story: dict, n_scenes: int | None = None,
         ))
         batch_start = batch_end + 1
 
-    final_scenes = _split_overloaded_acted(scenes[:n])
+    final_scenes = _split_overloaded_acted(
+        scenes[:n], chained=bool((scene_plan or {}).get("chained_acted")))
     # Narrated scenes only: a silent scene is meant to be empty, and an acted
     # scene's "narration" is what its characters say (filled at assembly).
     narrated = [s for s in final_scenes if s.mode in ("narration", "", None) and not s.lines]
@@ -470,12 +471,14 @@ def divide_story(story: dict, n_scenes: int | None = None,
     return final_scenes, music, style, identified
 
 
-def _split_overloaded_acted(scenes: list[Scene]) -> list[Scene]:
+def _split_overloaded_acted(scenes: list[Scene], chained: bool = False) -> list[Scene]:
     """Split any acted scene whose dialogue cannot fit one clip, and renumber.
 
     The video model truncates past ~15 s, so a scene the LLM overfilled is cut
     at a speaker turn into consecutive scenes instead — more short scenes beat
-    one that stops mid-sentence."""
+    one that stops mid-sentence. *chained* (h3_chain_scenes) doubles the room
+    before a split kicks in: the renderer shoots those scenes as two joined
+    clips, so dialogue that used to become two scenes stays one take."""
     from pipeline import performance as _perf
 
     out: list[Scene] = []
@@ -484,7 +487,7 @@ def _split_overloaded_acted(scenes: list[Scene]) -> list[Scene]:
             out.append(scene)
             continue
         raw = {**_perf.scene_meta(scene), "title": scene.title, "lines": scene.lines}
-        pieces = _perf.split_overloaded(raw)
+        pieces = _perf.split_overloaded(raw, chained=chained)
         if len(pieces) == 1:
             out.append(scene)
             continue
