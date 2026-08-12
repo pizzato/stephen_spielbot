@@ -1372,6 +1372,18 @@ class ModeConversionTests(ActedSceneEditingTests):
         self.assertIn("You came.", scene["video_prompt"])
         self.assertEqual(llm.call_count, 1)
 
+    def test_a_blank_added_scene_flips_without_inventing_a_scene(self):
+        # A scene just added in the film editor has nothing to convert.
+        added = self.backend.add_film_scene(
+            self.backend.AddFilmSceneBody(work_dir=str(self.wd)))
+        with mock.patch.object(self.backend, "_llm_complete") as llm:
+            r = self.backend.convert_scene_mode(
+                self.job_id, added["scene_id"], self.backend.ConvertModeBody(mode="dialogue"))
+        llm.assert_not_called()
+        self.assertEqual(r["scene"]["mode"], "dialogue")
+        self.assertEqual(r["scene"]["lines"], [])
+        self.assertEqual(r["scene"]["narration"], "")
+
     def test_to_silent_is_mechanical(self):
         with mock.patch.object(self.backend, "_llm_complete") as llm:
             r = self.backend.convert_scene_mode(

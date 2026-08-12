@@ -107,19 +107,27 @@ function SceneCard({
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
-  useEffect(() => {
-    setTitle(scene.title || '')
-    setNarration(scene.narration || '')
-    setSplit(!!(scene.tts_text || '').trim())
-    setTtsText(scene.tts_text || '')
-    setVoice(scene.voice || '')
-    setImagePrompt(scene.image_prompt || '')
-    setVideoPrompt(scene.video_prompt || '')
+  // Load a scene into the editor fields. The card seeds its state from the
+  // props once per scene id, so a server-rewritten scene (mode conversion) has
+  // to be adopted explicitly — a refetch alone leaves the old values on screen.
+  const adopt = (s) => {
+    if (!s) return
+    setTitle(s.title || '')
+    setNarration(s.narration || '')
+    setSplit(!!(s.tts_text || '').trim())
+    setTtsText(s.tts_text || '')
+    setVoice(s.voice || '')
+    setImagePrompt(s.image_prompt || '')
+    setVideoPrompt(s.video_prompt || '')
     setSceneType({
-      mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
-      setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
-      cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+      mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
+      setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
+      cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
     })
+  }
+
+  useEffect(() => {
+    adopt(scene)
     setEditing(false)
   }, [scene.id])
 
@@ -445,8 +453,11 @@ function SceneCard({
                 <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType}
                   onConvert={async (m) => {
                     setError('')
-                    try { await api.convertSceneMode(jobId, scene.id, m); onSaved() }
-                    catch (e) { setError(e.message) }
+                    try {
+                      const r = await api.convertSceneMode(jobId, scene.id, m)
+                      adopt(r?.scene)
+                      onSaved()
+                    } catch (e) { setError(e.message) }
                   }} />
                 {(sceneType.mode || 'narration') === 'narration' && (<>
                   <Field label={<RegenLabel busy={fieldBusy === 'narration'} onRegen={(instr) => regenField('narration', instr)} icon="microphone-lines" chips={REGEN_CHIPS.narration}>Narration</RegenLabel>}>
