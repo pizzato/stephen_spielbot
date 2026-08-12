@@ -6,7 +6,8 @@ hide:
 # Stephen Spielbot
 
 An AI video generator that turns a topic into a fully produced short film — cinematic
-visuals, narration, and background music — plus the whole channel workflow around it:
+visuals, narration or scenes acted out by its characters, and background music — plus the
+whole channel workflow around it:
 a render queue, AI-suggested ideas, per-scene editing, and publishing to YouTube and X.
 
 It runs on your own hardware. A **controller** (your laptop or desktop) hosts the web
@@ -14,7 +15,8 @@ app; one or more **GPU workers** do the rendering.
 
 [Install it](installation.md){ .md-button .md-button--primary }
 [Make your first film](first-film.md){ .md-button }
-[Watch how it works](https://www.youtube.com/watch?v=2h5T0mkW1gc){ .md-button }
+[Watch how it works](https://www.youtube.com/watch?v=1XMU1_QnRa4){ .md-button }
+[Read the story](https://medium.com/@pizzato/i-will-never-direct-a-movie-again-65bd4e9e6797){ .md-button }
 
 ---
 

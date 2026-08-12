@@ -41,7 +41,9 @@ The five most recently finished films, newest first. **All films →** opens
 ## About
 
 Reachable from the Spielbot card here or the handle at the bottom of the sidebar. It
-covers what the app is, the models behind it, and the list of channels using it —
-generated from
+covers what the app is, the models behind it, links to the
+[write-up](https://medium.com/@pizzato/i-will-never-direct-a-movie-again-65bd4e9e6797) and
+[video](https://www.youtube.com/watch?v=1XMU1_QnRa4) about the project, and the list of
+channels using it — generated from
 [`channels.yaml`](https://github.com/pizzato/stephen_spielbot/blob/main/channels.yaml). To
 add yours, see [Contributing](../contributing.md#adding-your-channel).

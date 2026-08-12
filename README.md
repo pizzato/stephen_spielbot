@@ -4,17 +4,19 @@
 
 # Stephen Spielbot
 
-An AI video generator that turns a topic into a fully produced short film — complete with cinematic visuals, narration, and background music.
+An AI video generator that turns a topic into a fully produced short film — complete with cinematic visuals, narration or scenes acted out by its characters, and background music.
 
 <p align="center">
-  <a href="https://www.youtube.com/watch?v=2h5T0mkW1gc">
-    <img src="https://img.youtube.com/vi/2h5T0mkW1gc/maxresdefault.jpg" alt="Watch: how Stephen Spielbot works" width="640"><br>
+  <a href="https://www.youtube.com/watch?v=1XMU1_QnRa4">
+    <img src="https://img.youtube.com/vi/1XMU1_QnRa4/maxresdefault.jpg" alt="Watch: how Stephen Spielbot works" width="640"><br>
     ▶️ Watch how it works
   </a>
 </p>
 
 <p align="center">
   <b><a href="https://pizzato.github.io/stephen_spielbot/">📖 Documentation &amp; manual</a></b>
+  &nbsp;·&nbsp;
+  <b><a href="https://medium.com/@pizzato/i-will-never-direct-a-movie-again-65bd4e9e6797">✍️ The story: “I will never direct a movie again”</a></b>
 </p>
 
 ## What it does

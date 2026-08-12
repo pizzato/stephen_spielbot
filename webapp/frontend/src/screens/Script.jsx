@@ -1214,7 +1214,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
                       <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
-                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="LTX — motion & camera.">
+                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="For the video engine (LTX / MiniMax H3) — motion & camera.">
                       <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
                   </>
