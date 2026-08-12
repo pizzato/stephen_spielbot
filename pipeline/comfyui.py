@@ -37,15 +37,21 @@ DEFAULT_LENGTH = LTX_FPS * 5 + 1   # 126 frames ≈ 5 seconds at 25 fps
 LTX_MAX_FRAMES = 1000              # LTXVEmptyLatentAudio rejects frames_number > 1000 (~40 s)
 
 
-def _frame_count(length: int, duration_seconds: float | None) -> int:
+def _frame_count(length: int, duration_seconds: float | None,
+                 fps: int = LTX_FPS, multiple: int = 0) -> int:
     """Frames for a clip request, clamped to what the LTX graph accepts.
     A clip cut short by the clamp is still usable: the muxer freeze-pads the
-    last frame to cover the rest of the narration."""
+    last frame to cover the rest of the narration.
+
+    *multiple* > 0 snaps the count down to ``multiple*k + 1`` (LTX 2.5's latent
+    only accepts 8k+1 frame counts; 2.3 takes any count)."""
     if duration_seconds is not None:
-        length = max(1, int(duration_seconds * LTX_FPS) + 1)
+        length = max(1, int(duration_seconds * fps) + 1)
     if length > LTX_MAX_FRAMES:
         logger.warning("[comfy] clamping %d frames to LTX max %d", length, LTX_MAX_FRAMES)
         length = LTX_MAX_FRAMES
+    if multiple > 0:
+        length = max(multiple + 1, (length - 1) // multiple * multiple + 1)
     return length
 
 
@@ -680,9 +686,18 @@ def generate_video_continuation(
     second_pass_cfg: float = 1.0,
     second_pass_steps: int = 6,
     comfy_url: str = COMFYUI_URL,
+    video_engine: dict | None = None,
 ) -> Path:
-    """Continue a video clip from its last frame using LTX 2.3 I2V."""
-    length = _frame_count(length, duration_seconds)
+    """Continue a video clip from its last frame using LTX I2V.
+
+    *video_engine* is an LTX-family entry from ``engines.VIDEO_ENGINES``; it
+    supplies the workflow, fps and frame-count grid. None (or the bare ltx23
+    entry, which carries none of those keys) keeps the LTX 2.3 defaults."""
+    eng = video_engine or {}
+    check_engine_supported(eng, comfy_url=comfy_url)
+    fps = int(eng.get("fps") or LTX_FPS)
+    length = _frame_count(length, duration_seconds, fps=fps,
+                          multiple=int(eng.get("frame_multiple") or 0))
     positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
 
     if seed is None:
@@ -693,7 +708,7 @@ def generate_video_continuation(
 
     image_name = _upload_image(last_frame_path, comfy_url=comfy_url)
 
-    workflow = _load_workflow("ltx23_i2v.json")
+    workflow = _load_workflow(eng.get("workflow") or "ltx23_i2v.json")
     workflow = _fill_template(workflow, {
         "POSITIVE_PROMPT":   positive_prompt,
         "NEGATIVE_PROMPT":   negative_prompt,
@@ -707,7 +722,8 @@ def generate_video_continuation(
         "FIRST_PASS_CFG":    first_pass_cfg,
         "FIRST_PASS_SIGMAS": _gen_first_pass_sigmas(first_pass_steps),
     })
-    workflow["3"]["inputs"]["strength_model"] = lora_strength
+    if "3" in workflow:  # 2.3's distill LoRA node; 2.5's distilled transformer is standalone
+        workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)
 
     _video_timeout = _video_timeout_seconds(width, height, length)
@@ -1266,9 +1282,10 @@ def generate_video_with_engine(
 ) -> Path:
     """Route a scene's I2V render to the style's video engine.
 
-    None or family "ltx" → the LTX 2.3 two-pass path, unchanged; family
-    "minimax" → MiniMax H3, where the negative prompt and the LTX pass tuning
-    knobs don't apply (H3 is CFG-free single-pass).
+    None or family "ltx" → the two-pass LTX path (2.3 by default; the engine
+    entry may swap in another LTX workflow, e.g. ltx25); family "minimax" →
+    MiniMax H3, where the negative prompt and the LTX pass tuning knobs don't
+    apply (H3 is CFG-free single-pass).
 
     *chained* (the style's ``h3_chain_scenes``) renders a MiniMax scene as two
     clips joined by H3 Motion Context so it can run past H3_MAX_SECONDS. It is
@@ -1287,6 +1304,7 @@ def generate_video_with_engine(
         lora_strength=lora_strength, first_pass_cfg=first_pass_cfg,
         first_pass_steps=first_pass_steps, second_pass_cfg=second_pass_cfg,
         second_pass_steps=second_pass_steps, comfy_url=comfy_url,
+        video_engine=video_engine,
     )
 
 

@@ -73,7 +73,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | Claude / Grok / OpenAI key + model | API key (or the matching [environment variable](environment.md)) and model name |
 | Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + a narration language that also drives the script), or the non-commercial `f5-original` preview |
 | Image engine | Per-style generate and edit engines; default FLUX.2 Klein |
-| Video engine | Per-style scene I2V model — `ltx23` (default) or the opt-in `minimax-h3` / `minimax-h3-turbo` (see [Models → Video engines](models.md#video-engines-per-style)) |
+| Video engine | Per-style scene I2V model — `ltx23` (default) or the opt-in `ltx25` / `minimax-h3` / `minimax-h3-turbo` (see [Models → Video engines](models.md#video-engines-per-style)) |
 | Sampling steps | MiniMax engines only: overrides the engine's step count (0 = engine default — Turbo 4, base H3 15). More steps = sharper but slower |
 | Chained scenes | Render long scenes as **two** clips joined by H3 Motion Context, so a scene can run ~29 s instead of H3's ~15 s ceiling. Always covers acted (dialogue) scenes — Ref2VA is always MiniMax — and narrated scenes when the video engine is MiniMax (LTX narrated scenes ignore it). Scripts are planned to match: fewer, longer scenes with roughly twice the content each. Needs the Motion Context nodes on the workers (see [Models](models.md#chained-scenes)) |
 | Resolution | Portrait FHD (1080×1920) by default; landscape / portrait / square presets from 512×288 to 1920×1080 |

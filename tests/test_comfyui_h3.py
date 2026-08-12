@@ -119,10 +119,90 @@ class VideoDispatchTests(unittest.TestCase):
             h3.assert_not_called()
 
             ltx.reset_mock()
+            eng25 = engines.resolve_video({}, "ltx25")
+            comfyui.generate_video_with_engine(eng25, "p", "n", Path("f"), Path("o"))
+            ltx.assert_called_once()
+            # The LTX path picks the workflow/fps off the engine — it must arrive.
+            self.assertEqual(ltx.call_args.kwargs["video_engine"], eng25)
+            h3.assert_not_called()
+
+            ltx.reset_mock()
             comfyui.generate_video_with_engine(
                 engines.resolve_video({}, "minimax-h3"), "p", "n", Path("f"), Path("o"))
             h3.assert_called_once()
             ltx.assert_not_called()
+
+
+class LTX25WorkflowTests(unittest.TestCase):
+    """The shared LTX continuation path, parameterized by the ltx25 engine."""
+
+    def _generate(self, engine_key, duration=5.0):
+        eng = engines.resolve_video({}, engine_key) if engine_key else None
+        captured = {}
+
+        def fake_queue(workflow, client_id, comfy_url=None):
+            captured["workflow"] = workflow
+            return "pid"
+
+        outputs = [{"filename": "ltx.mp4", "type": "output"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame.png"
+            frame.write_bytes(b"png")
+            out = Path(tmp) / "out.mp4"
+            with mock.patch.object(comfyui, "_upload_image", return_value="frame.png"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=outputs), \
+                 mock.patch.object(comfyui, "comfyui_version", return_value=(0, 32, 0)), \
+                 mock.patch.object(comfyui, "_download_output",
+                                   side_effect=lambda item, dest, comfy_url=None: dest):
+                comfyui.generate_video_continuation(
+                    "a cat sails a paper boat", "blurry", frame, out,
+                    width=832, height=480, seed=7, duration_seconds=duration,
+                    video_engine=eng,
+                )
+        return captured["workflow"]
+
+    def test_ltx25_workflow_parameterization(self):
+        wf = self._generate("ltx25")
+        eng = engines.resolve_video({}, "ltx25")
+        self.assertEqual(wf["1"]["inputs"]["unet_name"], eng["unet"])
+        # 5 s at 24 fps → 121 frames, already on the 8k+1 grid.
+        self.assertEqual(wf["8"]["inputs"]["length"], 121)
+        self.assertEqual(wf["9"]["inputs"]["frames_number"], 121)
+        self.assertEqual(wf["14"]["inputs"]["noise_seed"], 7)
+        self.assertEqual(wf["35"]["inputs"]["image"], "frame.png")
+        # First pass renders at half resolution; the second at full.
+        self.assertEqual(wf["8"]["inputs"]["width"], 416)
+        self.assertEqual(wf["37"]["inputs"]["width"], 832)
+        # No distill LoRA node, and the second-pass patch still landed.
+        self.assertNotIn("3", wf)
+        self.assertEqual(wf["25"]["inputs"]["cfg"], 1.0)
+        self.assertIn(wf["28"]["inputs"]["sigmas"], comfyui._SECOND_PASS_SIGMAS.values())
+        # Audio steering rides the prompts as on 2.3.
+        self.assertIn("diegetic", wf["4"]["inputs"]["text"])
+
+    def test_ltx25_snaps_frames_to_the_8k_plus_1_grid(self):
+        # 6 s at 24 fps is 145 frames (144 % 8 == 0 → already valid);
+        # 5.5 s is 133 frames → snapped down to 129.
+        wf = self._generate("ltx25", duration=5.5)
+        self.assertEqual(wf["8"]["inputs"]["length"], 129)
+
+    def test_ltx23_default_path_is_unchanged(self):
+        wf = self._generate(None)
+        self.assertEqual(wf["1"]["class_type"], "CheckpointLoaderSimple")
+        # 5 s at 25 fps → 126 frames, no grid snap for 2.3.
+        self.assertEqual(wf["8"]["inputs"]["length"], 126)
+        self.assertEqual(wf["3"]["inputs"]["strength_model"], 0.5)
+
+    def test_old_worker_is_refused_before_queueing(self):
+        eng = engines.resolve_video({}, "ltx25")
+        with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 31, 1)), \
+             mock.patch.object(comfyui, "_upload_image") as upload:
+            with self.assertRaises(RuntimeError):
+                comfyui.generate_video_continuation(
+                    "p", "n", Path("f"), Path("o"), video_engine=eng)
+            upload.assert_not_called()
 
 
 if __name__ == "__main__":

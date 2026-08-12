@@ -139,9 +139,10 @@ def public_list(commercial_only: bool = False) -> list[dict]:
 
 # ── Video engines (per-style ``video_engine``) ───────────────────────────────
 # ltx23 has no ``models`` list: its weights are part of the bulk worker install
-# (scripts/download_models.sh). minimax-h3 downloads on demand like the opt-in
-# image engines, and additionally needs the worker's ComfyUI to register its
-# nodes (``requires_node`` — ComfyUI ≥ v0.30.0).
+# (scripts/download_models.sh). ltx25 and minimax-h3 download on demand like the
+# opt-in image engines, and additionally need the worker's ComfyUI to register
+# their nodes (``requires_node`` — ComfyUI ≥ v0.30.0 for H3, ≥ v0.32.0 for
+# LTX 2.5).
 VIDEO_ENGINES: dict[str, dict] = {
     "ltx23": {
         "key": "ltx23",
@@ -151,6 +152,56 @@ VIDEO_ENGINES: dict[str, dict] = {
         "commercial_ok": True,
         "license": "LTX-2 Community License",
         "probe": ("CheckpointLoaderSimple", "ckpt_name", "ltx-2.3-22b-dev-fp8.safetensors"),
+    },
+    "ltx25": {
+        "key": "ltx25",
+        "label": "LTX 2.5 22B",
+        "sub": "Fast · native audio · distilled two-pass · 24 fps",
+        "family": "ltx",
+        "commercial_ok": True,
+        "license": "LTX-2.x Community License",
+        "workflow": "ltx25_i2v.json",
+        # LTX 2.5 runs at 24 fps (2.3 runs at 25) and its latent wants frame
+        # counts of the form 8k+1 — comfyui.generate_video_continuation reads
+        # both off the engine.
+        "fps": 24,
+        "frame_multiple": 8,
+        # ComfyUI-blessed consumer stack (~40 GB): int8+convrot transformer and
+        # Gemma 4 12B encoder exactly as in the official docs.comfy.org LTX-2.5
+        # workflows, plus the diffusion video VAE ("best quality" decoder), the
+        # audio VAE and the 2.5 latent spatial upscaler for the second pass.
+        "unet": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+        "clip": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+        "video_vae": "ltx-2.5-video-vae-bf16.safetensors",
+        "audio_vae": "ltx-2.5-audio-vae-bf16.safetensors",
+        "upscaler": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+        # The graph itself uses only native loaders/samplers, but LTX 2.5
+        # support (gemma4 'ltxv' CLIP + the 2.5 transformer) landed in ComfyUI
+        # v0.32.0 — probe one of the nodes that release introduced so the
+        # Settings availability check catches too-old workers, and hard-gate
+        # renders on the same floor.
+        "requires_node": "LTXVDualCFGGuider",
+        "min_comfyui": (0, 32, 0),
+        "probe": ("UNETLoader", "unet_name",
+                  "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors"),
+        # Lightricks/LTX-2.5 is a click-through repo: accept the license on
+        # huggingface.co/Lightricks/LTX-2.5 and set an HF token before the
+        # Settings download.
+        "models": [
+            _model("Lightricks/LTX-2.5",
+                   "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+                   "models/diffusion_models", gated=True),
+            _model("Lightricks/LTX-2.5",
+                   "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+                   "models/text_encoders", gated=True),
+            _model("Lightricks/LTX-2.5",
+                   "vae/ltx-2.5-video-vae-bf16.safetensors", "models/vae", gated=True),
+            _model("Lightricks/LTX-2.5",
+                   "vae/ltx-2.5-audio-vae-bf16.safetensors", "models/vae", gated=True),
+            _model("Lightricks/LTX-2.5",
+                   "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors",
+                   "models/latent_upscale_models", gated=True),
+        ],
     },
     "minimax-h3": {
         "key": "minimax-h3",

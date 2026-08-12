@@ -1859,7 +1859,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
-              <div className="field__hint">MiniMax H3's nodes ship with ComfyUI itself (≥ v0.30.0) — “not installed” with weights already downloaded usually means the worker container needs a rebuild. Expect much slower renders than LTX.</div>
+              <div className="field__hint">MiniMax H3's nodes ship with ComfyUI itself (≥ v0.30.0) and LTX 2.5 support with ≥ v0.32.0 — “not installed” with weights already downloaded usually means the worker container needs a rebuild. LTX 2.5 downloads need a Hugging Face token with the Lightricks/LTX-2.5 license accepted. Expect much slower renders from MiniMax than LTX.</div>
             </div>
           </Card>
 

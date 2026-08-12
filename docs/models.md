@@ -38,6 +38,20 @@ If you'd rather fetch them yourself:
     huggingface-cli download Comfy-Org/ltx-2 split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
     ```
 
+=== "LTX 2.5 (~40 GB, opt-in)"
+
+    Accept the license at [huggingface.co/Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5)
+    first — the repo is click-through gated, so every download needs `--token`.
+
+    ```bash
+    cd ~/github/ComfyUI
+    huggingface-cli download Lightricks/LTX-2.5 diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False --token "$HF_TOKEN"
+    huggingface-cli download Lightricks/LTX-2.5 text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False --token "$HF_TOKEN"
+    huggingface-cli download Lightricks/LTX-2.5 vae/ltx-2.5-video-vae-bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False --token "$HF_TOKEN"
+    huggingface-cli download Lightricks/LTX-2.5 vae/ltx-2.5-audio-vae-bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False --token "$HF_TOKEN"
+    huggingface-cli download Lightricks/LTX-2.5 latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors --local-dir models/latent_upscale_models --local-dir-use-symlinks False --token "$HF_TOKEN"
+    ```
+
 === "FLUX.2 Klein 4B (~16 GB)"
 
     ```bash
@@ -68,15 +82,36 @@ make download-flux-cluster     # to the first node, then rsync to all workers
 
 Each style picks the model that animates its scenes under **Settings → Styles →
 Video model**; child styles inherit the parent's choice like every other style
-field. Three engines ship:
+field. These engines ship:
 
 | Engine | Character | License |
 |---|---|---|
 | **LTX 2.3 22B** (default) | Fast two-pass render, native audio, honors the per-style video negative prompt | LTX-2 Community License |
+| **LTX 2.5 22B** (opt-in) | Same fast two-pass shape on the newer distilled 2.5 transformer — Gemma 4 encoder for better prompt adherence, improved audio, 24 fps | LTX-2.x Community License |
 | **MiniMax H3 33B** (opt-in) | Much slower single-pass render, higher fidelity, native **stereo** audio; no negative-prompt path | MiniMax H3 Community License |
 | **MiniMax H3 33B Turbo** (opt-in, early preview) | H3 with a distilled few-step LoRA (4 steps instead of 15) on the full non-pruned transformer — measured ~1.9× faster per scene | MiniMax H3 Community License (LoRA itself Apache-2.0) |
 | **MiniMax H3 33B Ref2VA** (opt-in) | Not a scene I2V engine: takes character portraits and voice clips instead of a first frame and generates picture + spoken dialogue together. Only [performance films](performance_films.md) use it | MiniMax H3 Community License |
 | **MiniMax H3 33B Ref2VA Turbo** (opt-in) | The same, with the distilled few-step LoRA — measured ~2.3× faster (10.2 min vs 22.9 min for a 10 s scene at 704×1280 on a GB10) | MiniMax H3 Community License (LoRA itself Apache-2.0) |
+
+LTX 2.5 notes:
+
+- **Download** its ~40 GB stack (int8+convrot distilled transformer, int8 Gemma 4
+  12B text encoder, video + audio VAEs, 2.5 latent spatial upscaler) from
+  **Settings → Infrastructure → Video models** — it is *not* part of the bulk
+  install. [Lightricks/LTX-2.5](https://huggingface.co/Lightricks/LTX-2.5) is a
+  click-through repo: accept its license on Hugging Face and configure an HF
+  token before downloading.
+- Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.32.0`) if the engine shows
+  "not installed" with the weights already downloaded. Older workers refuse the
+  render rather than failing mid-graph.
+- Clips render at **24 fps** (2.3 runs at 25) through the same two-pass
+  half-resolution → 2× latent upscale graph, so the Render quality first/second
+  pass knobs and the per-style video negative prompt apply as on 2.3. The
+  distilled transformer replaces 2.3's distill LoRA, so the LoRA-strength knob
+  has no effect on this engine.
+- Same license family as 2.3: free commercial use under US$10M annual revenue,
+  no territory restrictions.
 
 MiniMax H3 notes:
 

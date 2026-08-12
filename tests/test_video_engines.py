@@ -51,6 +51,51 @@ class VideoEngineRegistryTests(unittest.TestCase):
         self.assertTrue(entries["minimax-h3"]["license_note"])
         self.assertTrue(entries["minimax-h3"]["downloadable"])
         self.assertFalse(entries["ltx23"]["downloadable"])
+        self.assertTrue(entries["ltx25"]["downloadable"])
+
+    def test_resolve_video_ltx25(self):
+        eng = engines.resolve_video({}, "ltx25")
+        self.assertEqual(eng["family"], "ltx")
+        self.assertEqual(eng["workflow"], "ltx25_i2v.json")
+        # 2.5 runs at 24 fps and its latent wants 8k+1 frame counts.
+        self.assertEqual(eng["fps"], 24)
+        self.assertEqual(eng["frame_multiple"], 8)
+        # Native support (gemma4 'ltxv' CLIP + the 2.5 transformer) landed in
+        # ComfyUI v0.32.0 — older workers must be refused, and the probed node
+        # only exists from that release.
+        self.assertEqual(eng["min_comfyui"], (0, 32, 0))
+        self.assertEqual(eng["requires_node"], "LTXVDualCFGGuider")
+        # No distill-LoRA steps knob: the distilled transformer has a fixed
+        # sigma schedule, so the per-style video_steps override must not bite.
+        self.assertNotIn("steps", engines.resolve_video({"video_steps": 6}, "ltx25"))
+        # Every model file the workflow names must be in the download list,
+        # and the click-through Lightricks repo needs a token.
+        files = {m["file"] for m in eng["models"]}
+        for key in ("unet", "clip", "video_vae", "audio_vae", "upscaler"):
+            self.assertIn(eng[key], files)
+        self.assertTrue(all(m["gated"] for m in eng["models"]))
+
+    def test_ltx25_workflow_is_wired_for_the_shared_ltx_path(self):
+        import json
+        from pathlib import Path
+        eng = engines.resolve_video({}, "ltx25")
+        root = Path(__file__).resolve().parent.parent
+        graph = json.loads((root / "workflows" / eng["workflow"]).read_text())
+        # generate_video_continuation patches these nodes by ID — the 2.5 graph
+        # must keep the 2.3 layout: 25/28 second pass, no "3" distill LoRA.
+        self.assertNotIn("3", graph)
+        self.assertEqual(graph["25"]["class_type"], "CFGGuider")
+        self.assertEqual(graph["28"]["class_type"], "ManualSigmas")
+        # Loaders must name exactly the files the engine downloads.
+        self.assertEqual(graph["1"]["inputs"]["unet_name"], eng["unet"])
+        self.assertEqual(graph["2"]["inputs"]["clip_name"], eng["clip"])
+        self.assertEqual(graph["2"]["inputs"]["type"], "ltxv")
+        self.assertEqual(graph["38"]["inputs"]["vae_name"], eng["video_vae"])
+        self.assertEqual(graph["7"]["inputs"]["vae_name"], eng["audio_vae"])
+        self.assertEqual(graph["19"]["inputs"]["model_name"], eng["upscaler"])
+        # Both passes sample the same standalone transformer.
+        for node in ("13", "25"):
+            self.assertEqual(graph[node]["inputs"]["model"], ["1", 0])
 
 
 class VideoEngineStyleTests(TempConfigCase):
