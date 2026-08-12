@@ -24,7 +24,7 @@ app; one or more **GPU workers** do the rendering.
 |---|------|-----------|
 | 1 | **Script** | An LLM (local vLLM, Claude, Grok, or OpenAI) drafts the whole story as prose, critiques it, and — once you've read it — divides it into scenes |
 | 2 | **Images** | [FLUX.2 Klein](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) paints each scene's first frame, with recurring [characters](characters.md) held consistent via reference images |
-| 3 | **Video** | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) — or opt-in [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) / MiniMax H3 — animates each scene from its still, through ComfyUI |
+| 3 | **Video** | [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) — or opt-in MiniMax H3 — animates each scene from its still, through ComfyUI |
 | 4 | **Narration** | [F5-TTS](https://github.com/SWivid/F5-TTS) speaks the script in a cloned voice — or [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) for 23 languages |
 | 5 | **Dialogue** | Scenes can instead be acted: the characters speak on screen, picture and voice generated together by [MiniMax H3](https://github.com/MiniMax-AI) — see [acted scenes](performance_films.md) |
 | 6 | **Music** | [ACE-Step](https://github.com/ace-step/ACE-Step) scores it from the LLM's mood description, mixed in at the very end — or switched off per style or per film |

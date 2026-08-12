@@ -7,7 +7,7 @@ settings carry ``image_engine`` (scene generation) and ``edit_engine`` (the
 "Edit image" inpaint); both fall back to ``flux1-schnell``.
 
 ``VIDEO_ENGINES`` is the same idea for the scene I2V model (per-style
-``video_engine``): ``ltx23`` is the incumbent LTX 2.3 path, ``minimax-h3`` is
+``video_engine``): ``ltx25`` is the default LTX path, ``minimax-h3`` is
 opt-in. Unlike the image engines, video engines are not Apache-only — each
 entry carries its license terms and the Settings UI surfaces them.
 
@@ -138,25 +138,18 @@ def public_list(commercial_only: bool = False) -> list[dict]:
 
 
 # ── Video engines (per-style ``video_engine``) ───────────────────────────────
-# ltx23 has no ``models`` list: its weights are part of the bulk worker install
-# (scripts/download_models.sh). ltx25 and minimax-h3 download on demand like the
-# opt-in image engines, and additionally need the worker's ComfyUI to register
-# their nodes (``requires_node`` — ComfyUI ≥ v0.30.0 for H3, ≥ v0.32.0 for
-# LTX 2.5).
+# ltx25 is the default scene engine (LTX 2.3 was replaced outright — same
+# license terms, ~26% faster at production size; the 2.3 checkpoint itself is
+# still bulk-installed for the keyframed establishing shots and the Remix
+# IC-LoRA pixel upscale, which render outside this registry). ltx25 is part of
+# the bulk install and downloadable per worker from Settings; the H3 engines
+# download on demand only. Engines need the worker's ComfyUI to register their
+# nodes (``requires_node`` — ComfyUI ≥ v0.30.0 for H3, ≥ v0.32.0 for LTX 2.5).
 VIDEO_ENGINES: dict[str, dict] = {
-    "ltx23": {
-        "key": "ltx23",
-        "label": "LTX 2.3 22B",
-        "sub": "Fast · native audio · negative prompt",
-        "family": "ltx",
-        "commercial_ok": True,
-        "license": "LTX-2 Community License",
-        "probe": ("CheckpointLoaderSimple", "ckpt_name", "ltx-2.3-22b-dev-fp8.safetensors"),
-    },
     "ltx25": {
         "key": "ltx25",
         "label": "LTX 2.5 22B",
-        "sub": "Fast · native audio · distilled two-pass · 24 fps",
+        "sub": "Fast · native audio · negative prompt · 24 fps",
         "family": "ltx",
         "commercial_ok": True,
         "license": "LTX-2.x Community License",
@@ -421,7 +414,7 @@ VIDEO_ENGINES: dict[str, dict] = {
     },
 }
 
-DEFAULT_VIDEO_ENGINE = "ltx23"
+DEFAULT_VIDEO_ENGINE = "ltx25"
 # Acted scenes render through a Ref2VA engine
 # instead of the style's I2V engine; this is the default when none is stamped.
 # w4a8 over turbo, measured on one shot at one seed: same wall clock (~6.6 min

@@ -2,8 +2,12 @@
 # Download all models required by Stephen Spielbot into a ComfyUI installation.
 # Usage: bash scripts/download_models.sh [/path/to/ComfyUI]
 #
-# Models downloaded by default (~50+ GB):
+# Models downloaded by default (~90+ GB):
+#   LTX 2.5  — distilled transformer, Gemma 4 encoder, VAEs, latent upscaler
+#              (the DEFAULT scene video engine; gated repo — needs HF_TOKEN with
+#              the license accepted at huggingface.co/Lightricks/LTX-2.5)
 #   LTX 2.3  — checkpoint, distilled LoRA, latent spatial upscaler, text encoder
+#              (still required: keyframed establishing shots + Remix upscale)
 #   LTX IC-LoRA Pixel Spatial Upscaler (2× + 4×) for Remix AI temporal upscale
 #   ACE-Step 1.5 — diffusion model, VAE, two CLIP text encoders
 #   FLUX.2 Klein 4B — diffusion model, Qwen-3 encoder, VAE
@@ -116,12 +120,54 @@ if [[ -n "${ENGINE_MODELS:-}" ]]; then
     exit 0
 fi
 
-# ── LTX 2.3 ───────────────────────────────────────────────────────────────────
-# Skip with:  SKIP_LTX=1 bash scripts/download_models.sh
+# ── LTX 2.5 (default scene video engine) ─────────────────────────────────────
+# Gated repo: accept the license at huggingface.co/Lightricks/LTX-2.5 and run
+# with HF_TOKEN set. Skip with:  SKIP_LTX=1 bash scripts/download_models.sh
 if [[ "${SKIP_LTX:-0}" == "1" ]]; then
-    echo "--- LTX 2.3 models skipped (SKIP_LTX=1) ---"
+    echo "--- LTX 2.5 models skipped (SKIP_LTX=1) ---"
 else
-echo "--- LTX 2.3 video generation models ---"
+echo "--- LTX 2.5 video generation models (~40 GB, gated) ---"
+if [[ -z "$HF_TOKEN" ]]; then
+    echo "  [warn] HF_TOKEN not set — the Lightricks/LTX-2.5 repo is click-through"
+    echo "         gated, so these downloads will likely fail. Accept the license at"
+    echo "         https://huggingface.co/Lightricks/LTX-2.5 and re-run with HF_TOKEN=<token>."
+fi
+
+download \
+    "Lightricks/LTX-2.5" \
+    "diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors" \
+    "models/diffusion_models" \
+    || echo "  [warn] LTX 2.5 transformer skipped — scene renders need it (see HF_TOKEN note above)"
+
+download \
+    "Lightricks/LTX-2.5" \
+    "text_encoders/gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors" \
+    "models/text_encoders" \
+    || echo "  [warn] LTX 2.5 text encoder skipped"
+
+download \
+    "Lightricks/LTX-2.5" \
+    "vae/ltx-2.5-video-vae-bf16.safetensors" \
+    "models/vae" \
+    || echo "  [warn] LTX 2.5 video VAE skipped"
+
+download \
+    "Lightricks/LTX-2.5" \
+    "vae/ltx-2.5-audio-vae-bf16.safetensors" \
+    "models/vae" \
+    || echo "  [warn] LTX 2.5 audio VAE skipped"
+
+download \
+    "Lightricks/LTX-2.5" \
+    "latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors" \
+    "models/latent_upscale_models" \
+    || echo "  [warn] LTX 2.5 latent upscaler skipped"
+
+# ── LTX 2.3 ───────────────────────────────────────────────────────────────────
+# No longer a scene engine, but still required by the keyframed establishing
+# shots (dialogue push-ins) and the Remix IC-LoRA pixel upscale.
+echo ""
+echo "--- LTX 2.3 models (keyframed shots + Remix upscale) ---"
 
 download \
     "Lightricks/LTX-2.3-fp8" \

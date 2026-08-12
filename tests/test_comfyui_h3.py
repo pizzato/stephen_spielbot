@@ -114,7 +114,7 @@ class VideoDispatchTests(unittest.TestCase):
 
             ltx.reset_mock()
             comfyui.generate_video_with_engine(
-                engines.resolve_video({}, "ltx23"), "p", "n", Path("f"), Path("o"))
+                engines.resolve_video({}, "ltx25"), "p", "n", Path("f"), Path("o"))
             ltx.assert_called_once()
             h3.assert_not_called()
 
@@ -188,12 +188,12 @@ class LTX25WorkflowTests(unittest.TestCase):
         wf = self._generate("ltx25", duration=5.5)
         self.assertEqual(wf["8"]["inputs"]["length"], 129)
 
-    def test_ltx23_default_path_is_unchanged(self):
+    def test_no_engine_falls_back_to_ltx25(self):
+        # LTX 2.3 was removed as a scene engine — a legacy call with no engine
+        # renders the default (2.5) graph, not the retired checkpoint.
         wf = self._generate(None)
-        self.assertEqual(wf["1"]["class_type"], "CheckpointLoaderSimple")
-        # 5 s at 25 fps → 126 frames, no grid snap for 2.3.
-        self.assertEqual(wf["8"]["inputs"]["length"], 126)
-        self.assertEqual(wf["3"]["inputs"]["strength_model"], 0.5)
+        self.assertEqual(wf["1"]["class_type"], "UNETLoader")
+        self.assertEqual(wf["8"]["inputs"]["length"], 121)
 
     def test_old_worker_is_refused_before_queueing(self):
         eng = engines.resolve_video({}, "ltx25")

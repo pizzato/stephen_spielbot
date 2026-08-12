@@ -10,7 +10,7 @@ machine over HTTP.
 
 | Service | Port | What it is |
 |---|---|---|
-| `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.3 / ACE-Step / FLUX — all native nodes) |
+| `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.5 / ACE-Step / FLUX — all native nodes) |
 | `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server (`pipeline/tts_server.py`) |
 | `autoheal` | — | Restarts any container whose (GPU-aware) healthcheck fails |
 

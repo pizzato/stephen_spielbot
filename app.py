@@ -189,8 +189,8 @@ DEFAULT_CFG = {
     "default_image_engine": "flux2-klein",
     "default_edit_engine":  "flux2-klein",
     # Video engine per style (see pipeline/engines.py VIDEO_ENGINES): which I2V
-    # model animates each scene. Default = the incumbent LTX 2.3 path.
-    "default_video_engine": "ltx23",
+    # model animates each scene. Default = LTX 2.5.
+    "default_video_engine": "ltx25",
     # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
@@ -746,7 +746,8 @@ def _norm_engine(value, slot: str) -> str:
 
 def _norm_video_engine(value) -> str:
     """Coerce a video engine key to a known one (see pipeline/engines.py
-    VIDEO_ENGINES), falling back to the default (LTX 2.3)."""
+    VIDEO_ENGINES), falling back to the default (LTX 2.5) — this also migrates
+    configs still carrying the removed ``ltx23`` key."""
     return value if engines.get_video(value) else engines.DEFAULT_VIDEO_ENGINE
 
 

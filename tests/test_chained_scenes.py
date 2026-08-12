@@ -141,7 +141,7 @@ class TestActedChaining(unittest.TestCase):
         # An LTX narrated style with the toggle on: narration stays unchained,
         # acted scenes chain.
         import app as gapp
-        ss = {"h3_chain_scenes": True, "video_engine": "ltx23",
+        ss = {"h3_chain_scenes": True, "video_engine": "ltx25",
               "video_minutes": 4.0}
         plan = gapp.style_script_plan(ss)
         self.assertFalse(plan["chained"])

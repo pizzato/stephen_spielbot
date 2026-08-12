@@ -14,6 +14,8 @@ import uuid
 import websocket  # websocket-client
 from pathlib import Path
 
+from pipeline import engines as _engines
+
 logger = logging.getLogger("video_gen")
 
 
@@ -29,7 +31,9 @@ _BOUNDARY = "----ComfyUIBoundary"
 COMFYUI_URL = "http://localhost:8188"
 WORKFLOWS_DIR = Path(__file__).parent.parent / "workflows"
 
-# LTX 2.3 video defaults (25 fps, two-pass upscaled)
+# LTX base defaults (25 fps = the 2.3 clock, still used by the keyframed
+# establishing shots; scene I2V engines override fps/grid via their registry
+# entry — LTX 2.5 runs at 24 fps on an 8k+1 frame grid).
 DEFAULT_WIDTH  = 832
 DEFAULT_HEIGHT = 480
 LTX_FPS        = 25
@@ -650,7 +654,7 @@ def _apply_second_pass(workflow: dict, cfg: float, steps: int) -> None:
     workflow["28"]["inputs"]["sigmas"] = sigmas
 
 
-# LTX 2.3 generates each clip's audio from the same text prompt. Steer that audio
+# LTX generates each clip's audio from the same text prompt. Steer that audio
 # toward natural diegetic sound (the real sounds of what's happening in the scene)
 # and away from the music / dramatic score LTX otherwise invents — films are
 # scored separately (the user adds music where wanted). Applied to every LTX video.
@@ -691,9 +695,9 @@ def generate_video_continuation(
     """Continue a video clip from its last frame using LTX I2V.
 
     *video_engine* is an LTX-family entry from ``engines.VIDEO_ENGINES``; it
-    supplies the workflow, fps and frame-count grid. None (or the bare ltx23
-    entry, which carries none of those keys) keeps the LTX 2.3 defaults."""
-    eng = video_engine or {}
+    supplies the workflow, fps and frame-count grid. None falls back to the
+    default registry engine (LTX 2.5)."""
+    eng = video_engine or _engines.VIDEO_ENGINES[_engines.DEFAULT_VIDEO_ENGINE]
     check_engine_supported(eng, comfy_url=comfy_url)
     fps = int(eng.get("fps") or LTX_FPS)
     length = _frame_count(length, duration_seconds, fps=fps,
@@ -708,7 +712,7 @@ def generate_video_continuation(
 
     image_name = _upload_image(last_frame_path, comfy_url=comfy_url)
 
-    workflow = _load_workflow(eng.get("workflow") or "ltx23_i2v.json")
+    workflow = _load_workflow(eng["workflow"])
     workflow = _fill_template(workflow, {
         "POSITIVE_PROMPT":   positive_prompt,
         "NEGATIVE_PROMPT":   negative_prompt,
@@ -1282,10 +1286,10 @@ def generate_video_with_engine(
 ) -> Path:
     """Route a scene's I2V render to the style's video engine.
 
-    None or family "ltx" → the two-pass LTX path (2.3 by default; the engine
-    entry may swap in another LTX workflow, e.g. ltx25); family "minimax" →
-    MiniMax H3, where the negative prompt and the LTX pass tuning knobs don't
-    apply (H3 is CFG-free single-pass).
+    None or family "ltx" → the two-pass LTX path (the engine entry supplies
+    the workflow; LTX 2.5 is the default); family "minimax" → MiniMax H3,
+    where the negative prompt and the LTX pass tuning knobs don't apply (H3
+    is CFG-free single-pass).
 
     *chained* (the style's ``h3_chain_scenes``) renders a MiniMax scene as two
     clips joined by H3 Motion Context so it can run past H3_MAX_SECONDS. It is

@@ -2371,7 +2371,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {engineInfo && (
                 <Field label="Narrated & silent scenes"
                   hint="Animates each scene from its first-frame still, with the narrator's voice-over on top. In a MIXED film these scenes render on MiniMax H3 automatically, so the whole film matches the acted takes.">
-                  <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx23'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
+                  <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx25'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
                     {(engineInfo.video_engines || []).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}
