@@ -1859,7 +1859,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
-              <div className="field__hint">MiniMax H3's nodes ship with ComfyUI itself (≥ v0.30.0) — “not installed” with weights already downloaded usually means the worker container needs a rebuild. Expect much slower renders than LTX.</div>
+              <div className="field__hint">MiniMax H3's nodes ship with ComfyUI itself (≥ v0.30.0) and LTX 2.5 support with ≥ v0.32.0 — “not installed” with weights already downloaded usually means the worker container needs a rebuild. LTX 2.5 downloads need a Hugging Face token with the Lightricks/LTX-2.5 license accepted. Expect much slower renders from MiniMax than LTX.</div>
             </div>
           </Card>
 
@@ -2371,7 +2371,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               {engineInfo && (
                 <Field label="Narrated & silent scenes"
                   hint="Animates each scene from its first-frame still, with the narrator's voice-over on top. In a MIXED film these scenes render on MiniMax H3 automatically, so the whole film matches the acted takes.">
-                  <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx23'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
+                  <select className="select" value={eff.video_engine || engineInfo.default_video_engine || 'ltx25'} onChange={(e) => setStyleField('video_engine', e.target.value)}>
                     {(engineInfo.video_engines || []).map((e) => (
                       <option key={e.key} value={e.key}>{e.label}{e.commercial_ok ? '' : ' · non-commercial'}</option>
                     ))}

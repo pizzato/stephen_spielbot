@@ -40,7 +40,7 @@ def generate_scene_video(
     *image_engine* is an engine dict from :func:`pipeline.engines.resolve`
     (the style's selected image engine); None falls back to the default engine.
     *video_engine* is a dict from :func:`pipeline.engines.resolve_video` picking
-    the I2V model (None = the default LTX 2.3 path).
+    the I2V model (None = the default LTX 2.5 path).
 
     ``on_first_frame`` (if given) is invoked with the first-frame path the
     instant the image engine finishes — before the much longer I2V step — so

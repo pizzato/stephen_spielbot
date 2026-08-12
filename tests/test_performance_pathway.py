@@ -1168,7 +1168,7 @@ class MixedEngineTests(unittest.TestCase):
         return rg.unify_mixed_engine(eng, {}, **kw)
 
     def test_mixed_film_moves_narrated_scenes_onto_h3(self):
-        out = self._unify("ltx23", has_acted=True, has_classic=True)
+        out = self._unify("ltx25", has_acted=True, has_classic=True)
         self.assertEqual(out["key"], "minimax-h3")
 
     def test_a_style_already_on_a_minimax_engine_keeps_its_pick(self):
@@ -1176,8 +1176,8 @@ class MixedEngineTests(unittest.TestCase):
         self.assertEqual(out["key"], "minimax-h3-turbo")
 
     def test_unmixed_films_are_untouched(self):
-        self.assertEqual(self._unify("ltx23", has_acted=False, has_classic=True)["key"], "ltx23")
-        self.assertEqual(self._unify("ltx23", has_acted=True, has_classic=False)["key"], "ltx23")
+        self.assertEqual(self._unify("ltx25", has_acted=False, has_classic=True)["key"], "ltx25")
+        self.assertEqual(self._unify("ltx25", has_acted=True, has_classic=False)["key"], "ltx25")
 
 
 class ActedSceneRegenTests(ActedSceneEditingTests):

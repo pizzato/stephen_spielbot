@@ -23,7 +23,7 @@ An AI video generator that turns a topic into a fully produced short film — co
 
 1. **Script** — an LLM (local vLLM, Claude, Grok, or OpenAI) drafts and critiques the whole story as prose, you review it, and it is then divided into scenes with visual prompts, narration, and a mood-matched music description
 2. **Images** — FLUX.2 Klein (the default per-style image engine) generates each scene's first-frame still, with optional recurring [characters](docs/characters.md) kept consistent via reference images
-3. **Video** — [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) animates each scene from its still via ComfyUI (local or distributed workers)
+3. **Video** — [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) animates each scene from its still via ComfyUI (local or distributed workers)
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
 6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film)

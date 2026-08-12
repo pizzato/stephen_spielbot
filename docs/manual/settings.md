@@ -150,7 +150,7 @@ A film can hold two kinds of scene, and each has its own model, picked side by s
 
 | Picker | Renders |
 |---|---|
-| **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.3 or MiniMax H3 I2V). In a *mixed* film these scenes render on H3 automatically so the whole film matches the acted takes |
+| **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.5 or MiniMax H3 I2V). In a *mixed* film these scenes render on H3 automatically so the whole film matches the acted takes |
 | **Acted (dialogue) scenes** | Each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices (a MiniMax H3 Ref2VA variant) |
 
 **Sampling steps** beneath them is one knob for both: it overrides the step count of every

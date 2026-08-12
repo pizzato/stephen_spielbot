@@ -1,27 +1,17 @@
 {
   "1": {
-    "class_type": "CheckpointLoaderSimple",
+    "class_type": "UNETLoader",
     "inputs": {
-      "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
+      "unet_name": "ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors",
+      "weight_dtype": "default"
     }
   },
   "2": {
-    "class_type": "LTXAVTextEncoderLoader",
+    "class_type": "CLIPLoader",
     "inputs": {
-      "text_encoder": "gemma_3_12B_it_fp4_mixed.safetensors",
-      "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors",
+      "clip_name": "gemma4-12b-with-proj-ltx-2.5-comfy-int8-convrot.safetensors",
+      "type": "ltxv",
       "device": "default"
-    }
-  },
-  "3": {
-    "class_type": "LoraLoaderModelOnly",
-    "inputs": {
-      "model": [
-        "1",
-        0
-      ],
-      "lora_name": "ltx-2.3-22b-distilled-lora-384.safetensors",
-      "strength_model": 0.5
     }
   },
   "4": {
@@ -55,13 +45,19 @@
         "5",
         0
       ],
-      "frame_rate": 25.0
+      "frame_rate": 24.0
     }
   },
   "7": {
-    "class_type": "LTXVAudioVAELoader",
+    "class_type": "VAELoader",
     "inputs": {
-      "ckpt_name": "ltx-2.3-22b-dev-fp8.safetensors"
+      "vae_name": "ltx-2.5-audio-vae-bf16.safetensors"
+    }
+  },
+  "38": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "ltx-2.5-video-vae-bf16.safetensors"
     }
   },
   "8": {
@@ -77,7 +73,7 @@
     "class_type": "LTXVEmptyLatentAudio",
     "inputs": {
       "frames_number": "{{LENGTH}}",
-      "frame_rate": 25,
+      "frame_rate": 24,
       "batch_size": 1,
       "audio_vae": [
         "7",
@@ -121,8 +117,8 @@
     "class_type": "LTXVImgToVideoInplace",
     "inputs": {
       "vae": [
-        "1",
-        2
+        "38",
+        0
       ],
       "image": [
         "36",
@@ -132,7 +128,7 @@
         "8",
         0
       ],
-      "strength": 0.85,
+      "strength": 0.7,
       "bypass": false
     }
   },
@@ -153,7 +149,7 @@
     "class_type": "CFGGuider",
     "inputs": {
       "model": [
-        "3",
+        "1",
         0
       ],
       "positive": [
@@ -176,7 +172,7 @@
   "15": {
     "class_type": "KSamplerSelect",
     "inputs": {
-      "sampler_name": "euler_cfg_pp"
+      "sampler_name": "euler_ancestral"
     }
   },
   "16": {
@@ -222,7 +218,7 @@
   "19": {
     "class_type": "LatentUpscaleModelLoader",
     "inputs": {
-      "model_name": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors"
+      "model_name": "ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors"
     }
   },
   "20": {
@@ -237,8 +233,8 @@
         0
       ],
       "vae": [
-        "1",
-        2
+        "38",
+        0
       ]
     }
   },
@@ -246,8 +242,8 @@
     "class_type": "LTXVImgToVideoInplace",
     "inputs": {
       "vae": [
-        "1",
-        2
+        "38",
+        0
       ],
       "image": [
         "37",
@@ -274,36 +270,19 @@
       ]
     }
   },
-  "24": {
-    "class_type": "LTXVCropGuides",
-    "inputs": {
-      "positive": [
-        "6",
-        0
-      ],
-      "negative": [
-        "6",
-        1
-      ],
-      "latent": [
-        "18",
-        0
-      ]
-    }
-  },
   "25": {
     "class_type": "CFGGuider",
     "inputs": {
       "model": [
-        "3",
+        "1",
         0
       ],
       "positive": [
-        "24",
+        "6",
         0
       ],
       "negative": [
-        "24",
+        "6",
         1
       ],
       "cfg": 1.0
@@ -318,7 +297,7 @@
   "27": {
     "class_type": "KSamplerSelect",
     "inputs": {
-      "sampler_name": "euler_ancestral_cfg_pp"
+      "sampler_name": "euler_ancestral"
     }
   },
   "28": {
@@ -362,20 +341,20 @@
     }
   },
   "31": {
-    "class_type": "VAEDecode",
+    "class_type": "VAEDecodeTiled",
     "inputs": {
       "samples": [
         "30",
         0
       ],
       "vae": [
-        "1",
-        2
+        "38",
+        0
       ],
-      "tile_size": 0,
-      "overlap": 0,
-      "temporal_size": 0,
-      "temporal_overlap": 0
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8
     }
   },
   "32": {
@@ -398,7 +377,7 @@
         "31",
         0
       ],
-      "fps": 25,
+      "fps": 24,
       "audio": [
         "32",
         0
@@ -412,7 +391,7 @@
         "33",
         0
       ],
-      "filename_prefix": "ltx-i2v",
+      "filename_prefix": "ltx25-i2v",
       "format": "mp4",
       "codec": "auto"
     }

@@ -22,11 +22,11 @@ single-machine install where the controller is also the (localhost) worker.
 
 === "Workers (GPU machines)"
 
-    - An NVIDIA GPU with enough VRAM for LTX 2.3 (the models total ~49 GB on disk)
+    - An NVIDIA GPU with enough VRAM for LTX 2.5 (the default models total ~90 GB on disk)
     - Docker Engine + Docker Compose v2
     - The [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
 
-    ComfyUI (LTX 2.3 / FLUX / ACE-Step) and F5-TTS/Chatterbox run as
+    ComfyUI (LTX 2.5 / FLUX / ACE-Step) and F5-TTS/Chatterbox run as
     **containers** that `make install` builds and deploys. A worker needs no Python,
     conda, or ComfyUI install of its own.
 

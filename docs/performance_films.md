@@ -13,7 +13,7 @@ scenes, and each scene takes the path its mode asks for.
 |---|---|---|
 | Script | image + video prompts + narration | cast, timed beats, quoted dialogue, soundscape |
 | First frame | image engine (FLUX) | none |
-| Video | LTX 2.3 or H3 I2V | **H3 Ref2VA** from character portraits |
+| Video | LTX 2.5 or H3 I2V | **H3 Ref2VA** from character portraits |
 | Voice | TTS (OpenF5 / Chatterbox) | generated with the picture, cast from the voice library |
 | Length | the narration audio | what the dialogue needs, ~10 s |
 
@@ -138,7 +138,7 @@ MiniMax engine keeps its own pick; unmixed films are untouched.
 A style carries **two video model pickers**, side by side under *Video models*, because a
 film can hold two kinds of scene:
 
-- **Narrated & silent scenes** — the I2V engine (LTX 2.3 or MiniMax H3) that animates each
+- **Narrated & silent scenes** — the I2V engine (LTX 2.5 or MiniMax H3) that animates each
   scene from its first-frame still.
 - **Acted (dialogue) scenes** — the Ref2VA engine that performs each acted scene from
   portraits and voices. Always a MiniMax H3 variant:

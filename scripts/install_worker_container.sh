@@ -155,8 +155,9 @@ rsync -az          "$REPO_ROOT/.dockerignore" "$BUILD_DEST/.dockerignore"
 _sh "cat > ~/$REMOTE_BUILD_DIR/docker/.env" <<ENV
 MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
-# Pinned ComfyUI release: v0.30.0 = first with native MiniMax H3 nodes.
-COMFYUI_REF=v0.30.0
+# Pinned ComfyUI release: v0.32.0 = first with native LTX 2.5 support
+# (v0.30.0 added the MiniMax H3 nodes, v0.31.0 the w4a8 loaders).
+COMFYUI_REF=v0.32.0
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}
@@ -177,7 +178,7 @@ echo "[deploy] models mounted from $TARGET:$REMOTE_MODELS"
 # The container mounts the host's existing models (it does not download them).
 # If they're missing and a MODEL_SOURCE host is given, rsync them over (host↔host
 # via SSH agent forwarding); otherwise warn — the build works, but renders need them.
-if _sh "[[ -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null; then
+if _sh "[[ -f '$REMOTE_MODELS/diffusion_models/ltx-2.5-22b-distilled-transformer-comfy-int8-convrot.safetensors' && -f '$REMOTE_MODELS/checkpoints/ltx-2.3-22b-dev-fp8.safetensors' && -f '$REMOTE_MODELS/latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors' ]]" 2>/dev/null; then
     echo "[deploy] models present on $TARGET"
 elif [[ -n "${MODEL_SOURCE:-}" && "$MODEL_SOURCE" != "$TARGET" ]]; then
     echo "[deploy] models missing on $TARGET — rsyncing from $MODEL_SOURCE (this can take a while) ..."
