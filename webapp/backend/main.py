@@ -60,6 +60,7 @@ from pipeline import image_history  # noqa: E402
 from pipeline import video_history  # noqa: E402
 from pipeline import music_history  # noqa: E402
 from pipeline import final_video_history  # noqa: E402
+from pipeline import scene_context  # noqa: E402
 from pipeline.cover import (  # noqa: E402
     COVER_PHRASE_FILE,
     COVER_PHRASE_MAX_CHARS,
@@ -10977,6 +10978,9 @@ def _film_scene_files(work_dir: Path, sid: int) -> dict:
         "has_narration": has_nar,
         "has_video": actual_video is not None,
         "has_final": has_final,
+        # Whether the take on screen is one H3 can still be continued from
+        # (an acted scene, shot with its context saved, not since replaced).
+        "can_continue": has_final and scene_context.continuable(work_dir, sid, final),
         "narration_url": f"/api/file?path={narration}" if has_nar else "",
         "video_url": f"/api/file?path={video_file}&t={video_mtime}" if video_file else "",
         "preview_url": f"/api/file?path={preview_img}&t={preview_mtime}" if preview_img else "",
@@ -12232,6 +12236,209 @@ def trim_film_scene(scene_id: int, body: FilmTrimBody) -> dict:
         raise HTTPException(503, f"Trim failed: {str(e).splitlines()[0][:300]}")
     return {"ok": True, "duration": end,
             "video_history": video_history.record(wd, sid, final_path)}
+
+
+class FilmContinueBody(BaseModel):
+    work_dir: str
+    seconds: float | None = None
+    direction: str = ""
+    lines: list | None = None
+
+
+def _run_scene_continue(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
+                        body: FilmContinueBody) -> None:
+    """Background thread: shoot MORE of an acted scene and join it on.
+
+    The continuation is rendered to its own file and only swapped into the cut
+    once the join succeeds, so a failure anywhere leaves the film exactly as it
+    was — and the take it started from is kept either way."""
+    from pipeline.assembler import _concat_video_chunks
+    from pipeline.comfyui import context_latent_name
+    from pipeline.llm import Scene
+    from resume_generation import continue_performance_scene
+
+    started = time.time()
+    cfg = gapp.load_config()
+    md = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    ctx = scene_context.load(wd, sid) or {}
+    staged = wd / f"scene_{sid:02d}_final.staging.mp4"
+    clip = None
+
+    try:
+        pool = _shared_edit_render_pool()
+        if pool is None:
+            raise RuntimeError("No ComfyUI workers reachable.")
+        worker = str(ctx.get("comfy_url") or "")
+        if worker not in pool.urls:
+            raise RuntimeError(
+                f"The worker that shot this take ({worker or 'unknown'}) is not "
+                "available — a continuation can only be rendered where the take's "
+                "motion context is saved. Bring it back, or re-shoot the scene.")
+
+        from pipeline.comfyui import ltx_dimensions
+        resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
+        vid_w, vid_h = gapp._RESOLUTIONS.get(
+            resolution, (int(jc.get("vid_width", 832)), int(jc.get("vid_height", 480))))
+        vid_w, vid_h = ltx_dimensions(vid_w, vid_h)
+
+        lines = performance_mode.norm_lines(body.lines or [])
+        seconds = float(body.seconds or 0) or performance_mode.render_seconds({"lines": lines})
+        scene = Scene(
+            id=sid,
+            title=row.get("title") or "",
+            image_prompt=row.get("image_prompt") or "",
+            video_prompt=row.get("video_prompt") or "",
+            narration=row.get("narration") or "",
+            mode=md.get("mode") or "dialogue",
+            lines=[ln for ln in (md.get("lines") or []) if isinstance(ln, dict)],
+            metadata_extra=md,
+        )
+        # Live config UNDER the job's overrides — the same merge the full render
+        # uses, so a catalogue character scoped to a parent style still resolves.
+        scene_cfg = {**cfg, **jc}
+        scene_cfg["style_name"] = jc.get("style_name") or ""
+
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "continuing"}
+        url = _acquire_render_worker_only(pool, task_id, worker)
+        try:
+            clip = continue_performance_scene(
+                scene, wd, scene_cfg, comfy_url=url, vid_width=vid_w, vid_height=vid_h,
+                style_name=scene_cfg["style_name"], ctx=ctx, lines=lines,
+                seconds=seconds, direction=body.direction or "")
+        finally:
+            pool.release(url)
+
+        _film_checkpoint(task_id)
+        # Keep the shorter take before the join — "that went on too long" is the
+        # other half of "that finished too early".
+        video_history.seed_if_empty(wd, sid, final_path)
+        _concat_video_chunks([final_path, clip], staged)
+        staged.replace(final_path)
+        clip.unlink(missing_ok=True)
+
+        # The scene now ENDS where this clip ends: the next continuation carries
+        # on from the context this one saved, and the note is re-bound to the
+        # longer cut.
+        index = int(ctx.get("next_index") or 2)
+        scene_context.save(wd, sid,
+                           latent=context_latent_name(str(ctx.get("token") or ""), index),
+                           next_index=index + 1)
+        scene_context.stamp_final(wd, sid, final_path)
+        video_history.record(wd, sid, final_path)
+        if lines:
+            _append_scene_lines(wd, sid, lines)
+
+        _film_tasks[task_id] = {"status": "done"}
+        _log_continue_activity(wd, sid, started, "done")
+    except Exception as e:
+        staged.unlink(missing_ok=True)
+        if clip is not None:
+            clip.unlink(missing_ok=True)
+        _finish_film_task_error(task_id, e)
+        _log_continue_activity(wd, sid, started,
+                               (_film_tasks.get(task_id) or {}).get("status") or "error")
+
+
+def _log_continue_activity(wd: Path, sid: int, started: float, status: str) -> None:
+    """The Recent entry every other film operation gets."""
+    name = {"done": f"Continued scene {sid}",
+            "cancelled": f"Continue cancelled — scene {sid}"}.get(
+                status, f"Continue failed — scene {sid}")
+    with _op_lock:
+        _append_activity_locked(name, "continue", time.time(), started,
+                                work_dir=str(wd), status=status, category="film")
+
+
+def _append_scene_lines(wd: Path, sid: int, lines: list[dict]) -> None:
+    """Add what was just said to the scene's own dialogue.
+
+    The continuation is spoken in the film, so it belongs in the script the
+    captions and the description are written from — a scene whose video says
+    more than its text is a scene whose subtitles stop early.
+    """
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        current = store.get_scene(job_id, sid) or {}
+        meta = dict(current.get("metadata") or {})
+        meta["lines"] = [*(meta.get("lines") or []), *lines]
+        acted = performance_mode.acted_meta({"metadata": meta, "lines": meta["lines"]})
+        meta.update({k: acted[k] for k in ("cast", "seconds", "beats")})
+        store.upsert_scene(
+            job_id, sid,
+            title=current.get("title") or "",
+            image_prompt=current.get("image_prompt") or "",
+            # The stored prompt is a preview of the take that was shot; the
+            # continuation was prompted separately and must not overwrite it.
+            video_prompt=current.get("video_prompt") or "",
+            narration=performance_mode.spoken_text(acted),
+            preview_path=current.get("preview_path", ""),
+            metadata=meta,
+        )
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    gapp._persist_script_snapshot(wd, rows)
+
+
+def _acquire_render_worker_only(pool, task_id: str, url: str) -> str:
+    """_acquire_render_worker for work that can run on ONE named worker."""
+    task = _film_tasks.get(task_id)
+    if isinstance(task, dict):
+        task["queued"] = True
+    try:
+        return pool.acquire(only=url)
+    finally:
+        task = _film_tasks.get(task_id)
+        if isinstance(task, dict):
+            task.pop("queued", None)
+
+
+@api.post("/api/films/scenes/{scene_id}/continue")
+def continue_film_scene(scene_id: int, body: FilmContinueBody) -> dict:
+    """Shoot a few more seconds of an acted scene, continuing the same take."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    sid = int(scene_id)
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    if not final_path.exists():
+        raise HTTPException(400, "This scene has no rendered video yet.")
+    if not scene_context.load(wd, sid):
+        raise HTTPException(
+            400, "This take was shot before continuations were possible — "
+                 "shoot the scene again and it can be continued from then on.")
+    if not scene_context.continuable(wd, sid, final_path):
+        raise HTTPException(
+            400, "The clip in the cut is not the take the continuation point "
+                 "belongs to (a different take was selected, or this one was "
+                 "trimmed). Shoot the scene again to continue from it.")
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        rows = store.scene_rows(job_id)
+    finally:
+        store.close()
+    row = next((r for r in rows if int(r.get("id") or r.get("scene_id") or 0) == sid), None)
+    if not row:
+        raise HTTPException(404, f"Scene {sid} not found.")
+    meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    if not performance_mode.is_performance_mode((meta or {}).get("mode")):
+        raise HTTPException(400, "Only acted (dialogue) scenes can be continued.")
+
+    _clear_finished_film_tasks(str(wd), sid)
+    tid = f"continue_{sid:02d}_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "continuing"}
+    _film_task_meta[tid] = {"work_dir": str(wd), "scene_id": sid, "component": "continue"}
+    threading.Thread(
+        target=_run_scene_continue,
+        args=(tid, wd, sid, _film_job_config(wd), row, body),
+        daemon=True,
+    ).start()
+    return {"ok": True, "task_id": tid}
 
 
 class FilmInpaintBody(BaseModel):

@@ -145,11 +145,17 @@ class WorkerPool:
                 self._refresh_reservation()
                 self._cond.wait(timeout=2.0)
 
-    def acquire(self) -> str:
+    def acquire(self, only: Optional[str] = None) -> str:
         """Block until any worker is free, return its URL.
 
         Keep callers FIFO so retries cannot be starved by later scene threads.
+
+        *only* waits for ONE named worker instead of taking the first free one —
+        for work that can run nowhere else, like continuing an H3 take from the
+        motion context saved on that worker's disk.
         """
+        if only is not None and only not in self._sems:
+            raise RuntimeError(f"Worker {only} is not in the pool")
         token = object()
         with self._cond:
             self._waiters.append(token)
@@ -157,11 +163,21 @@ class WorkerPool:
                 while True:
                     if not self._urls:
                         raise RuntimeError("No healthy workers remaining in pool")
+                    if only is not None and only not in self._sems:
+                        raise RuntimeError(f"Worker {only} left the pool")
                     self._refresh_reservation()
+                    if only is not None and self._reserved_url == only:
+                        # The one worker that will do is the one held idle for the
+                        # UI. Hand it over — the next refresh reserves another —
+                        # rather than wait for a reservation that outlasts us.
+                        sem = self._sems.get(only)
+                        if sem:
+                            sem.release()
+                        self._reserved_url = None
 
                     is_turn = self._waiters and self._waiters[0] is token
                     if is_turn:
-                        for url in list(self._urls):
+                        for url in ([only] if only is not None else list(self._urls)):
                             if url == self._reserved_url:
                                 continue  # held idle for the UI
                             sem = self._sems.get(url)

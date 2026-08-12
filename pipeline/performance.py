@@ -398,6 +398,13 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     if look:
         sections.append(f"[SCENE]\n{look}")
 
+    # [DIRECTION] — a note about THIS take rather than the scene: what the
+    # editor asked for when re-shooting it, or how a continuation carries on
+    # from the take before it. Placed ahead of the dialogue it steers.
+    direction = _clean(scene_meta.get("direction"))
+    if direction:
+        sections.append(f"[DIRECTION]\n{direction}")
+
     # [DIALOGUE] — each line bound to one speaker and one delivery; the
     # lips-close instruction is load-bearing (without it the mouth keeps
     # moving after the line ends).

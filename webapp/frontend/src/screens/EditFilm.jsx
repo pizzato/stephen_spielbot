@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -104,6 +104,8 @@ function SceneCard({
   const [inpaintErr, setInpaintErr] = useState('')
   const [trim, setTrim] = useState(false)
   const [trimErr, setTrimErr] = useState('')
+  const [cont, setCont] = useState(false)
+  const [contErr, setContErr] = useState('')
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
@@ -292,6 +294,21 @@ function SceneCard({
     } catch (e) { setTrimErr(e.message) } finally { setBusy('') }
   }
 
+  // The continuation renders like a re-shoot (worker queue, minutes) rather than
+  // like a trim, so the modal closes and the card shows the same busy state.
+  const applyContinue = async ({ seconds, direction, lines }) => {
+    setBusy('continue'); setContErr(''); setError('')
+    onRerenderStart('continue')
+    try {
+      const r = await api.continueFilmScene(workDir, scene.id, { seconds, direction, lines })
+      setCont(false)
+      if (r.task_id) startPolling(r.task_id)
+      else { setBusy(''); onRerenderDone() }
+    } catch (e) {
+      setBusy(''); setContErr(e.message); onRerenderDone()
+    }
+  }
+
   const rerender = async (component, instruction = '') => {
     await persist()
     setBusy(component)
@@ -330,6 +347,12 @@ function SceneCard({
       {trim && videoUrl && (
         <TrimModal src={videoUrl} busy={busy === 'trim'} error={trimErr}
           onApply={applyTrim} onClose={() => setTrim(false)} />
+      )}
+
+      {cont && videoUrl && (
+        <ContinueModal src={videoUrl} castOpts={sceneType.cast?.length ? sceneType.cast : castOpts}
+          busy={busy === 'continue'} error={contErr}
+          onApply={applyContinue} onClose={() => setCont(false)} />
       )}
 
       {lightbox && previewUrl && (
@@ -565,6 +588,16 @@ function SceneCard({
                 onClick={() => { setTrimErr(''); setTrim(true) }}>
                 {busy === 'trim' ? 'Trimming…' : 'Trim'}
               </Button>
+              {/* Only offered where it can actually work: an acted take whose
+                  motion context is still on a worker and still matches the clip
+                  in the cut (scene.can_continue). */}
+              {isActedMode(sceneType.mode) && scene.can_continue && (
+                <Button variant="ghost" icon="forward-step" size="sm" disabled={isRendering || !videoUrl}
+                  title="Shoot a few more seconds carrying on from the last frame — same take, no cut"
+                  onClick={() => { setContErr(''); setCont(true) }}>
+                  {busy === 'continue' ? 'Shooting…' : 'Continue'}
+                </Button>
+              )}
 
               <div style={{ flex: 1 }} />
 
