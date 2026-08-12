@@ -12175,6 +12175,57 @@ def delete_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
     return {"ok": True, "video_history": hist}
 
 
+class FilmTrimBody(BaseModel):
+    work_dir: str
+    end_seconds: float
+
+
+# Shortest a trimmed scene may be — below this the clip is a flash, and a stray
+# slider drag shouldn't be able to destroy a scene's video.
+_MIN_TRIM_SECONDS = 0.5
+
+
+@api.post("/api/films/scenes/{scene_id}/trim")
+def trim_film_scene(scene_id: int, body: FilmTrimBody) -> dict:
+    """Cut the tail off a rendered scene clip (video and audio together).
+
+    The trimmed cut is recorded as a new video take, so the untrimmed one stays
+    one click away in the takes strip."""
+    from pipeline.assembler import _get_duration, trim_video
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    sid = int(scene_id)
+    final_path = wd / f"scene_{sid:02d}_final.mp4"
+    if not final_path.exists():
+        raise HTTPException(400, "This scene has no rendered video yet.")
+
+    end = float(body.end_seconds)
+    try:
+        duration = _get_duration(final_path)
+    except Exception as e:
+        raise HTTPException(503, f"Could not read the scene clip: {str(e).splitlines()[0][:200]}")
+    if end < _MIN_TRIM_SECONDS:
+        raise HTTPException(400, f"Keep at least {_MIN_TRIM_SECONDS:g}s of the scene.")
+    if end >= duration - 0.05:
+        raise HTTPException(400, f"That is the full clip ({duration:.1f}s) — drag the handle back to trim.")
+
+    # Snapshot the current final first, so the untrimmed take survives even if
+    # this scene had no history yet.
+    video_history.seed_if_empty(wd, sid, final_path)
+    staged = wd / f"scene_{sid:02d}_final.staging.mp4"
+    try:
+        with _track_op("Trimming scene", f"scene {sid} · {end:.1f}s", work_dir=str(wd)):
+            trim_video(final_path, staged, end)
+            staged.replace(final_path)
+    except Exception as e:
+        staged.unlink(missing_ok=True)
+        raise HTTPException(503, f"Trim failed: {str(e).splitlines()[0][:300]}")
+    return {"ok": True, "duration": end,
+            "video_history": video_history.record(wd, sid, final_path)}
+
+
 class FilmInpaintBody(BaseModel):
     work_dir: str
     mask: str

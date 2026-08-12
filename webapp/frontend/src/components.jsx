@@ -1004,6 +1004,74 @@ export function InpaintModal({ src, aspect = '16 / 9', busy, error, onApply, onC
   )
 }
 
+// Trim a rendered scene clip: drag the handle to pick a new end point (the player
+// seeks there so you see the frame you'd cut on), then apply. Calls
+// `onApply(endSeconds)`. The cut takes the audio with it — the note says so.
+export function TrimModal({ src, busy, error, onApply, onClose }) {
+  const videoRef = useRef(null)
+  const [duration, setDuration] = useState(0)
+  const [end, setEnd] = useState(0)
+
+  const onMeta = () => {
+    const d = videoRef.current?.duration
+    if (!d || !isFinite(d)) return
+    setDuration(d)
+    setEnd(d)
+  }
+
+  // Seeking while dragging is the whole point: the frame under the handle is the
+  // last frame the trimmed scene will hold.
+  const seek = (v) => {
+    setEnd(v)
+    const el = videoRef.current
+    if (el) { el.pause(); el.currentTime = Math.max(0, Math.min(v, (el.duration || v) - 0.01)) }
+  }
+
+  const cut = Math.max(0, duration - end)
+  const canApply = !busy && duration > 0 && end >= 0.5 && cut > 0.05
+
+  return (
+    <div onClick={() => !busy && onClose()}
+      style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--paper)', borderRadius: 'var(--r-lg)', padding: 20, width: 'min(760px, 96vw)', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,.5)' }}>
+        <div className="row center between" style={{ marginBottom: 12 }}>
+          <span className="h-title">Trim scene</span>
+          <button type="button" className="btn btn--quiet" onClick={() => !busy && onClose()} disabled={busy}><Icon name="xmark" /></button>
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+          Drag the handle to the new end point — everything after it is cut, narration included.
+        </p>
+
+        {/* The player sizes itself from the clip — a portrait scene must not grow
+            past the dialog and push the handle out of reach. */}
+        <div style={{ background: '#000', borderRadius: 'var(--r-md)', display: 'flex', justifyContent: 'center' }}>
+          <video ref={videoRef} src={src} controls onLoadedMetadata={onMeta}
+            style={{ display: 'block', maxWidth: '100%', maxHeight: '52vh' }} />
+        </div>
+
+        <div className="mt-16">
+          <input type="range" min={0.5} max={Math.max(duration, 0.5)} step={0.04} value={end} disabled={busy || !duration}
+            onChange={(e) => seek(Number(e.target.value))} style={{ width: '100%' }} />
+          <div className="row center between mt-8" style={{ fontSize: 12.5 }}>
+            <span className="muted">Was {duration.toFixed(1)}s</span>
+            <span style={{ fontWeight: 600 }}>Keeps {end.toFixed(1)}s{cut > 0.05 ? ` · cuts ${cut.toFixed(1)}s` : ''}</span>
+          </div>
+        </div>
+
+        {error && <div className="mt-16"><Banner tone="danger">{error}</Banner></div>}
+
+        <div className="row gap-10 mt-16" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="ghost" onClick={() => !busy && onClose()} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon="scissors" disabled={!canApply} onClick={() => canApply && onApply(Number(end.toFixed(2)))}>
+            {busy ? 'Trimming…' : 'Trim'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Banner({ tone = 'danger', children }) {
   if (!children) return null
   const bg = { danger: 'var(--danger-soft)', ok: 'var(--ok-soft)', info: 'var(--info-soft)', warn: 'var(--warn-soft)' }[tone]

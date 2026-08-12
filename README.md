@@ -36,7 +36,7 @@ takes the render path its mode asks for.
 
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation, AI-suggested video ideas, per-scene editing with image
-inpainting and version history, misspelling-proof cover thumbnails (text-free
+inpainting, clip trimming and version history, misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with
 playlists, captions, and tags) and **X**, a publish scheduler with per-channel

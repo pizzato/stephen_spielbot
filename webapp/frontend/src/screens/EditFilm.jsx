@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -102,6 +102,8 @@ function SceneCard({
   const [selecting, setSelecting] = useState(false)
   const [inpaint, setInpaint] = useState(false)
   const [inpaintErr, setInpaintErr] = useState('')
+  const [trim, setTrim] = useState(false)
+  const [trimErr, setTrimErr] = useState('')
   const pollRef = useRef(null)
   const resumedRef = useRef(null)
 
@@ -273,6 +275,15 @@ function SceneCard({
     } catch (e) { setInpaintErr(e.message) } finally { setBusy('') }
   }
 
+  const applyTrim = async (endSeconds) => {
+    setBusy('trim'); setTrimErr('')
+    try {
+      const r = await api.trimFilmScene(workDir, scene.id, endSeconds)
+      setVideoHistory(r.video_history)
+      setTrim(false)
+    } catch (e) { setTrimErr(e.message) } finally { setBusy('') }
+  }
+
   const rerender = async (component, instruction = '') => {
     await persist()
     setBusy(component)
@@ -306,6 +317,11 @@ function SceneCard({
       {inpaint && (
         <InpaintModal src={previewUrl} aspect={aspect} busy={busy === 'inpaint'} error={inpaintErr}
           onApply={applyInpaint} onClose={() => setInpaint(false)} />
+      )}
+
+      {trim && videoUrl && (
+        <TrimModal src={videoUrl} busy={busy === 'trim'} error={trimErr}
+          onApply={applyTrim} onClose={() => setTrim(false)} />
       )}
 
       {lightbox && previewUrl && (
@@ -533,6 +549,11 @@ function SceneCard({
               <GuidedRegenButton variant="ghost" icon="film" size="sm" disabled={isRendering}
                 label={isActedMode(sceneType.mode) ? 'Shoot again' : 'Video'} busyLabel="Rendering…" busy={busy === 'video'}
                 onRegen={(instr) => rerender('video', instr)} chips={REGEN_CHIPS.video} align="left" />
+              <Button variant="ghost" icon="scissors" size="sm" disabled={isRendering || !videoUrl}
+                title="Cut the tail off this scene's clip — the untrimmed take is kept"
+                onClick={() => { setTrimErr(''); setTrim(true) }}>
+                {busy === 'trim' ? 'Trimming…' : 'Trim'}
+              </Button>
 
               <div style={{ flex: 1 }} />
 

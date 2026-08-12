@@ -903,6 +903,25 @@ def mux_video_audio(
     return output_path
 
 
+def trim_video(input_path: Path, output_path: Path, duration: float) -> Path:
+    """Keep the first *duration* seconds of a clip, audio track included.
+
+    Re-encoded rather than stream-copied so the cut lands on the requested frame
+    instead of the preceding keyframe (same reason as ``mux_video_audio``)."""
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-map", "0:v:0", "-map", "0:a?",
+        "-t", f"{duration:.3f}",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ])
+    return output_path
+
+
 def concatenate_scenes(scene_paths: list[Path], output_path: Path, fade: float = 0.3) -> Path:
     """Concatenate scenes with fade-out/fade-in between them."""
     if len(scene_paths) == 1:
