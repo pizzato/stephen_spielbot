@@ -12,9 +12,7 @@ const PLATFORM_ICON = {
   other: { name: 'globe', brand: false },
 }
 
-// External links about the project. The GitHub repo is live; the rest are
-// placeholders for write-ups that don't exist yet — fill in the `href` (and drop
-// `soon`) once each is published.
+// External links about the project.
 const LINKS = [
   {
     label: 'GitHub',
@@ -23,20 +21,16 @@ const LINKS = [
     href: 'https://github.com/pizzato/stephen_spielbot',
   },
   {
-    // TODO: point at the Medium article once it's written.
     label: 'The story',
-    desc: 'A write-up on how it was built',
+    desc: '“I will never direct a movie again” — how it was built',
     icon: 'medium', brand: true,
-    href: '',
-    soon: true,
+    href: 'https://medium.com/@pizzato/i-will-never-direct-a-movie-again-65bd4e9e6797',
   },
   {
-    // TODO: link the channel / a demo reel when there's a public one to show.
     label: 'Watch it work',
-    desc: 'Films the studio has made',
+    desc: '“I Built an AI That Makes Movies While I Sleep” — a video tour',
     icon: 'youtube', brand: true,
-    href: '',
-    soon: true,
+    href: 'https://www.youtube.com/watch?v=1XMU1_QnRa4',
   },
 ]
 
@@ -44,8 +38,9 @@ const LINKS = [
 const PIPELINE = [
   ['feather-pointed', 'Script', 'An LLM writes a multi-scene script with visual prompts and narration'],
   ['image', 'Images', 'FLUX paints each scene’s first frame, with consistent recurring characters'],
-  ['film', 'Video', 'LTX animates every scene from its still through ComfyUI'],
-  ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning; acted scenes are performed and voiced by MiniMax H3'],
+  ['film', 'Video', 'LTX or MiniMax H3 animates every scene from its still through ComfyUI'],
+  ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning'],
+  ['masks-theater', 'Acted scenes', 'In dialogue and mixed films, MiniMax H3 performs the characters — picture and voice generated together from their portraits'],
   ['music', 'Music', 'ACE-Step scores it from a mood description'],
   ['clapperboard', 'Assembly', 'FFmpeg cuts it all into one finished film'],
 ]
@@ -94,7 +89,8 @@ export default function About() {
           </div>
           <p className="body-1 mt-16" style={{ fontSize: 14.5, lineHeight: 1.6 }}>
             Stephen Spielbot turns a single topic into a fully produced short film — cinematic
-            visuals, spoken narration and a mood-matched score, cut together automatically. Around the
+            visuals, spoken narration or scenes acted out by its characters, and a mood-matched
+            score, cut together automatically. Around the
             pipeline, the app runs the whole channel: a render queue with automation, AI-suggested
             ideas, per-scene editing, and publishing to YouTube and X with a scheduler, captions and
             community replies.
