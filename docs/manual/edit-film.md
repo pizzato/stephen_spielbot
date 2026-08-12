@@ -151,7 +151,9 @@ Each button does only its own part. A narrated scene has:
 
 An **acted** scene trades the Image buttons for **Remove first frame** (its frame is a
 reference, not a render input — see [acted scenes](../performance_films.md)), and its
-Video button reads **Shoot again**: the whole take re-renders from the references. It also
+Video button reads **Shoot again**: the whole take re-renders from the references, and its
+instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*) rather
+than the picture. It also
 gains **Continue**, which shoots more of the take it already has instead of replacing it.
 The **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.

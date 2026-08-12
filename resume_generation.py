@@ -355,16 +355,20 @@ _SILENT_DEFAULT_SECS = 5.0
 
 def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
                              comfy_url: str, vid_width: int, vid_height: int,
-                             style_name: str = "") -> Path:
+                             style_name: str = "", direction: str = "") -> Path:
     """Render ONE performance scene: character portraits + dialogue → a clip that
     already contains its own speech. Returns the finished scene_NN_final.mp4.
 
     Shared with the backend's per-scene re-render, so it takes everything it
-    needs as arguments and touches no module state.
+    needs as arguments and touches no module state. *direction* is the editor's
+    note for THIS take ("Shoot again" with an instruction) — it reaches the
+    model as the prompt's [DIRECTION] block and is not persisted to the scene.
     """
     # Fills in cast/length/setting for a dialogue scene authored in a MIXED
     # film, where only the lines and the classic prompts exist.
     scene_meta = _performance.acted_meta(scene)
+    if direction.strip():
+        scene_meta["direction"] = direction.strip()
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
