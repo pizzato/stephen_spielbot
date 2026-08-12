@@ -104,7 +104,8 @@ the fields below change with it. Switching the type **converts** the scene: the 
 rewrites the content into the other shape with the same theme and feel (a narrated beat
 becomes lines the characters speak, and vice versa). The version you leave is kept —
 switch back and it is restored exactly as it was, no rework. This works on the Script
-screen and on a film's edit screen alike.
+screen and on a film's edit screen alike. An empty scene — one just added — has nothing
+to convert, so it simply changes type and waits for you to write it.
 
 A **narrated or silent** scene has:
 

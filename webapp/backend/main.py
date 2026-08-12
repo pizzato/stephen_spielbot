@@ -4435,6 +4435,14 @@ def convert_scene_mode(job_id: str, scene_id: int, body: ConvertModeBody) -> dic
                                          "lines": meta.get("lines") or [],
                                          "video_prompt": current.get("video_prompt") or "",
                                          "image_prompt": current.get("image_prompt") or ""})
+    # An empty scene — one just added in the film editor — has no content to
+    # convert: flip the mode and leave the fields blank for the user to write,
+    # rather than have the LLM invent a scene out of nothing.
+    if not (meta.get("lines") or []) and not str(acted.get("setting") or "").strip() \
+            and not any(str(current.get(k) or "").strip()
+                        for k in ("narration", "image_prompt", "video_prompt")):
+        return _save(duration=5) if target == "silent" else _save()
+
     if target == "silent":
         # Mechanical: the visuals stay, the voice goes.
         return _save(image_prompt=current.get("image_prompt") or acted.get("setting") or "",
