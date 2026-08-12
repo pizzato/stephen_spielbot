@@ -387,6 +387,7 @@ export const api = {
   deleteFilmPreview: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/preview-delete`, { work_dir: workDir, version_id: versionId }),
   deleteFilmVideo: (workDir, sceneId, versionId) => req('POST', `/films/scenes/${sceneId}/video-delete`, { work_dir: workDir, version_id: versionId }),
   inpaintFilmScene: (workDir, sceneId, mask, prompt, denoise) => req('POST', `/films/scenes/${sceneId}/inpaint`, { work_dir: workDir, mask, prompt, denoise }),
+  trimFilmScene: (workDir, sceneId, endSeconds) => req('POST', `/films/scenes/${sceneId}/trim`, { work_dir: workDir, end_seconds: endSeconds }),
   reassembleFilm: (workDir) => req('POST', '/films/reassemble', { work_dir: workDir }),
   filmTaskStatus: (taskId) => req('GET', `/films/task?task_id=${encodeURIComponent(taskId)}`),
   filmTasksForWorkDir: (workDir) => req('GET', `/films/tasks?work_dir=${encodeURIComponent(workDir || '')}`),

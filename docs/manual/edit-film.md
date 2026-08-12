@@ -147,12 +147,22 @@ Each button does only its own part. A narrated scene has:
 | **Image** | Just the first frame (takes an instruction) |
 | **Edit image** | Masked inpaint — draw a region, describe the fix |
 | **Video** | Just this scene's clip (takes an instruction) |
+| **Trim** | Cuts the tail off the existing clip — no re-render |
 
 An **acted** scene trades the Image buttons for **Remove first frame** (its frame is a
 reference, not a render input — see [acted scenes](../performance_films.md)), and its
 Video button reads **Shoot again**: the whole take re-renders from the references. The
 **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.
+
+#### Trimming a scene
+
+When a clip is fine except for its tail — a drifting last second, a gesture that overruns —
+**Trim** cuts it without spending a re-render. Drag the handle to the new end point; the
+player seeks there so you see the frame the scene will hold, and the readout shows what is
+kept and what is cut. Applying it cuts the audio with the video, so watch (and listen to)
+the tail before trimming into narration. The trimmed cut becomes a new video take and the
+untrimmed one stays in the strip, one click away.
 
 **Reassemble film** (top of the list) re-cuts the published final from the scene parts —
 after re-shoots, take picks, or reorders — re-mixing music only where the film has it.
