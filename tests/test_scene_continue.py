@@ -434,6 +434,56 @@ class DirectionBlockTests(unittest.TestCase):
         from pipeline import performance
         self.assertNotIn("[DIRECTION]", performance.build_h3_prompt({"lines": []}))
 
+    def test_a_hand_edited_prompt_does_not_swallow_the_note(self):
+        # The override is the prompt for the SCENE; the note is for THIS take.
+        from pipeline import performance
+        prompt = performance.build_h3_prompt(
+            {"prompt_override": "[SCENE]\nA kitchen.", "direction": "slower this time"})
+        self.assertTrue(prompt.startswith("[SCENE] A kitchen."))
+        self.assertIn("[DIRECTION]\nslower this time", prompt)
+
+
+class ReshootDirectionTests(unittest.TestCase):
+    """The film editor's "Shoot again" note has to reach the model — it used to
+    be written to the render config, which nothing read."""
+
+    def setUp(self):
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-wd-"))
+
+    def _reshoot(self, direction):
+        import resume_generation as rg
+        from pipeline.llm import Scene
+
+        scene = Scene(id=1, title="t", image_prompt="", video_prompt="",
+                      narration="Hello.", mode="dialogue",
+                      lines=[{"speaker": "Ana", "delivery": "flat", "text": "Hello."}])
+        refs = {"pictures": [{"name": "Ana", "kind": "character",
+                              "path": str(self.wd / "ana.png")}],
+                "audios": [{"name": "Ana", "path": str(self.wd / "ana.wav")}]}
+        seen = {}
+
+        def generate(engine, prompt, images, out, **kw):
+            seen["prompt"] = prompt
+            Path(out).write_bytes(b"clip")
+            return out
+
+        with mock.patch("app.resolve_performance_references", return_value=refs), \
+             mock.patch.object(rg._engines, "resolve_reference",
+                               return_value={"key": "h3ref", "steps": 20}), \
+             mock.patch.object(rg.shot_gate, "available", return_value=False), \
+             mock.patch.object(rg, "ensure_video_resolution"), \
+             mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=generate):
+            rg.render_performance_scene(
+                scene, self.wd, {}, comfy_url="http://w1:8188",
+                vid_width=832, vid_height=480, style_name="s", direction=direction)
+        return seen["prompt"]
+
+    def test_the_note_reaches_the_prompt(self):
+        self.assertIn("[DIRECTION]\nmake her angrier", self._reshoot("make her angrier"))
+
+    def test_a_plain_reshoot_has_no_direction_block(self):
+        self.assertNotIn("[DIRECTION]", self._reshoot(""))
+
 
 class RenderSavesContextTests(unittest.TestCase):
     """The renderer's half of the deal: every acted take leaves a continuation

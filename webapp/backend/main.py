@@ -11888,7 +11888,6 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
             lines=[ln for ln in (md.get("lines") or []) if isinstance(ln, dict)],
             metadata_extra=md,
         )
-        # Guided re-generation: the user's note rides along with the prompt.
         # Live config UNDER the job's overrides — the same merge the full render
         # uses (resume_generation.load_job_config). job_config.json alone has no
         # "styles" list, and without the style hierarchy a catalogue character
@@ -11896,16 +11895,17 @@ def _run_acted_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
         # child style's film) resolves NO portrait and Ref2VA refuses the scene.
         scene_cfg = {**cfg, **jc}
         scene_cfg["style_name"] = jc.get("style_name") or ""
-        if instruction.strip():
-            scene_cfg["performance_instruction"] = instruction.strip()
 
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "acted scene"}
         url = pool.acquire()
         try:
+            # Guided re-generation: the user's note steers this take only, as
+            # the prompt's [DIRECTION] block.
             render_performance_scene(scene, wd, scene_cfg, comfy_url=url,
                                      vid_width=vid_w, vid_height=vid_h,
-                                     style_name=scene_cfg["style_name"])
+                                     style_name=scene_cfg["style_name"],
+                                     direction=instruction)
         finally:
             pool.release(url)
 

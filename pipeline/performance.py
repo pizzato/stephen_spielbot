@@ -355,11 +355,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
 
     A hand-edited prompt (``prompt_override``) wins outright: the check lives
     here, in the one function both the editor and the renderer call, so what is
-    shown on screen is exactly what the model receives.
+    shown on screen is exactly what the model receives. A note for THIS take
+    (``direction``) still applies on top of it — it belongs to the re-shoot, not
+    to the scene, so an edited prompt must not swallow it.
     """
+    direction = _clean(scene_meta.get("direction"))
     override = _clean(scene_meta.get("prompt_override"))
     if override:
-        return override
+        return f"{override}\n\n[DIRECTION]\n{direction}" if direction else override
     seconds = _clamp_seconds(scene_meta.get("seconds"))
     lines = norm_lines(scene_meta.get("lines"))
     beats = norm_beats(scene_meta.get("beats"), seconds)
@@ -401,7 +404,6 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     # [DIRECTION] — a note about THIS take rather than the scene: what the
     # editor asked for when re-shooting it, or how a continuation carries on
     # from the take before it. Placed ahead of the dialogue it steers.
-    direction = _clean(scene_meta.get("direction"))
     if direction:
         sections.append(f"[DIRECTION]\n{direction}")
 
