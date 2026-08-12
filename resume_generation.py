@@ -560,13 +560,22 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 scene.id, engine["key"],
                 f", chained x{len(sub_metas)}" if chained else "",
                 len(ref_images), len(ref_audios), clip.name)
-    def _generate(out: Path) -> Path:
+    base_seconds = sum(_performance.render_seconds(m) for m in sub_metas)
+
+    def _generate(out: Path, stretch: float = 1.0) -> Path:
+        """Render the clip. *stretch* multiplies its length — the gate uses it
+        to buy a truncated take the time its own delivery turned out to need,
+        spread across a chained scene's clips in the proportion they were
+        sized in. Each clip still stops at the model's own per-clip ceiling."""
+        durations = [min(_performance.H3_CEILING_SECONDS,
+                         _performance.render_seconds(m) * stretch)
+                     for m in sub_metas]
         if chained:
             generate_video_h3_ref_chained(
                 engine, prompts, ref_images, out,
                 ref_audios=ref_audios,
                 width=vid_width, height=vid_height,
-                durations=[_performance.render_seconds(m) for m in sub_metas],
+                durations=durations,
                 comfy_url=comfy_url,
             )
         else:
@@ -574,7 +583,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 engine, prompts[0], ref_images, out,
                 ref_audios=ref_audios,
                 width=vid_width, height=vid_height,
-                duration_seconds=_performance.render_seconds(meta),
+                duration_seconds=durations[0],
                 comfy_url=comfy_url,
             )
         return out
@@ -622,13 +631,37 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     if (expected and verify_on):
         best, transcript = shot_gate.verify(clip, expected)
         retakes = int(cfg.get("performance_verify_retakes", 1) or 0)
+
+        def _miss(score: float, said: str) -> bool:
+            """A take fails the gate for saying the WRONG words or for running
+            out of clip mid-line. Truncation needs its own test: similarity
+            rewards a matching head, so a take that nails two thirds of the
+            line and stops dead still scores above the threshold and used to
+            ship exactly as it was."""
+            return (score < shot_gate.DEFAULT_THRESHOLD
+                    or shot_gate.truncated(said, expected))
+
         attempt = 0
-        while best < shot_gate.DEFAULT_THRESHOLD and attempt < retakes:
+        stretch = 1.0
+        while _miss(best, transcript) and attempt < retakes:
             attempt += 1
+            # A take that ran out of clip will say the same words again on a
+            # fresh seed — the clip is the problem, not the roll. Buy it the
+            # length its own pace turned out to need. H3's delivery rate varies
+            # more than 2:1 across lines, so the scene's word-count estimate
+            # cannot see this coming; the failed take can.
+            if shot_gate.truncated(transcript, expected):
+                needed = shot_gate.seconds_for_full_line(
+                    transcript, expected, _get_duration(clip))
+                if needed > 0 and base_seconds > 0:
+                    stretch = max(stretch, needed / base_seconds)
+                    logger.warning("[gate] scene %d %s: truncated — retaking at "
+                                   "%.1fs (%.0f%% longer)", scene.id, clip.name,
+                                   base_seconds * stretch, (stretch - 1) * 100)
             logger.warning("[gate] scene %d %s: said %r (score %.2f) — retake %d/%d",
                            scene.id, clip.name, transcript[:80], best, attempt, retakes)
             candidate = clip.with_suffix(".retake.mp4")
-            _generate(candidate)
+            _generate(candidate, stretch)
             cand_score, cand_tr = shot_gate.verify(candidate, expected)
             if cand_score > best:
                 candidate.replace(clip)
@@ -636,7 +669,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             else:
                 candidate.unlink(missing_ok=True)
         logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
-                    "" if best >= shot_gate.DEFAULT_THRESHOLD else " (best of retakes)")
+                    " (best of retakes)" if _miss(best, transcript) else "")
 
     # H3 renders under its own pixel cap; bring the clip back to the film's frame.
     ensure_video_resolution(clip, vid_width, vid_height)

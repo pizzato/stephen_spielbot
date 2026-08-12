@@ -45,7 +45,13 @@ def _get_model():
 
 
 def _norm_words(text: str) -> str:
-    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", (text or "").lower()).split())
+    # Scripts are written with typographic apostrophes and ASR writes plain
+    # ones, so "I’m" has to normalize to the same token as "I'm" — otherwise
+    # every contraction splits into two words, which both depresses the score
+    # of a perfectly good take and inflates the word count a retake is sized
+    # from ("I’m David" reads as 3 words, not 2).
+    text = (text or "").lower().replace("’", "'").replace("ʼ", "'")
+    return " ".join(re.sub(r"[^a-z0-9' ]+", " ", text).split())
 
 
 def transcribe(clip: Path) -> str:
@@ -70,6 +76,43 @@ def score(transcript: str, expected: str) -> float:
 
 def word_count(transcript: str) -> int:
     return len(_norm_words(transcript).split())
+
+
+# Air after the last word on a retake that bought time, so the delivery has
+# somewhere to land instead of ending on the final frame.
+RETAKE_AIR_SECONDS = 1.0
+
+
+def truncated(transcript: str, expected: str, threshold: float = DEFAULT_THRESHOLD) -> bool:
+    """True when the take said the START of its line and then ran out of clip.
+
+    The overall score is a miss, but the words that DID come out match the head
+    of the line — the signature of a last frame arriving mid-sentence. Retaking
+    on a fresh seed cannot fix that: the clip is simply too short for the pace
+    the model chose. Only a longer clip can.
+    """
+    heard = _norm_words(transcript).split()
+    want = _norm_words(expected).split()
+    if not heard or len(heard) >= len(want):
+        return False
+    return score(transcript, " ".join(want[:len(heard)])) >= threshold
+
+
+def seconds_for_full_line(transcript: str, expected: str, clip_seconds: float) -> float:
+    """Clip length the WHOLE line needs, at the pace the take actually spoke.
+
+    A truncated take is its own measurement: it delivered *heard* words in
+    *clip_seconds*, so the rest needs the same seconds per word, plus a beat of
+    air. Sizing the retake from the delivery beats sizing it from a constant,
+    because H3's pace varies more than 2:1 with the line — short dramatic
+    sentences run at half the rate of flowing prose, and it is exactly those
+    that overrun. Returns 0.0 when there is nothing to measure.
+    """
+    heard = word_count(transcript)
+    want = word_count(expected)
+    if heard <= 0 or want <= heard or clip_seconds <= 0:
+        return 0.0
+    return clip_seconds * want / heard + RETAKE_AIR_SECONDS
 
 
 # A "silent" shot may carry a stray ASR token or two from room tone; three or
