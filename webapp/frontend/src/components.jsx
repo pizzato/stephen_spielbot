@@ -280,11 +280,11 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
           </Field>
 
           {/* Only meaningful for a style that PERFORMS its silent scenes
-              (Settings → Video models → "Silent scenes — act them on H3 too"):
-              naming who is on screen is what sends the scene down the Ref2VA
-              path instead of animating it from a still. Harmless otherwise. */}
+              (Settings → Video models → "Silent scenes — act them on H3 too"),
+              where these portraits ride alongside the scene's first frame and
+              keep a face the same as in the acted scenes. Harmless otherwise. */}
           <Field label="On screen"
-            hint="Who appears in this silent beat. If the style acts its silent scenes, these are the portraits it is performed from — leave it empty and the scene is animated from its first frame instead. Keep it to two.">
+            hint="Who appears in this silent beat. If the style acts its silent scenes, their portraits are wired in alongside the scene's own first frame — so a face here matches the acted scenes. Leave it empty for a beat with nobody in it. Keep it to two.">
             <div className="row gap-8 row--wrap">
               {castOpts.map((n) => {
                 const on = cast.includes(n)

@@ -642,10 +642,11 @@ def is_silent(scene) -> bool:
 def renders_acted(scene, cfg: dict | None = None) -> bool:
     """Does this scene render as ONE H3 Ref2VA take rather than first-frame I2V?
 
-    Always for a dialogue scene with lines. A SILENT scene only when the style
-    asks for it (``h3_silent_scenes``) AND the writer named who is on screen:
-    Ref2VA performs from portraits, so a castless scene has nothing to shoot
-    from and stays on the classic path.
+    Always for a dialogue scene with lines. EVERY silent scene when the style
+    asks for it (``h3_silent_scenes``) — the toggle alone decides, so a film's
+    silent beats are all shot the same way. A cast is not required: a silent
+    scene with nobody in it opens on its own first frame instead of portraits
+    (see the "frame" reference in picture_role).
 
     The one predicate the task planner, the renderer and the editor's re-shoot
     all call — they must agree, or a scene is planned on one path and rendered
@@ -654,8 +655,7 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     if is_performance(scene) and (scene_meta(scene).get("lines")
                                   or getattr(scene, "lines", None)):
         return True
-    return (is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
-            and bool([c for c in (scene_meta(scene).get("cast") or []) if _clean(c)]))
+    return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 
 
 def parse_scene_rows(rows) -> list[dict]:

@@ -48,17 +48,25 @@ prompt.
 A **silent** scene is a visual beat with no voice-over. By default it is animated from a
 first-frame still by the style's I2V engine, like a narrated scene without the narration.
 Turn on **Settings → a style → Video models → Silent scenes — act them on H3 too**
-(`h3_silent_scenes`) and it is *performed* instead: one H3 Ref2VA take from the portraits
-of whoever is on screen, carrying its own ambience and saying nothing — the same path the
-acted scenes take, so the silent beat and the takes around it read as one production
-rather than two.
+(`h3_silent_scenes`) and it is *performed* instead: one H3 Ref2VA take carrying its own
+ambience and saying nothing — the same path the acted scenes take, so the silent beat and
+the takes around it read as one production rather than two.
 
-The writer then names a **cast** on each silent scene (at most two, from the same
-characters), alongside the setting, camera and soundscape a dialogue scene gets. That cast
-is the switch: a silent scene with nobody in it has no portraits to perform from, so it
-stays on the I2V path — as does every silent scene in a style with the toggle off. The
-[Script editor](manual/script.md) shows the same **On screen** picker on a silent scene, so
-a hand-written or converted one can be cast (or un-cast) by hand.
+**The toggle alone decides**, so every silent scene in the style is shot the same way.
+What the take is built from depends on what the scene has:
+
+- **The scene's first frame.** Ref2VA has no literal first-frame input, but the scene's own
+  image rides as a reference that defines the opening composition — *begin the take looking
+  like this picture*. So the image prompt still composes the shot, exactly as it did on the
+  I2V path. The Create screen's preview is used when one exists; otherwise the frame is
+  generated at render time, on the same worker, right before the take.
+- **Portraits, when anyone is on screen.** The writer names a **cast** on each silent scene
+  (at most two, from the same characters), alongside the setting, camera and soundscape a
+  dialogue scene gets, and those portraits join the frame as references — which is what
+  keeps a face consistent between a silent beat and the acted scene beside it. A scene with
+  nobody in it simply opens on its frame. The [Script editor](manual/script.md) shows the
+  same **On screen** picker on a silent scene, so a hand-written or converted one can be
+  cast by hand.
 
 Nothing else about the scene changes: it is still silent by contract. The prompt says so
 outright, and the same gate that watches an establishing wide transcribes the take and
@@ -66,10 +74,7 @@ retakes (then mutes) it if the model babbles into the silence.
 
 !!! note "It costs an acted scene, not an I2V clip"
     A performed silent beat renders in ~6 minutes per 10 s on a GB10, against roughly a
-    minute for the LTX clip it replaces. It also skips the first frame entirely, so the
-    scene's image prompt no longer produces a still — the scene's own preview, when the
-    Create screen already made one, rides along as the take's opening-composition
-    reference.
+    minute for the LTX clip it replaces.
 
 ## What you need first
 

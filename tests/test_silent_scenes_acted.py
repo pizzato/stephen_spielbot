@@ -7,6 +7,7 @@ PERFORMED from those portraits — one acted take, no first frame, no TTS, no mu
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,18 +35,18 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(perf.renders_acted(scene, OFF))
         self.assertTrue(perf.renders_acted(scene, ON))
 
-    def test_silent_scene_with_a_cast_is_acted_only_when_asked(self):
+    def test_silent_scene_is_acted_only_when_asked(self):
         scene = _silent(["Ana"])
         self.assertTrue(perf.renders_acted(scene, ON))
         self.assertFalse(perf.renders_acted(scene, OFF))
         self.assertFalse(perf.renders_acted(scene, {}))
 
-    def test_castless_silent_scene_keeps_the_i2v_path(self):
-        # Ref2VA performs from portraits: with nobody named there is nothing to
-        # shoot from, so the scene must stay classic rather than fail at render.
-        self.assertFalse(perf.renders_acted(_silent(), ON))
-        self.assertFalse(perf.renders_acted(_silent([]), ON))
-        self.assertFalse(perf.renders_acted(_silent([" "]), ON))
+    def test_the_toggle_alone_decides_cast_or_no_cast(self):
+        # Every silent scene in the style is shot the same way — a castless one
+        # opens on its own first frame instead of portraits.
+        self.assertTrue(perf.renders_acted(_silent(), ON))
+        self.assertTrue(perf.renders_acted(_silent([]), ON))
+        self.assertFalse(perf.renders_acted(_silent(), OFF))
 
     def test_narrated_scene_is_never_acted(self):
         scene = Scene(id=1, title="open", image_prompt="i", video_prompt="v",
@@ -100,6 +101,54 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn("job:scene:3:performance", kinds)
         for part in ("image", "narration", "video", "mux"):
             self.assertIn(f"job:scene:3:{part}", kinds)
+
+
+class OpeningFrameTests(unittest.TestCase):
+    """A silent take opens on the scene's own image — Ref2VA takes no literal
+    first frame, but the picture rides as the opening-composition reference,
+    and for a castless beat it is the ONLY reference the take has."""
+
+    def _run(self, scene, files=()):
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            for name in files:
+                (wd / name).write_bytes(b"x")
+            made = []
+
+            def _fake_gen(engine, prompt, out, **kw):
+                Path(out).write_bytes(b"png")
+                made.append((prompt, kw.get("width"), kw.get("height")))
+                return out
+
+            with unittest.mock.patch.object(rg, "generate_with_engine", _fake_gen):
+                got = rg.ensure_opening_frame(scene, wd, {}, comfy_url="http://x",
+                                              vid_width=512, vid_height=256)
+            return got, made
+
+    def test_a_silent_scene_without_one_gets_one(self):
+        got, made = self._run(_silent(["Ana"]))
+        self.assertTrue(str(got).endswith("scene_03_first_frame.png"))
+        self.assertEqual(made, [("i", 512, 256)])
+
+    def test_an_existing_preview_is_reused(self):
+        got, made = self._run(_silent(), files=["scene_03_preview.png"])
+        self.assertTrue(str(got).endswith("scene_03_preview.png"))
+        self.assertEqual(made, [])   # nothing regenerated
+
+    def test_a_dialogue_scene_is_untouched(self):
+        scene = Scene(id=3, title="t", image_prompt="i", video_prompt="v", narration="",
+                      mode="dialogue", lines=[{"speaker": "Ana", "text": "hi"}])
+        got, made = self._run(scene)
+        self.assertIsNone(got)
+        self.assertEqual(made, [])
+
+    def test_no_image_prompt_is_not_an_error(self):
+        scene = Scene(id=3, title="t", image_prompt="", video_prompt="v", narration="",
+                      mode="silent", duration=6.0, metadata_extra={"mode": "silent"})
+        got, made = self._run(scene)
+        self.assertIsNone(got)
+        self.assertEqual(made, [])
 
 
 class MetaTests(unittest.TestCase):
@@ -167,11 +216,13 @@ class ScriptTests(unittest.TestCase):
         scene = _scene_from_item(4, {"mode": "silent", "cast": "Ana"}, "T", None)
         self.assertEqual(scene.metadata["cast"], ["Ana"])
 
-    def test_a_plain_silent_scene_is_unchanged(self):
+    def test_a_plain_silent_scene_carries_no_extra_metadata(self):
+        # Nothing the writer didn't give it — the scene is still acted when the
+        # style asks (it opens on its first frame), but its sidecar is bare.
         from pipeline.story import _scene_from_item
         scene = _scene_from_item(4, {"mode": "silent", "image_prompt": "i"}, "T", None)
         self.assertEqual(scene.metadata, {"mode": "silent", "duration": 5.0})
-        self.assertFalse(perf.renders_acted(scene, ON))
+        self.assertFalse(perf.renders_acted(scene, OFF))
 
 
 class SettingsTests(unittest.TestCase):
@@ -186,8 +237,9 @@ class SettingsTests(unittest.TestCase):
         import webapp.backend.main as m
         on = m._build_dialogue_note("mixed", ["Ana"], acted_silent=True)
         off = m._build_dialogue_note("mixed", ["Ana"], acted_silent=False)
-        self.assertIn("silent scenes are performed", on)
-        self.assertNotIn("silent scenes are performed", off)
+        self.assertIn("silent scenes are PERFORMED", on)
+        self.assertIn('give it a "cast" too', on)
+        self.assertNotIn("PERFORMED", off)
         # Narrated films never see any of it.
         self.assertIsNone(m._build_dialogue_note("narration", ["Ana"], acted_silent=True))
 

@@ -353,6 +353,46 @@ _SILENT_DEFAULT_SECS = 5.0
 # per-scene re-render shares it (imported above).
 
 
+def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
+                         vid_width: int, vid_height: int) -> Path | None:
+    """The image a SILENT acted scene opens on, generated if it isn't there yet.
+
+    Ref2VA has no literal first-frame input, but the scene's own image rides as
+    a reference that defines the opening composition (picture_role's "frame"
+    role: "begin the take looking like this picture"). For a silent beat that
+    is what carries the shot — the image prompt still composes the scene, and
+    for a beat with nobody in it the frame is the only reference the take has.
+
+    A dialogue scene is untouched: its pictures ARE the portraits, and the
+    Create screen's preview (when one exists) already rides along.
+
+    Returns the frame, or None when there is nothing to make one from.
+    """
+    if not _performance.is_silent(scene):
+        return None
+    # Any existing image will do — unlike the I2V path this is a REFERENCE, not
+    # frame zero, so an off-resolution preview from the Create screen is still
+    # the composition the take should open on (and resolve_performance_references
+    # picks the preview first either way — regenerating here would burn a FLUX
+    # render nothing then uses).
+    for ext in ("_preview.png", "_first_frame.png"):
+        existing = work_dir / f"scene_{scene.id:02d}{ext}"
+        if existing.exists() and existing.stat().st_size > 0:
+            return existing
+    prompt = str(getattr(scene, "image_prompt", "") or "").strip()
+    if not prompt:
+        logger.info("Scene %d: silent scene has no image prompt — the take opens "
+                    "on its references alone", scene.id)
+        return None
+    engine = _engines.resolve(cfg, cfg.get("image_engine"))
+    out = work_dir / f"scene_{scene.id:02d}_first_frame.png"
+    logger.info("Scene %d: opening frame for the silent take (%s) on %s",
+                scene.id, engine.get("key"), comfy_url)
+    generate_with_engine(engine, prompt, out, width=vid_width, height=vid_height,
+                         comfy_url=comfy_url)
+    return out
+
+
 def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
                              comfy_url: str, vid_width: int, vid_height: int,
                              style_name: str = "", direction: str = "") -> Path:
@@ -369,6 +409,8 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     scene_meta = _performance.acted_meta(scene)
     if direction.strip():
         scene_meta["direction"] = direction.strip()
+    ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
+                         vid_width=vid_width, vid_height=vid_height)
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
@@ -608,9 +650,10 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
 
     if not ref_images:
         raise RuntimeError(
-            f"Scene {scene.id}: no character portrait resolved for cast "
-            f"{meta.get('cast')} — Ref2VA needs at least one reference image "
-            "(generate the character look images first)")
+            f"Scene {scene.id}: no reference image resolved for cast "
+            f"{meta.get('cast')} — Ref2VA needs at least one (generate the "
+            "character look images first; a silent scene can open on its own "
+            "first frame instead, but it needs an image prompt to make one)")
 
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
     # Chained acted scenes (h3_chain_scenes): dialogue longer than one clip is

@@ -1948,11 +1948,12 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
            "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
            "in the same setting rather than overfilling one. ")
         + ("A \"silent\" scene leaves narration empty (visuals only), may set \"seconds\", and "
-           "gets a \"cast\" of the people ON SCREEN (AT MOST 2, from the same characters; "
-           "leave it out for a scene with nobody in it) plus \"setting\", \"camera\" and "
-           "\"soundscape\" exactly as a dialogue scene does — silent scenes are performed by "
-           "those characters, so name them. Nobody speaks in a silent scene: never give it "
-           "\"lines\". "
+           "gets \"setting\", \"camera\" and \"soundscape\" exactly as a dialogue scene does — "
+           "silent scenes are PERFORMED, not animated from a still. Whenever anyone is in "
+           "shot, give it a \"cast\" too (AT MOST 2, from the same characters): their "
+           "portraits are what keep a face the same as in the acted scenes. Leave the cast "
+           "out for a beat with nobody in it — the scene still opens on its image_prompt. "
+           "Nobody speaks in a silent scene: never give it \"lines\". "
            if acted_silent else
            "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". ")
         +

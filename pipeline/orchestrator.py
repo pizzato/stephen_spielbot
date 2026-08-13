@@ -126,10 +126,9 @@ def _renders_acted(scene_md: dict[str, Any], config: dict[str, Any]) -> bool:
     mode = str(scene_md.get("mode") or "").strip().lower()
     if mode in ACTED_SCENE_MODES and (scene_md.get("lines") or []):
         return True
-    # A silent scene is acted only where the style asks for it and the writer
-    # named who is on screen — Ref2VA performs from portraits.
-    return (mode == "silent" and bool(config.get("h3_silent_scenes"))
-            and bool([c for c in (scene_md.get("cast") or []) if str(c).strip()]))
+    # Every silent scene, where the style asks for it: the toggle alone decides
+    # (a castless one opens on its own first frame rather than portraits).
+    return mode == "silent" and bool(config.get("h3_silent_scenes"))
 
 
 # Labels whose duration depends on output resolution (the rest are flat).
