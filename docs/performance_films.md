@@ -218,6 +218,11 @@ and no prompt can separate them.
   [Models → Chained scenes](models.md#chained-scenes)) a dialogue scene may run to
   ~29 s: it is shot as two clips joined by H3 Motion Context, the script budget
   doubles, and exchanges that used to split into consecutive scenes stay one take.
+  A take that still stops too early can be extended after the fact with
+  [Continue](manual/edit-film.md#continuing-an-acted-scene), which shoots the next
+  clip against the same motion context rather than re-shooting the scene — the one
+  catch being that the context lives on the worker that shot the take, so that
+  machine has to be up.
 - **One voice reference bleeds onto other speakers** in the same clip. Give every speaker
   their own voice (the model accepts 3 per scene), or write scenes with one speaker.
 - **Nine portraits and three voices** per scene, maximum.

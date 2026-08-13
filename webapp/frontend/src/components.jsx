@@ -1072,6 +1072,99 @@ export function TrimModal({ src, busy, error, onApply, onClose }) {
   )
 }
 
+// Shortest and longest continuation H3 will render (pipeline/comfyui.py clamps
+// a clip to 4–15s; 12 is the same margin acted scenes are written to).
+const CONTINUE_MIN_SECONDS = 4
+const CONTINUE_MAX_SECONDS = 12
+
+export function ContinueModal({ src, castOpts = [], busy, error, onApply, onClose }) {
+  const [seconds, setSeconds] = useState(CONTINUE_MIN_SECONDS)
+  const [direction, setDirection] = useState('')
+  const [lines, setLines] = useState([])
+  const videoRef = useRef(null)
+
+  // Park the player on the last frame: that is the moment the new clip picks up
+  // from, and seeing it is how you decide what should happen next.
+  const onMeta = () => {
+    const el = videoRef.current
+    if (el && isFinite(el.duration)) el.currentTime = Math.max(0, el.duration - 0.05)
+  }
+
+  const setLine = (i, k, v) => setLines(lines.map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln))
+  const addLine = () => setLines([...lines, { speaker: castOpts[0] || '', delivery: 'even, natural', text: '' }])
+  const spoken = lines.filter((ln) => (ln.text || '').trim() && (ln.speaker || '').trim())
+
+  return (
+    <div onClick={() => !busy && onClose()}
+      style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={(e) => e.stopPropagation()}
+        style={{ background: 'var(--paper)', borderRadius: 'var(--r-lg)', padding: 20, width: 'min(760px, 96vw)', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,.5)' }}>
+        <div className="row center between" style={{ marginBottom: 12 }}>
+          <span className="h-title">Continue scene</span>
+          <button type="button" className="btn btn--quiet" onClick={() => !busy && onClose()} disabled={busy}><Icon name="xmark" /></button>
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 0, marginBottom: 12 }}>
+          Shoots a few more seconds carrying on from the last frame — same room, same take, no cut.
+          Leave the dialogue empty and the moment simply plays on.
+        </p>
+
+        <div style={{ background: '#000', borderRadius: 'var(--r-md)', display: 'flex', justifyContent: 'center' }}>
+          <video ref={videoRef} src={src} controls onLoadedMetadata={onMeta}
+            style={{ display: 'block', maxWidth: '100%', maxHeight: '40vh' }} />
+        </div>
+
+        <div className="mt-16">
+          <input type="range" min={CONTINUE_MIN_SECONDS} max={CONTINUE_MAX_SECONDS} step={0.5}
+            value={seconds} disabled={busy}
+            onChange={(e) => setSeconds(Number(e.target.value))} style={{ width: '100%' }} />
+          <div className="row center between mt-8" style={{ fontSize: 12.5 }}>
+            <span className="muted">How much longer</span>
+            <span style={{ fontWeight: 600 }}>+{seconds.toFixed(1)}s</span>
+          </div>
+        </div>
+
+        <Field label="What happens next" hint="A note for this clip only — “she finally looks up”, “he keeps walking”. Optional.">
+          <textarea className="textarea" rows={2} value={direction} disabled={busy}
+            onChange={(e) => setDirection(e.target.value)} />
+        </Field>
+
+        <Field label="Dialogue" hint="What is said in the continuation, in the same voices. About 2.5 words a second.">
+          <div className="stack gap-8">
+            {lines.map((ln, i) => (
+              <div key={i} className="row gap-8 center">
+                <select className="input" style={{ maxWidth: 170 }} value={ln.speaker || ''} disabled={busy}
+                  onChange={(e) => setLine(i, 'speaker', e.target.value)}>
+                  {castOpts.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <input className="input" style={{ flex: 1 }} value={ln.text || ''} disabled={busy}
+                  placeholder="…and what they say" onChange={(e) => setLine(i, 'text', e.target.value)} />
+                <Button variant="quiet" icon="trash" title="Remove line" disabled={busy}
+                  onClick={() => setLines(lines.filter((_, idx) => idx !== i))} />
+              </div>
+            ))}
+            <div>
+              <Button variant="ghost" icon="plus" size="sm" disabled={busy || !castOpts.length} onClick={addLine}>
+                Add line
+              </Button>
+              {!castOpts.length && <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>No characters to speak.</span>}
+            </div>
+          </div>
+        </Field>
+
+        {error && <div className="mt-16"><Banner tone="danger">{error}</Banner></div>}
+
+        <div className="row gap-10 mt-16" style={{ justifyContent: 'flex-end' }}>
+          <Button variant="ghost" onClick={() => !busy && onClose()} disabled={busy}>Cancel</Button>
+          <Button variant="primary" icon="forward-step" disabled={busy}
+            onClick={() => !busy && onApply({ seconds, direction: direction.trim(), lines: spoken })}>
+            {busy ? 'Shooting…' : 'Continue'}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function Banner({ tone = 'danger', children }) {
   if (!children) return null
   const bg = { danger: 'var(--danger-soft)', ok: 'var(--ok-soft)', info: 'var(--info-soft)', warn: 'var(--warn-soft)' }[tone]

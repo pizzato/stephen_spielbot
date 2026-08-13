@@ -48,6 +48,7 @@ from pipeline.assembler import (
     write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
+from pipeline import scene_context as _scene_context
 from pipeline.tts_text import spoken_source
 from pipeline.tts_worker import generate_narration, resolve_robotic_amount
 from pipeline.orchestrator import (
@@ -354,16 +355,20 @@ _SILENT_DEFAULT_SECS = 5.0
 
 def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
                              comfy_url: str, vid_width: int, vid_height: int,
-                             style_name: str = "") -> Path:
+                             style_name: str = "", direction: str = "") -> Path:
     """Render ONE performance scene: character portraits + dialogue → a clip that
     already contains its own speech. Returns the finished scene_NN_final.mp4.
 
     Shared with the backend's per-scene re-render, so it takes everything it
-    needs as arguments and touches no module state.
+    needs as arguments and touches no module state. *direction* is the editor's
+    note for THIS take ("Shoot again" with an instruction) — it reaches the
+    model as the prompt's [DIRECTION] block and is not persisted to the scene.
     """
     # Fills in cast/length/setting for a dialogue scene authored in a MIXED
     # film, where only the lines and the classic prompts exist.
     scene_meta = _performance.acted_meta(scene)
+    if direction.strip():
+        scene_meta["direction"] = direction.strip()
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config
@@ -375,13 +380,88 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     else:
         shots = [dict(scene_meta)]
     if len(shots) > 1:
-        return _render_performance_shots(
+        final = _render_performance_shots(
             scene, shots, scene_meta, work_dir, cfg, comfy_url=comfy_url,
             vid_width=vid_width, vid_height=vid_height, style_name=style_name)
-    return _render_performance_clip(
-        scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
-        comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
-        style_name=style_name)
+    else:
+        final = _render_performance_clip(
+            scene, shots[0], work_dir, cfg, work_dir / f"scene_{scene.id:02d}_final.mp4",
+            comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
+            style_name=style_name)
+    # Bind the continuation point to the clip that is actually in the cut.
+    _scene_context.stamp_final(work_dir, scene.id, final)
+    return final
+
+
+# What every continuation is told before the editor's own note: it is not a new
+# scene, and re-establishing one is exactly the failure the pinned frames exist
+# to prevent.
+_CONTINUATION_DIRECTION = (
+    "This is a continuation of a take already in progress — the camera has not "
+    "cut and nothing restarts. Carry straight on from the moment on screen, in "
+    "the same room, the same framing and the same light, with everyone exactly "
+    "where they already are. Do not re-establish the scene and do not "
+    "re-introduce anyone.")
+
+
+def continue_performance_scene(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
+                               vid_width: int, vid_height: int, style_name: str,
+                               ctx: dict, lines: list, seconds: float,
+                               direction: str = "") -> Path:
+    """Shoot MORE of an acted scene that is already in the cut.
+
+    One Ref2VA clip continuing the motion context *ctx* points at, written to
+    scene_NN_continue.mp4 for the caller to join onto the scene's final. The
+    scene's own portraits and voices are wired in again, so the people who come
+    out of the join are the people who went into it; *lines* is what they say
+    next (empty for a held beat) and *direction* the editor's note.
+    """
+    from pipeline.comfyui import generate_video_h3_ref_continue
+    from app import resolve_performance_references
+
+    meta = {
+        **_performance.acted_meta(scene),
+        "lines": _performance.norm_lines(lines),
+        # The action beat and the framing belong to the frames already pinned in
+        # front of this clip; a fresh beat would fight them.
+        "beats": [],
+        "seconds": seconds,
+        "direction": " ".join(x for x in (_CONTINUATION_DIRECTION, direction.strip()) if x),
+    }
+    # A hand-edited prompt is a prompt for the ORIGINAL take, lines and all —
+    # honouring it here would have the scene play its opening again.
+    meta.pop("prompt_override", None)
+
+    refs = resolve_performance_references(meta, cfg, work_dir, style_name, scene_id=scene.id)
+    ref_images = [Path(p["path"]) for p in refs["pictures"]]
+    ref_audios = [Path(a["path"]) for a in refs["audios"]]
+    if not ref_images:
+        raise RuntimeError(
+            f"Scene {scene.id}: no character portrait resolved — a continuation "
+            "needs the same references the take was shot with.")
+
+    # The engine the take was shot on, not whatever the style points at today:
+    # a continuation sampled differently from the clip it joins is a visible
+    # change of look mid-scene.
+    engine = _engines.resolve_reference(cfg, ctx.get("engine") or cfg.get("reference_engine"))
+    prompt = _performance.build_h3_prompt(
+        meta, style_note=cfg.get("style", ""), picture_names=refs["pictures"],
+        audio_names=[a["name"] for a in refs["audios"]])
+
+    out = work_dir / f"scene_{scene.id:02d}_continue.mp4"
+    logger.info("Scene %d: continuing the take (+%.1fs, %d line(s)) from %s on %s",
+                scene.id, seconds, len(meta["lines"]), ctx.get("latent"), comfy_url)
+    generate_video_h3_ref_continue(
+        engine, prompt, ref_images, out,
+        context_latent=str(ctx.get("latent") or ""),
+        context_token=str(ctx.get("token") or ""),
+        clip_index=int(ctx.get("next_index") or 2),
+        ref_audios=ref_audios, width=vid_width, height=vid_height,
+        duration_seconds=seconds, comfy_url=comfy_url)
+    # H3 renders under its own pixel cap; the continuation has to match the frame
+    # of the clip it is joined to.
+    ensure_video_resolution(out, vid_width, vid_height)
+    return out
 
 
 def unify_mixed_engine(video_engine: dict, cfg: dict, *, has_acted: bool,
@@ -507,7 +587,8 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                              vid_width, vid_height, style_name,
                              extra_pictures: list[dict] | None = None,
                              drop_kinds: tuple = ()) -> Path:
-    from pipeline.comfyui import generate_video_h3_ref, generate_video_h3_ref_chained
+    from pipeline.comfyui import (context_latent_name, generate_video_h3_ref,
+                                  generate_video_h3_ref_chained)
     from app import resolve_performance_references
 
     # The SAME resolver the editor's performance view calls, so the slots shown
@@ -560,6 +641,12 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 scene.id, engine["key"],
                 f", chained x{len(sub_metas)}" if chained else "",
                 len(ref_images), len(ref_audios), clip.name)
+    # Where this take can be picked up again (the film editor's Continue). Each
+    # attempt saves under its own prefix — a gate retake is a different take, and
+    # continuing the discarded one would splice in a moment nobody watched.
+    ctx_prefix = _scene_context.token_prefix(work_dir, scene.id)
+    attempts = {"n": 0}
+    last_ctx: dict = {}
     base_seconds = sum(_performance.render_seconds(m) for m in sub_metas)
 
     def _generate(out: Path, stretch: float = 1.0) -> Path:
@@ -567,6 +654,8 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         to buy a truncated take the time its own delivery turned out to need,
         spread across a chained scene's clips in the proportion they were
         sized in. Each clip still stops at the model's own per-clip ceiling."""
+        attempts["n"] += 1
+        token = f"{ctx_prefix}_t{attempts['n']}"
         durations = [min(_performance.H3_CEILING_SECONDS,
                          _performance.render_seconds(m) * stretch)
                      for m in sub_metas]
@@ -576,6 +665,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 ref_audios=ref_audios,
                 width=vid_width, height=vid_height,
                 durations=durations,
+                context_token=token,
                 comfy_url=comfy_url,
             )
         else:
@@ -584,15 +674,21 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 ref_audios=ref_audios,
                 width=vid_width, height=vid_height,
                 duration_seconds=durations[0],
+                context_token=token,
                 comfy_url=comfy_url,
             )
+        index = len(prompts) if chained else 1
+        last_ctx.update(token=token, latent=context_latent_name(token, index),
+                        clip_index=index)
         return out
 
     _generate(clip)
+    kept_ctx = dict(last_ctx)
 
     # The gate: a shot that doesn't say its line is a miss, and misses get
-    # retaken with a fresh seed instead of shipped — that is what turns a
-    # stochastic model into a consistent one. Soft dependency: without
+    # retaken instead of shipped — on a fresh seed for wrong words, on a longer
+    # clip for a line that ran out of time. That is what turns a stochastic
+    # model into a consistent one. Soft dependency: without
     # faster-whisper the gate stands down. Silent shots have nothing to verify.
     expected = _performance.spoken_text(meta)
     verify_on = shot_gate.available() and bool(cfg.get("performance_verify", True))
@@ -615,6 +711,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             cand_tr = shot_gate.transcribe(candidate)
             if shot_gate.word_count(cand_tr) < words:
                 candidate.replace(clip)
+                kept_ctx = dict(last_ctx)
                 transcript, words = cand_tr, shot_gate.word_count(cand_tr)
             else:
                 candidate.unlink(missing_ok=True)
@@ -665,11 +762,20 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             cand_score, cand_tr = shot_gate.verify(candidate, expected)
             if cand_score > best:
                 candidate.replace(clip)
+                kept_ctx = dict(last_ctx)
                 best, transcript = cand_score, cand_tr
             else:
                 candidate.unlink(missing_ok=True)
         logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
                     " (best of retakes)" if _miss(best, transcript) else "")
+
+    # The kept take's continuation point, on the worker that shot it. Written
+    # after the gate so it belongs to the clip that survived, not to a reject.
+    _scene_context.save(
+        work_dir, scene.id, latent=kept_ctx.get("latent", ""),
+        token=kept_ctx.get("token", ""), next_index=int(kept_ctx.get("clip_index", 1)) + 1,
+        comfy_url=comfy_url, engine=engine.get("key", ""),
+        width=vid_width, height=vid_height)
 
     # H3 renders under its own pixel cap; bring the clip back to the film's frame.
     ensure_video_resolution(clip, vid_width, vid_height)

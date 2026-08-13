@@ -151,8 +151,11 @@ Each button does only its own part. A narrated scene has:
 
 An **acted** scene trades the Image buttons for **Remove first frame** (its frame is a
 reference, not a render input — see [acted scenes](../performance_films.md)), and its
-Video button reads **Shoot again**: the whole take re-renders from the references. The
-**scene type** switch converts a scene between narration, dialogue and silent — same
+Video button reads **Shoot again**: the whole take re-renders from the references, and its
+instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*) rather
+than the picture. It also
+gains **Continue**, which shoots more of the take it already has instead of replacing it.
+The **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.
 
 #### Trimming a scene
@@ -163,6 +166,35 @@ player seeks there so you see the frame the scene will hold, and the readout sho
 kept and what is cut. Applying it cuts the audio with the video, so watch (and listen to)
 the tail before trimming into narration. The trimmed cut becomes a new video take and the
 untrimmed one stays in the strip, one click away.
+
+#### Continuing an acted scene
+
+When a dialogue take ends too early — the line lands but the moment has nowhere to go, or
+you simply want a few seconds more — **Continue** shoots the next clip carrying on from the
+last frame, rather than re-shooting the scene and losing the take you liked. The camera does
+not cut: the new clip is conditioned on the motion the previous one ended with, so the room,
+the framing, the faces and the voices carry across the join.
+
+The dialog shows the take parked on its final frame — the moment being continued — and asks
+for three things: **how much longer** (4 to 12 seconds), an optional note for what happens
+next ("she finally looks up"), and any **dialogue** spoken in the continuation, in the same
+voices as the scene. Leave the dialogue empty and the moment simply plays on. Anything said
+here is added to the scene's script, so captions and the description stay in step with what
+the film actually says.
+
+The join is made once the clip renders, and the shorter take is kept in the takes strip —
+if the continuation is not what you wanted, click back to the take before it. Continue again
+to keep going: each continuation picks up where the last one stopped.
+
+Continue is offered only where it can actually work, so the button is absent when:
+
+- the scene is narrated (only acted takes carry the motion context);
+- the take was shot before this feature existed — shoot it again once and it becomes
+  continuable from then on;
+- the clip in the cut is no longer the take the continuation point belongs to, because a
+  different take was selected or this one was trimmed;
+- the worker that shot the take is offline. The context lives on that machine's disk, so a
+  continuation can only render there — bring it back, or shoot the scene again.
 
 **Reassemble film** (top of the list) re-cuts the published final from the scene parts —
 after re-shoots, take picks, or reorders — re-mixing music only where the film has it.
