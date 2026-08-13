@@ -116,6 +116,11 @@ A **narrated or silent** scene has:
 | **Image prompt** | FLUX — static, highly detailed first frame |
 | **Video prompt** | LTX — motion and camera |
 
+A **silent** scene also carries a **Duration** and an **On screen** cast. The cast matters
+only for a style that [performs its silent scenes](../performance_films.md#silent-scenes-performed):
+name who is in the shot and the scene is acted from their portraits instead of animated
+from a still. Leave it empty and nothing changes.
+
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
 

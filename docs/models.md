@@ -175,6 +175,14 @@ It covers both kinds of scene, on different gates:
   per dialogue scene instead of 3 / 22), exchanges that used to split into two
   scenes stay one continuous take, and a scene that still fits one clip renders
   single-clip rather than paying the join overhead for nothing.
+- **Silent scenes** chain too where the style
+  [performs them](performance_films.md#silent-scenes-performed). A silent beat
+  has no lines to divide, so what splits is its *window*: the writer is asked
+  for ~19 s instead of ~10, and the scene's timed beats are dealt out to the
+  clip whose window they fall in (re-based to start at zero) rather than all
+  landing in the first — otherwise the second clip has nothing to do but hold
+  the frame. A film's scene count is planned at the longer take, so the runtime
+  you ask for is still the runtime you get.
 
 Measured on a GB10 worker:
 

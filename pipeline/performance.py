@@ -60,6 +60,21 @@ def acted_limits(chained: bool = False) -> tuple[float, float]:
             H3_CEILING_SECONDS * cadence.CHAIN_CLIPS - lost)
 
 
+def scene_seconds(chained: bool = False) -> float:
+    """How long ONE scene is written to run — the planner's unit.
+
+    SCENE_SECONDS for a single clip; chained, the clips minus what each join
+    trims, so a film's scene count still adds up to the runtime that was asked
+    for (at one scene per take, a chained film planned at the unchained length
+    comes out twice as long).
+    """
+    if not chained:
+        return SCENE_SECONDS
+    from pipeline import cadence
+    return (SCENE_SECONDS * cadence.CHAIN_CLIPS
+            - cadence.CHAIN_JOIN_SECS * (cadence.CHAIN_CLIPS - 1))
+
+
 # One audio reference per speaker, and H3 accepts at most 3 (and 9 images).
 MAX_SPEAKERS_PER_SCENE = 3
 
@@ -72,12 +87,17 @@ _REFUSALS = ("Do not add subtitles, do not add captions, do not add any on-scree
              "no watermark, no extra characters, no scene changes, no music.")
 
 
-def _clamp_seconds(value) -> float:
+def _clamp_seconds(value, chained: bool = False) -> float:
+    """An authored length, held inside what one scene may run.
+
+    *chained* (h3_chain_scenes) widens the cap to the joined-clip window, the
+    same way acted_limits does — without it a 20 s silent beat written for a
+    chained style would be cut back to 12 and the film would come in short."""
     try:
         secs = float(value or 0) or SCENE_SECONDS
     except (TypeError, ValueError):
         secs = SCENE_SECONDS
-    return max(MIN_SCENE_SECONDS, min(MAX_SCENE_SECONDS, secs))
+    return max(MIN_SCENE_SECONDS, min(acted_limits(chained)[0], secs))
 
 
 def _clean(text) -> str:
@@ -131,16 +151,18 @@ def norm_beats(raw, seconds: float) -> list[dict]:
     return out
 
 
-def content_seconds(meta: dict) -> float:
-    """How long this scene's dialogue actually needs on screen.
+def content_seconds(meta: dict, chained: bool = False) -> float:
+    """How long this scene's content actually needs on screen.
 
     ~2.5 spoken words/second, a beat per speaker turn, and a moment of air.
     The LLM's own "seconds" guess is ignored when there are lines — scenes it
-    overloaded got truncated mid-sentence at the model's 15 s ceiling.
+    overloaded got truncated mid-sentence at the model's 15 s ceiling. With no
+    lines (a silent scene) the authored length IS the content, held inside the
+    window *chained* opens up.
     """
     lines = norm_lines(meta.get("lines"))
     if not lines:
-        return _clamp_seconds(meta.get("seconds"))
+        return _clamp_seconds(meta.get("seconds"), chained)
     words = sum(len(l["text"].split()) for l in lines)
     turns = 1 + sum(1 for a, b in zip(lines, lines[1:]) if a["speaker"] != b["speaker"])
     return words / WORDS_PER_SECOND + 1.0 * turns + 1.0
@@ -157,7 +179,7 @@ def render_seconds(meta: dict, chained: bool = False) -> float:
         # Content wins outright when there are lines: a stored guess used as a
         # floor pads the clip, and padding is where the model invents speech.
         return min(ceiling, max(MIN_SCENE_SECONDS, content_seconds(meta)))
-    return min(ceiling, _clamp_seconds(meta.get("seconds")))
+    return min(ceiling, _clamp_seconds(meta.get("seconds"), chained))
 
 
 def split_overloaded(raw_scene: dict, chained: bool = False) -> list[dict]:
@@ -220,6 +242,32 @@ def split_lines_for_chain(meta: dict, n_clips: int = 2) -> list[dict]:
             # fresh action beat would fight them.
             piece["beats"] = []
         out.append(piece)
+    return out
+
+
+def split_silent_for_chain(meta: dict, n_clips: int = 2) -> list[dict]:
+    """Divide one chained SILENT scene into *n_clips* consecutive sub-metas.
+
+    The dialogue splitter has nothing to divide here — a silent scene's content
+    is its LENGTH and its timed beats — so the clip window is what is split, and
+    each clip takes the beats that fall inside its own window, re-based to start
+    at zero. Sending every beat to clip one (what split_lines_for_chain does
+    with a continuation) would leave the second clip with nothing to do but hold
+    the frame. Setting, cast, camera and sound stay shared: it is one take.
+    """
+    total = render_seconds(meta, chained=True)
+    if n_clips < 2 or total <= 0:
+        return [meta]
+    per = total / n_clips
+    beats = norm_beats(meta.get("beats"), total)
+    out = []
+    for i in range(n_clips):
+        lo, hi = per * i, per * (i + 1)
+        mine = [{"t0": round(max(0.0, b["t0"] - lo), 1),
+                 "t1": round(min(per, b["t1"] - lo), 1),
+                 "action": b["action"]}
+                for b in beats if b["t1"] > lo and b["t0"] < hi]
+        out.append({**meta, "seconds": per, "beats": mine})
     return out
 
 
@@ -571,7 +619,7 @@ def is_performance_mode(mode) -> bool:
     return str(mode or "").strip().lower() in PERFORMANCE_MODES
 
 
-def acted_meta(scene) -> dict:
+def acted_meta(scene, chained: bool = False) -> dict:
     """The metadata an acted scene needs to render, filled in where it's absent.
 
     A performance script authors cast/beats/seconds/setting directly. A dialogue
@@ -580,6 +628,12 @@ def acted_meta(scene) -> dict:
     setting from the scene's own video/image prompt. Without this a mixed film's
     dialogue scene would render castless (no portraits → hard failure) and
     5 seconds long.
+
+    *chained* (h3_chain_scenes) widens the length a scene may hold to the
+    joined-clip window. It only moves a SILENT scene, whose length is authored
+    rather than counted from words — but that scene would otherwise be clamped
+    back to the single-clip cap before the renderer ever saw how long it was
+    written to run.
     """
     def field(name, default=""):
         return (scene.get(name, default) if isinstance(scene, dict)
@@ -613,11 +667,14 @@ def acted_meta(scene) -> dict:
         # a stale one is what the editor shows and the shot list is written
         # against while the renderer sizes the clip from the words.
         meta["seconds"] = render_seconds(meta)
-    elif not meta.get("seconds"):
+    else:
         # A silent scene's authored length lives in ``duration`` — on the Scene
-        # itself, and in the metadata sidecar of a stored row.
+        # itself, and in the metadata sidecar of a stored row. Re-clamped every
+        # time (not only when absent) so a length stored under one chaining
+        # setting is held inside the window the scene will actually render in.
         meta["seconds"] = _clamp_seconds(
-            field("duration", 0) or meta.get("duration") or SCENE_SECONDS)
+            meta.get("seconds") or field("duration", 0) or meta.get("duration")
+            or SCENE_SECONDS, chained)
     meta["beats"] = norm_beats(meta.get("beats"), float(meta["seconds"]))
     return meta
 
@@ -642,10 +699,11 @@ def is_silent(scene) -> bool:
 def renders_acted(scene, cfg: dict | None = None) -> bool:
     """Does this scene render as ONE H3 Ref2VA take rather than first-frame I2V?
 
-    Always for a dialogue scene with lines. A SILENT scene only when the style
-    asks for it (``h3_silent_scenes``) AND the writer named who is on screen:
-    Ref2VA performs from portraits, so a castless scene has nothing to shoot
-    from and stays on the classic path.
+    Always for a dialogue scene with lines. EVERY silent scene when the style
+    asks for it (``h3_silent_scenes``) — the toggle alone decides, so a film's
+    silent beats are all shot the same way. A cast is not required: a silent
+    scene with nobody in it opens on its own first frame instead of portraits
+    (see the "frame" reference in picture_role).
 
     The one predicate the task planner, the renderer and the editor's re-shoot
     all call — they must agree, or a scene is planned on one path and rendered
@@ -654,8 +712,7 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     if is_performance(scene) and (scene_meta(scene).get("lines")
                                   or getattr(scene, "lines", None)):
         return True
-    return (is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
-            and bool([c for c in (scene_meta(scene).get("cast") or []) if _clean(c)]))
+    return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 
 
 def parse_scene_rows(rows) -> list[dict]:

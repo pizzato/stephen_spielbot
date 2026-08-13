@@ -1692,7 +1692,8 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
-    # "narration" (default) | "dialogue" | "mixed" — see docs/dialogue_scenes.md.
+    # "narration" (default) | "dialogue" | "mixed" | "silent" — see
+    # docs/performance_films.md.
     format: str = "narration"
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
@@ -1844,6 +1845,16 @@ def _story_format_note(fmt: str) -> str | None:
             "narration. Ignore any video length or scene limits while drafting — the "
             "story is divided into scenes afterwards."
         )
+    if fmt == "silent":
+        return (
+            "SILENT STORY: this story will be staged as a SILENT film — told in "
+            "pictures, with no narrator reading it and hardly anyone speaking. Write "
+            "chapter summaries whose beats are VISIBLE: what happens, what changes, "
+            "what is seen — never information that could only arrive in words. Plan "
+            "recurring characters to carry it on screen (never return an empty "
+            "characters array). Ignore any video length or scene limits while "
+            "drafting — the story is divided into scenes afterwards."
+        )
     return None
 
 
@@ -1861,9 +1872,13 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     budget here the LLM keeps writing single-clip scenes and nothing ever
     chains. *acted_silent* (h3_silent_scenes) asks for a cast on the SILENT
     scenes as well: those are performed from the same portraits, and a silent
-    scene with nobody named stays on the I2V path."""
+    scene with nobody named stays on the I2V path.
+
+    The "silent" format shares all of it — a silent film is staged from the
+    same schema, with the balance pushed the other way: pictures carry the
+    story and a spoken line is the exception."""
     fmt = (fmt or "narration").strip().lower()
-    if fmt not in ("dialogue", "mixed"):
+    if fmt not in ("dialogue", "mixed", "silent"):
         return None
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
@@ -1873,26 +1888,60 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
         "The speakers are the story's recurring characters — identify them and use them "
         "consistently; a scene with nobody to speak must be \"narration\" or \"silent\"."
     )
-    balance = (
-        "Almost every scene should be mode \"dialogue\": the characters carry the story by "
-        "speaking to camera or to each other. Use \"narration\" only where no one could "
-        "plausibly say it."
-        if fmt == "dialogue" else
-        "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
-        "scene-setting voice-over, \"silent\" for a pure visual beat. A mixed film must "
-        "actually MIX — acted dialogue scenes AND narrated scenes both appear, spread "
-        "through the film rather than clustered; if every scene comes back the same mode "
-        "the division has failed the brief."
-    )
+    # A silent scene's length is AUTHORED (there are no words to count it from),
+    # so the writer is given the window the renderer will actually hold it
+    # inside — which chaining widens to the joined-clip take.
+    silent_target = round(performance_mode.scene_seconds(chained))
+    silent_max = int(performance_mode.acted_limits(chained)[0])
+    silent_budget = (
+        f"A silent scene is ONE continuous take, so give it a \"seconds\" of about "
+        f"{silent_target} (never below {int(performance_mode.MIN_SCENE_SECONDS)} or above "
+        f"{silent_max}) and write a visual that holds for exactly that long"
+        + (" — with the beats spread across the whole take rather than crowded into its "
+           "opening seconds. " if chained else ". "))
+    if fmt == "dialogue":
+        balance = (
+            "Almost every scene should be mode \"dialogue\": the characters carry the story by "
+            "speaking to camera or to each other. Use \"narration\" only where no one could "
+            "plausibly say it.")
+    elif fmt == "silent":
+        balance = (
+            "Almost every scene should be mode \"silent\": the story is told in PICTURES — "
+            "what happens on screen carries it, with no voice at all. Use \"dialogue\" only "
+            "for the rare beat that genuinely turns on something said out loud (one or two "
+            "in the whole film), and NEVER use \"narration\": this film has no narrator. "
+            # The acted-silent schema below already states the budget; saying it
+            # twice in one prompt is noise.
+            + ("" if acted_silent else silent_budget))
+    else:
+        balance = (
+            "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
+            "scene-setting voice-over, \"silent\" for a pure visual beat. A mixed film must "
+            "actually MIX — acted dialogue scenes AND narrated scenes both appear, spread "
+            "through the film rather than clustered; if every scene comes back the same mode "
+            "and the direction did not ask for that, the division has failed the brief.")
+    # The direction is the user's own instruction and outranks the balance above
+    # in BOTH directions: a brief asking for a particular staging ("mostly
+    # silent", "no narrator") used to lose to the must-mix rule, and the
+    # narrator's own words used to be handed to a character.
     instructions_rule = (
-        "The TOPIC/DIRECTION outranks this mode balance: when it asks the narrator to "
-        "introduce themselves, address the viewer, or say specific things, stage those "
-        "beats as \"narration\" scenes carrying exactly that content — never drop them "
-        "and never reassign the narrator's own words to a character."
+        "The TOPIC/DIRECTION outranks this mode balance whenever it speaks to staging: if it "
+        "asks for mostly silent scenes, for no narrator, or for more spoken exchanges, stage "
+        "the film the way it asks rather than the way the balance above describes. And when "
+        "it asks the narrator to introduce themselves, address the viewer, or say specific "
+        "things, stage those beats as \"narration\" scenes carrying exactly that content — "
+        "never drop them and never reassign the narrator's own words to a character."
+        if fmt != "silent" else
+        "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging. If it asks "
+        "for specific words to be said, give them to a character in a \"dialogue\" scene — a "
+        "silent film never adds a narrator."
     )
     return (
-        "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. "
-        "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
+        ("SILENT FILM — the story is told in PICTURES: no narrator reads it, and a character "
+         "speaks only where a beat truly needs a line. "
+         if fmt == "silent" else
+         "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. ")
+        + "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
         "A \"dialogue\" scene also gets:\n"
         "  \"cast\": [names on screen, AT MOST 2 — a third face makes the model swap them],\n"
         "  \"lines\": ordered [{\"speaker\": <a cast name>, \"delivery\": <2-4 words, e.g. "
@@ -1910,12 +1959,13 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
            "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
            "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
            "in the same setting rather than overfilling one. ")
-        + ("A \"silent\" scene leaves narration empty (visuals only), may set \"seconds\", and "
-           "gets a \"cast\" of the people ON SCREEN (AT MOST 2, from the same characters; "
-           "leave it out for a scene with nobody in it) plus \"setting\", \"camera\" and "
-           "\"soundscape\" exactly as a dialogue scene does — silent scenes are performed by "
-           "those characters, so name them. Nobody speaks in a silent scene: never give it "
-           "\"lines\". "
+        + ("A \"silent\" scene leaves narration empty (visuals only) and gets \"setting\", "
+           "\"camera\" and \"soundscape\" exactly as a dialogue scene does — silent scenes "
+           "are PERFORMED, not animated from a still. Whenever anyone is in shot, give it a "
+           "\"cast\" too (AT MOST 2, from the same characters): their portraits are what keep "
+           "a face the same as in the acted scenes. Leave the cast out for a beat with nobody "
+           "in it — the scene still opens on its image_prompt. Nobody speaks in a silent "
+           "scene: never give it \"lines\". " + silent_budget
            if acted_silent else
            "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". ")
         +
@@ -2162,11 +2212,12 @@ def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
 
 
 def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
-    """How many scenes an ALL-ACTED film gets.
+    """How many scenes a film made of CLIPS gets — acted or silent.
 
-    Not the narration cadence plan: acted scenes are clips capped by the video
-    model (~10 s each), not a word budget. An explicit scene count wins, then
-    the requested minutes at one scene per clip, then the style's own length."""
+    Not the narration cadence plan: these scenes are clips capped by the video
+    model (~10 s each, or ~19 s where the style chains them), not a word budget.
+    An explicit scene count wins, then the requested minutes at one scene per
+    take, then the style's own length."""
     try:
         n = int(body.n_scenes or 0)
     except (TypeError, ValueError):
@@ -2178,7 +2229,9 @@ def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
     except (TypeError, ValueError):
         minutes = 0.0
     if minutes > 0:
-        return max(1, round(minutes * 60.0 / performance_mode.SCENE_SECONDS))
+        secs = performance_mode.scene_seconds(
+            gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")))
+        return max(1, round(minutes * 60.0 / secs))
     return int(_plan_for_generate(body, ss)["n_scenes"])
 
 
@@ -2200,9 +2253,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
     plan = _plan_for_generate(body, ss)
-    if fmt == "dialogue":
-        # Every scene is an acted clip, so the length comes from clip count,
-        # not from a narrator's word budget.
+    if fmt in ("dialogue", "silent"):
+        # Every scene is one clip — acted, or a silent beat nobody narrates —
+        # so the length comes from clip count, not a narrator's word budget.
         plan = {**plan, "n_scenes": _acted_scene_count(body, ss)}
     # The draft only learns WHO tells the story (acted / mixed); the acted
     # scene schema and clip budgets bind at the divide step, so the prose

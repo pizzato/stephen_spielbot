@@ -60,7 +60,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
-  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed
+  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed | silent
   const [music, setMusic] = useState(true)   // score this film? (style default, overridable here)
   // Script mode ('classic' | 'story'): owned by the style, like the narrator
   // voice and visual style — locked while a style is active, editable under
@@ -256,9 +256,9 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Format"
-              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes.">
+              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes. Silent = told in pictures, no narrator, with a spoken line only where a beat needs one. Whichever you pick, the direction box can steer the balance — “mostly silent, one exchange near the end”.">
               <div className="row gap-8">
-                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed']].map(([f, lbl]) => (
+                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed'], ['silent', 'Silent']].map(([f, lbl]) => (
                   <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
                 ))}
               </div>
@@ -277,6 +277,7 @@ export default function Create({ seed, meta, onGenerated }) {
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   You'll review the story next, then divide it into scenes.
                   {format === 'dialogue' && ' Each scene becomes one acted clip of about 10 seconds.'}
+                  {format === 'silent' && ' Each scene becomes one clip of about 10 seconds, with no voice-over.'}
                 </span>
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />

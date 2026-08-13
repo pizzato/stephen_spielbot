@@ -273,10 +273,32 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
       )}
 
       {mode === 'silent' && (
-        <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
-          <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
-            value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
-        </Field>
+        <>
+          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion. A style that performs its silent scenes holds this to H3's window: 5–12 s, or up to ~23 s with Chained scenes on.">
+            <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
+              value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
+          </Field>
+
+          {/* Only meaningful for a style that PERFORMS its silent scenes
+              (Settings → Video models → "Silent scenes — act them on H3 too"),
+              where these portraits ride alongside the scene's first frame and
+              keep a face the same as in the acted scenes. Harmless otherwise. */}
+          <Field label="On screen"
+            hint="Who appears in this silent beat. If the style acts its silent scenes, their portraits are wired in alongside the scene's own first frame — so a face here matches the acted scenes. Leave it empty for a beat with nobody in it. Keep it to two.">
+            <div className="row gap-8 row--wrap">
+              {castOpts.map((n) => {
+                const on = cast.includes(n)
+                return (
+                  <Button key={n} variant={on ? 'primary' : 'ghost'} size="sm"
+                    onClick={() => onChange({ cast: on ? cast.filter((c) => c !== n) : [...cast, n] }, true)}>
+                    {on ? `${cast.indexOf(n) + 1}. ${n}` : n}
+                  </Button>
+                )
+              })}
+              {!castOpts.length && <span className="muted" style={{ fontSize: 12.5 }}>No characters yet — add them in Characters.</span>}
+            </div>
+          </Field>
+        </>
       )}
     </>
   )

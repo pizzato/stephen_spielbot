@@ -59,11 +59,19 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | **Narration** | Voice-over throughout. The mature default path |
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
+| **Silent** | Told in pictures: no narrator, and a spoken line only where a beat truly needs one |
 
 See [acted scenes](../performance_films.md) for what the modes actually render.
 
-An all-dialogue film is measured in clips rather than words: every scene is one acted take
+A dialogue or silent film is measured in clips rather than words: every scene is one take
 of about ten seconds, so the length you ask for becomes a scene count at that rate.
+
+**The direction box outranks the format's balance.** Whatever you pick, an instruction about
+staging — "mostly silent, one exchange near the end", "no narrator" — is followed rather
+than the format's own default mix. Use *Mixed* plus a direction when you want a balance no
+button describes; use *Silent* when pictures carry the whole film. (Instructions aimed at
+the narrator still survive in the formats that have one: a topic asking the narrator to
+introduce themselves becomes a narration scene saying exactly that.)
 
 ## How the script is written
 
