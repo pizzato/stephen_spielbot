@@ -1848,7 +1848,7 @@ def _story_format_note(fmt: str) -> str | None:
 
 
 def _build_dialogue_note(fmt: str, cast_names: list[str],
-                         chained: bool = False) -> str | None:
+                         chained: bool = False, acted_silent: bool = False) -> str | None:
     """Instruction appended to the script prompts so the LLM stages scenes as
     ACTED takes. None for the narration format (the prompts are unchanged).
 
@@ -1859,7 +1859,9 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     mid-sentence. *chained* (h3_chain_scenes) roughly doubles that budget: the
     renderer shoots long scenes as two joined clips, so without the bigger
     budget here the LLM keeps writing single-clip scenes and nothing ever
-    chains."""
+    chains. *acted_silent* (h3_silent_scenes) asks for a cast on the SILENT
+    scenes as well: those are performed from the same portraits, and a silent
+    scene with nobody named stays on the I2V path."""
     fmt = (fmt or "narration").strip().lower()
     if fmt not in ("dialogue", "mixed"):
         return None
@@ -1908,8 +1910,15 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
            "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
            "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
            "in the same setting rather than overfilling one. ")
+        + ("A \"silent\" scene leaves narration empty (visuals only), may set \"seconds\", and "
+           "gets a \"cast\" of the people ON SCREEN (AT MOST 2, from the same characters; "
+           "leave it out for a scene with nobody in it) plus \"setting\", \"camera\" and "
+           "\"soundscape\" exactly as a dialogue scene does — silent scenes are performed by "
+           "those characters, so name them. Nobody speaks in a silent scene: never give it "
+           "\"lines\". "
+           if acted_silent else
+           "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". ")
         +
-        "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". "
         f"{speakers} {balance} {instructions_rule} "
         "Still fill image_prompt and video_prompt as usual — for a dialogue scene they "
         "describe the setting the performance happens in."
@@ -2293,7 +2302,8 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     fmt = (brief.get("format") or "narration").strip().lower()
     dialogue_note = _build_dialogue_note(
         fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])],
-        chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")))
+        chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
+        acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")))
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(
@@ -4843,6 +4853,10 @@ def start_generation(body: GenerateBody) -> dict:
         # key silently falls back to the flat default and a per-style toggle
         # never reaches the render.
         "h3_chain_scenes": gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
+        # Act the silent scenes on H3 Ref2VA (from their cast's portraits)
+        # rather than animating them from a first frame. Stamped for the same
+        # reason as the flag above — the render reads the job config flat.
+        "h3_silent_scenes": gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).
@@ -11712,6 +11726,18 @@ def _chain_scenes_for_job(cfg: dict, jc: dict) -> bool:
             and _resolve_video_for_job(cfg, jc).get("family") == "minimax")
 
 
+def _acted_silent_cfg(jc: dict) -> dict:
+    """The ``h3_silent_scenes`` flag for a work-dir job, as a cfg for
+    performance.renders_acted: the job-config snapshot the film was rendered
+    with wins, then the style's current setting (older job dirs stamp neither).
+    """
+    flag = jc.get("h3_silent_scenes")
+    if flag is None:
+        cfg = gapp.load_config()
+        flag = gapp.style_settings(cfg, jc.get("style_name") or "").get("h3_silent_scenes")
+    return {"h3_silent_scenes": gapp._norm_h3_silent_scenes(flag)}
+
+
 def _run_video_rerender(task_id: str, wd: Path, sid: int, jc: dict, row: dict,
                         instruction: str = "") -> None:
     """Background thread: re-render video from the existing first frame → mux.
@@ -12062,9 +12088,12 @@ def _start_scene_rerender(wd: Path, sid: int, component: str, instruction: str =
         target = _run_narration_rerender
     elif component == "image":
         target = _run_image_rerender
-    elif scene_mode in performance_mode.PERFORMANCE_MODES:
+    elif performance_mode.renders_acted({"metadata": scene_meta},
+                                        _acted_silent_cfg(jc)):
         # Acted scenes re-render whole: one H3 generation carrying its own
-        # voices (there is no single narration wav to mux).
+        # sound (there is no first frame or narration wav to mux). Silent
+        # scenes shot on Ref2VA come back the same way — re-shooting one down
+        # the classic path would look nothing like the take in the cut.
         target = _run_acted_rerender
     else:
         target = _run_video_rerender

@@ -931,6 +931,16 @@ def main(work_dir: Path) -> None:
     # app.scene_plan_for_settings, which planned FEWER, LONGER scenes off the
     # same flag.
     chain_scenes = bool(chain_flag) and video_engine.get("family") == "minimax"
+    # Silent scenes acted on H3 Ref2VA (h3_silent_scenes) instead of animated
+    # from a first frame. Same three-step fallback as the flags above; resolved
+    # ONCE here and stamped flat into plan_cfg, so the task planner and the
+    # render below route every scene the same way.
+    silent_flag = cfg.get("h3_silent_scenes")
+    if silent_flag is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
+                silent_flag = s.get("h3_silent_scenes")
+                break
     tts_hosts     = cfg.get("tts_workers", [])
     worker_urls   = alive_workers(cfg.get("comfy_workers", []))
 
@@ -952,6 +962,7 @@ def main(work_dir: Path) -> None:
         "voice_ref": voice_ref_str or "",
         "voice_robotic_amount": voice_robotic_amount,
         "voice_speed": voice_speed,
+        "h3_silent_scenes": bool(silent_flag),
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)
@@ -984,9 +995,10 @@ def main(work_dir: Path) -> None:
     # then skip them (they operate on classic_scenes). A narration-only script
     # has dialogue_scenes == [] and classic_scenes == scenes, so everything
     # below runs exactly as before — which is what makes MIXED films work: each
-    # scene takes the path its mode asks for.
-    dialogue_scenes = [s for s in scenes
-                       if _performance.is_performance(s) and (s.lines or [])]
+    # scene takes the path its mode asks for. Silent scenes join them when the
+    # style acts those too (h3_silent_scenes) — the same predicate the task
+    # planner used, off the same stamped flag.
+    dialogue_scenes = [s for s in scenes if _performance.renders_acted(s, plan_cfg)]
     acted_ids = {s.id for s in dialogue_scenes}
     classic_scenes = [s for s in scenes if s.id not in acted_ids]
     dialogue_durs: dict[int, float] = {}

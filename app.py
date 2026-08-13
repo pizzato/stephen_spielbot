@@ -202,6 +202,11 @@ DEFAULT_CFG = {
     # ceiling. The planner then writes FEWER, LONGER scenes for the same
     # runtime. MiniMax engines only — LTX chains natively and ignores this.
     "default_h3_chain_scenes": False,
+    # Act the SILENT scenes too: a silent beat renders as an H3 Ref2VA take from
+    # its cast's portraits (no first frame, no I2V) instead of being animated
+    # from a still, so it matches the acted scenes it cuts against. Only scenes
+    # the writer gave a cast; the rest stay on the I2V path.
+    "default_h3_silent_scenes": False,
     # TTS engine per style (see pipeline/tts_engines.py): which narration model
     # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
     "default_tts_engine":   "openf5",
@@ -438,6 +443,8 @@ STYLE_FIELD_TO_FLAT = {
     "video_steps":          "default_video_steps",
     # Chain two H3 clips per scene so scenes can run past the model's ceiling
     "h3_chain_scenes":      "default_h3_chain_scenes",
+    # Act silent scenes on H3 Ref2VA instead of animating them from a still
+    "h3_silent_scenes":     "default_h3_silent_scenes",
     # Ref2VA engine for performance films — see pipeline/engines.py
     "reference_engine":     "default_reference_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
@@ -813,6 +820,11 @@ def _norm_h3_chain_scenes(value) -> bool:
     return bool(value)
 
 
+def _norm_h3_silent_scenes(value) -> bool:
+    """Coerce the acted-silent-scenes toggle to a plain bool (YAML/JSON/form)."""
+    return _norm_h3_chain_scenes(value)
+
+
 def _norm_first_frame_cover(value) -> str:
     """Coerce a first-frame cover mode to "none" | "image" | "text"."""
     from pipeline.cover import norm_first_frame_cover
@@ -965,6 +977,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "video_engine", _norm_video_engine)
         _coerce(row, "video_steps", _norm_video_steps)
         _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
+        _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)

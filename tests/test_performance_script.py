@@ -181,7 +181,10 @@ class PunctuationTests(unittest.TestCase):
         })
         self.assertNotIn("..", p)
         self.assertIn("Slow steady walk, holding him centre-frame.", p)
-        self.assertIn("seagulls at second 4. Clear dialogue, no music of any kind.", p)
+        # (No lines in this meta, so the sound block asks for silence — see
+        # test_silent_scenes_acted for the talking variant.)
+        self.assertIn("seagulls at second 4. No speech and no voices at all, "
+                      "no music of any kind.", p)
 
 
 class IdentityBindingTests(unittest.TestCase):

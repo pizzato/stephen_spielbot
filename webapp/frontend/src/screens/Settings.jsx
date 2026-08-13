@@ -2418,6 +2418,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="h3_chain_scenes" />
                 </Field>
               )}
+              {engineInfo && (
+                <Field label="Silent scenes — act them on H3 too"
+                  hint="A silent scene (a visual beat with no voice-over) is normally animated from a first-frame still by the I2V engine above. With this on it is PERFORMED instead: one MiniMax H3 Ref2VA take from the portraits of whoever is on screen, carrying its own ambience — the same path the acted scenes take, so a silent beat cuts against them as one production. The writer names the cast of each silent scene; a scene with nobody in it keeps the I2V path. Costs an acted scene's render time (~6 min per 10 s) instead of an I2V clip's.">
+                  <label className="check">
+                    <input type="checkbox" checked={!!eff.h3_silent_scenes}
+                      onChange={(e) => setStyleField('h3_silent_scenes', e.target.checked)} />
+                    <span>Perform silent scenes from character portraits</span>
+                  </label>
+                  <ParentVal k="h3_silent_scenes" />
+                </Field>
+              )}
             </div>
           </Card>
 

@@ -38,6 +38,32 @@ A scene written as dialogue in a mixed script only carries its lines — the cas
 who speaks, the length from what they say, and the setting from the scene's own video
 prompt.
 
+### Silent scenes, performed
+
+A **silent** scene is a visual beat with no voice-over. By default it is animated from a
+first-frame still by the style's I2V engine, like a narrated scene without the narration.
+Turn on **Settings → a style → Video models → Silent scenes — act them on H3 too**
+(`h3_silent_scenes`) and it is *performed* instead: one H3 Ref2VA take from the portraits
+of whoever is on screen, carrying its own ambience and saying nothing — the same path the
+acted scenes take, so the silent beat and the takes around it read as one production
+rather than two.
+
+The writer then names a **cast** on each silent scene (at most two, from the same
+characters), alongside the setting, camera and soundscape a dialogue scene gets. That cast
+is the switch: a silent scene with nobody in it has no portraits to perform from, so it
+stays on the I2V path — as does every silent scene in a style with the toggle off.
+
+Nothing else about the scene changes: it is still silent by contract. The prompt says so
+outright, and the same gate that watches an establishing wide transcribes the take and
+retakes (then mutes) it if the model babbles into the silence.
+
+!!! note "It costs an acted scene, not an I2V clip"
+    A performed silent beat renders in ~6 minutes per 10 s on a GB10, against roughly a
+    minute for the LTX clip it replaces. It also skips the first frame entirely, so the
+    scene's image prompt no longer produces a still — the scene's own preview, when the
+    Create screen already made one, rides along as the take's opening-composition
+    reference.
+
 ## What you need first
 
 **Characters with portraits.** The portraits *are* the conditioning: each cast member's
@@ -139,7 +165,8 @@ A style carries **two video model pickers**, side by side under *Video models*, 
 film can hold two kinds of scene:
 
 - **Narrated & silent scenes** — the I2V engine (LTX 2.5 or MiniMax H3) that animates each
-  scene from its first-frame still.
+  scene from its first-frame still. (Silent scenes leave for the Ref2VA picker below when
+  the style acts them — see [Silent scenes, performed](#silent-scenes-performed).)
 - **Acted (dialogue) scenes** — the Ref2VA engine that performs each acted scene from
   portraits and voices. Always a MiniMax H3 variant:
 

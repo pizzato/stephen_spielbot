@@ -568,6 +568,17 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
     if _perf.is_performance_mode(mode) and item.get("lines"):
         return _perf.scene_from_raw(scene_id, item, style_note=style_hint or "")
     if mode == "silent":
+        # cast/setting/camera/soundscape are kept when the writer supplied them:
+        # a style that acts its silent scenes (h3_silent_scenes) performs this
+        # beat from those characters' portraits, and the fields are what the H3
+        # prompt is assembled from. Absent, the scene renders as it always did.
+        extra = {k: item[k] for k in ("setting", "camera", "soundscape", "beats")
+                 if item.get(k)}
+        cast = item.get("cast")
+        if cast:
+            # One name comes back as a bare string often enough to matter — and
+            # list("Ada") is three "characters" nobody has a portrait for.
+            extra["cast"] = [cast] if isinstance(cast, str) else list(cast)
         return Scene(
             id=scene_id,
             title=item.get("title", f"Scene {scene_id}"),
@@ -576,7 +587,7 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
             narration="",
             mode="silent",
             duration=float(item.get("seconds") or 0) or _SILENT_SECONDS,
-            metadata_extra={"mode": "silent"},
+            metadata_extra={**extra, "mode": "silent"},
         )
     return Scene(
         id=scene_id,

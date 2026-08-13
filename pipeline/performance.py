@@ -16,6 +16,11 @@ The scenes themselves are written by pipeline/story.py, which stages an approved
 story as acted scenes when the film's format asks for them (``scene_from_raw``
 is where one of its scene objects becomes a Scene). A narrated scene in the same
 film is untouched by any of this.
+
+A SILENT scene can be performed the same way — same portraits, no dialogue —
+when the style asks for it (``h3_silent_scenes``): ``renders_acted`` is the one
+predicate that decides, and everything from the prompt down treats it as an
+acted scene whose cast happens to say nothing.
 """
 from __future__ import annotations
 
@@ -453,6 +458,12 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         geo.append(f"{' and '.join(people_names)} are together in the frame, "
                    f"{', '.join(placed)}, in a wide shot. Nobody speaks: every "
                    f"mouth stays completely closed for the whole shot.")
+    elif not lines:
+        # A shot with no lines is one the model will otherwise babble into —
+        # measured on real establishing wides. Say it outright; the render-time
+        # gate mutes whatever still gets through.
+        geo.append("Nobody speaks in this scene: every mouth stays completely "
+                   "closed for the whole shot.")
     if geo:
         sections.append("[SCREEN GEOGRAPHY]\n" + "\n".join(geo))
 
@@ -468,8 +479,9 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
 
     # [PRODUCTION SOUND] — diegetic only; performance films carry no score.
     soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
+    speech = "Clear dialogue" if lines else "No speech and no voices at all"
     sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
-                    f"Clear dialogue, no music of any kind.")
+                    f"{speech}, no music of any kind.")
 
     # [NEGATIVES] — a preservation contract plus named failure modes. H3 is
     # CFG-free: these are plain sentences, not a negative prompt.
@@ -602,7 +614,10 @@ def acted_meta(scene) -> dict:
         # against while the renderer sizes the clip from the words.
         meta["seconds"] = render_seconds(meta)
     elif not meta.get("seconds"):
-        meta["seconds"] = _clamp_seconds(field("duration", 0) or SCENE_SECONDS)
+        # A silent scene's authored length lives in ``duration`` — on the Scene
+        # itself, and in the metadata sidecar of a stored row.
+        meta["seconds"] = _clamp_seconds(
+            field("duration", 0) or meta.get("duration") or SCENE_SECONDS)
     meta["beats"] = norm_beats(meta.get("beats"), float(meta["seconds"]))
     return meta
 
@@ -617,6 +632,30 @@ def scene_meta(scene) -> dict:
 def is_performance(scene) -> bool:
     return (is_performance_mode(scene_meta(scene).get("mode"))
             or is_performance_mode(getattr(scene, "mode", "")))
+
+
+def is_silent(scene) -> bool:
+    return (str(scene_meta(scene).get("mode") or "").strip().lower() == "silent"
+            or str(getattr(scene, "mode", "") or "").strip().lower() == "silent")
+
+
+def renders_acted(scene, cfg: dict | None = None) -> bool:
+    """Does this scene render as ONE H3 Ref2VA take rather than first-frame I2V?
+
+    Always for a dialogue scene with lines. A SILENT scene only when the style
+    asks for it (``h3_silent_scenes``) AND the writer named who is on screen:
+    Ref2VA performs from portraits, so a castless scene has nothing to shoot
+    from and stays on the classic path.
+
+    The one predicate the task planner, the renderer and the editor's re-shoot
+    all call — they must agree, or a scene is planned on one path and rendered
+    on the other (an acted task nobody completes hangs the render).
+    """
+    if is_performance(scene) and (scene_meta(scene).get("lines")
+                                  or getattr(scene, "lines", None)):
+        return True
+    return (is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
+            and bool([c for c in (scene_meta(scene).get("cast") or []) if _clean(c)]))
 
 
 def parse_scene_rows(rows) -> list[dict]:
