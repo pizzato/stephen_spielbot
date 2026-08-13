@@ -32,7 +32,9 @@ An AI video generator that turns a topic into a fully produced short film — co
 A film's **format** decides how the story is staged: narrated throughout, entirely
 [**acted**](docs/performance_films.md) — the characters speaking on screen, no narrator and
 no music — or mixed, with acted, narrated and silent scenes side by side. Each scene then
-takes the render path its mode asks for.
+takes the render path its mode asks for — and a style can send its
+[silent scenes down the acted path too](docs/performance_films.md#silent-scenes-performed),
+performed from the same portraits so a wordless beat matches the takes it cuts against.
 
 Around the pipeline, the web app also handles the full channel workflow: a render
 queue with automation, AI-suggested video ideas, per-scene editing with image

@@ -114,6 +114,24 @@ TIMING_KIND_LABELS = {
 # dependency-free so the controller DB can be used standalone.)
 ACTED_SCENE_MODES = {"dialogue", "performance"}
 
+
+def _renders_acted(scene_md: dict[str, Any], config: dict[str, Any]) -> bool:
+    """Does this scene render as one acted H3 take instead of the classic
+    image → TTS → I2V → mux quartet?
+
+    Mirrors pipeline.performance.renders_acted — kept here so this module stays
+    dependency-free, and the two MUST agree: a scene planned as acted but
+    rendered classically (or the reverse) leaves a task nobody ever completes.
+    """
+    mode = str(scene_md.get("mode") or "").strip().lower()
+    if mode in ACTED_SCENE_MODES and (scene_md.get("lines") or []):
+        return True
+    # A silent scene is acted only where the style asks for it and the writer
+    # named who is on screen — Ref2VA performs from portraits.
+    return (mode == "silent" and bool(config.get("h3_silent_scenes"))
+            and bool([c for c in (scene_md.get("cast") or []) if str(c).strip()]))
+
+
 # Labels whose duration depends on output resolution (the rest are flat).
 TIMING_RES_SENSITIVE = {"image", "video", "finalize", "acted scene"}
 
@@ -533,13 +551,13 @@ class DurableStore:
             }
             scene_payload.update({k: v for k, v in common_scene_payload.items() if v is not None})
 
-            # An acted scene ("dialogue"/"performance") renders as ONE H3 Ref2VA
-            # generation carrying its own voices — no first frame, no TTS, no
-            # mux — so it gets one real task and the quartet below is skipped
+            # An acted scene ("dialogue"/"performance", and a silent scene when
+            # the style acts those too) renders as ONE H3 Ref2VA generation
+            # carrying its own sound — no first frame, no TTS, no mux — so it
+            # gets one real task and the quartet below is skipped
             # (queued-forever tasks poison the ETA).
             scene_md = _scene_value(scene, "metadata", {}) or {}
-            dlg_lines = scene_md.get("lines") or []
-            if scene_md.get("mode") in ACTED_SCENE_MODES and dlg_lines:
+            if _renders_acted(scene_md, config):
                 perf_task = task_id(job_id, "scene", sid, "performance")
                 self.create_task(
                     perf_task,
