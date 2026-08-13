@@ -126,10 +126,14 @@ class ScriptForkTests(TempConfigCase):
         ss = backend.gapp.style_settings(backend.gapp.load_config(), "Acted")
         body = backend.GenerateScriptBody(video_title="X", topic="y", minutes=1.0)
         # 60 s of film at ~10 s per acted clip.
-        self.assertEqual(backend._acted_scene_count(body, ss), 6)
-        # An explicit count still wins.
+        self.assertEqual(backend._acted_scene_plan(body, ss), (6, 10.0))
+        # An explicit count still wins, and stretches the takes to fill the
+        # minute — as far as one take goes (12 s), then the length gives way.
         body_n = backend.GenerateScriptBody(video_title="X", topic="y", minutes=1.0, n_scenes=3)
-        self.assertEqual(backend._acted_scene_count(body_n, ss), 3)
+        self.assertEqual(backend._acted_scene_plan(body_n, ss), (3, 12.0))
+        # More scenes than the length needs: shorter takes, same minute.
+        body_m = backend.GenerateScriptBody(video_title="X", topic="y", minutes=1.0, n_scenes=8)
+        self.assertEqual(backend._acted_scene_plan(body_m, ss), (8, 7.5))
 
 
 class RenderWiringTests(TempConfigCase):

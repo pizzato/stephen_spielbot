@@ -132,6 +132,7 @@ those scripts, so they accent the last line instead — nothing when the title f
 | Field | Effect |
 |---|---|
 | **Video length (minutes)** | The style's default runtime. The script's word budget is length × the narrator's cadence, divided into 10–15 s scenes |
+| **Scenes** | How many scenes that length becomes. *Auto* leaves it to the scene size (~12 s narrated, ~10 s a take when the scenes are clips); a count divides the length instead, so fewer scenes are longer ones — never past what the video engine holds in one take. [Create](create.md#length-scenes-and-resolution) can override it per film |
 | **Visual style** | Appended to every image prompt |
 | **Video / motion style** | Camera and subject movement guidance for video prompts |
 | **Video negative prompt** | Per-style LTX negative; blank uses the built-in quality default |
@@ -235,7 +236,7 @@ The voice library — the 10 bundled public-domain LibriVox voices plus anything
 - **Calibrate** measures a voice's natural **cadence** (words per minute) by timing a
   fixed passage — **Calibrate all cadences** does the whole library. The number is shown
   on each row and keeps refining automatically from every real narration render. Cadence
-  drives the [length → word budget](create.md#length-and-resolution) sizing and the
+  drives the [length → word budget](create.md#length-scenes-and-resolution) sizing and the
   per-style cadence control
 
 Voices are cloned from a single reference clip, so a clean 10–20 seconds is worth more than

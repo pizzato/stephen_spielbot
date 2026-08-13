@@ -254,6 +254,11 @@ DEFAULT_CFG = {
     # word budget is minutes × cadence, divided into 10–15 s scenes
     # (pipeline/cadence.py). 0 = derive the length from the legacy n_scenes.
     "default_video_minutes": 0.0,
+    # How many scenes that length is divided into. 0 = as many as the scene
+    # contract implies (~12 s each narrated, ~10 s acted); >0 pins the count,
+    # so fewer scenes are longer ones and more are shorter — held inside what
+    # the video engine can render in one take (cadence.engine_scene_ceiling).
+    "default_video_scenes": 0,
     # Burn the cover into the head of the final video when a render finishes
     # ("none" | "image" | "text") — YouTube Shorts ignore uploaded thumbnails
     # and pick their own frame. Held for _seconds (1s by default; a single
@@ -417,6 +422,8 @@ STYLE_FIELD_TO_FLAT = {
     "n_scenes":             "default_n_scenes",
     # Target video length in minutes (0 = derive from legacy n_scenes)
     "video_minutes":        "default_video_minutes",
+    # Scenes that length is divided into (0 = derive from the length)
+    "video_scenes":         "default_video_scenes",
     # Burn the cover into the head of the final video after each render
     # ("none" | "image" | "text") — Shorts pick their own frame, not the
     # uploaded thumbnail — and how long that cover is held (seconds)
@@ -808,6 +815,15 @@ def _norm_video_minutes(value) -> float:
     return 0.0 if v <= 0 else round(max(0.25, min(cadence.MAX_MINUTES, v)), 2)
 
 
+def _norm_video_scenes(value) -> int:
+    """Clamp the scene count to 0..MAX_SCENES (0 = derive it from the length)."""
+    try:
+        v = int(float(value))
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(MAX_SCENES, v))
+
+
 def _norm_reference_engine(value) -> str:
     """Coerce a Ref2VA engine key (performance films) to a known one."""
     return engines.resolve_reference({}, value)["key"]
@@ -984,6 +1000,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)
         _coerce(row, "voice_cadence_wpm", _norm_voice_cadence_wpm)
         _coerce(row, "video_minutes", _norm_video_minutes)
+        _coerce(row, "video_scenes", _norm_video_scenes)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
         _coerce(row, "cover_typography", _norm_cover_typography)
@@ -1274,11 +1291,20 @@ def style_video_minutes(ss: dict) -> float:
     return cadence.minutes_for_scenes(n or int(DEFAULT_CFG["default_n_scenes"]))
 
 
+def style_video_scenes(ss: dict) -> int:
+    """How many scenes this style divides its length into — 0 when it leaves
+    that to the scene contract (``video_scenes``, the per-style default for
+    the Create screen's scene count)."""
+    return _norm_video_scenes(ss.get("video_scenes"))
+
+
 def style_script_plan(ss: dict, minutes: float | None = None,
                       n_scenes: int | None = None) -> dict:
-    """Cadence plan (word budget + 10–15 s scene caps) for a resolved
-    style-settings dict. Explicit *minutes* wins; an explicit *n_scenes* pins
-    the scene count (redraft/legacy callers); else the style's own length."""
+    """Cadence plan (word budget + scene caps) for a resolved style-settings
+    dict. Explicit *minutes* wins, else the style's own length; an explicit
+    *n_scenes* (else the style's ``video_scenes``) divides that length into
+    that many scenes, so fewer scenes are longer ones. A count with no length
+    at all is the legacy redraft path: the count sets the length."""
     from pipeline import cadence
     wpm, measured = cadence.effective_wpm(ss)
     try:
@@ -1290,12 +1316,14 @@ def style_script_plan(ss: dict, minutes: float | None = None,
     # MiniMax engines chain; LTX has its own continuation and ignores the flag.
     chained = bool(ss.get("h3_chain_scenes")) and \
         str(ss.get("video_engine") or "").startswith("minimax-h3")
-    if minutes and float(minutes) > 0:
-        plan = cadence.plan_script(float(minutes), wpm, pause, chained)
-    elif n_scenes and int(n_scenes) > 0:
+    count = int(n_scenes or 0) or style_video_scenes(ss)
+    ceiling = cadence.engine_scene_ceiling(ss.get("video_engine"), chained)
+    if n_scenes and int(n_scenes) > 0 and not (minutes and float(minutes) > 0):
         plan = cadence.plan_for_scenes(int(n_scenes), wpm, pause, chained)
     else:
-        plan = cadence.plan_script(style_video_minutes(ss), wpm, pause, chained)
+        plan = cadence.plan_script(
+            float(minutes) if minutes and float(minutes) > 0 else style_video_minutes(ss),
+            wpm, pause, chained, n_scenes=count, scene_ceiling=ceiling)
     plan["n_scenes"] = min(plan["n_scenes"], MAX_SCENES)
     plan["wpm_measured"] = measured
     plan["voice"] = ss.get("voice") or ""

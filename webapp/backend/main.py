@@ -1859,7 +1859,8 @@ def _story_format_note(fmt: str) -> str | None:
 
 
 def _build_dialogue_note(fmt: str, cast_names: list[str],
-                         chained: bool = False, acted_silent: bool = False) -> str | None:
+                         chained: bool = False, acted_silent: bool = False,
+                         scene_secs: float | None = None) -> str | None:
     """Instruction appended to the script prompts so the LLM stages scenes as
     ACTED takes. None for the narration format (the prompts are unchanged).
 
@@ -1876,10 +1877,19 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
 
     The "silent" format shares all of it — a silent film is staged from the
     same schema, with the balance pushed the other way: pictures carry the
-    story and a spoken line is the exception."""
+    story and a spoken line is the exception.
+
+    *scene_secs* is how long one take runs when the brief asked for a scene
+    count (_acted_scene_plan); the budgets below are written to it, since a
+    scene the writer fills to the wrong length is the one that truncates."""
     fmt = (fmt or "narration").strip().lower()
     if fmt not in ("dialogue", "mixed", "silent"):
         return None
+    # An acted take is bound by the model, not by the narrated scene window a
+    # mixed film's plan carries: hold the asked-for length inside it.
+    take_secs = min(max(float(scene_secs or 0) or performance_mode.scene_seconds(chained),
+                        performance_mode.MIN_SCENE_SECONDS),
+                    performance_mode.acted_limits(chained)[0])
     cast = ", ".join(n for n in cast_names if n)
     speakers = (
         f"Speakers are these existing characters ({cast}) and/or the main character(s) "
@@ -1891,7 +1901,7 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     # A silent scene's length is AUTHORED (there are no words to count it from),
     # so the writer is given the window the renderer will actually hold it
     # inside — which chaining widens to the joined-clip take.
-    silent_target = round(performance_mode.scene_seconds(chained))
+    silent_target = round(take_secs)
     silent_max = int(performance_mode.acted_limits(chained)[0])
     silent_budget = (
         f"A silent scene is ONE continuous take, so give it a \"seconds\" of about "
@@ -1951,14 +1961,12 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
         "single shot and at most one move,\n"
         "  \"soundscape\": diegetic sound only (no score),\n"
         "and leaves \"narration\" EMPTY. "
-        + ("HARD BUDGET: the take runs about 20 seconds, so keep a dialogue scene to AT MOST "
-           "6 lines and 45 spoken words TOTAL — a real exchange, not a fragment — and split "
-           "anything longer across consecutive scenes in the same setting rather than "
-           "overfilling one. "
-           if chained else
-           "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
-           "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
-           "in the same setting rather than overfilling one. ")
+        + (f"HARD BUDGET: the take runs about {round(take_secs)} seconds, so keep a dialogue "
+           f"scene to AT MOST {max(1, round(take_secs / 3.2))} lines and "
+           f"{max(6, round(take_secs * 2.25))} spoken words TOTAL — "
+           + ("a real exchange, not a fragment — and split " if take_secs >= 15 else "split ")
+           + "anything longer across consecutive scenes in the same setting rather than "
+           "overfilling one. ")
         + ("A \"silent\" scene leaves narration empty (visuals only) and gets \"setting\", "
            "\"camera\" and \"soundscape\" exactly as a dialogue scene does — silent scenes "
            "are PERFORMED, not animated from a still. Whenever anyone is in shot, give it a "
@@ -2211,28 +2219,35 @@ def _merge_story_edits(story: dict, edits: list["StoryChapterEdit"]) -> None:
             target["text"] = edit.text.strip()
 
 
-def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
-    """How many scenes a film made of CLIPS gets — acted or silent.
+def _acted_scene_plan(body: GenerateScriptBody, ss: dict) -> tuple[int, float]:
+    """(scene count, seconds per scene) for a film made of CLIPS — acted or
+    silent.
 
     Not the narration cadence plan: these scenes are clips capped by the video
     model (~10 s each, or ~19 s where the style chains them), not a word budget.
-    An explicit scene count wins, then the requested minutes at one scene per
-    take, then the style's own length."""
+    The requested length is divided by the requested scene count (the style's
+    ``video_scenes`` when the brief doesn't say), so fewer scenes are longer
+    takes — up to the threshold a take is split at, past which the LENGTH gives
+    way rather than the clip truncating. With no count, the length alone sets
+    how many one-take scenes it takes to fill."""
+    chained = gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes"))
+    secs = performance_mode.scene_seconds(chained)
     try:
         n = int(body.n_scenes or 0)
     except (TypeError, ValueError):
         n = 0
-    if n > 0:
-        return n
+    n = n or gapp.style_video_scenes(ss)
     try:
         minutes = float(body.minutes or 0)
     except (TypeError, ValueError):
         minutes = 0.0
-    if minutes > 0:
-        secs = performance_mode.scene_seconds(
-            gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")))
-        return max(1, round(minutes * 60.0 / secs))
-    return int(_plan_for_generate(body, ss)["n_scenes"])
+    minutes = minutes if minutes > 0 else gapp.style_video_minutes(ss)
+    if n > 0:
+        n = min(gapp.MAX_SCENES, n)
+        ceiling = performance_mode.acted_limits(chained)[0]
+        secs = min(max(minutes * 60.0 / n, performance_mode.MIN_SCENE_SECONDS), ceiling)
+        return n, secs
+    return max(1, min(gapp.MAX_SCENES, round(minutes * 60.0 / secs))), secs
 
 
 def _do_story_generate(body: GenerateScriptBody) -> dict:
@@ -2259,7 +2274,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     if fmt in ("dialogue", "silent"):
         # Every scene is one clip — acted, or a silent beat nobody narrates —
         # so the length comes from clip count, not a narrator's word budget.
-        plan = {**plan, "n_scenes": _acted_scene_count(body, ss)}
+        acted_n, acted_secs = _acted_scene_plan(body, ss)
+        plan = {**plan, "n_scenes": acted_n, "scene_secs_target": acted_secs,
+                "minutes": round(acted_n * acted_secs / 60.0, 2)}
     # The draft only learns WHO tells the story (acted / mixed); the acted
     # scene schema and clip budgets bind at the divide step, so the prose
     # comes out well-formed whatever the film's length.
@@ -2360,10 +2377,15 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     # The format decides how the story is STAGED: narrated voice-over, acted
     # scenes the characters speak, or a mix of both (and silent beats).
     fmt = (brief.get("format") or "narration").strip().lower()
+    # The take length the draft was planned to (an explicit scene count divides
+    # the film's length into longer or shorter scenes) so the acted budgets the
+    # writer works to match the clips the renderer will actually shoot.
+    plan = story.get("scene_plan") or brief.get("scene_plan") or {}
     dialogue_note = _build_dialogue_note(
         fmt, [c.get("name", "") for c in requested_chars],
         chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
-        acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")))
+        acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
+        scene_secs=plan.get("scene_secs_target") if isinstance(plan, dict) else None)
     try:
         with _track_op("Dividing story into scenes", display_topic):
             scenes, music_desc, style, characters = story_mode.divide_story(

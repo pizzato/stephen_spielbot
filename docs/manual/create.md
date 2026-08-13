@@ -31,12 +31,26 @@ Both labels carry a regenerate button: it rewrites the field with the LLM, and y
 it a free-text instruction or use the chips — *Shorter*, *Punchier*, *More specific* for
 the title; *Sharper angle*, *More detail*, *Simpler* for the direction.
 
-## Length and Resolution
+## Length, Scenes and Resolution
 
 **Length** is a slider in minutes. The script's word budget comes from the narrator's
 cadence (words per minute — measured per voice, see Settings → Voices), and the story is
 divided into scenes of 10–15 seconds each; the hint under the slider shows the estimated
 word count and scene count live. Picking a style prefills its default length.
+
+**Scenes** decides how many scenes that length becomes. Left on *Auto* it's whatever the
+length needs at the usual scene size — about 12 seconds of narration each, or one ~10 s
+take in a dialogue or silent film. Type a count and the length is divided by it instead, so
+**fewer scenes are longer ones** and more scenes are shorter, quicker cuts. The hint under
+the box shows what a scene works out to. Picking a style prefills its default
+([Settings → Styles](settings.md#script-content)); the count you type here overrides it for
+this film only.
+
+A scene can only run as long as the style's video engine holds in a single take — about
+40 s on LTX, and 12 s on MiniMax H3 (23 s where the style
+[chains its scenes](../performance_films.md)). Ask for a count so low that the scenes
+can't fill the length, and **the count wins**: the hint tells you what the film will
+actually run.
 
 **Resolution** picks orientation first, then quality — higher is slower. Portrait means the
 film is treated as a Short, which the predictive model weighs differently.
@@ -64,7 +78,8 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 See [acted scenes](../performance_films.md) for what the modes actually render.
 
 A dialogue or silent film is measured in clips rather than words: every scene is one take
-of about ten seconds, so the length you ask for becomes a scene count at that rate.
+of about ten seconds, so the length you ask for becomes a scene count at that rate — unless
+you set **Scenes** yourself, which stretches or shortens the takes instead.
 
 **The direction box outranks the format's balance.** Whatever you pick, an instruction about
 staging — "mostly silent, one exchange near the end", "no narrator" — is followed rather

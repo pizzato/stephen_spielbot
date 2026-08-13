@@ -63,18 +63,28 @@ CHAIN_CLIPS = 2
 CHAIN_JOIN_SECS = 22 / 24.0
 
 
-def scene_window(chained: bool = False) -> tuple[float, float, float]:
+def scene_window(chained: bool = False,
+                 scene_secs: float | None = None) -> tuple[float, float, float]:
     """(min, target, max) seconds of narration for one scene.
 
     Unchained is the model's own 10–15 s contract. Chained multiplies it by
     CHAIN_CLIPS and pays CHAIN_JOIN_SECS per join, so callers budget against
-    what a scene actually delivers rather than what it sampled."""
+    what a scene actually delivers rather than what it sampled.
+
+    *scene_secs* re-centres the window on a length the caller asked for (an
+    explicit scene count — see :func:`plan_script`), keeping the contract's
+    proportions so a stretched scene still has room to run over or under."""
     if not chained:
-        return SCENE_MIN_SECS, SCENE_TARGET_SECS, SCENE_MAX_SECS
-    lost = CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
-    return (SCENE_MIN_SECS * CHAIN_CLIPS - lost,
-            SCENE_TARGET_SECS * CHAIN_CLIPS - lost,
-            SCENE_MAX_SECS * CHAIN_CLIPS - lost)
+        base = (SCENE_MIN_SECS, SCENE_TARGET_SECS, SCENE_MAX_SECS)
+    else:
+        lost = CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
+        base = (SCENE_MIN_SECS * CHAIN_CLIPS - lost,
+                SCENE_TARGET_SECS * CHAIN_CLIPS - lost,
+                SCENE_MAX_SECS * CHAIN_CLIPS - lost)
+    if not scene_secs or float(scene_secs) <= 0:
+        return base
+    scale = float(scene_secs) / base[1]
+    return base[0] * scale, float(scene_secs), base[2] * scale
 
 # Mirror of generate_narration's speed clamp.
 SPEED_MIN, SPEED_MAX = 0.3, 2.0
@@ -83,14 +93,39 @@ SPEED_MIN, SPEED_MAX = 0.3, 2.0
 # words, ~9 s") — used only to interpret legacy scene counts as minutes.
 LEGACY_SCENE_SECS = 9.0
 
-# Longest plannable video: the MAX_SCENES cap (200) at the scene target.
-MAX_MINUTES = 200 * SCENE_TARGET_SECS / 60.0
+# Most scenes one script may have (app.MAX_SCENES).
+MAX_SCENES = 200
+
+# Longest plannable video: the MAX_SCENES cap at the scene target.
+MAX_MINUTES = MAX_SCENES * SCENE_TARGET_SECS / 60.0
 
 
 def max_minutes(chained: bool = False) -> float:
     """MAX_MINUTES for the given chaining mode — chained scenes are longer, so
     the same 200-scene cap reaches further."""
-    return 200 * scene_window(chained)[1] / 60.0
+    return MAX_SCENES * scene_window(chained)[1] / 60.0
+
+
+# An explicit scene count decides how long a scene runs (length ÷ count), so
+# the 10–15 s contract stops being the bound — the video engine is. Below the
+# floor a scene is too short to hold a sentence; the ceiling is the longest
+# single take the engine can render.
+SCENE_FLOOR_SECS = 5.0
+# comfyui.LTX_MAX_FRAMES (1000) at LTX_FPS (25).
+LTX_SCENE_CEIL_SECS = 40.0
+
+
+def engine_scene_ceiling(video_engine: str | None = None,
+                         chained: bool = False) -> float:
+    """The longest one scene may be stretched to on a style's video engine.
+
+    LTX renders up to LTX_SCENE_CEIL_SECS in a pass; MiniMax H3 is held to the
+    same threshold an acted take is split at (performance.acted_limits), which
+    chaining widens — past it a clip truncates rather than running longer."""
+    if str(video_engine or "").startswith("minimax-h3"):
+        from pipeline.performance import acted_limits  # lazy: avoid cycle
+        return acted_limits(chained)[0]
+    return LTX_SCENE_CEIL_SECS
 
 # Sanity range for measured cadences — samples outside are discarded (a
 # mis-measured duration, a transcript mismatch, a silence-heavy take).
@@ -304,7 +339,9 @@ def effective_wpm(settings: dict) -> tuple[float, bool]:
 # ── Length planning ───────────────────────────────────────────────────────────
 
 def plan_script(minutes: float, wpm: float,
-                sentence_pause: float = 0.0, chained: bool = False) -> dict:
+                sentence_pause: float = 0.0, chained: bool = False,
+                n_scenes: int | None = None,
+                scene_ceiling: float | None = None) -> dict:
     """Turn a target length into a word budget and per-scene word caps.
 
     Each scene is one scene_window() of audio; when the style splices
@@ -314,12 +351,30 @@ def plan_script(minutes: float, wpm: float,
 
     With *chained* on, the same runtime is planned as fewer, longer scenes —
     each carrying proportionally more narration.
+
+    *n_scenes* asks for that many scenes rather than the count the target
+    length implies: the length is divided by it, so fewer scenes are longer
+    ones. A scene may only stretch to *scene_ceiling* (default: the contract's
+    own maximum — :func:`engine_scene_ceiling` is what the engine allows), and
+    the LENGTH gives way when the count cannot fit it: the returned ``minutes``
+    is what the film will actually run.
     """
-    secs_min, secs_target, secs_max = scene_window(chained)
-    minutes = max(0.25, min(max_minutes(chained), float(minutes or 0)))
+    minutes = float(minutes or 0)
+    n_scenes = max(0, int(n_scenes or 0))
+    scene_secs = None
+    if n_scenes > 0:
+        n_scenes = min(MAX_SCENES, n_scenes)
+        ceiling = max(SCENE_FLOOR_SECS,
+                      float(scene_ceiling or scene_window(chained)[2]))
+        minutes = max(0.25, min(MAX_SCENES * ceiling / 60.0, minutes))
+        scene_secs = min(max(minutes * 60.0 / n_scenes, SCENE_FLOOR_SECS), ceiling)
+        minutes = n_scenes * scene_secs / 60.0
+    else:
+        minutes = max(0.25, min(max_minutes(chained), minutes))
+    secs_min, secs_target, secs_max = scene_window(chained, scene_secs)
     wpm = float(wpm) if wpm and wpm > 0 else DEFAULT_WPM
     gap = max(0.0, min(float(sentence_pause or 0.0), secs_min / 2))
-    n_scenes = max(1, round(minutes * 60.0 / secs_target))
+    n_scenes = n_scenes or max(1, round(minutes * 60.0 / secs_target))
     words_target = max(1, round(wpm * (secs_target - gap) / 60.0))
     words_max = max(words_target, math.floor(wpm * (secs_max - gap) / 60.0))
     words_min = max(1, min(words_target, math.ceil(wpm * (secs_min - gap) / 60.0)))
@@ -333,6 +388,7 @@ def plan_script(minutes: float, wpm: float,
         "scene_words_min": words_min,
         "scene_words_max": words_max,
         "scene_secs_min": secs_min,
+        "scene_secs_target": secs_target,
         "scene_secs_max": secs_max,
         "chained": bool(chained),
     }

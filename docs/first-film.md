@@ -36,6 +36,8 @@ you into **Create** with the topic already filled in.
   cadence (words per minute) and divided into 10–15 second scenes; the hint under the
   slider shows the estimated words and scenes. Start small: your first render is also the
   one that builds the timing table.
+- **Scenes** — leave it on *Auto* for a first run. It divides that length into a scene
+  count you choose, so fewer scenes are longer ones.
 - **Resolution** — orientation first, then quality. Portrait makes a Short.
 - **Format** — leave it on **Narration** for a first run. Dialogue needs characters with
   portraits and voices.

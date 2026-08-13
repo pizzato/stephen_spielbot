@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimate, lengthEstimateLabel, sceneBounds, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
 
@@ -56,6 +56,10 @@ export default function Create({ seed, meta, onGenerated }) {
   const [minutes, setMinutes] = useState(
     seed?.minutes || (seed?.scenes ? legacyMinutes(seed.scenes) : 0)
     || (profile ? styleMinutes(profile) : 1))
+  // How many scenes that length is divided into — 0 = as many as the scene
+  // contract implies. Pinning a count makes the scenes longer or shorter
+  // (length ÷ count), which is why the style owns a default for it.
+  const [sceneCount, setSceneCount] = useState(profile?.video_scenes || 0)
   const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
@@ -115,6 +119,10 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [profile, profile?.video_minutes, profile?.n_scenes, seed?.minutes, seed?.scenes])
 
   useEffect(() => {
+    if (profile) setSceneCount(profile.video_scenes || 0)
+  }, [profile, profile?.video_scenes])
+
+  useEffect(() => {
     if (seed?.resolution || !profile) return
     setResolution(profile.resolution || meta.default_resolution || '')
   }, [profile, profile?.resolution, meta.default_resolution, seed?.resolution])
@@ -157,6 +165,18 @@ export default function Create({ seed, meta, onGenerated }) {
   // voices generated with its picture.
   const musicable = format !== 'dialogue'
 
+  // A dialogue/silent film is made of CLIPS, not narration: its scenes have no
+  // word budget, and their length is what the video model can hold in one take.
+  const acted = format === 'dialogue' || format === 'silent'
+  const bounds = useMemo(() => sceneBounds(profile || {}, format), [profile, format])
+  const est = useMemo(
+    () => lengthEstimate(minutes, effectiveWpm(meta, profile || {}, voice).wpm,
+                         profile?.tts_sentence_pause, sceneCount, bounds),
+    [minutes, meta, profile, voice, sceneCount, bounds])
+  // A count the length can't fill at these scene lengths: the count wins and
+  // the film comes out at whatever it adds up to.
+  const lengthGaveWay = Math.abs(est.minutes - (Number(minutes) || 0)) > 0.02
+
   const generate = async () => {
     setBusy(true); setError('')
     try {
@@ -164,6 +184,7 @@ export default function Create({ seed, meta, onGenerated }) {
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         minutes: Number(minutes) || 0,
+        n_scenes: Number(sceneCount) || 0,
         visual_style: style.trim() || null,
         auto_approve: autoApprove,
         voice,
@@ -231,7 +252,9 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Length — ${fmtDuration(minutes)}`}
-                  hint={`${lengthEstimateLabel(minutes, effectiveWpm(meta, profile || {}, voice).wpm, profile?.tts_sentence_pause)} at ${voice || 'the narrator'}’s cadence.`}>
+                  hint={acted
+                    ? `${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of ~${Math.round(est.sceneSecs)} s — no narration to budget.`
+                    : `${lengthEstimateLabel(minutes, effectiveWpm(meta, profile || {}, voice).wpm, profile?.tts_sentence_pause, sceneCount, bounds)} at ${voice || 'the narrator'}’s cadence.`}>
                   <input className="slider" type="range" min={0.5} max={30} step={0.25} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
                 </Field>
               </div>
@@ -241,6 +264,22 @@ export default function Create({ seed, meta, onGenerated }) {
                 </Field>
               </div>
             </div>
+
+            <Field label="Scenes"
+              hint={sceneCount > 0
+                ? (lengthGaveWay
+                  ? `${sceneCount} scenes of ~${Math.round(est.sceneSecs)} s — as far as this style’s video model stretches a single take, so the film runs ${fmtDuration(est.minutes)} rather than ${fmtDuration(minutes)}.`
+                  : `${fmtDuration(minutes)} split ${sceneCount} ways — ~${Math.round(est.sceneSecs)} s a scene. Fewer scenes are longer ones.`)
+                : `Automatic — the length becomes ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of ~${Math.round(est.sceneSecs)} s. Set a count to make the scenes longer or shorter.`}>
+              <div className="row center gap-8">
+                <input className="input" type="number" min={0} max={200} step={1}
+                  value={sceneCount || ''} placeholder="Auto" style={{ width: 110 }}
+                  onChange={(e) => setSceneCount(Math.max(0, Math.min(200, parseInt(e.target.value, 10) || 0)))} />
+                {sceneCount > 0 && (
+                  <Button variant="ghost" onClick={() => setSceneCount(0)}>Auto</Button>
+                )}
+              </div>
+            </Field>
 
             <Field label="Visual style"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : "Applied to every scene's image prompt."}>
@@ -276,8 +315,8 @@ export default function Create({ seed, meta, onGenerated }) {
               <div className="stack gap-4">
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   You'll review the story next, then divide it into scenes.
-                  {format === 'dialogue' && ' Each scene becomes one acted clip of about 10 seconds.'}
-                  {format === 'silent' && ' Each scene becomes one clip of about 10 seconds, with no voice-over.'}
+                  {format === 'dialogue' && ` Each scene becomes one acted clip of about ${Math.round(est.sceneSecs)} seconds.`}
+                  {format === 'silent' && ` Each scene becomes one clip of about ${Math.round(est.sceneSecs)} seconds, with no voice-over.`}
                 </span>
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />

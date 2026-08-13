@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
@@ -1366,6 +1366,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return Number(v) > 0 ? `${v} words/min` : 'natural pace'
       case 'video_minutes':
         return Number(v) > 0 ? fmtDuration(v) : '(from legacy scene count)'
+      case 'video_scenes':
+        return Number(v) > 0 ? `${v} scenes` : 'automatic'
       case 'size_presets':
         return ['small', 'medium', 'large'].map((b) => {
           const p = (v || {})[b] || {}
@@ -2153,10 +2155,19 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             <span className="label-sm">Script & content</span>
             <div className="stack gap-22 mt-16">
               <Field label={`Video length — ${fmtDuration(styleMinutes(eff))}`}
-                hint={`How long this style's videos run. The script's word budget comes from the narrator's cadence, divided into 10–15s scenes — ${lengthEstimateLabel(styleMinutes(eff), effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause)}.`}>
+                hint={`How long this style's videos run. The script's word budget comes from the narrator's cadence, divided into scenes — ${lengthEstimateLabel(styleMinutes(eff), effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause, eff.video_scenes, sceneBounds(eff))}.`}>
                 <DurationInput value={eff.video_minutes || styleMinutes(eff)}
                   onChange={(v) => setStyleField('video_minutes', v)} />
                 <ParentVal k="video_minutes" />
+              </Field>
+              <Field label="Scenes"
+                hint={Number(eff.video_scenes) > 0
+                  ? `That length split ${eff.video_scenes} ways — about ${Math.round(sceneSecsFor(styleMinutes(eff), eff.video_scenes, sceneBounds(eff)))} s a scene. Fewer scenes are longer ones; a scene never runs past what the video engine holds in one take. The Create screen can override it per film.`
+                  : 'Automatic — as many scenes as the length needs (about 12 s of narration each, 10 s a take in an acted or silent film). Set a count to make this style’s scenes longer or shorter.'}>
+                <input className="input" type="number" min={0} max={200} step={1}
+                  value={eff.video_scenes || ''} placeholder="Auto" style={{ width: 110 }}
+                  onChange={(e) => setStyleField('video_scenes', Math.max(0, Math.min(200, parseInt(e.target.value, 10) || 0)))} />
+                <ParentVal k="video_scenes" />
               </Field>
               <Field label="Visual style" hint="Applied to every scene's image prompt.">
                 <input className="input" value={fieldVal('visual_style')} onChange={(e) => setStyleField('visual_style', e.target.value)} />
