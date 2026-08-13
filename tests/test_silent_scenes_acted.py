@@ -4,6 +4,7 @@ The contract: with the toggle on, a silent scene whose writer named a cast is
 PERFORMED from those portraits — one acted take, no first frame, no TTS, no mux
 — and says nothing. Off (or castless), it renders exactly as it always did.
 """
+import json
 import sys
 import tempfile
 import unittest
@@ -357,6 +358,68 @@ class SettingsTests(unittest.TestCase):
         self.assertNotIn("PERFORMED", off)
         # Narrated films never see any of it.
         self.assertIsNone(m._build_dialogue_note("narration", ["Ana"], acted_silent=True))
+
+
+class AssemblyTests(unittest.TestCase):
+    """An acted silent film must reach its final cut.
+
+    The regression: acted silent scenes are planned as ONE performance task —
+    they have no mux task — but the mux loop only skipped DIALOGUE scenes, so
+    it recorded a scene_final artifact against a task id that was never
+    created. SQLite's FK check killed the render after every clip was already
+    on disk ("FOREIGN KEY constraint failed"), leaving the film unassembled.
+    """
+
+    def _run(self, script_rows, job_cfg):
+        import resume_generation as rg
+        from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        wd = root / "film-20260813-194405"
+        wd.mkdir()
+        out_dir = root / "out"
+        out_dir.mkdir()
+        (wd / "script.json").write_text(json.dumps(script_rows))
+        (wd / "job_config.json").write_text(json.dumps(job_cfg))
+        for row in script_rows:
+            (wd / f"scene_{row['id']:02d}_final.mp4").write_bytes(b"m" * 20_000)
+
+        store = DurableStore(root / "orchestrator.sqlite3")
+        self.addCleanup(store.close)
+        m = unittest.mock
+        with m.patch.object(rg, "load_config", return_value={}), \
+             m.patch.object(rg.DurableStore, "default", classmethod(lambda cls: store)), \
+             m.patch.object(rg, "OUTPUT_DIR", out_dir), \
+             m.patch.object(rg, "alive_workers", return_value=["http://w:8188"]), \
+             m.patch.object(rg, "generate_cover_image"), \
+             m.patch.object(rg, "ensure_video_resolution"), \
+             m.patch.object(rg, "_get_duration", return_value=6.0), \
+             m.patch.object(rg, "concatenate_scenes",
+                            side_effect=lambda clips, out: Path(out).write_bytes(b"c" * 20_000)):
+            rg.main(wd)
+        return store, job_id_from_work_dir(wd), out_dir
+
+    def _silent_row(self, sid):
+        return {"id": sid, "title": f"beat {sid}", "image_prompt": "a wharf at dusk",
+                "video_prompt": "a wharf at dusk", "narration": "",
+                "metadata": {"mode": "silent", "cast": ["Ana"], "duration": 6.0}}
+
+    def test_an_acted_silent_film_assembles(self):
+        store, job, out_dir = self._run(
+            [self._silent_row(1), self._silent_row(2)],
+            {"h3_silent_scenes": True, "music_enabled": False,
+             "tts_workers": ["http://t:8000"],   # unused: nothing is narrated
+             "resolution": "Landscape 720p (1280×720)", "title": "Scene 1"})
+        finals = list(out_dir.glob("*.mp4"))
+        self.assertEqual(len(finals), 1, "the film never reached its final cut")
+        self.assertEqual(store.get_job(job)["status"], "done")
+        # …and the scene_final artifacts hung off the performance tasks, not a
+        # mux task that was never planned.
+        kinds = {r["id"]: r["status"] for r in store.task_rows(job)}
+        self.assertEqual(kinds.get(f"{job}:final"), "succeeded")
+        self.assertNotIn(f"{job}:scene:1:mux", kinds)
 
 
 if __name__ == "__main__":
