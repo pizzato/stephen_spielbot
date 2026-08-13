@@ -188,14 +188,26 @@ Consistency comes from three mechanisms, each born from a measured failure:
   distance anyway).
 - **A quality gate.** Every talking shot is transcribed (faster-whisper, CPU,
   seconds against a ~6-minute render) and scored against its scripted line; a
-  miss is retaken with a fresh seed and the better take kept
+  miss is retaken and the better take kept
   (`performance_verify`, `performance_verify_retakes`, default one retake).
   The gate verifies **speech, not picture** — a visually broken shot that says
   its line still passes.
+- **A truncated take is retaken LONGER, not just re-rolled.** A shot that says
+  the start of its line and then hits the last frame is a separate failure from
+  one that says the wrong words: a fresh seed reproduces the same cut, because
+  the clip is too short rather than unlucky. The gate spots it (the words that
+  came out match the head of the line) and sizes the retake from the pace that
+  take actually delivered — so a scene the word count under-bought gets the
+  seconds its own delivery needed, capped at the model's 15 s ceiling.
 
 Shots are sized to their words (~2.5 words/second plus a beat of air) rather
 than to a share of the scene, because oversized shots left the model padding
-the tail with speech nobody scripted. And cast **distinct voices** for
+the tail with speech nobody scripted. That estimate is a **median**, not a
+guarantee: measured across 29 rendered shots, H3 delivers between 1.4 and 2.7
+words a second depending on the line — short dramatic sentences run at half the
+rate of flowing prose, because each full stop buys a pause. Rather than pay for
+the slow tail on every scene, the length stays tuned to the middle and the gate
+buys time for the takes that overrun. And cast **distinct voices** for
 co-stars: two reference voices five hertz apart will bleed into each other,
 and no prompt can separate them.
 

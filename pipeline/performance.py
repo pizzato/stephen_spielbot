@@ -363,7 +363,10 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     override = _clean(scene_meta.get("prompt_override"))
     if override:
         return f"{override}\n\n[DIRECTION]\n{direction}" if direction else override
-    seconds = _clamp_seconds(scene_meta.get("seconds"))
+    # The length the clip is RENDERED at, so the shot list describes the take
+    # the model is actually asked for. Sizing the beats off the stored guess
+    # instead left prompts ending at 5 s on an 8 s clip.
+    seconds = render_seconds(scene_meta)
     lines = norm_lines(scene_meta.get("lines"))
     beats = norm_beats(scene_meta.get("beats"), seconds)
     pics = picture_names or []
@@ -592,9 +595,14 @@ def acted_meta(scene) -> dict:
             # in as the setting would nest the whole thing inside itself.
             video = ""
         meta["setting"] = video or _clean(field("image_prompt"))
-    if not meta.get("seconds"):
-        meta["seconds"] = _clamp_seconds(
-            content_seconds(meta) if lines else field("duration", 0) or SCENE_SECONDS)
+    if lines:
+        # The lines decide the length EVERY time, not just when nothing is
+        # stored: a value saved before the dialogue was edited goes stale, and
+        # a stale one is what the editor shows and the shot list is written
+        # against while the renderer sizes the clip from the words.
+        meta["seconds"] = render_seconds(meta)
+    elif not meta.get("seconds"):
+        meta["seconds"] = _clamp_seconds(field("duration", 0) or SCENE_SECONDS)
     meta["beats"] = norm_beats(meta.get("beats"), float(meta["seconds"]))
     return meta
 

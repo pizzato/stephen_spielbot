@@ -418,7 +418,11 @@ class MixedFilmTests(unittest.TestCase):
         meta = perf.acted_meta(scene)
         self.assertEqual(meta["cast"], ["Bo", "Ana"])   # authored order wins
         self.assertEqual(meta["setting"], "a kitchen")
-        self.assertEqual(meta["seconds"], 11)
+        # ...but NOT its length: the words decide that. A stored 11 s never
+        # reached the renderer (render_seconds sizes from the lines), so
+        # keeping it only made the editor and the shot list describe a take
+        # longer than the clip. The two now agree.
+        self.assertEqual(meta["seconds"], perf.render_seconds(meta))
 
 
 class MusicToggleTests(unittest.TestCase):
