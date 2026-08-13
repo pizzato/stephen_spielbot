@@ -90,6 +90,12 @@ reference image becomes a `<Picture N>` reference for the scenes they appear in.
 whose cast resolves to no portrait at all fails rather than inventing a look — see
 [characters](characters.md) for the catalogue and the per-script cast.
 
+An acted story casts **its own** characters: the style's catalogue is only offered as
+speakers when the brief names one of them (topic, title, or the style's extra
+instructions — see [casting is opt-in](characters.md#casting-is-opt-in-by-name)).
+Otherwise the writer invents the cast, and the portraits are generated for those
+per-script characters.
+
 **Voices.** Each character's cast voice (assigned automatically at script creation, from
 the same library the narrator uses) is passed as an `<Audio N>` reference so the character
 sounds the same in every scene. A character with no voice still speaks — the model simply

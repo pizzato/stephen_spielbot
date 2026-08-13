@@ -4,7 +4,8 @@ Named characters keep a consistent look (and voice) across scenes and videos. Tw
 mechanisms work together:
 
 1. **Text consistency** — every character has a canonical appearance description that is
-   fed to the script LLM and deterministically re-injected into image prompts.
+   fed to the script LLM ([when the brief asks for them](#casting-is-opt-in-by-name))
+   and deterministically re-injected into image prompts.
 2. **Visual consistency** — a character can carry a reference image; scenes featuring
    that character are generated with FLUX.2 reference conditioning (`ReferenceLatent`),
    so the output resembles the reference. FLUX.2-only; other engines ignore references.
@@ -17,7 +18,9 @@ the still is consistent, the motion clip inherits it.
 Characters live in a single top-level `cfg["characters"]` list; each entry carries a
 `style` scope that says who inherits it:
 
-- `style: ""` — the **global pool**: every style inherits the character automatically.
+- `style: ""` — the **global pool**: every style inherits the character automatically
+  (inheriting a character makes it *available* to that style — it does not cast it into
+  every film; see [Casting is opt-in, by name](#casting-is-opt-in-by-name)).
 - `style: "<name>"` — owned by that style: visible to it **and every style under it**
   in the [style hierarchy](configuration.md) (children inherit the parent's cast;
   siblings and unrelated styles never see it).
@@ -99,6 +102,26 @@ placeholder with no UI.
   characters fall back to the default style's. Endpoints:
   `/api/characters/image`, `.../image/clear`, `.../image/select`,
   `/api/characters/portrait`.
+
+## Casting is opt-in, by name
+
+A style's catalogue is what a film *may* use, not what it *will* use. Script generation
+only tells the LLM about a catalogue character when the brief names them — their name or
+any alias appearing in the **topic/description**, the **video title**, or the style's
+**extra instructions** (`_requested_characters` in `app.py`, applied to all three script
+stages: story draft, divide, and redraft). Otherwise no character sheet is sent and the
+story invents its own cast, which becomes [per-script characters](#per-script-characters).
+
+- Ask for one by name — "A day in the life of Bob John" — and the sheet is sent, so the
+  scenes refer to them by name and pick up their canonical look and voice.
+- Want a character in *every* film of a style (a host, a mascot)? Name them in that
+  style's **extra instructions**.
+- Nothing downstream depends on the sheet: `_characters_for_scene` matches by name, so a
+  character the story does name gets their look and voice either way.
+
+This matters most for [performance films](performance_films.md), where the cast doubles
+as the speaker roster: handing over the whole library put library characters into every
+acted or silent script.
 
 ## Per-script characters
 
