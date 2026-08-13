@@ -102,6 +102,32 @@ class StoryEndpointTests(TempConfigCase):
             backend._do_script_generate(body)
         self.assertEqual(gen.call_args.args[1], 6)
 
+    def test_the_silent_format_stages_a_film_told_in_pictures(self):
+        body = backend.GenerateScriptBody(video_title="Sil", topic="t", minutes=1.0,
+                                          style_name="Hero", format="silent")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(6)) as gen, \
+             mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(6), "m", "st", [])) as div:
+            backend._do_script_generate(body)
+        # measured in clips, like an acted film — there is no narration to time
+        self.assertEqual(gen.call_args.args[1], 6)
+        self.assertIn("SILENT STORY", gen.call_args.kwargs["dialogue_note"])
+        divide_note = div.call_args.kwargs["dialogue_note"]
+        self.assertIn("SILENT FILM", divide_note)
+        self.assertIn('mode "silent"', divide_note)
+        # a spoken beat is still possible, so the dialogue schema comes along …
+        self.assertIn('"lines"', divide_note)
+        # … but nobody narrates it
+        self.assertIn('NEVER use "narration"', divide_note)
+
+    def test_the_direction_can_steer_the_mode_balance(self):
+        # "mostly silent, one exchange at the end" used to lose to the
+        # must-mix rule; the direction outranks the balance in both directions.
+        mixed = backend._build_dialogue_note("mixed", ["Kinho"])
+        self.assertIn("mostly silent scenes", mixed)
+        self.assertIn("the way it asks", mixed)
+
     # ── phase 1: story generate ──────────────────────────────────────────────
 
     def test_story_generate_persists_draft(self):

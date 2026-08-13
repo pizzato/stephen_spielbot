@@ -273,10 +273,32 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
       )}
 
       {mode === 'silent' && (
-        <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
-          <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
-            value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
-        </Field>
+        <>
+          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
+            <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
+              value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
+          </Field>
+
+          {/* Only meaningful for a style that PERFORMS its silent scenes
+              (Settings → Video models → "Silent scenes — act them on H3 too"):
+              naming who is on screen is what sends the scene down the Ref2VA
+              path instead of animating it from a still. Harmless otherwise. */}
+          <Field label="On screen"
+            hint="Who appears in this silent beat. If the style acts its silent scenes, these are the portraits it is performed from — leave it empty and the scene is animated from its first frame instead. Keep it to two.">
+            <div className="row gap-8 row--wrap">
+              {castOpts.map((n) => {
+                const on = cast.includes(n)
+                return (
+                  <Button key={n} variant={on ? 'primary' : 'ghost'} size="sm"
+                    onClick={() => onChange({ cast: on ? cast.filter((c) => c !== n) : [...cast, n] }, true)}>
+                    {on ? `${cast.indexOf(n) + 1}. ${n}` : n}
+                  </Button>
+                )
+              })}
+              {!castOpts.length && <span className="muted" style={{ fontSize: 12.5 }}>No characters yet — add them in Characters.</span>}
+            </div>
+          </Field>
+        </>
       )}
     </>
   )

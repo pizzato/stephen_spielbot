@@ -20,9 +20,14 @@ scenes, and each scene takes the path its mode asks for.
 ## Turning it on
 
 Choose the **Dialogue** format in [Create](manual/create.md) for a film that is acted all
-the way through, or **Mixed** to let the writer place acted scenes among narrated and silent
-ones. A single scene can also be switched to *dialogue* in the
+the way through, **Mixed** to let the writer place acted scenes among narrated and silent
+ones, or **Silent** for a film told in pictures where a spoken line is the exception. A
+single scene can also be switched to *dialogue* in the
 [Script editor](manual/script.md) — any scene with dialogue lines is acted, wherever it sits.
+
+Whichever format you pick, the **direction box outranks its balance**: ask for "mostly
+silent scenes, one exchange near the end" and the division follows that rather than the
+format's own default mix.
 
 The script is written story-first either way: the prose story is drafted with no scene or
 clip-length constraints — whatever the film's size, the draft only learns that its
@@ -51,7 +56,9 @@ rather than two.
 The writer then names a **cast** on each silent scene (at most two, from the same
 characters), alongside the setting, camera and soundscape a dialogue scene gets. That cast
 is the switch: a silent scene with nobody in it has no portraits to perform from, so it
-stays on the I2V path — as does every silent scene in a style with the toggle off.
+stays on the I2V path — as does every silent scene in a style with the toggle off. The
+[Script editor](manual/script.md) shows the same **On screen** picker on a silent scene, so
+a hand-written or converted one can be cast (or un-cast) by hand.
 
 Nothing else about the scene changes: it is still silent by contract. The prompt says so
 outright, and the same gate that watches an establishing wide transcribes the take and
