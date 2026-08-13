@@ -1888,6 +1888,17 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
         "The speakers are the story's recurring characters — identify them and use them "
         "consistently; a scene with nobody to speak must be \"narration\" or \"silent\"."
     )
+    # A silent scene's length is AUTHORED (there are no words to count it from),
+    # so the writer is given the window the renderer will actually hold it
+    # inside — which chaining widens to the joined-clip take.
+    silent_target = round(performance_mode.scene_seconds(chained))
+    silent_max = int(performance_mode.acted_limits(chained)[0])
+    silent_budget = (
+        f"A silent scene is ONE continuous take, so give it a \"seconds\" of about "
+        f"{silent_target} (never below {int(performance_mode.MIN_SCENE_SECONDS)} or above "
+        f"{silent_max}) and write a visual that holds for exactly that long"
+        + (" — with the beats spread across the whole take rather than crowded into its "
+           "opening seconds. " if chained else ". "))
     if fmt == "dialogue":
         balance = (
             "Almost every scene should be mode \"dialogue\": the characters carry the story by "
@@ -1899,8 +1910,9 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             "what happens on screen carries it, with no voice at all. Use \"dialogue\" only "
             "for the rare beat that genuinely turns on something said out loud (one or two "
             "in the whole film), and NEVER use \"narration\": this film has no narrator. "
-            "Every silent scene is ONE clip, so give it a \"seconds\" of about 10 (never "
-            "below 5 or above 12) and write a visual that holds for exactly that long.")
+            # The acted-silent schema below already states the budget; saying it
+            # twice in one prompt is noise.
+            + ("" if acted_silent else silent_budget))
     else:
         balance = (
             "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
@@ -1947,13 +1959,13 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
            "HARD BUDGET: the take runs about 10 seconds, so keep a dialogue scene to AT MOST 3 "
            "lines and 22 spoken words TOTAL — split a longer exchange across consecutive scenes "
            "in the same setting rather than overfilling one. ")
-        + ("A \"silent\" scene leaves narration empty (visuals only), may set \"seconds\", and "
-           "gets \"setting\", \"camera\" and \"soundscape\" exactly as a dialogue scene does — "
-           "silent scenes are PERFORMED, not animated from a still. Whenever anyone is in "
-           "shot, give it a \"cast\" too (AT MOST 2, from the same characters): their "
-           "portraits are what keep a face the same as in the acted scenes. Leave the cast "
-           "out for a beat with nobody in it — the scene still opens on its image_prompt. "
-           "Nobody speaks in a silent scene: never give it \"lines\". "
+        + ("A \"silent\" scene leaves narration empty (visuals only) and gets \"setting\", "
+           "\"camera\" and \"soundscape\" exactly as a dialogue scene does — silent scenes "
+           "are PERFORMED, not animated from a still. Whenever anyone is in shot, give it a "
+           "\"cast\" too (AT MOST 2, from the same characters): their portraits are what keep "
+           "a face the same as in the acted scenes. Leave the cast out for a beat with nobody "
+           "in it — the scene still opens on its image_prompt. Nobody speaks in a silent "
+           "scene: never give it \"lines\". " + silent_budget
            if acted_silent else
            "A \"silent\" scene leaves narration empty (visuals only) and may set \"seconds\". ")
         +
@@ -2203,8 +2215,9 @@ def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
     """How many scenes a film made of CLIPS gets — acted or silent.
 
     Not the narration cadence plan: these scenes are clips capped by the video
-    model (~10 s each), not a word budget. An explicit scene count wins, then
-    the requested minutes at one scene per clip, then the style's own length."""
+    model (~10 s each, or ~19 s where the style chains them), not a word budget.
+    An explicit scene count wins, then the requested minutes at one scene per
+    take, then the style's own length."""
     try:
         n = int(body.n_scenes or 0)
     except (TypeError, ValueError):
@@ -2216,7 +2229,9 @@ def _acted_scene_count(body: GenerateScriptBody, ss: dict) -> int:
     except (TypeError, ValueError):
         minutes = 0.0
     if minutes > 0:
-        return max(1, round(minutes * 60.0 / performance_mode.SCENE_SECONDS))
+        secs = performance_mode.scene_seconds(
+            gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")))
+        return max(1, round(minutes * 60.0 / secs))
     return int(_plan_for_generate(body, ss)["n_scenes"])
 
 

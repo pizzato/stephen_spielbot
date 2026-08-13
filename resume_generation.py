@@ -353,6 +353,24 @@ _SILENT_DEFAULT_SECS = 5.0
 # per-scene re-render shares it (imported above).
 
 
+def chain_scenes_flag(cfg: dict, style_name: str = "") -> bool:
+    """The style's ``h3_chain_scenes``, for the ACTED path.
+
+    Flat key first (stamped into job_config at render start), styles lookup for
+    older job dirs — the flat mirror alone only ever carries the DEFAULT style,
+    so reading it without the fallback silently ignores a per-style toggle.
+    Reference engines are always MiniMax, so unlike a narrated scene there is no
+    engine-family carve-out: the toggle alone decides.
+    """
+    flag = cfg.get("h3_chain_scenes")
+    if flag is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or style_name or ""):
+                flag = s.get("h3_chain_scenes")
+                break
+    return bool(flag)
+
+
 def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
                          vid_width: int, vid_height: int) -> Path | None:
     """The image a SILENT acted scene opens on, generated if it isn't there yet.
@@ -405,8 +423,10 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     model as the prompt's [DIRECTION] block and is not persisted to the scene.
     """
     # Fills in cast/length/setting for a dialogue scene authored in a MIXED
-    # film, where only the lines and the classic prompts exist.
-    scene_meta = _performance.acted_meta(scene)
+    # film, where only the lines and the classic prompts exist. Chaining is
+    # read here too: it decides how long a SILENT scene is allowed to be, and
+    # clamping before the renderer sees it would cut the scene short.
+    scene_meta = _performance.acted_meta(scene, chained=chain_scenes_flag(cfg, style_name))
     if direction.strip():
         scene_meta["direction"] = direction.strip()
     ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
@@ -656,21 +676,19 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             "first frame instead, but it needs an image prompt to make one)")
 
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
-    # Chained acted scenes (h3_chain_scenes): dialogue longer than one clip is
+    # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
     # split. Reference engines are always MiniMax, so the toggle alone decides
     # — but a scene that already fits one clip renders single-clip either way
-    # rather than paying the join's ~22% overhead for nothing. Flat key first
-    # (stamped into job_config), styles lookup for older job dirs.
-    chain_flag = cfg.get("h3_chain_scenes")
-    if chain_flag is None:
-        for s in cfg.get("styles") or []:
-            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or style_name or ""):
-                chain_flag = s.get("h3_chain_scenes")
-                break
-    chained = bool(chain_flag)
-    if chained and _performance.content_seconds(meta) > _performance.acted_limits(False)[1]:
-        sub_metas = _performance.split_lines_for_chain(meta)
+    # rather than paying the join's ~22% overhead for nothing.
+    chained = chain_scenes_flag(cfg, style_name)
+    if chained and _performance.content_seconds(
+            meta, chained=True) > _performance.acted_limits(False)[1]:
+        # Dialogue divides at speaker turns; a SILENT scene has no lines to
+        # divide, so its clip window (and the beats inside it) is what splits.
+        sub_metas = (_performance.split_silent_for_chain(meta)
+                     if not _performance.norm_lines(meta.get("lines"))
+                     else _performance.split_lines_for_chain(meta))
         chained = len(sub_metas) > 1
     else:
         chained, sub_metas = False, [meta]

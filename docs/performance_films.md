@@ -72,6 +72,13 @@ Nothing else about the scene changes: it is still silent by contract. The prompt
 outright, and the same gate that watches an establishing wide transcribes the take and
 retakes (then mutes) it if the model babbles into the silence.
 
+**Length.** A performed silent beat runs 5–12 s, H3's single-clip window — an authored
+20 s is held back to 12. With **Chained scenes** on it stretches to ~23 s (the writer is
+asked for ~19), shot as two clips joined by Motion Context: the take's own beats are split
+across the clips by their timings rather than all landing in the first, so the second clip
+has something to do besides hold the frame. A silent scene that already fits one clip stays
+one clip either way, rather than paying the join's overhead for nothing.
+
 !!! note "It costs an acted scene, not an I2V clip"
     A performed silent beat renders in ~6 minutes per 10 s on a GB10, against roughly a
     minute for the LTX clip it replaces.
@@ -254,9 +261,10 @@ and no prompt can separate them.
 
 - **15 seconds is a hard ceiling** per single-clip scene, and cost grows faster than
   length — scenes are written to ~10 s. With **Chained scenes** on (see
-  [Models → Chained scenes](models.md#chained-scenes)) a dialogue scene may run to
-  ~29 s: it is shot as two clips joined by H3 Motion Context, the script budget
-  doubles, and exchanges that used to split into consecutive scenes stay one take.
+  [Models → Chained scenes](models.md#chained-scenes)) a dialogue or performed silent
+  scene may run to ~29 s: it is shot as two clips joined by H3 Motion Context, the
+  script budget doubles, and exchanges that used to split into consecutive scenes
+  stay one take.
   A take that still stops too early can be extended after the fact with
   [Continue](manual/edit-film.md#continuing-an-acted-scene), which shoots the next
   clip against the same motion context rather than re-shooting the scene — the one

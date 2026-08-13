@@ -274,7 +274,7 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
 
       {mode === 'silent' && (
         <>
-          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
+          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion. A style that performs its silent scenes holds this to H3's window: 5–12 s, or up to ~23 s with Chained scenes on.">
             <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
               value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
           </Field>

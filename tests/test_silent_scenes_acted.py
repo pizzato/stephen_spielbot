@@ -167,6 +167,121 @@ class MetaTests(unittest.TestCase):
         self.assertEqual(perf.acted_meta(row)["seconds"], 6.0)
 
 
+class ChainedTests(unittest.TestCase):
+    """h3_chain_scenes widens a silent take the same way it widens an acted one:
+    two clips joined by Motion Context instead of one, so the beat can run past
+    H3's single-clip ceiling."""
+
+    def test_an_authored_length_survives_the_single_clip_cap(self):
+        long_beat = _silent(["Ana"], duration=20.0)
+        self.assertEqual(perf.acted_meta(long_beat)["seconds"], perf.MAX_SCENE_SECONDS)
+        chained = perf.acted_meta(long_beat, chained=True)["seconds"]
+        self.assertEqual(chained, 20.0)
+        self.assertGreater(chained, perf.H3_CEILING_SECONDS)
+
+    def test_render_seconds_follows(self):
+        meta = {"seconds": 20.0}
+        self.assertEqual(perf.render_seconds(meta), perf.MAX_SCENE_SECONDS)
+        self.assertEqual(perf.render_seconds(meta, chained=True), 20.0)
+
+    def test_the_split_divides_the_window_and_its_beats(self):
+        meta = perf.acted_meta(
+            Scene(id=3, title="t", image_prompt="i", video_prompt="v", narration="",
+                  mode="silent", duration=20.0,
+                  metadata_extra={"mode": "silent", "cast": ["Ana"], "beats": [
+                      {"t0": 0, "t1": 4, "action": "she steps onto the wharf"},
+                      {"t0": 14, "t1": 19, "action": "the light goes out"}]}),
+            chained=True)
+        halves = perf.split_silent_for_chain(meta)
+        self.assertEqual(len(halves), 2)
+        self.assertAlmostEqual(sum(h["seconds"] for h in halves), 20.0)
+        # each clip keeps the beats that fall in ITS window, re-based to zero —
+        # sending them all to clip one leaves the second with nothing to do
+        self.assertEqual([b["action"] for b in halves[0]["beats"]],
+                         ["she steps onto the wharf"])
+        self.assertEqual([b["action"] for b in halves[1]["beats"]],
+                         ["the light goes out"])
+        self.assertAlmostEqual(halves[1]["beats"][0]["t0"], 4.0)
+        # one take: the space and the people are shared
+        self.assertEqual(halves[1]["cast"], ["Ana"])
+
+    def test_a_scene_that_fits_one_clip_is_not_split(self):
+        meta = perf.acted_meta(_silent(["Ana"], duration=8.0), chained=True)
+        self.assertLess(perf.content_seconds(meta, chained=True),
+                        perf.acted_limits(False)[1])   # renderer keeps it single-clip
+
+    def test_a_chained_film_is_planned_in_longer_scenes(self):
+        # One scene per take: counting a chained film at the unchained length
+        # would deliver twice the runtime asked for.
+        import webapp.backend.main as m
+        body = m.GenerateScriptBody(video_title="t", topic="t", minutes=2.0, format="silent")
+        self.assertEqual(m._acted_scene_count(body, {}), 12)
+        self.assertEqual(m._acted_scene_count(body, {"h3_chain_scenes": True}), 6)
+
+    def test_the_writer_is_given_the_wider_window(self):
+        import webapp.backend.main as m
+        plain = m._build_dialogue_note("silent", ["Ana"], acted_silent=True)
+        chained = m._build_dialogue_note("silent", ["Ana"], chained=True, acted_silent=True)
+        self.assertIn('"seconds" of about 10 (never below 5 or above 12)', plain)
+        self.assertIn('"seconds" of about 19 (never below 5 or above 23)', chained)
+        self.assertIn("beats spread across the whole take", chained)
+
+
+class ChainedRenderTests(unittest.TestCase):
+    """The renderer's own decision, end to end: a castless silent beat shot
+    from its first frame, as one clip or as two joined ones."""
+
+    def _render(self, duration, cfg_extra):
+        import resume_generation as rg
+        calls = {"single": [], "chained": []}
+
+        def fake_single(engine, prompt, ref_images, out, **kw):
+            calls["single"].append({"refs": [Path(p).name for p in ref_images],
+                                    "secs": kw.get("duration_seconds"), "prompt": prompt})
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        def fake_chained(engine, prompts, ref_images, out, **kw):
+            calls["chained"].append({"prompts": prompts, "durations": kw.get("durations")})
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            (wd / "scene_03_preview.png").write_bytes(b"png")   # the opening image
+            with unittest.mock.patch("pipeline.comfyui.generate_video_h3_ref",
+                                     side_effect=fake_single), \
+                 unittest.mock.patch("pipeline.comfyui.generate_video_h3_ref_chained",
+                                     side_effect=fake_chained), \
+                 unittest.mock.patch.object(rg, "ensure_video_resolution"):
+                rg.render_performance_scene(
+                    _silent(duration=duration), wd,
+                    {"performance_verify": False, **cfg_extra},
+                    comfy_url="http://w:8188", vid_width=704, vid_height=1280)
+        return calls
+
+    def test_unchained_shoots_one_clip_off_the_first_frame(self):
+        calls = self._render(20.0, {})
+        self.assertEqual(len(calls["single"]), 1)
+        self.assertEqual(calls["chained"], [])
+        # castless: the scene's own image is the only reference it needs
+        self.assertEqual(calls["single"][0]["refs"], ["scene_03_preview.png"])
+        # …and 20 s is held back to the single-clip cap
+        self.assertEqual(calls["single"][0]["secs"], perf.MAX_SCENE_SECONDS)
+
+    def test_chained_shoots_two_joined_clips_for_the_full_length(self):
+        calls = self._render(20.0, {"h3_chain_scenes": True})
+        self.assertEqual(calls["single"], [])
+        self.assertEqual(len(calls["chained"]), 1)
+        self.assertEqual(len(calls["chained"][0]["prompts"]), 2)
+        self.assertAlmostEqual(sum(calls["chained"][0]["durations"]), 20.0, places=3)
+
+    def test_a_short_beat_stays_one_clip_even_when_chaining_is_on(self):
+        calls = self._render(8.0, {"h3_chain_scenes": True})
+        self.assertEqual(calls["chained"], [])
+        self.assertEqual(calls["single"][0]["secs"], 8.0)
+
+
 class PromptTests(unittest.TestCase):
     def setUp(self):
         self.prompt = perf.build_h3_prompt(
