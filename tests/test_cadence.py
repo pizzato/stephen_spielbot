@@ -163,6 +163,55 @@ def test_plan_clamps_absurd_minutes():
     assert cadence.plan_script(10_000, 150.0)["n_scenes"] <= 200
 
 
+# ── an explicit scene count ───────────────────────────────────────────────────
+
+def test_scene_count_divides_the_length_into_longer_scenes():
+    # 4 min as 10 scenes is 24 s each — twice the contract's 12 s — and each
+    # scene carries twice the narration.
+    auto = cadence.plan_script(4.0, 150.0)
+    pinned = cadence.plan_script(4.0, 150.0, n_scenes=10,
+                                 scene_ceiling=cadence.LTX_SCENE_CEIL_SECS)
+    assert auto["n_scenes"] == 20
+    assert pinned["n_scenes"] == 10
+    assert pinned["scene_secs_target"] == pytest.approx(24.0)
+    assert pinned["scene_words_target"] == 2 * auto["scene_words_target"]
+    assert pinned["minutes"] == pytest.approx(4.0)   # same film, fewer cuts
+
+
+def test_scene_count_divides_the_length_into_shorter_scenes():
+    p = cadence.plan_script(2.0, 150.0, n_scenes=20)
+    assert p["scene_secs_target"] == pytest.approx(6.0)
+    assert p["scene_secs_max"] < cadence.SCENE_MAX_SECS
+    assert p["minutes"] == pytest.approx(2.0)
+
+
+def test_length_gives_way_when_a_scene_cannot_stretch_that_far():
+    # 3 scenes of a 10-minute film would be 200 s each; H3 holds 12 s, so the
+    # count stands and the film comes out at what it adds up to.
+    p = cadence.plan_script(10.0, 150.0, n_scenes=3, scene_ceiling=12.0)
+    assert p["n_scenes"] == 3
+    assert p["scene_secs_target"] == pytest.approx(12.0)
+    assert p["minutes"] == pytest.approx(0.6)
+
+
+def test_a_scene_is_never_squeezed_below_the_floor():
+    p = cadence.plan_script(0.5, 150.0, n_scenes=20)
+    assert p["scene_secs_target"] == pytest.approx(cadence.SCENE_FLOOR_SECS)
+    assert p["minutes"] == pytest.approx(20 * cadence.SCENE_FLOOR_SECS / 60.0, abs=0.01)
+
+
+def test_scene_count_defaults_to_the_contract_ceiling():
+    # With no engine ceiling given, a scene stretches only to the 15 s contract.
+    p = cadence.plan_script(10.0, 150.0, n_scenes=4)
+    assert p["scene_secs_target"] == pytest.approx(cadence.SCENE_MAX_SECS)
+
+
+def test_engine_scene_ceiling_follows_the_engine():
+    assert cadence.engine_scene_ceiling("ltx25") == cadence.LTX_SCENE_CEIL_SECS
+    assert cadence.engine_scene_ceiling("minimax-h3") == 12.0
+    assert cadence.engine_scene_ceiling("minimax-h3", chained=True) > 20.0
+
+
 # ── splitting ─────────────────────────────────────────────────────────────────
 
 def test_split_short_text_untouched():

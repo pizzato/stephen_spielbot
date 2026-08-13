@@ -215,8 +215,8 @@ class ChainedTests(unittest.TestCase):
         # would deliver twice the runtime asked for.
         import webapp.backend.main as m
         body = m.GenerateScriptBody(video_title="t", topic="t", minutes=2.0, format="silent")
-        self.assertEqual(m._acted_scene_count(body, {}), 12)
-        self.assertEqual(m._acted_scene_count(body, {"h3_chain_scenes": True}), 6)
+        self.assertEqual(m._acted_scene_plan(body, {})[0], 12)
+        self.assertEqual(m._acted_scene_plan(body, {"h3_chain_scenes": True})[0], 6)
 
     def test_the_writer_is_given_the_wider_window(self):
         import webapp.backend.main as m

@@ -60,20 +60,60 @@ export function styleMinutes(eff) {
   return Math.round((n * LEGACY_SCENE_SECS / 60) * 100) / 100
 }
 
-// minutes × cadence → estimated words + scene count (pause-aware).
-export function lengthEstimate(minutes, wpm, sentencePause = 0) {
+// ── Scene length — mirror of pipeline/cadence.py + pipeline/performance.py ───
+// A scene runs SCENE_TARGET_SECS of narration, or one ~10 s take in a film
+// made of clips (dialogue/silent). An explicit scene count divides the length
+// instead, between the floor and what the engine renders in one take.
+export const SCENE_FLOOR_SECS = 5
+export const ACTED_SCENE_SECS = 10       // performance.SCENE_SECONDS
+export const ACTED_CEIL_SECS = 12        // performance.MAX_SCENE_SECONDS
+export const LTX_SCENE_CEIL_SECS = 40    // cadence.LTX_SCENE_CEIL_SECS
+const CHAIN_CLIPS = 2                    // cadence.CHAIN_CLIPS
+const CHAIN_JOIN_SECS = 22 / 24          // cadence.CHAIN_JOIN_SECS
+
+// { secs, ceil } — the default and longest scene for a resolved style in a
+// given format. Chaining joins two takes into one longer scene.
+export function sceneBounds(eff, format = 'narration') {
+  const chain = (v) => v * CHAIN_CLIPS - CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
+  const h3 = String(eff?.video_engine || '').startsWith('minimax-h3')
+  const acted = format === 'dialogue' || format === 'silent'
+  const chained = !!eff?.h3_chain_scenes && (h3 || acted)
+  if (acted) {
+    return { secs: chained ? chain(ACTED_SCENE_SECS) : ACTED_SCENE_SECS,
+             ceil: chained ? chain(ACTED_CEIL_SECS) : ACTED_CEIL_SECS }
+  }
+  return { secs: chained ? chain(SCENE_TARGET_SECS) : SCENE_TARGET_SECS,
+           ceil: h3 ? (chained ? chain(ACTED_CEIL_SECS) : ACTED_CEIL_SECS) : LTX_SCENE_CEIL_SECS }
+}
+
+// How long one scene runs when *nScenes* of them share *minutes* — the length
+// gives way at the bounds, exactly as cadence.plan_script does.
+export function sceneSecsFor(minutes, nScenes, bounds) {
+  const n = parseInt(nScenes, 10) || 0
+  if (n <= 0) return bounds.secs
+  const raw = Math.max(0.25, Number(minutes) || 0) * 60 / n
+  return Math.min(Math.max(raw, SCENE_FLOOR_SECS), bounds.ceil)
+}
+
+// minutes × cadence → estimated words + scene count (pause-aware). *bounds*
+// and *nScenes* re-centre it on a scene length the brief asked for.
+export function lengthEstimate(minutes, wpm, sentencePause = 0, nScenes = 0,
+                               bounds = { secs: SCENE_TARGET_SECS, ceil: LTX_SCENE_CEIL_SECS }) {
   const mins = Math.max(0.25, Number(minutes) || 0)
   const rate = Number(wpm) > 0 ? Number(wpm) : 150
   const gap = Math.max(0, Math.min(Number(sentencePause) || 0, 5))
-  const nScenes = Math.max(1, Math.round(mins * 60 / SCENE_TARGET_SECS))
-  const wordsScene = Math.max(1, Math.round(rate * (SCENE_TARGET_SECS - gap) / 60))
-  return { nScenes, words: nScenes * wordsScene, wordsScene }
+  const secs = sceneSecsFor(mins, nScenes, bounds)
+  const n = parseInt(nScenes, 10) || Math.max(1, Math.round(mins * 60 / secs))
+  const wordsScene = Math.max(1, Math.round(rate * (secs - gap) / 60))
+  return { nScenes: n, words: n * wordsScene, wordsScene, sceneSecs: secs,
+           minutes: n * secs / 60 }
 }
 
-// Compact "≈ 300 words · 10 scenes" line for length pickers.
-export function lengthEstimateLabel(minutes, wpm, sentencePause = 0) {
-  const est = lengthEstimate(minutes, wpm, sentencePause)
-  return `≈ ${est.words} words · ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of 10–15s`
+// Compact "≈ 300 words · 10 scenes of ~12 s" line for length pickers.
+export function lengthEstimateLabel(minutes, wpm, sentencePause = 0, nScenes = 0,
+                                    bounds = { secs: SCENE_TARGET_SECS, ceil: LTX_SCENE_CEIL_SECS }) {
+  const est = lengthEstimate(minutes, wpm, sentencePause, nScenes, bounds)
+  return `≈ ${est.words} words · ${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of ~${Math.round(est.sceneSecs)} s`
 }
 
 // "2 min 30 s" / "2 min" / "45 s" from a float-minutes value — lengths are
