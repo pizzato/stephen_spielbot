@@ -2279,7 +2279,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Button variant="ghost" icon="user-group" onClick={() => setTab('characters')}>Manage characters</Button>
             </div>
             <div className="field__hint" style={{ marginTop: 6 }}>
-              The cast “{st.name}” inherits automatically: every <strong>global</strong> character, plus the ones that belong to this style or a style above it. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos.
+              The cast “{st.name}” inherits automatically: every <strong>global</strong> character, plus the ones that belong to this style or a style above it. When a scene mentions one by name (or an alias), its appearance is written into the image prompt so it stays consistent across scenes and videos. Scripts only cast these characters when you <strong>ask for one by name</strong> in the topic, the title, or this style’s extra instructions — otherwise every story invents its own people.
             </div>
             {(() => {
               const lineageNames = styleLineage(styles, st.name).map((s) => s.name)

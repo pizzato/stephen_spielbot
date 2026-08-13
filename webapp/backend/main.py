@@ -2249,7 +2249,10 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     llm_topic = f"{user_topic}\n\n{extra}" if extra else user_topic
     style_hint = body.visual_style or ss.get("visual_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, body.style_name)) or None
+    # Only the catalogue characters the brief NAMES — the story invents its own
+    # cast otherwise (gapp._requested_characters).
+    character_sheet = gapp._character_sheet(
+        gapp._requested_characters(cfg, body.style_name, user_topic, body.video_title, extra)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
     plan = _plan_for_generate(body, ss)
@@ -2347,14 +2350,18 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
+    # The same brief-named subset the draft was given, so the scenes stage the
+    # story's own cast rather than the whole library (gapp._requested_characters).
+    requested_chars = gapp._requested_characters(
+        cfg, ss["name"], user_topic, video_title, (ss.get("extra_instructions") or ""))
+    character_sheet = gapp._character_sheet(requested_chars) or None
     language = gapp._norm_tts_language(ss.get("tts_language"))
     display_topic = video_title or user_topic.splitlines()[0][:80]
     # The format decides how the story is STAGED: narrated voice-over, acted
     # scenes the characters speak, or a mix of both (and silent beats).
     fmt = (brief.get("format") or "narration").strip().lower()
     dialogue_note = _build_dialogue_note(
-        fmt, [c.get("name", "") for c in gapp._style_characters(cfg, ss["name"])],
+        fmt, [c.get("name", "") for c in requested_chars],
         chained=gapp._norm_h3_chain_scenes(ss.get("h3_chain_scenes")),
         acted_silent=gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")))
     try:
@@ -2497,9 +2504,12 @@ def _do_story_redraft(job_id: str, body: StoryRedraftBody) -> dict:
             raise HTTPException(400, "Give a target length in minutes, or a scene count between 1 and 200.")
         plan = gapp.style_script_plan(plan_ss, n_scenes=n)
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
-    character_sheet = gapp._character_sheet(gapp._style_characters(cfg, ss["name"])) or None
     user_topic = (brief.get("topic") or story.get("topic") or "").strip() or wd.name
     video_title = (brief.get("video_title") or story.get("video_title") or "").strip()
+    # Retelling the same story keeps the same cast rule: only the catalogue
+    # characters the brief named (gapp._requested_characters).
+    character_sheet = gapp._character_sheet(gapp._requested_characters(
+        cfg, ss["name"], user_topic, video_title, (ss.get("extra_instructions") or ""))) or None
     display_topic = video_title or user_topic.splitlines()[0][:80]
     try:
         with _track_op(f"Redrafting story to {n} scenes", display_topic):

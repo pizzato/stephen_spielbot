@@ -1179,6 +1179,40 @@ class CharacterTests(TempConfigCase):
             cfg, app.NO_STYLE)
         self.assertEqual([c["name"] for c in kept], ["Newcomer"])
 
+    def _cfg_with_catalogue(self):
+        self.write_config({
+            "characters": [{"id": "char_k", "name": "Kinho", "description": "a man",
+                            "aliases": ["The Kid"]},
+                           {"id": "char_b", "name": "Bob", "description": "another man"}],
+            "styles": [_style("Hero")],
+            "default_style": "Hero",
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        return app.load_config()
+
+    def test_requested_characters_only_returns_the_ones_the_brief_names(self):
+        cfg = self._cfg_with_catalogue()
+        got = app._requested_characters(cfg, "Hero", "A day with Kinho", "", "")
+        self.assertEqual([c["name"] for c in got], ["Kinho"])
+        # an alias counts as asking for them, and so does the video title or
+        # the style's standing extra instructions
+        self.assertEqual([c["name"] for c in
+                          app._requested_characters(cfg, "Hero", "The Kid returns")],
+                         ["Kinho"])
+        self.assertEqual([c["name"] for c in
+                          app._requested_characters(cfg, "Hero", "", "Bob's big day")],
+                         ["Bob"])
+        self.assertEqual([c["name"] for c in
+                          app._requested_characters(cfg, "Hero", "t", "", "Always cast Bob")],
+                         ["Bob"])
+
+    def test_requested_characters_is_empty_when_the_brief_names_nobody(self):
+        # the catalogue must not cast itself into every story — an unrelated
+        # topic (or no topic at all) gets no characters
+        cfg = self._cfg_with_catalogue()
+        self.assertEqual(app._requested_characters(cfg, "Hero", "The history of salt"), [])
+        self.assertEqual(app._requested_characters(cfg, "Hero", "", None, "  "), [])
+
     def test_character_sheet_lists_enabled_described_only(self):
         sheet = app._character_sheet([
             {"name": "Robot XYZ", "description": "matte-black chassis", "enabled": True},

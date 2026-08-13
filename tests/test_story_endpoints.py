@@ -128,6 +128,39 @@ class StoryEndpointTests(TempConfigCase):
         self.assertIn("mostly silent scenes", mixed)
         self.assertIn("the way it asks", mixed)
 
+    # ── the library cast is opt-in, by naming it ─────────────────────────────
+
+    def _catalogue_run(self, topic):
+        """Draft + divide an acted film with one catalogue character on the
+        style, returning the two mocked calls."""
+        self.write_config({
+            "styles": [_style("Hero")], "default_style": "Hero",
+            "characters": [{"id": "char_k", "name": "Kinho", "description": "a man"}],
+            "characters_migrated_v2": True, "characters_scoped_v3": True,
+        })
+        body = backend.GenerateScriptBody(video_title="Dlg", topic=topic, n_scenes=2,
+                                          style_name="Hero", format="dialogue")
+        with mock.patch.object(backend.story_mode, "generate_story",
+                               return_value=_fake_story(2)) as gen, \
+             mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(2), "m", "st", [])) as div:
+            backend._do_script_generate(body)
+        return gen, div
+
+    def test_an_unnamed_catalogue_character_never_reaches_the_prompts(self):
+        # an acted story needs a cast, but it invents its own — the library is
+        # not cast into every film just for being there
+        gen, div = self._catalogue_run("The history of salt")
+        self.assertIsNone(gen.call_args.kwargs["character_sheet"])
+        self.assertIsNone(div.call_args.kwargs["character_sheet"])
+        self.assertNotIn("Kinho", div.call_args.kwargs["dialogue_note"])
+
+    def test_naming_a_catalogue_character_casts_them(self):
+        gen, div = self._catalogue_run("A day with Kinho")
+        self.assertIn("Kinho: a man", gen.call_args.kwargs["character_sheet"])
+        self.assertIn("Kinho: a man", div.call_args.kwargs["character_sheet"])
+        self.assertIn("Kinho", div.call_args.kwargs["dialogue_note"])
+
     # ── phase 1: story generate ──────────────────────────────────────────────
 
     def test_story_generate_persists_draft(self):

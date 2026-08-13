@@ -2282,6 +2282,23 @@ def _style_characters(cfg: dict, style_name: str = "") -> list[dict]:
             if isinstance(c, dict) and (not c.get("style") or c.get("style") in visible)]
 
 
+def _requested_characters(cfg: dict, style_name: str, *texts: str | None) -> list[dict]:
+    """The style's catalogue characters the brief actually ASKED for — those whose
+    name or alias appears in *texts* (the topic/description, the video title, the
+    style's extra instructions).
+
+    Handing the script LLM the whole catalogue made it cast library characters in
+    every story, worst of all in acted films where the cast doubles as the
+    speaker roster. A catalogue character now reaches the prompts only when the
+    brief names them; otherwise the story invents its own people. Nothing is lost
+    downstream: _characters_for_scene matches by name, so a character the story
+    does name still gets their canonical look and voice."""
+    blob = "\n".join(t for t in texts if (t or "").strip())
+    if not blob.strip():
+        return []
+    return [c for c in _style_characters(cfg, style_name) if _character_mentions(blob, c)]
+
+
 def _filter_identified_against_style(identified, cfg: dict, style_name: str = "") -> list[dict]:
     """Drop LLM-identified characters that already exist in the style's catalogue.
 
