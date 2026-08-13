@@ -1528,10 +1528,13 @@ def main(work_dir: Path) -> None:
     scene_finals: list[Path] = []
     for s in scenes:
         scene_final = work_dir / f"scene_{s.id:02d}_final.mp4"
-        # Dialogue scenes were rendered in the pre-pass and their artifacts are
-        # tracked per line — they have NO mux task, so recording a scene_final
-        # artifact against one fails the FK. Just collect the finished clip.
-        if getattr(s, "mode", "narration") == "dialogue" and (s.lines or []):
+        # Acted scenes — dialogue, and silent ones when the style shoots those
+        # on H3 too — were rendered in the pre-pass and their artifacts are
+        # tracked against the performance task. They have NO mux task, so
+        # recording a scene_final artifact against one fails the FK and takes
+        # the whole assembly down. Same predicate the planner used, so the two
+        # can't disagree. Just collect the finished clip.
+        if s.id in acted_ids:
             scene_finals.append(scene_final)
             continue
         raw = scene_raws_map.get(s.id)
