@@ -99,6 +99,20 @@ class PromptTests(unittest.TestCase):
         self.assertIn("no music of any kind", prompt)
 
 
+class ProseBeatsTests(unittest.TestCase):
+    def test_a_prose_beats_string_becomes_one_whole_take_beat(self):
+        # The LLM sometimes writes "beats" as a sentence instead of a timed
+        # array — it must survive as an action, not crash or vanish.
+        beats = perf.norm_beats("Kinho rides easy down the hill", 10.0)
+        self.assertEqual(len(beats), 1)
+        self.assertEqual(beats[0]["action"], "Kinho rides easy down the hill")
+        self.assertEqual(perf.norm_beats("   ", 10.0), [])
+        prompt = perf.build_h3_prompt(
+            {"mode": "silent", "singing": True, "seconds": 8.0,
+             "beats": "Thomas flies the skate ramp"}, picture_names=["Thomas"])
+        self.assertIn("Thomas flies the skate ramp", prompt)
+
+
 class MarkSingingTests(unittest.TestCase):
     def test_marks_only_silent_scenes(self):
         scenes = [

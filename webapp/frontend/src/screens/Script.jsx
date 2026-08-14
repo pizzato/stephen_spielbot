@@ -105,7 +105,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // style performs them, the silent ones. Those takes are conditioned on
   // reference images, so this is what decides whether the film needs the
   // visuals wall (locations, wardrobe, stills) beside its characters.
-  const someActedShape = (job?.scenes || []).some((s) => hasActedShape(s.mode, actedSilent))
+  const someActedShape = (job?.scenes || []).some((s) => hasActedShape(s.mode, actedSilent, s.singing))
 
   // Story tab (story-first scripts only) — the prose draft the scenes come
   // from; null hides the tab (classic scripts 404 here). Chapters are editable:
@@ -128,6 +128,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       .then((s) => { setStory(s); setMinutesTarget(String(storyMinutes(s))) })
       .catch(() => setStory(null))
   }, [job?.job_id])
+  // A song film's song (music-video format): caption + tagged lyrics the music
+  // model sings. 404 for every other film — the tab simply doesn't appear.
+  const [song, setSong] = useState(null)
+  const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
+  const [songMsg, setSongMsg] = useState('')
+  useEffect(() => {
+    setSong(null); setSongDraft(null); setSongMsg('')
+    if (job?.job_id) api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
+  }, [job?.job_id])
+  const saveSong = async () => {
+    setBusy('song-save'); setError(''); setSongMsg('')
+    try {
+      const s = await api.saveSong(job.job_id, (songDraft ?? song).caption, (songDraft ?? song).lyrics)
+      setSong({ caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      setSongMsg('Song saved — the next render (or a music re-generation) sings this version.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
   const minutesTargetN = Number(minutesTarget)
   const minutesTargetOk = Number.isFinite(minutesTargetN) && minutesTargetN >= 0.25 && minutesTargetN <= 40
   const minutesTargetChanged = !!story && minutesTargetOk
@@ -620,7 +637,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // against the hierarchy offered none of the style's own cast.
   const styleKey = job?.style_name || job?.style || castStyles.defaultStyle
   const lineageNames = new Set(styleLineage(castStyles.styles, styleKey).map((s) => s.name))
-  const styleCast = styleKey === '(none)' ? []
+  // "(none)" imposes no STYLE cast but still sees the global pool — mirrors
+  // the backend's _style_characters, whose resolver casts those at render.
+  const styleCast = styleKey === '(none)'
+    ? globalCast.filter((x) => !x.style).map((x) => x.name)
     : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
   const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
@@ -901,6 +921,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
+          ...(song ? [{ value: 'song', label: 'Song' }] : []),
           { value: 'cover', label: 'Cover' },
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
@@ -915,6 +936,43 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'performance' && job && (
         <PerformanceScenes workDir={job.work_dir} jobId={job.job_id}
           voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
+      )}
+
+      {/* ── Song tab (music-video films): the words and sound the film sings ── */}
+      {view === 'song' && song && (
+        <div className="bento">
+          <Card span={8} padLg className="reveal reveal-d1">
+            <div className="stack gap-22">
+              {songMsg && <Banner tone="ok">{songMsg}</Banner>}
+              <Field label="Sound"
+                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The lead performer's cast voice (gender, age, tone) is described automatically on top of this at render time.">
+                <textarea className="textarea" rows={3}
+                  value={(songDraft ?? song).caption}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
+              </Field>
+              <Field label="Lyrics"
+                hint="Sung exactly as written. Keep the section tags — [Intro], [Verse], [Chorus], [Bridge], [Outro] — on their own lines; they shape the song without being sung. The song runs the film's length, so cutting or adding many words changes how it fits.">
+                <textarea className="textarea" rows={18} style={{ fontFamily: 'ui-monospace, monospace' }}
+                  value={(songDraft ?? song).lyrics}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), lyrics: e.target.value })} />
+              </Field>
+              <div className="row gap-8">
+                <Button variant="primary" disabled={!songDraft || busy === 'song-save'}
+                  onClick={saveSong}>{busy === 'song-save' ? 'Saving…' : 'Save song'}</Button>
+                {songDraft && <Button variant="ghost" onClick={() => setSongDraft(null)}>Discard edits</Button>}
+              </div>
+            </div>
+          </Card>
+          <Card span={4} well className="reveal reveal-d2">
+            <span className="label-sm">How it's used</span>
+            <p className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              This film is a <strong>music video</strong>: the music model sings these words
+              over the whole film, and the cast performs them on camera in silent acted
+              takes (their own audio is muted). Music is locked on at full volume.
+              After a render, Remix → <em>Generate again</em> re-sings the saved song.
+            </p>
+          </Card>
+        </div>
       )}
 
       {/* ── Story tab (story-first scripts): the prose behind the scenes ─────── */}
@@ -1232,20 +1290,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 ) : (
                   <>
                     <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')}
-                      hint={hasActedShape(d.mode, actedSilent)
+                      hint={hasActedShape(d.mode, actedSilent, d.singing)
                         ? 'FLUX — the frame this take opens on.'
                         : 'FLUX — static, highly detailed.'}>
                       <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
                     <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')}
-                      hint={hasActedShape(d.mode, actedSilent)
+                      hint={hasActedShape(d.mode, actedSilent, d.singing)
                         ? 'Stands in as the setting while the Setting field above is empty.'
                         : 'For the video engine (LTX / MiniMax H3) — motion & camera.'}>
                       <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
                     {/* The performed silent take's own H3 prompt, assembled from
                         the fields above — the same view a dialogue scene gets. */}
-                    {hasActedShape(d.mode, actedSilent) && (
+                    {hasActedShape(d.mode, actedSilent, d.singing) && (
                       <ActedPrompt label="Acted prompt" prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
                         refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                         onSave={(text) => savePromptOverride(text)}
@@ -1257,7 +1315,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </Card>
 
             <div className="col-4 stack gap-16">
-              {hasActedShape(d.mode, actedSilent) ? (
+              {hasActedShape(d.mode, actedSilent, d.singing) ? (
                 <Card className="reveal reveal-d2">
                   <span className="label-sm">References</span>
                   <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>

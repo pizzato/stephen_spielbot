@@ -234,8 +234,15 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "camera": meta.get("camera", ""),
         "soundscape": meta.get("soundscape", ""),
         "cast": meta.get("cast", []),
-        "beats": meta.get("beats", []),
+        # Normalized (a prose string becomes one whole-take beat): the editor
+        # maps over these, and the renderer normalizes identically.
+        "beats": performance_mode.norm_beats(
+            meta.get("beats"),
+            float(meta.get("seconds") or meta.get("duration") or 10)),
         "seconds": meta.get("seconds", 0),
+        # A song film's performance beat: acted whatever the style toggle says,
+        # so the editor must show the acted setup off the SCENE, not the style.
+        "singing": bool(meta.get("singing")),
         "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
@@ -2578,6 +2585,58 @@ def story_divide(body: DivideStoryBody) -> dict:
     return {"task_id": task_id}
 
 
+@api.get("/api/jobs/{job_id}/song")
+def get_job_song(job_id: str) -> dict:
+    """A song film's song.json — the caption and tagged lyrics the music model
+    sings (404 for every other film)."""
+    wd = _job_wd_or_404(job_id)
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "This film has no song.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        raise HTTPException(500, "song.json is unreadable.")
+    return {"caption": str(data.get("caption") or ""),
+            "lyrics": str(data.get("lyrics") or "")}
+
+
+class SongUpdateBody(BaseModel):
+    caption: str = ""
+    lyrics: str = ""
+
+
+@api.put("/api/jobs/{job_id}/song")
+def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
+    """Save edited song lyrics/caption. The render reads song.json directly,
+    so an edit made before (or between) renders is what gets sung."""
+    wd = _job_wd_or_404(job_id)
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "This film has no song.")
+    if not (body.lyrics or "").strip():
+        raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        data = {}
+    data.update({"caption": (body.caption or "").strip(),
+                 "lyrics": body.lyrics.strip(), "updated_at": time.time()})
+    path.write_text(json.dumps(data, indent=2))
+    # A film that already rendered stamped the song into job_config.json for
+    # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
+    jc_path = wd / "job_config.json"
+    if jc_path.exists():
+        try:
+            jc = json.loads(jc_path.read_text())
+            jc["music_lyrics"] = data["lyrics"]
+            jc_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            gapp.logger.warning("Could not mirror song edit into job_config.json",
+                                exc_info=True)
+    return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"]}
+
+
 @api.get("/api/jobs/{job_id}/story")
 def get_job_story(job_id: str) -> dict:
     """The story.json behind a story-mode script (404 for classic scripts)."""
@@ -3501,6 +3560,8 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             # drops the dialogue editor for it rather than offering lines that
             # would turn the beat into a conversation.
             "silent": performance_mode.is_silent({"metadata": meta}),
+            # A song film's beat — performed singing the film's song.
+            "singing": performance_mode.is_singing({"metadata": meta}),
             # True once the prompt has been hand-edited: the screen then shows
             # the override instead of re-assembling, and offers to drop it.
             "prompt_edited": bool(meta.get("prompt_override")),

@@ -129,7 +129,14 @@ def norm_lines(raw) -> list[dict]:
 
 
 def norm_beats(raw, seconds: float) -> list[dict]:
-    """Normalize timed beats to [{t0, t1, action}], clipped to the clip length."""
+    """Normalize timed beats to [{t0, t1, action}], clipped to the clip length.
+
+    The LLM sometimes writes "beats" as one prose sentence instead of a timed
+    array — that becomes a single beat covering the whole take, rather than
+    being iterated character-by-character into nothing (a stored string used
+    to silently drop the action from the prompt AND crash the beat editor)."""
+    if isinstance(raw, str):
+        raw = [{"action": raw}] if raw.strip() else []
     out: list[dict] = []
     for item in raw or []:
         if not isinstance(item, dict):

@@ -146,6 +146,9 @@ export const api = {
     }
   },
   getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
+  // A song film's song — the caption and tagged lyrics the music model sings.
+  getSong: (jobId) => req('GET', `/jobs/${jobId}/song`),
+  saveSong: (jobId, caption, lyrics) => req('PUT', `/jobs/${jobId}/song`, { caption, lyrics }),
   // Persist edited chapter texts so a story review can be resumed later.
   saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),
   // Script critic: post-generation QC that can rewrite, delete, and reorder

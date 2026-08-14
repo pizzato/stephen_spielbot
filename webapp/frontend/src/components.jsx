@@ -164,9 +164,11 @@ export const isActedMode = (m) => ACTED_MODES.includes(m || '')
 // Does this scene get the ACTED setup on screen? A dialogue scene always; a
 // silent one when the style performs its silent beats on H3 (h3_silent_scenes)
 // — the take is then built from the very same fields, so the editor is the same
-// minus the dialogue. Mirrors performance.renders_acted on the backend.
-export const hasActedShape = (mode, actedSilent) =>
-  isActedMode(mode) || (mode === 'silent' && !!actedSilent)
+// minus the dialogue. A SINGING scene (a music-video film's beat) is acted by
+// its own metadata, whatever the style says. Mirrors performance.renders_acted
+// on the backend.
+export const hasActedShape = (mode, actedSilent, singing = false) =>
+  isActedMode(mode) || (mode === 'silent' && (!!actedSilent || !!singing))
 
 function BeatRows({ beats, seconds, onChange, onCommit }) {
   const set = (i, k, v) => onChange(beats.map((b, j) => (i === j ? { ...b, [k]: v } : b)))
@@ -201,14 +203,16 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
   // pass commit=false and persist on blur via onCommit(). Passing the computed
   // patch (rather than a deferred callback) avoids a stale-closure save.
   const mode = scene.mode || 'narration'
-  const lines = scene.lines || []
-  const cast = scene.cast || []
-  const beats = scene.beats || []
+  const lines = Array.isArray(scene.lines) ? scene.lines : []
+  const cast = Array.isArray(scene.cast) ? scene.cast : []
+  // Older scripts can carry beats as one prose string — never crash on it.
+  const beats = Array.isArray(scene.beats) ? scene.beats
+    : scene.beats ? [{ action: String(scene.beats) }] : []
   // A dialogue scene's length is counted from its words; a silent one's is
   // authored, and lives in `duration` — the beats have to sit inside whichever
   // of the two this scene actually runs for.
   const silent = mode === 'silent'
-  const actedShape = hasActedShape(mode, actedSilent)
+  const actedShape = hasActedShape(mode, actedSilent, scene.singing)
   const seconds = Math.round((silent ? scene.duration || scene.seconds || 5
     : scene.seconds) || 10)
   const commit = () => onCommit && onCommit()
@@ -252,6 +256,11 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
           {converting && <span className="muted" style={{ fontSize: 12.5 }}><Icon name="spinner" spin /> Converting…</span>}
         </div>
       </Field>
+      {silent && scene.singing && (
+        <Banner tone="info">♪ A music-video beat — the cast performs the film's song on
+          camera (visibly singing, take shipped muted); the sung track is the film's
+          audio. Edit the words in the Song tab.</Banner>
+      )}
 
       {actedShape && (
         <>

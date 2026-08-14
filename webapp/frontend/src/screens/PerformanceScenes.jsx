@@ -135,8 +135,12 @@ function SceneEditor({ scene, jobId, onSaved }) {
         <div className="stack gap-4">
           <span className="label-sm">Dialogue</span>
           <span className="muted" style={{ fontSize: 12.5 }}>
-            Nobody speaks — this beat is performed silent. Give it words by switching
-            the scene to <strong>Dialogue</strong> in the Scenes editor.
+            {scene.singing
+              ? <>♪ A music-video beat — the cast performs the film's song on camera
+                  (the take ships muted; the sung track is the film's audio). The words
+                  live in the Song tab.</>
+              : <>Nobody speaks — this beat is performed silent. Give it words by switching
+                  the scene to <strong>Dialogue</strong> in the Scenes editor.</>}
           </span>
         </div>
       ) : (
@@ -210,7 +214,7 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </div>
         <span className="muted" style={{ fontSize: 12.5 }}>
           {Math.round(scene.seconds || seconds)}s · one continuous shot
-          {scene.silent ? ' · silent' : ''}
+          {scene.singing ? ' · ♪ singing' : scene.silent ? ' · silent' : ''}
         </span>
       </div>
 

@@ -90,6 +90,7 @@ function SceneCard({
     mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
     setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
     cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+    singing: !!scene.singing,
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -125,6 +126,7 @@ function SceneCard({
       mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
+      singing: !!s.singing,
     })
   }
 
@@ -533,19 +535,19 @@ function SceneCard({
                     }} />
                 ) : (<>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>}
-                  hint={hasActedShape(sceneType.mode, actedSilent)
+                  hint={hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
                     ? 'FLUX — the frame this take opens on' : 'FLUX — static frame'}>
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>}
-                  hint={hasActedShape(sceneType.mode, actedSilent)
+                  hint={hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
                     ? 'Stands in as the setting while the Setting field above is empty'
                     : 'For the video engine (LTX / MiniMax H3) — motion & camera'}>
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
                 {/* A performed silent take gets the same assembled H3 prompt a
                     dialogue scene shows — it is shot the same way. */}
-                {hasActedShape(sceneType.mode, actedSilent) && (
+                {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && (
                   <ActedPrompt label="Acted prompt" prompt={scene.acted_prompt || ''} edited={!!scene.prompt_edited}
                     refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                     onSave={async (text) => {
@@ -2092,7 +2094,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
       const list = r.scenes || []
-      setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent)))
+      setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent,
+        s.singing ?? s.metadata?.singing)))
       setFilmScenes(list)
       setFilmJobId(r.job_id || '')
     }).catch(() => {})
