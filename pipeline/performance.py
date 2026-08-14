@@ -507,11 +507,24 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                    f"{', '.join(placed)}, in a wide shot. Nobody speaks: every "
                    f"mouth stays completely closed for the whole shot.")
     elif not lines:
-        # A shot with no lines is one the model will otherwise babble into —
-        # measured on real establishing wides. Say it outright; the render-time
-        # gate mutes whatever still gets through.
-        geo.append("Nobody speaks in this scene: every mouth stays completely "
-                   "closed for the whole shot.")
+        if scene_meta.get("singing"):
+            # A song film: the cast visibly PERFORMS the film's song. The take's
+            # own audio is muted after the gate and the generated track laid
+            # over the whole film, so what matters here is the singing BODY —
+            # an open moving mouth reads as singing under the real vocals,
+            # a closed one reads as a still.
+            who = " and ".join(people_names) if people_names else "The performer"
+            verb = "are" if len(people_names) > 1 else "is"
+            geo.append(f"{who} {verb} performing a song on camera for the whole "
+                       f"shot: visibly singing, mouth opening and moving with "
+                       f"the words, expressive face, swaying and moving with "
+                       f"the beat. The mouth is never closed and still.")
+        else:
+            # A shot with no lines is one the model will otherwise babble into —
+            # measured on real establishing wides. Say it outright; the
+            # render-time gate mutes whatever still gets through.
+            geo.append("Nobody speaks in this scene: every mouth stays completely "
+                       "closed for the whole shot.")
     if geo:
         sections.append("[SCREEN GEOGRAPHY]\n" + "\n".join(geo))
 
@@ -527,20 +540,33 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
 
     # [PRODUCTION SOUND] — diegetic only; performance films carry no score.
     soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
-    speech = "Clear dialogue" if lines else "No speech and no voices at all"
-    sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
-                    f"{speech}, no music of any kind.")
+    if scene_meta.get("singing") and not lines:
+        # Ask for the singing VOICE (mouth movement follows the audio the model
+        # writes for itself) but keep instruments out — this audio is replaced
+        # by the film's real track, and "no music of any kind" would fight the
+        # singing itself.
+        sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
+                        f"A clear live singing voice — unaccompanied: no "
+                        f"instruments, no backing track, no other music.")
+    else:
+        speech = "Clear dialogue" if lines else "No speech and no voices at all"
+        sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
+                        f"{speech}, no music of any kind.")
 
     # [NEGATIVES] — a preservation contract plus named failure modes. H3 is
     # CFG-free: these are plain sentences, not a negative prompt.
     extra = _clean(scene_meta.get("refusals"))
+    # A singing scene ASKS for a voice raised in song; the blanket "no music"
+    # would fight it, so only the instruments are refused there.
+    no_music = ("no instrumental music" if scene_meta.get("singing") and not lines
+                else "no music")
     sections.append(("[NEGATIVES]\n"
                      "Preserve every reference exactly as assigned; do not modify "
                      "anything else. No extra people, no face drift, no wardrobe "
                      "changes, no voice swaps, no broken eyelines, no unmotivated "
                      "cuts. Do not add subtitles, do not add captions, do not add "
-                     "any on-screen text, no watermark, no scene changes, no "
-                     f"music. {extra}").strip())
+                     f"any on-screen text, no watermark, no scene changes, "
+                     f"{no_music}. {extra}").strip())
 
     return "\n\n".join(sections)
 
@@ -696,6 +722,15 @@ def is_silent(scene) -> bool:
             or str(getattr(scene, "mode", "") or "").strip().lower() == "silent")
 
 
+def is_singing(scene) -> bool:
+    """A silent scene of a SONG film: the cast performs the film's song on
+    camera (mouths moving, full performance energy) while the real vocals come
+    from the generated track laid over the whole film. Stamped into scene
+    metadata at divide time (story.mark_singing), so the flag travels with the
+    scene through the editor and every re-render."""
+    return is_silent(scene) and bool(scene_meta(scene).get("singing"))
+
+
 def renders_acted(scene, cfg: dict | None = None) -> bool:
     """Does this scene render as ONE H3 Ref2VA take rather than first-frame I2V?
 
@@ -711,6 +746,11 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     """
     if is_performance(scene) and (scene_meta(scene).get("lines")
                                   or getattr(scene, "lines", None)):
+        return True
+    # A singing scene is a performance by definition — the film exists to show
+    # the cast performing its song — so the flag on the SCENE decides, with no
+    # style toggle involved.
+    if is_singing(scene):
         return True
     return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 

@@ -1963,14 +1963,21 @@ def generate_music(
     seed: int | None = None,
     comfy_url: str = COMFYUI_URL,
     music_engine: str | None = None,
+    lyrics: str | None = None,
 ) -> Path:
     """Generate the background-music bed and save it to output_path.
 
     *music_engine* is a key from ``engines.MUSIC_ENGINES`` (default ACE-Step
-    1.5). Every music graph takes the same TAGS/DURATION/SEED placeholders, so
-    the engine only picks the workflow file, the duration ceiling and how long
-    to wait. A film longer than the engine's ceiling gets a shorter bed —
-    assembler.mix_background_music loops it to cover the picture.
+    1.5). Every music graph takes the same TAGS/DURATION/SEED/LYRICS
+    placeholders, so the engine only picks the workflow file, the duration
+    ceiling and how long to wait. A film longer than the engine's ceiling gets
+    a shorter bed — assembler.mix_background_music loops it to cover the
+    picture.
+
+    *lyrics* turns the instrumental bed into a SONG: both models sing whatever
+    tagged lyrics ([Verse]/[Chorus]/…) they are given. Empty keeps today's
+    lyric-free instrumental behaviour — the caption should then say
+    "instrumental" explicitly (the models are trained to write songs).
     """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -1990,6 +1997,7 @@ def generate_music(
         "TAGS":     tags,
         "DURATION": duration,
         "SEED":     seed,
+        "LYRICS":   (lyrics or "").strip(),
     })
 
     client_id = str(uuid.uuid4())

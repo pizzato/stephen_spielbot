@@ -598,6 +598,73 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
     )
 
 
+# ── Song films (music videos) ────────────────────────────────────────────────
+
+def write_song(story: dict, target_seconds: float,
+               language: str | None = None) -> dict:
+    """The film's SONG, written from the approved story draft.
+
+    A song film ("song" format) is a music video: the music engine sings the
+    whole soundtrack while the cast performs it on camera. This is where the
+    soundtrack is authored — returns ``{"caption": ..., "lyrics": ...}``:
+    tagged lyrics ([Verse]/[Chorus]/…) both music engines take verbatim, and a
+    structured caption (genre, tempo, mood, arrangement) that replaces the
+    instrumental ``music`` description. The caption deliberately leaves the
+    vocalist out — the render appends a description of the cast singer's
+    library voice (gender/age/tone), so the sung voice fits the character
+    the film shows singing.
+
+    The lyric budget comes from *target_seconds*: sung delivery runs well
+    under two words a second, and over-length lyrics are what make the model
+    rush or cut the song off mid-phrase.
+    """
+    cfg = _load_cfg()
+    call = _call_fn(cfg)
+    chapters_str = "\n\n".join(
+        f'Chapter {c.get("chapter")} — "{c.get("title", "")}":\n{c.get("text", "")}'
+        for c in (story.get("chapters") or []) if isinstance(c, dict))
+    seconds = max(30, int(target_seconds or 0) or 180)
+    word_budget = max(40, int(seconds * 1.7))
+    lang_name = narration_language_name(language)
+    language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
+                     f"section tags and the caption stay in English."
+                     if lang_name else "")
+    raw = call(
+        _prompts.system("song_write"),
+        _prompts.user("song_write",
+                      title_line=_title_line(str(story.get("topic") or ""),
+                                             story.get("video_title") or None),
+                      story_text=chapters_str,
+                      duration_seconds=seconds,
+                      word_budget=word_budget,
+                      music_hint=str(story.get("music") or ""),
+                      language_note=language_note),
+        word_budget * 3 + 500, "song write", retries=2,
+    )
+    data = _parse_claude_response(raw, "song write")
+    lyrics = str(data.get("lyrics") or "").strip()
+    if not lyrics:
+        raise RuntimeError("Song writing returned no lyrics")
+    caption = str(data.get("caption") or story.get("music") or "").strip()
+    return {"caption": caption, "lyrics": lyrics}
+
+
+def mark_singing(scenes: list[Scene]) -> list[Scene]:
+    """Stamp a song film's performance flag onto its silent scenes, in place.
+
+    The flag rides each scene's metadata sidecar (never a style toggle), so it
+    survives script.json → editor → every re-render, and renders_acted routes
+    the scene onto H3 with the singing prompt whatever the style's
+    ``h3_silent_scenes`` says. Narrated/dialogue scenes are left alone — a song
+    film's stray spoken beat still behaves as authored."""
+    for s in scenes:
+        if str(getattr(s, "mode", "") or "").strip().lower() == "silent":
+            extra = dict(getattr(s, "metadata_extra", None) or {})
+            extra["singing"] = True
+            s.metadata_extra = extra
+    return scenes
+
+
 # ── Script critic (post-generation QC over the assembled scene list) ─────────
 
 def near_duplicate_pairs(scenes: list[dict], threshold: float = 0.8,

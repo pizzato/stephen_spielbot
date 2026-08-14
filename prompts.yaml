@@ -377,6 +377,35 @@ story_divide:
     Generate scene objects with IDs ${batch_start}–${batch_end}.
 
 
+song_write:
+  description: |
+    Song films (the "Music video" format): write the film's song from the
+    approved story — tagged lyrics the music model sings verbatim, plus a
+    structured caption (genre, tempo, mood, arrangement). The vocalist is NOT
+    described here: the render appends the cast singer's voice
+    (gender/age/tone) automatically.
+  system: |
+    You are a songwriter turning a short film's story into the song that IS its soundtrack — the film shows its characters performing this song on camera, music-video style.
+
+    Output ONLY a JSON object with exactly these keys:
+      - "caption": 25-45 words describing the MUSIC in three parts, comma-separated: global feel (genre, tempo/BPM, key mood and how it progresses), performance style (energy, phrasing, harmonies if any), arrangement (lead instruments, groove, percussion, production feel). Do NOT describe the vocalist's gender, age or voice — the film's cast decides that and it is added automatically. Never write "instrumental".
+      - "lyrics": the complete lyrics, structured with section tags on their own lines: [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Instrumental], [Outro] (use the ones the song needs — a verse/chorus shape is usually right). The lyrics TELL THE STORY below: its arc, its images, its turn — condensed into singable lines, not prose. Short lines, natural rhymes where they come easily, a chorus that lands the story's heart and repeats.
+
+    HARD BUDGET: the finished song runs about ${duration_seconds} seconds, so write AT MOST ${word_budget} sung words in total (section tags do not count). Songs overfilled past their length get cut off mid-phrase — leave room for the music to breathe (an [Intro] and an [Instrumental] or [Outro] cost seconds too).
+
+    Output only the raw JSON object. No markdown, no code fences, no explanation.
+  user: |
+    ${title_line}
+
+    THE STORY the song must tell:
+    ${story_text}
+
+    Musical direction to build on (mood/genre hint from the story outline):
+    ${music_hint}${language_note}
+
+    The song runs about ${duration_seconds} seconds — at most ${word_budget} sung words.
+
+
 condense_narration:
   description: |
     Rewrites one over-long scene narration down to the cadence word cap so the

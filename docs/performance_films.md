@@ -96,6 +96,47 @@ one clip either way, rather than paying the join's overhead for nothing.
     A performed silent beat renders in ~6 minutes per 10 s on a GB10, against roughly a
     minute for the LTX clip it replaces.
 
+### Singing films (the Music-video format)
+
+The **Music video** format in [Create](manual/create.md#format) makes the film a song. The
+pipeline changes in three places:
+
+- **The story becomes lyrics.** After you approve the prose draft, the divide step also
+  writes the film's **song** (`song.json` in the work dir): tagged lyrics —
+  `[Verse]`/`[Chorus]`/`[Bridge]` — telling the story's arc in singable lines, plus a
+  music **caption** (genre, tempo, mood, arrangement) that becomes the film's music
+  description. Both music engines sing lyrics natively; the caption reads best structured,
+  and for song films it must *not* say "instrumental".
+- **The cast performs it.** Every scene is staged as a **performed silent take** —
+  the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
+  no style toggle needed — stamped `singing` in its metadata. The prompt asks for a
+  visible performance (mouth moving with the words, moving with the beat) instead of the
+  silent film's closed mouth, and the take ships **muted**: its own a-cappella audio would
+  double the real vocals. The speech gate stands down for these takes — singing is what
+  was asked for.
+- **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
+  whole film (a song film with the 18 % bed gain would be a near-silent music video). The
+  Remix screen's *Generate again* re-sings the same lyrics; edit the caption there to
+  change the sound, or edit `song.json` for the words.
+
+**Whose voice sings?** Neither music engine can clone a voice — the vocalist is whatever
+the caption describes. So the render describes the **lead performer's cast library voice**
+(gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
+accent"*) and appends it to the caption: the singer on screen and the voice on the track
+are matched by description, not by cloning. Pick the character's voice in the script's
+Characters tab to steer it. Lip movement is a performance, not a phoneme-accurate sync —
+exactly like a real music video shot without playback.
+
+**Engine choice matters.** MiniMax Music 3's caption-driven vocals are the stronger
+singer; ACE-Step also sings but our workflow pins its BPM, key and **English-only**
+language, so non-English songs need Music 3. And Music 3 caps a track at ~6 minutes — a
+longer film loops the song, restart audible, so keep song films short.
+
+!!! note "It is still one song under many takes"
+    H3 cannot lip-sync to an external track (it writes picture and audio together), so a
+    music video is the honest shape of a "singing character": the film's real vocals come
+    from the music engine, and the takes perform them.
+
 ## What you need first
 
 **Characters with portraits.** The portraits *are* the conditioning: each cast member's

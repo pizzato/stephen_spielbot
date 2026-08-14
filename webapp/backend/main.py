@@ -1743,8 +1743,9 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
-    # "narration" (default) | "dialogue" | "mixed" | "silent" — see
-    # docs/performance_films.md.
+    # "narration" (default) | "dialogue" | "mixed" | "silent" | "song" — see
+    # docs/performance_films.md ("song" is the Music-video format: the film's
+    # soundtrack is a sung song and the cast performs it on camera).
     format: str = "narration"
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
@@ -1906,6 +1907,17 @@ def _story_format_note(fmt: str) -> str | None:
             "characters array). Ignore any video length or scene limits while "
             "drafting — the story is divided into scenes afterwards."
         )
+    if fmt == "song":
+        return (
+            "MUSIC VIDEO STORY: this story will become the SONG of a music video — "
+            "sung over performed scenes, with no narrator and no spoken lines. Plan "
+            "ONE clear lead performer among the recurring characters (never return "
+            "an empty characters array) — the person the camera keeps returning to — "
+            "and write chapter summaries whose beats are VISIBLE and singable: "
+            "images, actions and turns a song can carry, never information that "
+            "could only arrive in spoken words. Ignore any video length or scene "
+            "limits while drafting — the story is divided into scenes afterwards."
+        )
     return None
 
 
@@ -1934,8 +1946,12 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     count (_acted_scene_plan); the budgets below are written to it, since a
     scene the writer fills to the wrong length is the one that truncates."""
     fmt = (fmt or "narration").strip().lower()
-    if fmt not in ("dialogue", "mixed", "silent"):
+    if fmt not in ("dialogue", "mixed", "silent", "song"):
         return None
+    # A song film's scenes are all PERFORMED silent takes — the schema below
+    # must always ask for their cast, whatever the style's own toggle says.
+    if fmt == "song":
+        acted_silent = True
     # An acted take is bound by the model, not by the narrated scene window a
     # mixed film's plan carries: hold the asked-for length inside it.
     take_secs = min(max(float(scene_secs or 0) or performance_mode.scene_seconds(chained),
@@ -1974,6 +1990,17 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             # The acted-silent schema below already states the budget; saying it
             # twice in one prompt is noise.
             + ("" if acted_silent else silent_budget))
+    elif fmt == "song":
+        balance = (
+            "EVERY scene must be mode \"silent\": this film is a MUSIC VIDEO — one "
+            "continuous song is laid over the whole film, so no scene carries a voice of "
+            "its own. NEVER use \"narration\" and NEVER give any scene \"lines\": nothing "
+            "said on camera survives the mix. Stage the scenes as the song's pictures: "
+            "the lead performer SINGING to camera and performing — put them in \"cast\" in "
+            "most scenes (the face that keeps returning is what makes it a music video) — "
+            "with pure story imagery between the performance shots. Write each scene's "
+            "\"beats\" as performance action (singing to camera, turning, walking, "
+            "dancing, a look), spread across the whole take.")
     else:
         balance = (
             "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
@@ -1985,22 +2012,31 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     # in BOTH directions: a brief asking for a particular staging ("mostly
     # silent", "no narrator") used to lose to the must-mix rule, and the
     # narrator's own words used to be handed to a character.
-    instructions_rule = (
-        "The TOPIC/DIRECTION outranks this mode balance whenever it speaks to staging: if it "
-        "asks for mostly silent scenes, for no narrator, or for more spoken exchanges, stage "
-        "the film the way it asks rather than the way the balance above describes. And when "
-        "it asks the narrator to introduce themselves, address the viewer, or say specific "
-        "things, stage those beats as \"narration\" scenes carrying exactly that content — "
-        "never drop them and never reassign the narrator's own words to a character."
-        if fmt != "silent" else
-        "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging. If it asks "
-        "for specific words to be said, give them to a character in a \"dialogue\" scene — a "
-        "silent film never adds a narrator."
-    )
+    if fmt == "silent":
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging. If it asks "
+            "for specific words to be said, give them to a character in a \"dialogue\" scene — a "
+            "silent film never adds a narrator.")
+    elif fmt == "song":
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging — but a "
+            "music video never adds a narrator and never stages spoken lines: the song is the "
+            "film's only voice.")
+    else:
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this mode balance whenever it speaks to staging: if it "
+            "asks for mostly silent scenes, for no narrator, or for more spoken exchanges, stage "
+            "the film the way it asks rather than the way the balance above describes. And when "
+            "it asks the narrator to introduce themselves, address the viewer, or say specific "
+            "things, stage those beats as \"narration\" scenes carrying exactly that content — "
+            "never drop them and never reassign the narrator's own words to a character.")
     return (
         ("SILENT FILM — the story is told in PICTURES: no narrator reads it, and a character "
          "speaks only where a beat truly needs a line. "
          if fmt == "silent" else
+         "MUSIC VIDEO — the story is told in PICTURES under one continuous song: nobody "
+         "narrates and nobody speaks. "
+         if fmt == "song" else
          "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. ")
         + "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
         "A \"dialogue\" scene also gets:\n"
@@ -2135,7 +2171,9 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
-        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
+        # A song film IS its song — music can't be opted out of.
+        "music": True if (body.format or "").strip().lower() == "song" else (
+            bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music)),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -2322,9 +2360,10 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
     plan = _plan_for_generate(body, ss)
-    if fmt in ("dialogue", "silent"):
-        # Every scene is one clip — acted, or a silent beat nobody narrates —
-        # so the length comes from clip count, not a narrator's word budget.
+    if fmt in ("dialogue", "silent", "song"):
+        # Every scene is one clip — acted, a silent beat nobody narrates, or a
+        # song film's performed take — so the length comes from clip count,
+        # not a narrator's word budget.
         acted_n, acted_secs = _acted_scene_plan(body, ss)
         plan = {**plan, "n_scenes": acted_n, "scene_secs_target": acted_secs,
                 "minutes": round(acted_n * acted_secs / 60.0, 2)}
@@ -2359,7 +2398,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": fmt,
-        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
+        # A song film IS its song — music can't be opted out of.
+        "music": True if fmt == "song" else (
+            bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music)),
     }
     _write_create_brief(work_dir, create_brief)
     store = DurableStore.default()
@@ -2448,6 +2489,32 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         raise
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story division failed: {str(e).splitlines()[0][:300]}")
+
+    if fmt == "song":
+        # A song film: stamp the performance flag onto every silent scene (it
+        # rides scene metadata through the editor and every re-render), then
+        # write the film's song — tagged lyrics + a music caption — as
+        # song.json beside the script. The render sings it on the style's
+        # music engine and lays it over the performed takes.
+        story_mode.mark_singing(scenes)
+        secs = 0.0
+        if isinstance(plan, dict):
+            try:
+                secs = float(plan.get("minutes") or 0) * 60.0
+            except (TypeError, ValueError):
+                secs = 0.0
+        if secs <= 0:
+            secs = len(scenes) * performance_mode.SCENE_SECONDS
+        try:
+            with _track_op("Writing the song", display_topic):
+                song = story_mode.write_song(story, secs, language=language)
+        except Exception as e:
+            raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
+        (wd / "song.json").write_text(json.dumps({**song, "created_at": time.time()},
+                                                 indent=2))
+        # The caption is the film's music description from here on — Remix
+        # shows and edits it, and the render appends the singer's voice.
+        music_desc = song.get("caption") or music_desc
 
     story["status"] = "divided"
     story["updated_at"] = time.time()
@@ -6284,6 +6351,14 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # before the setting existed fall back to the style's current choice.
         music_engine = jc.get("music_engine") or gapp.style_settings(
             gapp.load_config(), jc.get("style_name") or "").get("music_engine")
+        # A song film re-sings its lyrics (stamped into job_config at render
+        # time; song.json is the source for dirs rendered before that stamp).
+        lyrics = (jc.get("music_lyrics") or "").strip()
+        if not lyrics:
+            try:
+                lyrics = str(json.loads((wd / "song.json").read_text()).get("lyrics") or "")
+            except Exception:
+                lyrics = ""
 
         # The original track was already seeded (with its own prompt) by the endpoint,
         # before the prompt was overwritten — see remix_regen_music.
@@ -6293,7 +6368,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
             # acquire() can block behind a busy GPU — re-check before submitting.
             _film_checkpoint(task_id)
             generate_music(title, music_dur, staged, (music_desc or None), comfy_url=url,
-                           music_engine=music_engine)
+                           music_engine=music_engine, lyrics=lyrics or None)
         finally:
             pool.release(url)
         staged.replace(music_path)

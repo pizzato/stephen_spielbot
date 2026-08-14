@@ -64,7 +64,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
-  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed | silent
+  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed | silent | song
   const [music, setMusic] = useState(true)   // score this film? (style default, overridable here)
   // Script mode ('classic' | 'story'): owned by the style, like the narrator
   // voice and visual style — locked while a style is active, editable under
@@ -162,12 +162,15 @@ export default function Create({ seed, meta, onGenerated }) {
   }
 
   // An all-acted film has no room for a score: every scene already carries the
-  // voices generated with its picture.
+  // voices generated with its picture. A song film is the opposite extreme —
+  // it IS its music, so the score can't be opted out of.
   const musicable = format !== 'dialogue'
+  const songFmt = format === 'song'
 
-  // A dialogue/silent film is made of CLIPS, not narration: its scenes have no
-  // word budget, and their length is what the video model can hold in one take.
-  const acted = format === 'dialogue' || format === 'silent'
+  // A dialogue/silent/song film is made of CLIPS, not narration: its scenes
+  // have no word budget, and their length is what the video model holds in one
+  // take.
+  const acted = format === 'dialogue' || format === 'silent' || songFmt
   const bounds = useMemo(() => sceneBounds(profile || {}, format), [profile, format])
   const est = useMemo(
     () => lengthEstimate(minutes, effectiveWpm(meta, profile || {}, voice).wpm,
@@ -192,7 +195,7 @@ export default function Create({ seed, meta, onGenerated }) {
         format,
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
-        music: musicable && music,
+        music: songFmt ? true : (musicable && music),
       }
       // Phase 1: draft the story, then open the Script screen's Story view —
       // the draft is persisted server-side, so the review survives leaving.
@@ -295,20 +298,22 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Format"
-              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes. Silent = told in pictures, no narrator, with a spoken line only where a beat needs one. Whichever you pick, the direction box can steer the balance — “mostly silent, one exchange near the end”.">
+              hint="Narration = classic voice-over. Dialogue = the characters act and speak on screen (needs characters with a portrait). Mixed = the AI blends narration, dialogue and silent scenes. Silent = told in pictures, no narrator, with a spoken line only where a beat needs one. Music video = the story becomes a SONG — sung vocals over the whole film — while the lead character performs it on camera. Whichever you pick, the direction box can steer the balance — “mostly silent, one exchange near the end”.">
               <div className="row gap-8">
-                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed'], ['silent', 'Silent']].map(([f, lbl]) => (
+                {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['mixed', 'Mixed'], ['silent', 'Silent'], ['song', 'Music video']].map(([f, lbl]) => (
                   <Button key={f} variant={format === f ? 'primary' : 'ghost'} onClick={() => setFormat(f)}>{lbl}</Button>
                 ))}
               </div>
             </Field>
 
             <Field label="Music"
-              hint={musicable
+              hint={songFmt
+                ? 'A music video IS its song: the AI writes lyrics from the story and the music model sings them over the film, with the vocalist matched to the lead character’s cast voice.'
+                : musicable
                 ? 'Background score, mixed in at the very end. Off leaves the film with only its voices and room tone.'
                 : 'An acted film carries its own sound — the characters\u2019 voices are generated with the picture, so there is no score.'}>
-              <Check checked={musicable && music} onChange={setMusic} disabled={!musicable}
-                label="Score this film with background music" />
+              <Check checked={songFmt || (musicable && music)} onChange={setMusic} disabled={songFmt || !musicable}
+                label={songFmt ? 'The film is sung — its song is the soundtrack' : 'Score this film with background music'} />
             </Field>
 
             <div className="row center between mt-8 row--wrap gap-16">
@@ -317,6 +322,7 @@ export default function Create({ seed, meta, onGenerated }) {
                   You'll review the story next, then divide it into scenes.
                   {format === 'dialogue' && ` Each scene becomes one acted clip of about ${Math.round(est.sceneSecs)} seconds.`}
                   {format === 'silent' && ` Each scene becomes one clip of about ${Math.round(est.sceneSecs)} seconds, with no voice-over.`}
+                  {format === 'song' && ` Each scene becomes one performed clip of about ${Math.round(est.sceneSecs)} seconds, under one continuous song.`}
                 </span>
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />

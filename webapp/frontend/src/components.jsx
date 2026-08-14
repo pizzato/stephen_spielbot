@@ -76,7 +76,7 @@ const CHAIN_JOIN_SECS = 22 / 24          // cadence.CHAIN_JOIN_SECS
 export function sceneBounds(eff, format = 'narration') {
   const chain = (v) => v * CHAIN_CLIPS - CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
   const h3 = String(eff?.video_engine || '').startsWith('minimax-h3')
-  const acted = format === 'dialogue' || format === 'silent'
+  const acted = format === 'dialogue' || format === 'silent' || format === 'song'
   const chained = !!eff?.h3_chain_scenes && (h3 || acted)
   if (acted) {
     return { secs: chained ? chain(ACTED_SCENE_SECS) : ACTED_SCENE_SECS,

@@ -26,12 +26,13 @@ An AI video generator that turns a topic into a fully produced short film — co
 3. **Video** — [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) animates each scene from its still via ComfyUI (local or distributed workers)
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
-6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film). A per-style music-model picker adds [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) — slower and song-shaped, under its own community license
+6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film). A per-style music-model picker adds [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) — slower and song-shaped, under its own community license. The [**Music video** format](docs/performance_films.md#singing-films-the-music-video-format) goes further: the LLM writes the story as tagged lyrics, the music model **sings** them (vocalist matched to the lead character's cast voice), and the cast performs the song on camera
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
 
 A film's **format** decides how the story is staged: narrated throughout, entirely
 [**acted**](docs/performance_films.md) — the characters speaking on screen, no narrator and
-no music — or mixed, with acted, narrated and silent scenes side by side. Each scene then
+no music — a [**music video**](docs/performance_films.md#singing-films-the-music-video-format)
+sung end to end, or mixed, with acted, narrated and silent scenes side by side. Each scene then
 takes the render path its mode asks for — and a style can send its
 [silent scenes down the acted path too](docs/performance_films.md#silent-scenes-performed),
 performed on H3 from their own first frame (plus the portraits of anyone in shot) so a

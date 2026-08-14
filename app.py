@@ -3386,6 +3386,49 @@ def _performance_refs(cfg: dict, work_dir: Path, style_name: str = ""):
     return portrait_for, voice_for, voice_name_for, looks_like
 
 
+def vocalist_note(cfg: dict, style_name: str, work_dir: Path,
+                  singer_names: list[str] | None = None) -> str:
+    """A few words describing the SUNG voice, for a song film's music caption.
+
+    The music engines cannot clone a voice — the vocalist is whatever the
+    caption describes — so the closest a song film gets to "this character
+    sings" is describing the singer's cast library voice (gender/age/tone/
+    accent) and letting the model write a matching one. *singer_names* orders
+    the search (a song film's lead is whoever fronts its scenes' casts); the
+    job's characters are the fallback. Empty when nobody with a cast voice is
+    found — the caption then stands alone and the model picks the vocalist.
+    """
+    chars = _job_characters(cfg, style_name or cfg.get("style_name") or "", work_dir)
+    by_name = {}
+    for c in chars:
+        for n in [c.get("name", ""), *(c.get("aliases") or [])]:
+            key = str(n).strip().lower()
+            if key:
+                by_name.setdefault(key, c)
+    ordered = [by_name[k] for k in
+               (str(n).strip().lower() for n in (singer_names or [])) if k in by_name]
+    ordered += [c for c in chars if c not in ordered]
+    voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
+    for c in ordered:
+        v = voices.get((c.get("voice") or "").strip())
+        if not v:
+            continue
+        gender = (v.get("gender") or "").strip().lower()
+        age = (v.get("age") or "").strip().lower()
+        bits = [" ".join(x for x in (age if age in ("young", "mature", "elderly") else "",
+                                     gender, "vocalist") if x).strip()]
+        if (v.get("tone") or "").strip():
+            bits.append(f"{v['tone'].strip().lower()} voice")
+        if (v.get("accent") or "").strip():
+            bits.append(f"{v['accent'].strip()} accent")
+        note = ", ".join(b for b in bits if b)
+        if note and note != "vocalist":
+            logger.info("Song vocalist: %s sings as %r (voice %r)",
+                        c.get("name"), note, c.get("voice"))
+            return note
+    return ""
+
+
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
                                    style_name: str = "", scene_id: int = 0) -> dict:
     """Which references a performance scene will actually be rendered with.

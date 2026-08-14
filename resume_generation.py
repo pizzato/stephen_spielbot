@@ -752,7 +752,12 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # model into a consistent one. Soft dependency: without
     # faster-whisper the gate stands down. Silent shots have nothing to verify.
     expected = _performance.spoken_text(meta)
-    verify_on = shot_gate.available() and bool(cfg.get("performance_verify", True))
+    # A singing take (song film) is MEANT to carry a voice: the silent-shot
+    # gate below would hear the singing and retake it forever. No gate — its
+    # own audio is discarded outright (muted after the gates), because the
+    # film's real song covers the whole picture.
+    verify_on = (shot_gate.available() and bool(cfg.get("performance_verify", True))
+                 and not meta.get("singing"))
 
     # A shot with NO lines must be silent — and the model does babble into
     # them against instructions ("and seal it in a thween", heard in a real
@@ -829,6 +834,17 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 candidate.unlink(missing_ok=True)
         logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
                     " (best of retakes)" if _miss(best, transcript) else "")
+
+    if meta.get("singing"):
+        # Ship the singing take MUTED: the film's generated song is the only
+        # audio a music video carries, and H3's own a-cappella take under the
+        # real track would double the vocals.
+        silence = clip.with_suffix(".silence.wav")
+        _write_silence_wav(silence, _get_duration(clip))
+        muted = clip.with_suffix(".muted.mp4")
+        mux_video_audio(clip, silence, muted)
+        muted.replace(clip)
+        silence.unlink(missing_ok=True)
 
     # The kept take's continuation point, on the worker that shot it. Written
     # after the gate so it belongs to the clip that survived, not to a reject.
@@ -924,6 +940,50 @@ def main(work_dir: Path) -> None:
     # Self-heal: any scene with empty narration would produce a 0-byte audio clip
     # and a silent video. Fill missing fields from the LLM before audio generation.
     _heal_empty_scenes(scenes, title, cfg, work_dir)
+
+    # ── Song film (the "Music video" format) ─────────────────────────────────
+    # Scenes stamped "singing" perform the film's song on camera; the song
+    # itself (tagged lyrics + caption, written at divide time) lives in
+    # song.json. The track IS the soundtrack, so music is forced on at full
+    # volume, and the caption gains a description of the cast singer's library
+    # voice — the closest the music model gets to singing AS that character.
+    # The same keys are stamped back into job_config.json so the film editor's
+    # re-mix and the Remix screen's music re-generation stay consistent.
+    singing_film = any(_performance.is_singing(s) for s in scenes)
+    if singing_film:
+        song = {}
+        try:
+            song = json.loads((work_dir / "song.json").read_text())
+        except Exception:
+            logger.warning("Song film without a readable song.json — the track "
+                           "will be sung from the music description alone")
+        singer_names: list[str] = []
+        for s in scenes:
+            if _performance.is_singing(s):
+                for name in (_performance.scene_meta(s).get("cast") or []):
+                    if name not in singer_names:
+                        singer_names.append(name)
+        from app import vocalist_note
+        note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
+                             singer_names)
+        caption = (song.get("caption") or cfg.get("music_desc") or "").strip()
+        cfg["music_desc"] = ", ".join(x for x in (caption, note) if x)
+        cfg["music_lyrics"] = (song.get("lyrics") or "").strip()
+        cfg["music_enabled"] = True
+        cfg["music_vol"] = 100
+        logger.info("Song film: %d singing scene(s), lyrics %s, vocalist %r",
+                    sum(1 for s in scenes if _performance.is_singing(s)),
+                    "present" if cfg["music_lyrics"] else "MISSING", note)
+        try:
+            jc_path = work_dir / "job_config.json"
+            jc = json.loads(jc_path.read_text()) if jc_path.exists() else {}
+            jc.update({"music_enabled": True, "music_vol": 100,
+                       "music_desc": cfg["music_desc"],
+                       "music_lyrics": cfg["music_lyrics"]})
+            jc_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            logger.warning("Could not stamp song keys into job_config.json",
+                           exc_info=True)
 
     store = DurableStore.default()
     durable_job_id = job_id_from_work_dir(work_dir)
@@ -1248,6 +1308,7 @@ def main(work_dir: Path) -> None:
                 "duration_seconds": music_dur,
                 "output_path": str(music_path),
                 "music_desc": cfg.get("music_desc") or "",
+                "music_lyrics": cfg.get("music_lyrics") or "",
                 "music_engine": music_engine["key"],
             },
         )
@@ -1270,7 +1331,8 @@ def main(work_dir: Path) -> None:
                     start_message=f"music on {music_url}",
                 ) as run:
                     generate_music(title, music_dur, music_path, cfg.get("music_desc") or None,
-                                   comfy_url=music_url, music_engine=music_engine["key"])
+                                   comfy_url=music_url, music_engine=music_engine["key"],
+                                   lyrics=cfg.get("music_lyrics") or None)
                     actual_music_dur = _get_duration(music_path)
                     store.record_artifact(
                         durable_job_id,

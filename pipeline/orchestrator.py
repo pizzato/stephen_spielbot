@@ -126,6 +126,10 @@ def _renders_acted(scene_md: dict[str, Any], config: dict[str, Any]) -> bool:
     mode = str(scene_md.get("mode") or "").strip().lower()
     if mode in ACTED_SCENE_MODES and (scene_md.get("lines") or []):
         return True
+    # A singing scene (a song film's performance beat) is acted by definition —
+    # the flag rides the scene metadata, no style toggle involved.
+    if mode == "silent" and scene_md.get("singing"):
+        return True
     # Every silent scene, where the style asks for it: the toggle alone decides
     # (a castless one opens on its own first frame rather than portraits).
     return mode == "silent" and bool(config.get("h3_silent_scenes"))
@@ -654,6 +658,8 @@ class DurableStore:
                     "work_dir": str(work_dir),
                     "title": title,
                     "music_desc": config.get("music_desc", ""),
+                    # A song film's tagged lyrics — the track is sung, not a bed.
+                    "music_lyrics": config.get("music_lyrics", ""),
                     "music_engine": config.get("music_engine"),
                     "output_path": str(Path(work_dir) / "background_music.wav"),
                     "resource_class": resource_classes.get("music", "comfy:music"),

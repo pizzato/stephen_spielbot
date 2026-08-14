@@ -39,7 +39,7 @@
     "inputs": {
       "clip": ["1", 0],
       "tags": "{{TAGS}}",
-      "lyrics": "",
+      "lyrics": "{{LYRICS}}",
       "seed": "{{SEED}}",
       "bpm": 120,
       "duration": "{{DURATION}}",
