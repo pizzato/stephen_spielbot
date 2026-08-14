@@ -71,6 +71,23 @@ def convert_song(source: Path, voice_ref: Path, output: Path,
             raise RuntimeError("seed-vc produced no output file")
         output.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(wavs[0], output)
+    _normalize_loudness(output)
     logger.info("[svc] re-voiced %s with %s → %s", source.name, voice_ref.name,
                 output.name)
     return output
+
+
+def _normalize_loudness(path: Path) -> None:
+    """Bring a converted track to streaming loudness (-16 LUFS, -1.5 dBTP).
+
+    seed-vc's output lands ~18 dB quieter than its source (measured), and the
+    music-video mix plays the track at full volume — an unnormalized
+    conversion turns the whole film near-silent."""
+    from pipeline.assembler import _resolve_media_tool
+    tmp = path.with_suffix(".norm.wav")
+    subprocess.run(
+        [_resolve_media_tool("ffmpeg"), "-y", "-v", "error", "-i", str(path),
+         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11", "-ar", "44100",
+         str(tmp)],
+        check=True, capture_output=True)
+    tmp.replace(path)
