@@ -599,7 +599,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     if (!s) return
     try {
       const r = await api.saveScene(job.job_id, s.id, {
-        title: s.title || '', image_prompt: '', video_prompt: s.video_prompt || '',
+        title: s.title || '',
+        // A dialogue scene renders no image; a performed silent one opens on the
+        // frame its image prompt paints, so pinning a prompt must not wipe it.
+        image_prompt: isActedMode(s.mode) ? '' : (s.image_prompt || ''),
+        video_prompt: s.video_prompt || '',
         narration: s.narration || '', mode: s.mode || 'dialogue', prompt: text,
       })
       const fresh = (r?.scene && r.scene.id === s.id) ? r.scene : null
@@ -903,7 +907,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           // view with its cast slots, takes and prompts.
           { value: 'characters', label: someActedShape ? 'Characters & visuals' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
-          ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : []),
+          ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 
@@ -1227,12 +1231,26 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </>
                 ) : (
                   <>
-                    <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')} hint="FLUX — static, highly detailed.">
+                    <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')}
+                      hint={hasActedShape(d.mode, actedSilent)
+                        ? 'FLUX — the frame this take opens on.'
+                        : 'FLUX — static, highly detailed.'}>
                       <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
-                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')} hint="For the video engine (LTX / MiniMax H3) — motion & camera.">
+                    <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')}
+                      hint={hasActedShape(d.mode, actedSilent)
+                        ? 'Stands in as the setting while the Setting field above is empty.'
+                        : 'For the video engine (LTX / MiniMax H3) — motion & camera.'}>
                       <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
+                    {/* The performed silent take's own H3 prompt, assembled from
+                        the fields above — the same view a dialogue scene gets. */}
+                    {hasActedShape(d.mode, actedSilent) && (
+                      <ActedPrompt label="Acted prompt" prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
+                        refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                        onSave={(text) => savePromptOverride(text)}
+                        onRebuild={() => savePromptOverride('')} />
+                    )}
                   </>
                 )}
               </div>

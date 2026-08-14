@@ -532,12 +532,41 @@ function SceneCard({
                       } catch (e) { setError(e.message) }
                     }} />
                 ) : (<>
-                <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>} hint="FLUX — static frame">
+                <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>}
+                  hint={hasActedShape(sceneType.mode, actedSilent)
+                    ? 'FLUX — the frame this take opens on' : 'FLUX — static frame'}>
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
-                <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>} hint="For the video engine (LTX / MiniMax H3) — motion & camera">
+                <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>}
+                  hint={hasActedShape(sceneType.mode, actedSilent)
+                    ? 'Stands in as the setting while the Setting field above is empty'
+                    : 'For the video engine (LTX / MiniMax H3) — motion & camera'}>
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
+                {/* A performed silent take gets the same assembled H3 prompt a
+                    dialogue scene shows — it is shot the same way. */}
+                {hasActedShape(sceneType.mode, actedSilent) && (
+                  <ActedPrompt label="Acted prompt" prompt={scene.acted_prompt || ''} edited={!!scene.prompt_edited}
+                    refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
+                    onSave={async (text) => {
+                      try {
+                        await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: text,
+                        })
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }}
+                    onRebuild={async () => {
+                      try {
+                        await api.saveScene(jobId, scene.id, {
+                          title, narration, image_prompt: imagePrompt, video_prompt: videoPrompt,
+                          mode: sceneType.mode, prompt: '',
+                        })
+                        onSaved()
+                      } catch (e) { setError(e.message) }
+                    }} />
+                )}
                 </>)}
               </div>
             )}
@@ -2032,10 +2061,10 @@ const EDIT_TABS = new Set(['film', 'characters', 'scenes', 'performance'])
 export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }) {
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
-  const [actedMix, setActedMix] = useState('none')   // none | some | all
   // Any scene that renders as an H3 take — the acted ones plus, when the style
   // performs them, the silent ones. Those takes are conditioned on reference
-  // images, so this is what decides whether the film needs its visuals wall.
+  // images and shown in the acted view, so this is what decides whether the
+  // film gets the visuals wall and the Acted scenes tab.
   const [hasRefTakes, setHasRefTakes] = useState(false)
   const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
   const [filmJobId, setFilmJobId] = useState('')
@@ -2055,17 +2084,14 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   }, [])
 
   // Prefill page title from film scenes (lightweight enough for the head), and
-  // note how much of the film is acted: an ALL-acted film replaces the
-  // narration-shaped Scenes editor with the acted view; a MIXED film keeps the
-  // full Scenes list (every scene, both kinds) and adds the acted view beside it.
+  // note whether anything here is shot on the reference engine: the Scenes list
+  // keeps every scene whatever the mix, and the acted view is added beside it
+  // for the takes — spoken or performed silent — that H3 shoots.
   useEffect(() => {
     if (!workDir) return
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
-      const acted = (s) => ['dialogue', 'performance'].includes(s.mode || s.metadata?.mode)
       const list = r.scenes || []
-      setActedMix(list.length && list.every(acted) ? 'all'
-        : list.some(acted) ? 'some' : 'none')
       setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent)))
       setFilmScenes(list)
       setFilmJobId(r.job_id || '')
@@ -2099,8 +2125,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
           // mode, shiftable between them) plus, when anything is acted, the
           // Acted scenes view — cast slots, portraits, voices, takes.
           { value: 'scenes', label: 'Scenes' },
-          ...(actedMix !== 'none'
-            ? [{ value: 'performance', label: 'Acted scenes' }] : []),
+          ...(hasRefTakes ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
       </div>
 

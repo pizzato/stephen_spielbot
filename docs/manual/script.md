@@ -159,6 +159,12 @@ editable dialogue, the assembled prompt, the rendered take with its **Takes** st
 re-shoot is kept — click one to use it), **Shoot this scene again**, and **Reassemble
 film** once takes have changed.
 
+The view lists **every take the film shoots on the reference engine**, so a
+[performed silent scene](../performance_films.md#silent-scenes-performed) appears here
+too — same card, marked *silent*, with no dialogue editor: it is shot the same way and
+its prompt is read the same way. **Re-generate scene** rewrites it (action, setting,
+camera) and leaves it silent.
+
 !!! note "Spoken text"
     A scene can have narration text that differs from what the voice reads — useful for
     pronunciation or pacing (`[pause:1.5]` inserts real silence). The split is made on the

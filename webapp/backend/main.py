@@ -188,6 +188,30 @@ def _safe_under(path: Path, *roots: Path) -> bool:
     return False
 
 
+# (acted-silent flag, chaining, style note) per work dir, held for a moment so a
+# forty-scene payload reads the config once rather than forty times.
+_ACTED_CTX: dict[str, tuple[float, dict]] = {}
+
+
+def _acted_scene_ctx(wd: Path) -> dict:
+    """What a work dir's scenes need to assemble their H3 prompt."""
+    key = str(wd)
+    hit = _ACTED_CTX.get(key)
+    if hit and time.monotonic() - hit[0] < 2.0:
+        return hit[1]
+    job_id = job_id_from_work_dir(wd)
+    jc = dict(_film_job_config(wd))
+    if not jc.get("style_name"):
+        jc["style_name"] = _job_style_name(job_id)
+    ss = gapp.style_settings(gapp.load_config(), jc["style_name"])
+    ctx = {"acted_cfg": _acted_silent_cfg(jc),
+           "chained": bool(jc.get("h3_chain_scenes") if jc.get("h3_chain_scenes") is not None
+                           else ss.get("h3_chain_scenes")),
+           "style_note": _scene_style_note(job_id)}
+    _ACTED_CTX[key] = (time.monotonic(), ctx)
+    return ctx
+
+
 def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     sid = int(row["id"])
     preview = row.get("preview_path") or ""
@@ -219,6 +243,23 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
     if wd is not None:
         out["history"] = image_history.history(wd, sid)
         out["video_history"] = video_history.history(wd, sid)
+        # A PERFORMED silent scene is shot on H3 from the fields above, so the
+        # editor shows the prompt they assemble into — the same one a dialogue
+        # scene keeps in video_prompt. It is rebuilt on read rather than stored:
+        # the video prompt still belongs to the I2V render this style opted out
+        # of, and turning the toggle back off must leave it usable.
+        if out["mode"] == "silent":
+            try:
+                ctx = _acted_scene_ctx(wd)
+                if performance_mode.renders_acted({"metadata": meta}, ctx["acted_cfg"]):
+                    acted = performance_mode.acted_meta(
+                        {**row, "metadata": meta, "lines": []}, chained=ctx["chained"])
+                    out["acted_prompt"] = performance_mode.build_h3_prompt(
+                        acted, style_note=ctx["style_note"],
+                        picture_names=list(acted.get("cast") or []))
+            except Exception:
+                gapp.logger.debug("Could not assemble the acted prompt for scene %d", sid,
+                                  exc_info=True)
     return out
 
 
@@ -3338,16 +3379,26 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
     _, _, _, style_name, _ = _script_source_meta(
         job_id_from_work_dir(wd), wd.name.replace("-", " ").title())
     ss = gapp.style_settings(cfg, style_name)
+    # EVERY take this film shoots on H3, which is what this screen is about:
+    # the dialogue scenes plus, when the style performs them, the silent ones.
+    # Same predicate as the renderer, so a take that is shot here is shown here.
+    jc = dict(_film_job_config(wd))
+    jc.setdefault("style_name", style_name)
+    acted_cfg = _acted_silent_cfg(jc)
+    chained = bool(jc.get("h3_chain_scenes") if jc.get("h3_chain_scenes") is not None
+                   else ss.get("h3_chain_scenes"))
 
     scenes = []
     for row in rows:
         meta = dict(row.get("metadata") or {})
-        if not performance_mode.is_performance_mode(meta.get("mode")):
+        if not performance_mode.renders_acted({"metadata": meta}, acted_cfg):
             continue
         # A dialogue scene authored in a mixed film carries only its lines —
-        # fill in the cast/length/setting the acted render derives.
+        # fill in the cast/length/setting the acted render derives. Chaining is
+        # read for the same reason the renderer reads it: it decides how long a
+        # SILENT take may run, and the screen must show the length it will get.
         meta = performance_mode.acted_meta(
-            {**row, "metadata": meta, "lines": meta.get("lines") or []})
+            {**row, "metadata": meta, "lines": meta.get("lines") or []}, chained=chained)
         refs = gapp.resolve_performance_references(meta, cfg, wd, style_name,
                                                    scene_id=int(row.get("id") or 0))
         lines = performance_mode.norm_lines(meta.get("lines"))
@@ -3379,6 +3430,10 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "video_prompt": row.get("video_prompt") or "",
             "narration": row.get("narration") or "",
             "mode": meta.get("mode") or "dialogue",
+            # A performed SILENT take: same shoot, nobody speaks. The screen
+            # drops the dialogue editor for it rather than offering lines that
+            # would turn the beat into a conversation.
+            "silent": performance_mode.is_silent({"metadata": meta}),
             # True once the prompt has been hand-edited: the screen then shows
             # the override instead of re-assembling, and offers to drop it.
             "prompt_edited": bool(meta.get("prompt_override")),
@@ -3414,6 +3469,7 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
     return {"work_dir": str(wd), "style_name": style_name,
             "job_id": job_id_from_work_dir(wd),
             "engine": {"key": engine["key"], "label": engine["label"]},
+            "acted_silent": acted_cfg["h3_silent_scenes"],
             "scenes": scenes}
 
 
@@ -4650,7 +4706,11 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     sound — keeping the film's context and cast. The narrated fields have
     per-field regen buttons; an acted scene is one coherent take, so it
     regenerates whole. Persists through update_scene, which reassembles the
-    prompt exactly as a hand edit would."""
+    prompt exactly as a hand edit would.
+
+    A PERFORMED silent scene (h3_silent_scenes) is the same take without the
+    dialogue, so it rewrites the same way — and comes back with no lines: this
+    is where a rewrite must not turn a silent beat into a conversation."""
     body = body or ActedRegenBody()
     sid = int(scene_id)
     cfg = gapp.load_config()
@@ -4663,16 +4723,22 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     finally:
         store.close()
     meta = dict(current.get("metadata") or {})
-    if not performance_mode.is_performance_mode(meta.get("mode")):
+    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
+    wd = gapp._job_work_dir(job_id)
+    silent = performance_mode.is_silent({"metadata": meta})
+    # The render config from either place it is stamped — the job row for a
+    # script, the work dir for a film — so this agrees with the acted view about
+    # what is a take. Disagreeing would offer a rewrite that then refuses.
+    if not performance_mode.renders_acted(
+            {"metadata": meta},
+            _acted_silent_cfg({**(_film_job_config(Path(wd)) if wd else {}), **jc})):
         raise HTTPException(400, "Not an acted scene — use the per-field regenerate buttons.")
 
-    jc = json.loads(_row_to_dict(job).get("config_json") or "{}") if job else {}
     video_title = jc.get("video_title") or (_row_to_dict(job).get("title") if job else "") or ""
     topic = jc.get("topic") or ""
     style_name = jc.get("style_name", "")
     outline = "; ".join(f"{int(r['id'])}. {r.get('title') or ''}" for r in rows)
     cast_names = [c.get("name", "") for c in gapp._style_characters(cfg, style_name)]
-    wd = gapp._job_work_dir(job_id)
     if wd:
         try:
             cast_names += [c.get("name", "") for c in
@@ -4685,20 +4751,35 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
                           for ln in (meta.get("lines") or []))
     system = ("You are a screenwriter for short, AI-generated films. "
               "Return ONLY a raw JSON object — no markdown, no code fences, no explanation.")
+    seconds = float(meta.get("seconds") or meta.get("duration")
+                    or performance_mode.SCENE_SECONDS)
+    if silent:
+        task = (f"Rewrite SILENT scene {sid} — one continuous ~{round(seconds)} second take, "
+                f"performed on camera, in which NOBODY SPEAKS. Current draft:\n"
+                f'Title: {current.get("title") or ""}\n'
+                f'Setting: {meta.get("setting") or ""}\n')
+        keys = ('  "lines": [] — this scene is silent, nobody says anything\n'
+                '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>} '
+                f"— they must fit inside {round(seconds)} seconds\n")
+    else:
+        task = (f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the "
+                f"characters speak on camera. Current draft:\n"
+                f'Title: {current.get("title") or ""}\n'
+                f'Setting: {meta.get("setting") or ""}\n'
+                f"Dialogue:\n{lines_now or '  (none)'}\n")
+        keys = ('  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
+                '"text": <ONE short spoken sentence>} — AT MOST 3 lines and 22 spoken words TOTAL\n'
+                '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>}\n')
     user = (
         f"Video title: {video_title or topic}\nTopic: {topic}\n"
         f"Full scene outline: {outline}\n\n"
-        f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the characters "
-        f"speak on camera. Current draft:\n"
-        f'Title: {current.get("title") or ""}\nSetting: {meta.get("setting") or ""}\n'
-        f"Dialogue:\n{lines_now or '  (none)'}\n\n"
+        + task + "\n"
         "Return a JSON object with exactly these keys:\n"
         '  "title": 5-10 word scene title\n'
-        f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}\n'
+        f'  "cast": array of names on screen, AT MOST 2, chosen from: {cast_pool}'
+        + (" (empty for a beat with nobody in it)\n" if silent else "\n") +
         '  "setting": one sentence — where this happens and what is around them\n'
-        '  "lines": ordered array of {"speaker": <a cast name>, "delivery": <2-4 words>, '
-        '"text": <ONE short spoken sentence>} — AT MOST 3 lines and 22 spoken words TOTAL\n'
-        '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>}\n'
+        + keys +
         '  "camera": one sentence — a single shot, at most one move\n'
         '  "soundscape": diegetic sound only, no music'
         + _instruction_note(body.instruction)
@@ -4713,12 +4794,16 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     except Exception:
         raise HTTPException(502, "The LLM did not return a valid scene — try again.")
 
-    lines = performance_mode.norm_lines(raw.get("lines"))
-    if not lines:
+    # A silent beat stays silent whatever the model returns; a dialogue scene
+    # with no lines is a failed rewrite (it would render as a held stare).
+    lines = [] if silent else performance_mode.norm_lines(raw.get("lines"))
+    if not silent and not lines:
         raise HTTPException(502, "The LLM returned a scene with no dialogue — try again.")
     return update_scene(job_id, sid, SceneUpdate(
         title=str(raw.get("title") or current.get("title") or ""),
-        image_prompt="",
+        # A silent take opens on the frame its image prompt paints, so the
+        # rewrite keeps it; a dialogue scene renders no image at all.
+        image_prompt=(current.get("image_prompt") or "") if silent else "",
         video_prompt=current.get("video_prompt") or "",
         narration="",
         mode=meta.get("mode") or "dialogue",
@@ -4728,8 +4813,10 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         camera=str(raw.get("camera") or ""),
         soundscape=str(raw.get("soundscape") or ""),
         beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
-        # Length follows the new words (update_scene recomputes via acted_meta).
-        seconds=0,
+        # Length follows the new words (update_scene recomputes via acted_meta);
+        # a silent take keeps the length it was written for.
+        duration=seconds if silent else None,
+        seconds=seconds if silent else 0,
         prompt=""  # a rewrite supersedes any pinned prompt
     ))
 

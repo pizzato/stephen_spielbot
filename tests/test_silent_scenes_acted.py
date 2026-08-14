@@ -5,6 +5,7 @@ PERFORMED from those portraits — one acted take, no first frame, no TTS, no mu
 — and says nothing. Off (or castless), it renders exactly as it always did.
 """
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -422,6 +423,119 @@ class FilmEditorFlagTests(unittest.TestCase):
             payload = m.film_scenes(work_dir=str(wd))
         self.assertTrue(payload["acted_silent"])
         self.assertEqual(payload["scenes"][0]["cast"], ["Ana"])
+
+
+class ActedViewTests(unittest.TestCase):
+    """A performed silent take is shot on H3, so it belongs on the H3 screens:
+    the acted view lists it with its resolved slots and its prompt, and the
+    scene editor shows the same prompt beside the fields it is built from."""
+
+    def setUp(self):
+        import app as gapp
+        import webapp.backend.main as backend
+        from pipeline.orchestrator import DurableStore, job_id_from_work_dir
+        self.backend = backend
+        mock = unittest.mock
+        tmp = tempfile.TemporaryDirectory(prefix="spielbot-silent-view-")
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        self.output_dir = root / "videos"
+        self.output_dir.mkdir()
+        cfg_file = root / "config" / "config.yaml"
+        cfg_file.parent.mkdir(parents=True)
+        for target, attr, value in [(gapp, "CONFIG_FILE", cfg_file),
+                                    (gapp, "OUTPUT_DIR", self.output_dir)]:
+            p = mock.patch.object(target, attr, value)
+            p.start()
+            self.addCleanup(p.stop)
+        db = mock.patch.dict(os.environ,
+                             {"SPIELBOT_ORCHESTRATOR_DB": str(root / "orchestrator.sqlite3")})
+        db.start()
+        self.addCleanup(db.stop)
+        backend._ACTED_CTX.clear()          # the per-work-dir context is cached
+        self.addCleanup(backend._ACTED_CTX.clear)
+
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+        self.job_id = job_id_from_work_dir(self.wd)
+        row = {"id": 1, "title": "A hand lowers the component",
+               "image_prompt": "a shadowed bench", "video_prompt": "the hand descends",
+               "narration": "",
+               "metadata": {"mode": "silent", "cast": ["Ana"], "duration": 8.0,
+                            "setting": "A shadow-drowned laboratory bench.",
+                            "camera": "Extreme close-up",
+                            "beats": [{"t0": 0, "t1": 8, "action": "the hand descends"}]}}
+        # The acted view reads the on-disk script; the editors read the store.
+        (self.wd / "script.json").write_text(json.dumps([row]))
+        store = DurableStore.default()
+        try:
+            store.create_or_update_job(self.job_id, self.wd, "Film",
+                                       config={"video_title": "Film"}, metadata={})
+            store.upsert_scene(self.job_id, 1, title=row["title"],
+                               image_prompt=row["image_prompt"],
+                               video_prompt=row["video_prompt"], narration="",
+                               metadata=row["metadata"])
+        finally:
+            store.close()
+
+    def _flag(self, on):
+        (self.wd / "job_config.json").write_text(
+            json.dumps({"style_name": "S", "h3_silent_scenes": on}))
+        self.backend._ACTED_CTX.clear()
+
+    def test_the_acted_view_lists_a_performed_silent_take(self):
+        self._flag(True)
+        scenes = self.backend.load_performance_script(work_dir=str(self.wd))["scenes"]
+        self.assertEqual(len(scenes), 1)
+        scene = scenes[0]
+        self.assertTrue(scene["silent"])
+        self.assertEqual(scene["lines"], [])
+        # …with the prompt the model is actually sent, built from the fields.
+        self.assertIn("A shadow-drowned laboratory bench.", scene["prompt"])
+        self.assertIn("[SHOT LIST]", scene["prompt"])
+
+    def test_an_animated_silent_scene_stays_off_the_acted_view(self):
+        self._flag(False)
+        self.assertEqual(
+            self.backend.load_performance_script(work_dir=str(self.wd))["scenes"], [])
+
+    def test_the_scene_editor_gets_the_same_prompt(self):
+        self._flag(True)
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertIn("A shadow-drowned laboratory bench.", scene["acted_prompt"])
+        self._flag(False)
+        self.assertNotIn("acted_prompt", self.backend.job_scenes(self.job_id)["scenes"][0])
+
+    def test_a_pinned_prompt_wins_without_wiping_the_opening_frame(self):
+        self._flag(True)
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            title="A hand lowers the component", image_prompt="a shadowed bench",
+            video_prompt="the hand descends", narration="", mode="silent",
+            prompt="Just this, verbatim."))
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual(scene["acted_prompt"], "Just this, verbatim.")
+        self.assertTrue(scene["prompt_edited"])
+        self.assertEqual(scene["image_prompt"], "a shadowed bench")
+
+    def test_a_rewrite_leaves_the_beat_silent(self):
+        self._flag(True)
+        answer = json.dumps({
+            "title": "The hand settles", "cast": ["Ana"],
+            "setting": "The same bench, colder now.",
+            "lines": [{"speaker": "Ana", "text": "It is done."}],   # ignored: silent
+            "beats": [{"t0": 0, "t1": 8, "action": "the hand withdraws"}],
+            "camera": "Slow push in", "soundscape": "room tone"})
+        with unittest.mock.patch.object(self.backend, "_llm_complete", return_value=answer):
+            self.backend.regenerate_acted_scene(self.job_id, 1)
+        scene = self.backend.job_scenes(self.job_id)["scenes"][0]
+        self.assertEqual(scene["mode"], "silent")
+        self.assertEqual(scene["lines"], [])
+        self.assertEqual(scene["narration"], "")
+        self.assertIn("The same bench, colder now.", scene["setting"])
+        # The take still opens on its own frame, and keeps the length it was
+        # written for (a silent beat has no words to size it from).
+        self.assertEqual(scene["image_prompt"], "a shadowed bench")
+        self.assertEqual(scene["duration"], 8.0)
 
 
 class AssemblyTests(unittest.TestCase):

@@ -385,13 +385,16 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
 // "Edit" pins whatever you type — the fields stop rebuilding it until you
 // rebuild. `refs` is the resolved slot list, so the numbers in the text mean
 // something on screen.
-export function ActedPrompt({ prompt, refs = [], audios = [], edited, busy, onSave, onRebuild }) {
+export function ActedPrompt({ prompt, refs = [], audios = [], edited, busy, onSave, onRebuild,
+  label = 'Video prompt' }) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(prompt || '')
   useEffect(() => { setDraft(prompt || '') }, [prompt])
 
   return (
-    <Field label="Video prompt"
+    // `label` names it apart from a scene that ALSO keeps a plain video prompt —
+    // a performed silent one, where this is the take's own assembled prompt.
+    <Field label={label}
       hint="Assembled from the fields above — cast, setting, dialogue, beats, camera, sound — so nothing is written twice.">
       {(refs.length > 0 || audios.length > 0) && (
         <div className="stack gap-4" style={{ marginBottom: 10 }}>

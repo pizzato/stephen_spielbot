@@ -114,16 +114,32 @@ function SceneEditor({ scene, jobId, onSaved }) {
         <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
           label="Re-generate scene" busyLabel="Rewriting…"
           busy={busy === 'regen'} disabled={!!busy || !jobId}
-          chips={['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+          chips={scene.silent
+            ? ['Slower', 'More movement', 'Closer in', 'Different setting']
+            : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
           onRegen={async (instr) => {
             setBusy('regen'); setErr('')
             try { await api.regenActedScene(jobId, scene.id, instr); await onSaved() }
             catch (e) { setErr(e.message) } finally { setBusy('') }
           }} />
         <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>
-          Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.
+          {scene.silent
+            ? 'Rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.'
+            : 'Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.'}
         </span>
       </div>
+      {/* A performed SILENT take is the same shoot with nobody speaking, so it
+          gets no dialogue editor: a line typed here would turn the beat into a
+          conversation (and pull TTS-less speech into a wordless film). */}
+      {scene.silent ? (
+        <div className="stack gap-4">
+          <span className="label-sm">Dialogue</span>
+          <span className="muted" style={{ fontSize: 12.5 }}>
+            Nobody speaks — this beat is performed silent. Give it words by switching
+            the scene to <strong>Dialogue</strong> in the Scenes editor.
+          </span>
+        </div>
+      ) : (
       <div className="stack gap-10">
         <div className="row between center">
           <span className="label-sm">Dialogue</span>
@@ -158,6 +174,7 @@ function SceneEditor({ scene, jobId, onSaved }) {
           )}
         </div>
       </div>
+      )}
 
       <ActedPrompt prompt={prompt} edited={scene.prompt_edited} busy={!!busy}
         refs={scene.pictures} audios={scene.audios}
@@ -193,6 +210,7 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </div>
         <span className="muted" style={{ fontSize: 12.5 }}>
           {Math.round(scene.seconds || seconds)}s · one continuous shot
+          {scene.silent ? ' · silent' : ''}
         </span>
       </div>
 
@@ -341,9 +359,16 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
     <>
       <Card span={12} well>
         <div className="row between center row--wrap gap-10">
+          {/* Every take this film shoots on the reference engine, however it
+              was written: the spoken ones and the performed silent beats. */}
           <span style={{ fontSize: 13 }}>
-            {data.scenes.length} acted scene{data.scenes.length === 1 ? '' : 's'} · characters speak
-            on screen · no narrator, no music · <strong>{data.engine?.label}</strong>
+            {data.scenes.length} acted scene{data.scenes.length === 1 ? '' : 's'}
+            {(() => {
+              const silent = data.scenes.filter((s) => s.silent).length
+              if (!silent) return ' · characters speak on screen'
+              if (silent === data.scenes.length) return ' · performed silent, nobody speaks'
+              return ` · ${silent} of them performed silent`
+            })()} · no narrator, no music · <strong>{data.engine?.label}</strong>
           </span>
           <div className="row gap-8 center">
             {data.scenes.some((s) => s.has_video) && (
