@@ -683,7 +683,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     performs it), and ``sings`` is what today's prompt directs the cast to
     mouth. Non-singing scenes are left alone but still advance the clock —
     the song keeps playing under them."""
-    from pipeline.performance import SCENE_SECONDS
+    from pipeline.performance import MIN_SCENE_SECONDS, SCENE_SECONDS
     singing = [s for s in scenes
                if (getattr(s, "metadata_extra", None) or {}).get("singing")]
     if not singing or not (lyrics or "").strip():
@@ -693,10 +693,32 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
             return float(getattr(s, "duration", 0) or 0) or SCENE_SECONDS
         except (TypeError, ValueError):
             return SCENE_SECONDS
+    lines = lyric_lines(lyrics)
+    all_singing = len(singing) == len(scenes)
+    if all_singing and total_seconds:
+        # The whole film sings (the Music-video contract): the track divides
+        # EVENLY — n clips of track/n seconds, windows meeting exactly — so
+        # the concatenated takes run precisely the track's length and the
+        # overlaid song never drifts against the pictures. The takes' minimum
+        # length is respected by the clip-count planner upstream.
+        total = float(total_seconds)
+        per = total / len(scenes)
+        for i, s in enumerate(scenes):
+            extra = dict(getattr(s, "metadata_extra", None) or {})
+            extra["song_window"] = [round(i * per, 2), round((i + 1) * per, 2)]
+            lo = int(round(len(lines) * i / len(scenes)))
+            hi = int(round(len(lines) * (i + 1) / len(scenes)))
+            extra["sings"] = "\n".join(lines[lo:hi]).strip()
+            s.metadata_extra = extra
+            s.duration = round(per, 2)
+        return scenes
+    # Mixed film: the song plays across singing and non-singing scenes alike,
+    # so windows follow each scene's authored screen time, scaled onto the
+    # track. Singing scenes are resized to their windows (floored at the
+    # acted minimum) so the film tracks the song as closely as its mix allows.
     film_len = sum(secs(s) for s in scenes)
     scale = (float(total_seconds) / film_len
              if total_seconds and film_len > 0 else 1.0)
-    lines = lyric_lines(lyrics)
     clock = 0.0
     for s in scenes:
         start, end = clock, clock + secs(s)
@@ -709,12 +731,6 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         extra["song_window"] = [round(start * scale, 1), round(end * scale, 1)]
         extra["sings"] = "\n".join(lines[lo:hi]).strip()
         s.metadata_extra = extra
-        # The film follows the SONG, not the other way round: each singing
-        # scene is resized to the stretch of track it covers, so the film
-        # comes out the song's length and the mix never has to loop it
-        # (a looped song restarts audibly — fine for a bed, wrong for the
-        # soundtrack). Held inside the acted clip window either way.
-        from pipeline.performance import MIN_SCENE_SECONDS
         s.duration = max(MIN_SCENE_SECONDS,
                          round(extra["song_window"][1] - extra["song_window"][0], 1))
     return scenes

@@ -523,17 +523,20 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
             who = " and ".join(people_names) if people_names else "The performer"
             verb = "are" if len(people_names) > 1 else "is"
             geo.append(f"{who} {verb} performing a song on camera for the whole "
-                       f"shot: visibly singing, mouth opening and moving with "
-                       f"the words, expressive face, swaying and moving with "
-                       f"the beat. The mouth is never closed and still.")
-            # This scene's own slice of the song (assign_song_slices): singing
-            # the REAL words makes the mouth shapes and phrasing match what the
-            # track is doing under this stretch of the film.
+                       f"shot: visibly singing along with the clip's own "
+                       f"soundtrack, mouth opening and moving with the sung "
+                       f"words, expressive face, swaying and moving with the "
+                       f"beat. The mouth is never closed and still.")
+            # This scene's own slice of the song (assign_song_slices): when the
+            # render pins that stretch of the real track into the take
+            # (audio-driven H3), the model hears exactly these words — and on
+            # the fallback path without a pinned track, singing the REAL words
+            # still puts the right mouth shapes under this stretch of the film.
             sings = _clean(str(scene_meta.get("sings") or "").replace("\n", " / "))
             if sings:
                 sections.append(f"[SONG]\n{who} sing{'' if len(people_names) > 1 else 's'} "
-                                f"exactly these words of the song, in time with "
-                                f"the beat: \"{sings}\"")
+                                f"the clip's soundtrack — exactly these words, "
+                                f"in time with them: \"{sings}\"")
         else:
             # A shot with no lines is one the model will otherwise babble into —
             # measured on real establishing wides. Say it outright; the

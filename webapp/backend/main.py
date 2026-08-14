@@ -1758,6 +1758,10 @@ class GenerateScriptBody(BaseModel):
     # background_music.wav once generated). The story is drafted INTO it, from
     # its lyrics, instead of a fresh dir.
     work_dir: str = ""
+    # Music-video flow: how long each performed clip runs. The generated
+    # track's real duration is divided into clips of about this length —
+    # 5 gives "5-second parts". 0 = the acted default (~10 s takes).
+    clip_secs: float = 0
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
@@ -2370,22 +2374,11 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         gapp._requested_characters(cfg, body.style_name, user_topic, body.video_title, extra)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
-    plan = _plan_for_generate(body, ss)
-    if fmt in ("dialogue", "silent", "song"):
-        # Every scene is one clip — acted, a silent beat nobody narrates, or a
-        # song film's performed take — so the length comes from clip count,
-        # not a narrator's word budget.
-        acted_n, acted_secs = _acted_scene_plan(body, ss)
-        plan = {**plan, "n_scenes": acted_n, "scene_secs_target": acted_secs,
-                "minutes": round(acted_n * acted_secs / 60.0, 2)}
-    # The draft only learns WHO tells the story (acted / mixed); the acted
-    # scene schema and clip budgets bind at the divide step, so the prose
-    # comes out well-formed whatever the film's length.
-    dialogue_note = _story_format_note(fmt)
-    # Song-first: when the film's song already exists (written and possibly
-    # already generated via /api/song/draft), the story is drafted FROM its
-    # lyrics — the song leads, the pictures follow.
+    # Song-first: the film's song may already exist (written and generated via
+    # /api/song/draft + /api/song/generate). Resolved up front because the
+    # TRACK's real duration is what the scene plan divides.
     song_wd: Path | None = None
+    song_data: dict = {}
     if fmt == "song" and (body.work_dir or "").strip():
         cand = Path(body.work_dir)
         if _safe_under(cand, gapp.OUTPUT_DIR) and (cand / "song.json").exists():
@@ -2394,12 +2387,45 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                 song_data = json.loads((cand / "song.json").read_text())
             except Exception:
                 song_data = {}
-            if (song_data.get("lyrics") or "").strip():
-                dialogue_note = (
-                    (dialogue_note or "") +
-                    "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED. The story "
-                    "must tell exactly what these lyrics tell, in their order — "
-                    "it is the video this song plays over:\n" + song_data["lyrics"])
+    plan = _plan_for_generate(body, ss)
+    if fmt in ("dialogue", "silent", "song"):
+        # Every scene is one clip — acted, a silent beat nobody narrates, or a
+        # song film's performed take — so the length comes from clip count,
+        # not a narrator's word budget.
+        acted_n, acted_secs = _acted_scene_plan(body, ss)
+        if fmt == "song":
+            # The film follows the SONG: its generated duration (else the
+            # asked-for length) divided into clips of about clip_secs each.
+            total = 0.0
+            track = (song_wd / "background_music.wav") if song_wd else None
+            if track is not None and track.exists():
+                try:
+                    from pipeline.assembler import _get_duration
+                    total = float(_get_duration(track) or 0)
+                except Exception:
+                    total = 0.0
+            if total <= 0:
+                total = acted_n * acted_secs
+            clip = float(body.clip_secs or 0)
+            if clip > 0:
+                clip = min(max(clip, float(performance_mode.MIN_SCENE_SECONDS)),
+                           performance_mode.H3_CEILING_SECONDS)
+                acted_n = max(1, round(total / clip))
+            acted_secs = total / max(1, acted_n)
+        plan = {**plan, "n_scenes": acted_n, "scene_secs_target": acted_secs,
+                "minutes": round(acted_n * acted_secs / 60.0, 2)}
+    # The draft only learns WHO tells the story (acted / mixed); the acted
+    # scene schema and clip budgets bind at the divide step, so the prose
+    # comes out well-formed whatever the film's length.
+    dialogue_note = _story_format_note(fmt)
+    # Song-first: when the film's song already exists, the story is drafted
+    # FROM its lyrics — the song leads, the pictures follow.
+    if song_wd is not None and (song_data.get("lyrics") or "").strip():
+        dialogue_note = (
+            (dialogue_note or "") +
+            "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED. The story "
+            "must tell exactly what these lyrics tell, in their order — "
+            "it is the video this song plays over:\n" + song_data["lyrics"])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(

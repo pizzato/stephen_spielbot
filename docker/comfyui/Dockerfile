@@ -222,6 +222,14 @@ RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
     else \
         echo "H3 Motion Context not installed (H3_MOTION_CONTEXT_REF empty)"; \
     fi
+# Audio-driven H3 (this repo's addition, proven 2026-08-14): pin a whole audio
+# track across a clip so the video is generated to match it. Appended into the
+# Motion Context pack because it reuses its layout/payload patches and encode
+# path — a standalone package can't import a hyphenated sibling reliably.
+COPY docker/comfyui/h3_audio_track/append_to_motion_context.py /tmp/h3_audio_track.py
+RUN if [ -d custom_nodes/ComfyUI-H3-Motion-Context ]; then \
+        cat /tmp/h3_audio_track.py >> custom_nodes/ComfyUI-H3-Motion-Context/nodes.py; \
+    fi
 
 EXPOSE 8188
 

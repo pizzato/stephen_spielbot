@@ -84,6 +84,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [songVoice, setSongVoice] = useState('')     // '' = the model's own vocalist
   const [songUrl, setSongUrl] = useState('')
   const [songBusy, setSongBusy] = useState(false)
+  const [clipSecs, setClipSecs] = useState(5)  // performed-clip length; the track divides into these
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -231,8 +232,9 @@ export default function Create({ seed, meta, onGenerated }) {
         style_name: profile ? (profile.name || '') : NO_STYLE,
         music: songFmt ? true : (musicable && music),
         // Song-first: the story is drafted into the song's own work dir, from
-        // its lyrics.
+        // its lyrics; the track divides into clips of about clip_secs each.
         work_dir: songFmt ? songWd : '',
+        clip_secs: songFmt ? (Number(clipSecs) || 0) : 0,
       }
       // Phase 1: draft the story, then open the Script screen's Story view —
       // the draft is persisted server-side, so the review survives leaving.
@@ -385,6 +387,12 @@ export default function Create({ seed, meta, onGenerated }) {
                       <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
                     ))}
                   </select>
+                </Field>
+                <Field label="Clip length (seconds)"
+                  hint="The song divides into performed clips of about this length — 5 gives 5-second parts. Each clip's stretch of the track is pinned into its generation, so the performance follows the music.">
+                  <input className="input" type="number" min={5} max={12} step={1}
+                    style={{ width: 110 }} value={clipSecs}
+                    onChange={(e) => setClipSecs(e.target.value)} />
                 </Field>
                 <div className="row gap-12 center row--wrap">
                   <Button variant={songUrl ? 'ghost' : 'primary'} icon="music"
