@@ -4164,6 +4164,11 @@ def list_engines() -> dict:
         # Ref2VA models (performance films) — same availability map above.
         "reference_engines": eng.public_list_reference(),
         "default_reference_engine": eng.DEFAULT_REFERENCE_ENGINE,
+        # Background-music models — same availability rule (weights present AND,
+        # for MiniMax Music 3, the ComfyUI nodes registered).
+        "music_engines": eng.public_list_music(),
+        "music_availability": {k: _video_avail(e) for k, e in eng.MUSIC_ENGINES.items()},
+        "default_music_engine": eng.DEFAULT_MUSIC_ENGINE,
         "hf_token_set": bool((cfg.get("hf_token") or "").strip()),
         "probed": probe_url,
     }
@@ -4177,7 +4182,7 @@ def _install_engine_worker(task_id: str, engine_key: str, hosts: list[str], hf_t
     ENGINE_MODELS mode — piped to `ssh host bash -s`. Long-running (weights are GBs)."""
     import shlex
     from pipeline import engines as eng
-    e = eng.get(engine_key) or eng.get_video(engine_key) or {}
+    e = eng.get(engine_key) or eng.get_video(engine_key) or eng.get_music(engine_key) or {}
     spec = ";".join(f'{m["repo"]}|{m["remote"]}|{m["dir"]}' for m in e.get("models", []))
     try:
         script_text = (REPO_ROOT / "scripts" / "download_models.sh").read_text()
@@ -4219,7 +4224,7 @@ class EngineInstallBody(BaseModel):
 def install_engine(body: EngineInstallBody) -> dict:
     """Kick off an async download of an engine's models onto every ComfyUI worker."""
     from pipeline import engines as eng
-    e = eng.get(body.engine) or eng.get_video(body.engine)
+    e = eng.get(body.engine) or eng.get_video(body.engine) or eng.get_music(body.engine)
     if not e:
         raise HTTPException(400, f"Unknown engine: {body.engine!r}")
     if not e.get("models"):
@@ -4963,6 +4968,10 @@ def start_generation(body: GenerateBody) -> dict:
         # Score this film? The Create-time choice (stamped on the job) wins over
         # the style's default; music is a final-mix ingredient either way.
         "music_enabled": _job_music_enabled(job_id, ss),
+        # The style's music engine writes the background bed (ACE-Step / MiniMax
+        # Music 3). Stamped like the engines above so a resumed render and a
+        # later Remix re-generation both keep the style's choice.
+        "music_engine": gapp._norm_music_engine(ss.get("music_engine")),
         "music_vol": ss.get("music_vol"),
         "voice_vol": ss.get("voice_vol"),
         "ambient_vol": ss.get("ambient_vol"),
@@ -6174,6 +6183,10 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # Duration of the narration video the music plays under; fall back to the
         # existing music length if combined.mp4 is missing.
         music_dur = _get_duration(combined) if combined.exists() else _get_duration(music_path)
+        # Re-generate on the engine the film was scored with; job dirs from
+        # before the setting existed fall back to the style's current choice.
+        music_engine = jc.get("music_engine") or gapp.style_settings(
+            gapp.load_config(), jc.get("style_name") or "").get("music_engine")
 
         # The original track was already seeded (with its own prompt) by the endpoint,
         # before the prompt was overwritten — see remix_regen_music.
@@ -6182,7 +6195,8 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         try:
             # acquire() can block behind a busy GPU — re-check before submitting.
             _film_checkpoint(task_id)
-            generate_music(title, music_dur, staged, (music_desc or None), comfy_url=url)
+            generate_music(title, music_dur, staged, (music_desc or None), comfy_url=url,
+                           music_engine=music_engine)
         finally:
             pool.release(url)
         staged.replace(music_path)

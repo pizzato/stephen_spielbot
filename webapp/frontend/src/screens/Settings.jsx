@@ -1348,6 +1348,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
         return (engineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'video_engine':
         return (engineInfo?.video_engines || []).find((e) => e.key === v)?.label || String(v || '')
+      case 'music_engine':
+        return (engineInfo?.music_engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'tts_engine':
         return (ttsEngineInfo?.engines || []).find((e) => e.key === v)?.label || String(v || '')
       case 'reference_engine':
@@ -1862,6 +1864,45 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 )
               })}
               <div className="field__hint">MiniMax H3's nodes ship with ComfyUI itself (≥ v0.30.0) and LTX 2.5 support with ≥ v0.32.0 — “not installed” with weights already downloaded usually means the worker container needs a rebuild. LTX 2.5 downloads need a Hugging Face token with the Lightricks/LTX-2.5 license accepted. Expect much slower renders from MiniMax than LTX.</div>
+            </div>
+          </Card>
+
+          {/* ── Music models (engines) ── */}
+          <Card span={12} className="reveal reveal-d2">
+            <div className="row center between">
+              <span className="label-sm">Music models</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>pick per style under <strong>Styles</strong> · download here</span>
+            </div>
+            <div className="stack gap-10 mt-16">
+              {!engineInfo && <div className="muted" style={{ fontSize: 12 }}>Loading engines…</div>}
+              {(engineInfo?.music_engines || []).map((e) => {
+                const avail = engineInfo?.music_availability?.[e.key]
+                const ins = engInstall[e.key]
+                const running = ins?.status === 'running'
+                return (
+                  <div key={e.key} className="row center between" style={{ borderTop: '1px solid var(--line)', paddingTop: 10, gap: 12 }}>
+                    <div className="grow">
+                      <div className="row center gap-8" style={{ flexWrap: 'wrap' }}>
+                        <span style={{ fontWeight: 600 }}>{e.label}</span>
+                        {avail === true && <Chip tone="ok" dot>installed</Chip>}
+                        {avail === false && <Chip tone="warn">not installed</Chip>}
+                      </div>
+                      <div className="muted" style={{ fontSize: 12 }}>{e.sub} · {e.license}</div>
+                      {e.license_note && <div className="muted" style={{ fontSize: 12 }}>{e.license_note}</div>}
+                      {ins?.status === 'error' && <div style={{ color: 'var(--danger)', fontSize: 12 }}>Download failed{ins.error ? `: ${ins.error}` : ' — see workers'}</div>}
+                      {ins?.status === 'done' && <div style={{ color: 'var(--ok)', fontSize: 12 }}>Download complete</div>}
+                    </div>
+                    {e.downloadable && (
+                      <Button variant="ghost" size="sm" icon={running ? 'spinner' : 'download'}
+                        disabled={running || avail === true}
+                        onClick={() => installEngine(e.key)}>
+                        {running ? 'Downloading…' : avail === true ? 'Installed' : 'Download'}
+                      </Button>
+                    )}
+                  </div>
+                )
+              })}
+              <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds (measured on a GB10: 83 s for a 30 s bed); it also stops at 6 minutes, and a longer film loops the bed.</div>
             </div>
           </Card>
 
@@ -2454,6 +2495,21 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   label="Add background music" />
                 <ParentVal k="music_enabled" />
               </Field>
+              {engineInfo && eff.music_enabled !== false && (
+                <Field label="Music model"
+                  hint="Writes the background bed. ACE-Step is quick and stays instrumental; MiniMax Music 3 writes song-shaped tracks at much higher quality but takes minutes per film and caps at 6 minutes. Download models under Infrastructure.">
+                  <select className="select" value={eff.music_engine || engineInfo.default_music_engine || 'ace-step'} onChange={(e) => setStyleField('music_engine', e.target.value)}>
+                    {(engineInfo.music_engines || []).map((e) => (
+                      <option key={e.key} value={e.key}>{e.label}</option>
+                    ))}
+                  </select>
+                  <ParentVal k="music_engine" />
+                  {(() => {
+                    const sel = (engineInfo.music_engines || []).find((x) => x.key === (eff.music_engine || engineInfo.default_music_engine))
+                    return sel?.license_note ? <div className="field__hint" style={{ marginTop: 6 }}>{sel.license_note}</div> : null
+                  })()}
+                </Field>
+              )}
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
                 <Field key={k} label={`${label} — ${eff[k] ?? 0}%`}>
                   <input className="slider" type="range" min={0} max={max} value={eff[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />

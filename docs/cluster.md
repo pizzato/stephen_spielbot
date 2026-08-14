@@ -39,7 +39,7 @@ Each worker machine runs the same stack, sharing that machine's GPU(s):
 
 | Service | Port | What it is |
 |---|---|---|
-| `comfyui` | 8188 | ComfyUI + PyTorch (LTX 2.5 / ACE-Step / FLUX — all native nodes) |
+| `comfyui` | 8188 | ComfyUI + PyTorch (LTX 2.5 / ACE-Step / MiniMax Music 3 / FLUX — all native nodes) |
 | `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server |
 | `autoheal` | — | Restarts any container whose GPU-aware healthcheck fails |
 

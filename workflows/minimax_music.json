@@ -1,0 +1,76 @@
+{
+  "1": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+      "type": "minimax"
+    }
+  },
+  "2": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "minimax_music3_dav.safetensors"
+    }
+  },
+  "3": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "minimax_music3_dit_fp16.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "5": {
+    "class_type": "MiniMaxMusic3TextEncode",
+    "inputs": {
+      "clip": ["1", 0],
+      "caption": "{{TAGS}}",
+      "lyrics": "",
+      "seed": "{{SEED}}",
+      "max_duration": "{{DURATION}}",
+      "cfg_scale": 1.7,
+      "top_k": 50
+    }
+  },
+  "6": {
+    "class_type": "EmptyMiniMaxMusic3LatentAudio",
+    "inputs": {
+      "seconds": ["5", 1],
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "ConditioningZeroOut",
+    "inputs": {
+      "conditioning": ["5", 0]
+    }
+  },
+  "8": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": ["3", 0],
+      "positive": ["5", 0],
+      "negative": ["7", 0],
+      "latent_image": ["6", 0],
+      "seed": "{{SEED}}",
+      "steps": 30,
+      "cfg": 1.7,
+      "sampler_name": "euler",
+      "scheduler": "simple",
+      "denoise": 1.0
+    }
+  },
+  "9": {
+    "class_type": "VAEDecodeAudio",
+    "inputs": {
+      "samples": ["8", 0],
+      "vae": ["2", 0]
+    }
+  },
+  "10": {
+    "class_type": "SaveAudio",
+    "inputs": {
+      "audio": ["9", 0],
+      "filename_prefix": "audio/video-gen"
+    }
+  }
+}

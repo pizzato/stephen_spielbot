@@ -1232,6 +1232,15 @@ def main(work_dir: Path) -> None:
     else:
         write_progress(status_file, tts_band[1], f"Generating background music ({music_dur:.0f}s)…")
         _MAX_MUSIC_ATTEMPTS = 3
+        # Same three-step fallback as the image/video engines above: the stamped
+        # job_config key, then the style row, then the flat default mirror.
+        music_key = cfg.get("music_engine")
+        if not music_key:
+            for s in cfg.get("styles") or []:
+                if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or ""):
+                    music_key = s.get("music_engine")
+                    break
+        music_engine = _engines.resolve_music(music_key or cfg.get("default_music_engine"))
         music_task = task_id(durable_job_id, "music")
         store.update_task_payload(
             music_task,
@@ -1239,6 +1248,7 @@ def main(work_dir: Path) -> None:
                 "duration_seconds": music_dur,
                 "output_path": str(music_path),
                 "music_desc": cfg.get("music_desc") or "",
+                "music_engine": music_engine["key"],
             },
         )
         for attempt in range(1, _MAX_MUSIC_ATTEMPTS + 1):
@@ -1256,10 +1266,11 @@ def main(work_dir: Path) -> None:
                     store,
                     music_task,
                     worker_id_value=music_worker,
-                    lease_seconds=900,
+                    lease_seconds=music_engine["timeout"] + 300,
                     start_message=f"music on {music_url}",
                 ) as run:
-                    generate_music(title, music_dur, music_path, cfg.get("music_desc") or None, comfy_url=music_url)
+                    generate_music(title, music_dur, music_path, cfg.get("music_desc") or None,
+                                   comfy_url=music_url, music_engine=music_engine["key"])
                     actual_music_dur = _get_duration(music_path)
                     store.record_artifact(
                         durable_job_id,

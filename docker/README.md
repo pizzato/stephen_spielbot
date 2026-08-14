@@ -10,7 +10,7 @@ machine over HTTP.
 
 | Service | Port | What it is |
 |---|---|---|
-| `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.5 / ACE-Step / FLUX — all native nodes) |
+| `comfyui` | 8188 | Vanilla ComfyUI + PyTorch (LTX 2.5 / ACE-Step / MiniMax Music 3 / FLUX — all native nodes) |
 | `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server (`pipeline/tts_server.py`) |
 | `autoheal` | — | Restarts any container whose (GPU-aware) healthcheck fails |
 
@@ -88,7 +88,7 @@ the value must be an `http://host:8189` URL.
 |---|---|---|
 | `MODELS_DIR` | — (required) | Host path to the ComfyUI `models/` dir, mounted into the ComfyUI container |
 | `COMFYUI_INPUT_DIR` | `./input` | Host path mounted into `/opt/ComfyUI/input`; `make install` sets this to `~/github/ComfyUI/input` |
-| `COMFYUI_REF` | `master` | Pin ComfyUI to a tag/branch/commit for reproducible workers |
+| `COMFYUI_REF` | `v0.33.0` | Pin ComfyUI to a tag/branch/commit for reproducible workers. `make install` writes this pin; v0.33.0 is the floor for the MiniMax Music 3 engine |
 | `BASE_IMAGE` | `nvidia/cuda:13.0.1-runtime-ubuntu24.04` | Default targets DGX Spark (GB10, CUDA 13). Multi-arch (amd64 + arm64/sbsa) |
 | `TORCH_INDEX_URL` | `…/whl/cu130` | Match your GPU's CUDA — DGX Spark/GB10: cu130 (default); older GPUs: cu124/cu128 |
 | `COMFYUI_PORT` / `TTS_PORT` | `8188` / `8189` | Host ports; match them in the controller config |

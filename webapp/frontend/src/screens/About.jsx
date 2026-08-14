@@ -41,7 +41,7 @@ const PIPELINE = [
   ['film', 'Video', 'LTX or MiniMax H3 animates every scene from its still through ComfyUI'],
   ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning'],
   ['masks-theater', 'Acted scenes', 'In dialogue and mixed films, MiniMax H3 performs the characters — picture and voice generated together from their portraits'],
-  ['music', 'Music', 'ACE-Step scores it from a mood description'],
+  ['music', 'Music', 'ACE-Step or MiniMax Music 3 scores it from a mood description'],
   ['clapperboard', 'Assembly', 'FFmpeg cuts it all into one finished film'],
 ]
 

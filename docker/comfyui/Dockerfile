@@ -67,9 +67,10 @@ FROM ${BASE_IMAGE}
 # Pin ComfyUI for reproducible workers: a tag, branch, or commit SHA.
 # v0.30.0 is the first release with native MiniMax H3 nodes (nodes_minimax_h3);
 # v0.32.0 adds native LTX 2.5 (gemma4 'ltxv' CLIP + 2.5 transformer/VAEs) for
-# the opt-in ltx25 engine. Bumping this wants a chained H3 render re-check —
+# the ltx25 engine; v0.33.0 adds MiniMax Music 3 (nodes_minimax_music) for the
+# opt-in music engine. Bumping this wants a chained H3 render re-check —
 # H3 Motion Context monkey-patches ComfyUI internals and self-tests on load.
-ARG COMFYUI_REF=v0.32.0
+ARG COMFYUI_REF=v0.33.0
 ARG TORCH_INDEX_URL
 ARG TORCH_SPEC
 

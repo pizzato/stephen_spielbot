@@ -14,7 +14,7 @@ const PIPELINE = [
   ['feather-pointed', 'Script', 'An LLM drafts every scene'],
   ['palette', 'Visuals', 'FLUX paints, LTX or MiniMax H3 animates'],
   ['microphone-lines', 'Voices', 'F5-TTS narrates, H3 acts the dialogue'],
-  ['music', 'Score', 'ACE-Step writes the music'],
+  ['music', 'Score', 'ACE-Step or MiniMax Music 3 writes the music'],
   ['film', 'Cut', 'FFmpeg muxes the final film'],
 ]
 

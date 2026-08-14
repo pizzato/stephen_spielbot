@@ -654,6 +654,7 @@ class DurableStore:
                     "work_dir": str(work_dir),
                     "title": title,
                     "music_desc": config.get("music_desc", ""),
+                    "music_engine": config.get("music_engine"),
                     "output_path": str(Path(work_dir) / "background_music.wav"),
                     "resource_class": resource_classes.get("music", "comfy:music"),
                 },

@@ -26,7 +26,7 @@ An AI video generator that turns a topic into a fully produced short film — co
 3. **Video** — [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) animates each scene from its still via ComfyUI (local or distributed workers)
 4. **Narration** — [F5-TTS](https://github.com/SWivid/F5-TTS) synthesises speech with voice cloning from a reference WAV. The default weights are the Apache-2.0 [OpenF5-TTS-Base](https://huggingface.co/mrfakename/OpenF5-TTS-Base) so narration is licensed for commercial use — see [docs/tts_licensing.md](docs/tts_licensing.md). A per-style voice-model picker adds [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) (23 languages, with a per-style narration language that also drives the script's language)
 5. **Dialogue** — scenes can instead be [acted or silent](docs/performance_films.md): the characters speak on screen, with MiniMax H3 Ref2VA generating picture and voice together from their portraits
-6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film)
+6. **Music** — [ACE-Step](https://github.com/ace-step/ACE-Step) generates background music from the LLM's mood description, mixed in at the very end (switch it off per style or per film). A per-style music-model picker adds [MiniMax Music 3](https://huggingface.co/MiniMaxAI/MiniMax-Music3) — slower and song-shaped, under its own community license
 7. **Assembly** — FFmpeg mixes everything into a single video with synced audio
 
 A film's **format** decides how the story is staged: narrated throughout, entirely
@@ -127,7 +127,8 @@ The AI **models** it downloads each carry their own licenses — see
 [`docs/tts_licensing.md`](docs/tts_licensing.md).
 The defaults (FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model)
 are commercial-friendly; the original F5-TTS narration weights are offered only
-as an opt-in **non-commercial** preview. Review the notices before monetizing.
+as an opt-in **non-commercial** preview, and the opt-in MiniMax engines carry
+their own community licenses. Review the notices before monetizing.
 
 > "Stephen Spielbot" is a playful name and is not affiliated with, endorsed by,
 > or connected to Steven Spielberg or any of his companies.
