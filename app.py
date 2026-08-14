@@ -3410,23 +3410,30 @@ def vocalist_note(cfg: dict, style_name: str, work_dir: Path,
     ordered += [c for c in chars if c not in ordered]
     voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
     for c in ordered:
-        v = voices.get((c.get("voice") or "").strip())
-        if not v:
-            continue
-        gender = (v.get("gender") or "").strip().lower()
-        age = (v.get("age") or "").strip().lower()
-        bits = [" ".join(x for x in (age if age in ("young", "mature", "elderly") else "",
-                                     gender, "vocalist") if x).strip()]
-        if (v.get("tone") or "").strip():
-            bits.append(f"{v['tone'].strip().lower()} voice")
-        if (v.get("accent") or "").strip():
-            bits.append(f"{v['accent'].strip()} accent")
-        note = ", ".join(b for b in bits if b)
-        if note and note != "vocalist":
+        note = voice_descriptor(voices.get((c.get("voice") or "").strip()))
+        if note:
             logger.info("Song vocalist: %s sings as %r (voice %r)",
                         c.get("name"), note, c.get("voice"))
             return note
     return ""
+
+
+def voice_descriptor(voice: dict | None) -> str:
+    """One library voice's casting metadata as a vocalist description —
+    "mature female vocalist, warm smoky voice, Irish accent". Empty when the
+    voice is unknown or carries no metadata worth saying."""
+    if not voice:
+        return ""
+    gender = (voice.get("gender") or "").strip().lower()
+    age = (voice.get("age") or "").strip().lower()
+    bits = [" ".join(x for x in (age if age in ("young", "mature", "elderly") else "",
+                                 gender, "vocalist") if x).strip()]
+    if (voice.get("tone") or "").strip():
+        bits.append(f"{voice['tone'].strip().lower()} voice")
+    if (voice.get("accent") or "").strip():
+        bits.append(f"{voice['accent'].strip()} accent")
+    note = ", ".join(b for b in bits if b)
+    return "" if note == "vocalist" else note
 
 
 def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,

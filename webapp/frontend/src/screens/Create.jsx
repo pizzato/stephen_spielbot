@@ -75,6 +75,15 @@ export default function Create({ seed, meta, onGenerated }) {
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
+  // Music-video flow: the SONG comes first. Draft writes caption + lyrics into
+  // a work dir; the audio is generated (and regenerated) from there; only then
+  // is the story drafted — from the approved lyrics — into the same dir.
+  const [songWd, setSongWd] = useState('')
+  const [songCaption, setSongCaption] = useState('')
+  const [songLyrics, setSongLyrics] = useState('')
+  const [songVoice, setSongVoice] = useState('')     // '' = the model's own vocalist
+  const [songUrl, setSongUrl] = useState('')
+  const [songBusy, setSongBusy] = useState(false)
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -180,6 +189,31 @@ export default function Create({ seed, meta, onGenerated }) {
   // the film comes out at whatever it adds up to.
   const lengthGaveWay = Math.abs(est.minutes - (Number(minutes) || 0)) > 0.02
 
+  const draftSong = async () => {
+    setBusy(true); setError('')
+    try {
+      const r = await api.songDraft({
+        video_title: videoTitle.trim(),
+        topic: direction.trim() || videoTitle.trim(),
+        minutes: Number(minutes) || 0,
+        style_name: profile ? (profile.name || '') : NO_STYLE,
+        voice: songVoice,
+      })
+      setSongWd(r.work_dir); setSongCaption(r.caption); setSongLyrics(r.lyrics)
+      setSongUrl('')
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+
+  const generateSong = async () => {
+    setSongBusy(true); setError('')
+    try {
+      const r = await api.songGenerate({
+        work_dir: songWd, caption: songCaption, lyrics: songLyrics, voice: songVoice,
+      })
+      setSongUrl(r.song_url || '')
+    } catch (e) { setError(e.message) } finally { setSongBusy(false) }
+  }
+
   const generate = async () => {
     setBusy(true); setError('')
     try {
@@ -196,6 +230,9 @@ export default function Create({ seed, meta, onGenerated }) {
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
         music: songFmt ? true : (musicable && music),
+        // Song-first: the story is drafted into the song's own work dir, from
+        // its lyrics.
+        work_dir: songFmt ? songWd : '',
       }
       // Phase 1: draft the story, then open the Script screen's Story view —
       // the draft is persisted server-side, so the review survives leaving.
@@ -306,32 +343,94 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </Field>
 
+            {!songFmt && (
             <Field label="Music"
-              hint={songFmt
-                ? 'A music video IS its song: the AI writes lyrics from the story and the music model sings them over the film, with the vocalist matched to the lead character’s cast voice.'
-                : musicable
+              hint={musicable
                 ? 'Background score, mixed in at the very end. Off leaves the film with only its voices and room tone.'
                 : 'An acted film carries its own sound — the characters\u2019 voices are generated with the picture, so there is no score.'}>
-              <Check checked={songFmt || (musicable && music)} onChange={setMusic} disabled={songFmt || !musicable}
-                label={songFmt ? 'The film is sung — its song is the soundtrack' : 'Score this film with background music'} />
+              <Check checked={musicable && music} onChange={setMusic} disabled={!musicable}
+                label="Score this film with background music" />
             </Field>
+            )}
+
+            {songFmt && !songWd && (
+              <Field label="Singing voice"
+                hint="Who sings the film. The vocalist is described to the music model from this voice’s gender, age and tone (matched by description, not cloned). Leave it on the model’s own vocalist to let the song decide.">
+                <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
+                  <option value="">The model’s own vocalist</option>
+                  {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                    <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            {songFmt && songWd && (
+              <>
+                <Field label="Song — the sound"
+                  hint="What the music model is told: genre, tempo, mood, arrangement. The singing voice below is described on top of it automatically.">
+                  <textarea className="textarea" rows={3} value={songCaption}
+                    onChange={(e) => setSongCaption(e.target.value)} />
+                </Field>
+                <Field label="Song — the lyrics"
+                  hint="Sung exactly as written. Keep the section tags — [Intro], [Verse], [Chorus], [Outro] — on their own lines. The story will be drafted from these words.">
+                  <textarea className="textarea" rows={12} style={{ fontFamily: 'ui-monospace, monospace' }}
+                    value={songLyrics} onChange={(e) => setSongLyrics(e.target.value)} />
+                </Field>
+                <Field label="Singing voice"
+                  hint="Described to the music model from this voice’s gender, age and tone — matched by description, not cloned.">
+                  <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
+                    <option value="">The model’s own vocalist</option>
+                    {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                      <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
+                    ))}
+                  </select>
+                </Field>
+                <div className="row gap-12 center row--wrap">
+                  <Button variant={songUrl ? 'ghost' : 'primary'} icon="music"
+                    disabled={songBusy || !songLyrics.trim()}
+                    onClick={generateSong}>
+                    {songBusy ? 'Singing it…' : songUrl ? 'Generate the song again' : 'Generate the song'}
+                  </Button>
+                  {songUrl && <audio controls src={songUrl} style={{ height: 34 }} />}
+                </div>
+                {songUrl && (
+                  <span className="muted" style={{ fontSize: 12.5 }}>
+                    Happy with it? This exact track becomes the film’s soundtrack —
+                    the story and scenes are drafted to it next.
+                  </span>
+                )}
+              </>
+            )}
 
             <div className="row center between mt-8 row--wrap gap-16">
               <div className="stack gap-4">
                 <span className="muted" style={{ fontSize: 12.5 }}>
-                  You'll review the story next, then divide it into scenes.
+                  {songFmt
+                    ? (songWd
+                      ? 'The story is drafted from these lyrics, then divided into performed scenes — each covering its window of the song.'
+                      : 'The song comes first: write it, listen, regenerate until it’s right — then the story is drafted from its lyrics.')
+                    : "You'll review the story next, then divide it into scenes."}
                   {format === 'dialogue' && ` Each scene becomes one acted clip of about ${Math.round(est.sceneSecs)} seconds.`}
                   {format === 'silent' && ` Each scene becomes one clip of about ${Math.round(est.sceneSecs)} seconds, with no voice-over.`}
-                  {format === 'song' && ` Each scene becomes one performed clip of about ${Math.round(est.sceneSecs)} seconds, under one continuous song.`}
+                  {format === 'song' && ` Each scene becomes one performed clip of about ${Math.round(est.sceneSecs)} seconds.`}
                 </span>
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />
               </div>
-              <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
-                disabled={!videoTitle.trim() || busy}
-                onClick={generate}>
-                {busy ? 'Drafting the story…' : '1. Draft the story →'}
-              </Button>
+              {songFmt && !songWd ? (
+                <Button variant="primary" size="lg" iconRight="music"
+                  disabled={!videoTitle.trim() || busy}
+                  onClick={draftSong}>
+                  {busy ? 'Writing the song…' : '1. Write the song →'}
+                </Button>
+              ) : (
+                <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
+                  disabled={!videoTitle.trim() || busy || (songFmt && songBusy)}
+                  onClick={generate}>
+                  {busy ? 'Drafting the story…' : songFmt ? '2. Draft the story →' : '1. Draft the story →'}
+                </Button>
+              )}
             </div>
           </div>
         </Card>

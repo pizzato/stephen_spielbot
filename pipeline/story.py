@@ -600,8 +600,10 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
 
 # ── Song films (music videos) ────────────────────────────────────────────────
 
-def write_song(story: dict, target_seconds: float,
-               language: str | None = None) -> dict:
+def write_song(story: dict | None, target_seconds: float,
+               language: str | None = None, *,
+               topic: str = "", video_title: str = "",
+               source_text: str = "", music_hint: str = "") -> dict:
     """The film's SONG, written from the approved story draft.
 
     A song film ("song" format) is a music video: the music engine sings the
@@ -620,10 +622,18 @@ def write_song(story: dict, target_seconds: float,
     """
     cfg = _load_cfg()
     call = _call_fn(cfg)
-    chapters_str = "\n\n".join(
-        f'Chapter {c.get("chapter")} — "{c.get("title", "")}":\n{c.get("text", "")}'
-        for c in (story.get("chapters") or []) if isinstance(c, dict))
-    seconds = max(30, int(target_seconds or 0) or 180)
+    if story is not None:
+        # Song written from an approved story (the divide-time fallback).
+        source_text = "\n\n".join(
+            f'Chapter {c.get("chapter")} — "{c.get("title", "")}":\n{c.get("text", "")}'
+            for c in (story.get("chapters") or []) if isinstance(c, dict))
+        topic = str(story.get("topic") or "")
+        video_title = str(story.get("video_title") or "")
+        music_hint = str(story.get("music") or "")
+    # Song-FIRST (the interactive Music-video flow): only the brief exists,
+    # so the song is written straight from it and the story follows the
+    # lyrics afterwards.
+    seconds = max(15, int(target_seconds or 0) or 180)
     word_budget = max(40, int(seconds * 1.7))
     lang_name = narration_language_name(language)
     language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
@@ -632,12 +642,11 @@ def write_song(story: dict, target_seconds: float,
     raw = call(
         _prompts.system("song_write"),
         _prompts.user("song_write",
-                      title_line=_title_line(str(story.get("topic") or ""),
-                                             story.get("video_title") or None),
-                      story_text=chapters_str,
+                      title_line=_title_line(topic, video_title or None),
+                      story_text=source_text or topic,
                       duration_seconds=seconds,
                       word_budget=word_budget,
-                      music_hint=str(story.get("music") or ""),
+                      music_hint=music_hint,
                       language_note=language_note),
         word_budget * 3 + 500, "song write", retries=2,
     )
@@ -645,8 +654,70 @@ def write_song(story: dict, target_seconds: float,
     lyrics = str(data.get("lyrics") or "").strip()
     if not lyrics:
         raise RuntimeError("Song writing returned no lyrics")
-    caption = str(data.get("caption") or story.get("music") or "").strip()
+    caption = str(data.get("caption") or music_hint or "").strip()
     return {"caption": caption, "lyrics": lyrics}
+
+
+def lyric_lines(lyrics: str) -> list[str]:
+    """The sung lines of a tagged lyric sheet, in order — section tags
+    ([Verse], [Chorus], …) and blank lines dropped."""
+    out = []
+    for line in (lyrics or "").splitlines():
+        line = line.strip()
+        if line and not (line.startswith("[") and line.endswith("]")):
+            out.append(line)
+    return out
+
+
+def assign_song_slices(scenes: list[Scene], lyrics: str,
+                       total_seconds: float | None = None) -> list[Scene]:
+    """Give each singing scene its WINDOW of the song and the words sung in it.
+
+    The song plays once across the whole film, so each singing scene covers the
+    stretch of it that its screen time occupies: ``song_window`` is [start, end]
+    seconds into the track, and ``sings`` is the lyric lines that fall inside
+    (distributed by time share — sung delivery is loose enough that proportional
+    beats word-level alignment's failure modes on sung vocals). Both ride the
+    scene metadata: the window is the interface a future audio-conditioned H3
+    render plugs into (pass that slice of the track in, get a take that
+    performs it), and ``sings`` is what today's prompt directs the cast to
+    mouth. Non-singing scenes are left alone but still advance the clock —
+    the song keeps playing under them."""
+    from pipeline.performance import SCENE_SECONDS
+    singing = [s for s in scenes
+               if (getattr(s, "metadata_extra", None) or {}).get("singing")]
+    if not singing or not (lyrics or "").strip():
+        return scenes
+    def secs(s):
+        try:
+            return float(getattr(s, "duration", 0) or 0) or SCENE_SECONDS
+        except (TypeError, ValueError):
+            return SCENE_SECONDS
+    film_len = sum(secs(s) for s in scenes)
+    scale = (float(total_seconds) / film_len
+             if total_seconds and film_len > 0 else 1.0)
+    lines = lyric_lines(lyrics)
+    clock = 0.0
+    for s in scenes:
+        start, end = clock, clock + secs(s)
+        clock = end
+        extra = dict(getattr(s, "metadata_extra", None) or {})
+        if not extra.get("singing"):
+            continue
+        lo = int(round(len(lines) * (start / film_len))) if film_len else 0
+        hi = int(round(len(lines) * (end / film_len))) if film_len else 0
+        extra["song_window"] = [round(start * scale, 1), round(end * scale, 1)]
+        extra["sings"] = "\n".join(lines[lo:hi]).strip()
+        s.metadata_extra = extra
+        # The film follows the SONG, not the other way round: each singing
+        # scene is resized to the stretch of track it covers, so the film
+        # comes out the song's length and the mix never has to loop it
+        # (a looped song restarts audibly — fine for a bed, wrong for the
+        # soundtrack). Held inside the acted clip window either way.
+        from pipeline.performance import MIN_SCENE_SECONDS
+        s.duration = max(MIN_SCENE_SECONDS,
+                         round(extra["song_window"][1] - extra["song_window"][0], 1))
+    return scenes
 
 
 def mark_singing(scenes: list[Scene]) -> list[Scene]:

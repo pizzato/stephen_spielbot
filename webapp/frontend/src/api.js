@@ -123,6 +123,18 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Story generation failed.')
     }
   },
+  // Music-video flow: write the song first, then generate its audio (polls
+  // the shared script-task status until the track is rendered).
+  songDraft: (body) => req('POST', '/song/draft', body),
+  songGenerate: async (body) => {
+    const { task_id } = await req('POST', '/song/generate', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Song generation failed.')
+    }
+  },
   divideStory: async (body) => {
     const { task_id } = await req('POST', '/script/story/divide', body)
     for (;;) {

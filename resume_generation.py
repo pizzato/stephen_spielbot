@@ -963,9 +963,17 @@ def main(work_dir: Path) -> None:
                 for name in (_performance.scene_meta(s).get("cast") or []):
                     if name not in singer_names:
                         singer_names.append(name)
-        from app import vocalist_note
-        note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
-                             singer_names)
+        from app import vocalist_note, voice_descriptor
+        # The song-first flow picked an explicit SINGING voice; a cast
+        # member's voice is the fallback for films that skipped that step.
+        note = ""
+        if (song.get("voice") or "").strip():
+            voices = {v.get("name"): v for v in (cfg.get("voices") or [])
+                      if v.get("name")}
+            note = voice_descriptor(voices.get(song["voice"].strip()))
+        if not note:
+            note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
+                                 singer_names)
         caption = (song.get("caption") or cfg.get("music_desc") or "").strip()
         cfg["music_desc"] = ", ".join(x for x in (caption, note) if x)
         cfg["music_lyrics"] = (song.get("lyrics") or "").strip()

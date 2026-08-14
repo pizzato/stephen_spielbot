@@ -1754,6 +1754,10 @@ class GenerateScriptBody(BaseModel):
     # docs/performance_films.md ("song" is the Music-video format: the film's
     # soundtrack is a sung song and the cast performs it on camera).
     format: str = "narration"
+    # Music-video flow: the work dir /api/song/draft created (song.json, and
+    # background_music.wav once generated). The story is drafted INTO it, from
+    # its lyrics, instead of a fresh dir.
+    work_dir: str = ""
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
@@ -2378,6 +2382,24 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     # scene schema and clip budgets bind at the divide step, so the prose
     # comes out well-formed whatever the film's length.
     dialogue_note = _story_format_note(fmt)
+    # Song-first: when the film's song already exists (written and possibly
+    # already generated via /api/song/draft), the story is drafted FROM its
+    # lyrics — the song leads, the pictures follow.
+    song_wd: Path | None = None
+    if fmt == "song" and (body.work_dir or "").strip():
+        cand = Path(body.work_dir)
+        if _safe_under(cand, gapp.OUTPUT_DIR) and (cand / "song.json").exists():
+            song_wd = cand
+            try:
+                song_data = json.loads((cand / "song.json").read_text())
+            except Exception:
+                song_data = {}
+            if (song_data.get("lyrics") or "").strip():
+                dialogue_note = (
+                    (dialogue_note or "") +
+                    "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED. The story "
+                    "must tell exactly what these lyrics tell, in their order — "
+                    "it is the video this song plays over:\n" + song_data["lyrics"])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
@@ -2390,7 +2412,7 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
 
     display_title = (body.video_title or "").strip() or user_topic
-    work_dir = gapp._script_work_dir(display_title)
+    work_dir = song_wd if song_wd is not None else gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
     _story_path(work_dir).write_text(json.dumps(story, indent=2))
     create_brief = {
@@ -2463,6 +2485,11 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         src = wd
         wd = gapp._script_work_dir(video_title or user_topic)
         gapp.logger.info("Story divide: %s already has scenes — forking to %s", src, wd)
+        # A song film's approved song travels with the fork — it IS the film.
+        import shutil
+        for name in ("song.json", "background_music.wav"):
+            if (src / name).exists():
+                shutil.copy2(src / name, wd / name)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -2499,10 +2526,10 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
 
     if fmt == "song":
         # A song film: stamp the performance flag onto every silent scene (it
-        # rides scene metadata through the editor and every re-render), then
-        # write the film's song — tagged lyrics + a music caption — as
-        # song.json beside the script. The render sings it on the style's
-        # music engine and lays it over the performed takes.
+        # rides scene metadata through the editor and every re-render). The
+        # song normally already exists — the song-FIRST flow wrote and
+        # generated it before the story was drafted — and is only written
+        # here as a fallback for headless runs that skipped that step.
         story_mode.mark_singing(scenes)
         secs = 0.0
         if isinstance(plan, dict):
@@ -2512,13 +2539,32 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
                 secs = 0.0
         if secs <= 0:
             secs = len(scenes) * performance_mode.SCENE_SECONDS
-        try:
-            with _track_op("Writing the song", display_topic):
-                song = story_mode.write_song(story, secs, language=language)
-        except Exception as e:
-            raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
-        (wd / "song.json").write_text(json.dumps({**song, "created_at": time.time()},
-                                                 indent=2))
+        song = None
+        if (wd / "song.json").exists():
+            try:
+                song = json.loads((wd / "song.json").read_text())
+            except Exception:
+                song = None
+        if not (song and (song.get("lyrics") or "").strip()):
+            try:
+                with _track_op("Writing the song", display_topic):
+                    song = story_mode.write_song(story, secs, language=language)
+            except Exception as e:
+                raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
+            (wd / "song.json").write_text(json.dumps({**song, "created_at": time.time()},
+                                                     indent=2))
+        # Each singing scene gets its WINDOW of the song and the words sung in
+        # it — timed against the real generated track when one exists.
+        track_secs = None
+        track = wd / "background_music.wav"
+        if track.exists():
+            try:
+                from pipeline.assembler import _get_duration
+                track_secs = _get_duration(track) or None
+            except Exception:
+                track_secs = None
+        story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
+                                      total_seconds=track_secs or secs)
         # The caption is the film's music description from here on — Remix
         # shows and edits it, and the render appends the singer's voice.
         music_desc = song.get("caption") or music_desc
@@ -2582,6 +2628,137 @@ def story_divide(body: DivideStoryBody) -> dict:
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
     threading.Thread(target=_run_story_divide_task, args=(task_id, body), daemon=True).start()
+    return {"task_id": task_id}
+
+
+class SongDraftBody(BaseModel):
+    video_title: str = ""
+    topic: str = ""
+    minutes: float = 0
+    style_name: str = ""
+    voice: str = ""          # the SINGING voice (library name); "" = model's pick
+
+
+@api.post("/api/song/draft")
+def song_draft(body: SongDraftBody) -> dict:
+    """Song-FIRST step of the Music-video flow: write the film's song from the
+    brief alone — caption + tagged lyrics — into a fresh work dir. Generate the
+    track with /api/song/generate, iterate, and only then draft the story from
+    the approved lyrics (story/generate with this work_dir)."""
+    title = (body.video_title or "").strip() or (body.topic or "").strip()
+    if not title:
+        raise HTTPException(400, "Enter a video title or describe the song.")
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name)
+    minutes = float(body.minutes or 0) or gapp.style_video_minutes(ss)
+    secs = max(15.0, minutes * 60.0)
+    extra = (ss.get("extra_instructions") or "").strip()
+    topic = (body.topic or "").strip() or title
+    display_topic = title.splitlines()[0][:80]
+    try:
+        with _track_op("Writing the song", display_topic):
+            song = story_mode.write_song(
+                None, secs,
+                language=gapp._norm_tts_language(ss.get("tts_language")),
+                topic=f"{topic}\n\n{extra}" if extra else topic,
+                video_title=(body.video_title or "").strip())
+    except Exception as e:
+        raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
+    wd = gapp._script_work_dir(title)
+    song.update({"voice": (body.voice or "").strip(), "seconds": secs,
+                 "title": title, "style_name": ss["name"],
+                 "created_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(song, indent=2))
+    return {"work_dir": str(wd), "caption": song["caption"],
+            "lyrics": song["lyrics"], "voice": song["voice"], "seconds": secs}
+
+
+class SongGenerateBody(BaseModel):
+    work_dir: str
+    caption: str = ""
+    lyrics: str = ""
+    voice: str = ""
+
+
+def _do_song_generate(wd: Path) -> dict:
+    """Render the song itself (song.json → background_music.wav) on a worker.
+
+    The finished track IS the film's final soundtrack: the render's music step
+    sees the file already present and reuses it verbatim, so what was approved
+    here is exactly what plays under the film. Each generation is kept in the
+    music history for comparison."""
+    from pipeline.assembler import _get_duration
+    from pipeline.comfyui import generate_music
+    from pipeline.worker_pool import WorkerPool
+
+    cfg = gapp.load_config()
+    data = json.loads((wd / "song.json").read_text())
+    secs = float(data.get("seconds") or 60)
+    voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
+    vocal = gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
+    caption = ", ".join(x for x in ((data.get("caption") or "").strip(), vocal) if x)
+    ss = gapp.style_settings(cfg, data.get("style_name") or "")
+    engine = gapp._norm_music_engine(ss.get("music_engine"))
+    urls = gapp._preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No ComfyUI workers reachable.")
+    pool = WorkerPool(urls)
+    staged = wd / "background_music.staging.wav"
+    url = pool.acquire()
+    try:
+        generate_music(str(data.get("title") or wd.name), secs, staged,
+                       caption or None, comfy_url=url, music_engine=engine,
+                       lyrics=data.get("lyrics") or None)
+    finally:
+        pool.release(url)
+    final = wd / "background_music.wav"
+    staged.replace(final)
+    try:
+        music_history.record(wd, final, caption)
+    except Exception:
+        gapp.logger.warning("Could not record song into music history", exc_info=True)
+    dur = _get_duration(final)
+    data.update({"generated_at": time.time(), "duration": dur})
+    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    return {"ok": True, "duration": dur,
+            "song_url": f"/api/file?path={final}&t={int(time.time())}"}
+
+
+def _run_song_generate_task(task_id: str, wd: Path) -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_song_generate(wd)}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/song/generate")
+def song_generate(body: SongGenerateBody) -> dict:
+    """Save the (possibly edited) song and start rendering its audio in the
+    background; poll /api/script/generate/status with the returned task id."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "Draft the song first.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        data = {}
+    if (body.lyrics or "").strip():
+        data["lyrics"] = body.lyrics.strip()
+    if (body.caption or "").strip():
+        data["caption"] = body.caption.strip()
+    if body.voice is not None:
+        data["voice"] = (body.voice or "").strip()
+    if not (data.get("lyrics") or "").strip():
+        raise HTTPException(400, "The song has no lyrics.")
+    data["updated_at"] = time.time()
+    path.write_text(json.dumps(data, indent=2))
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_song_generate_task, args=(task_id, wd),
+                     daemon=True).start()
     return {"task_id": task_id}
 
 

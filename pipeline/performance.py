@@ -526,6 +526,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                        f"shot: visibly singing, mouth opening and moving with "
                        f"the words, expressive face, swaying and moving with "
                        f"the beat. The mouth is never closed and still.")
+            # This scene's own slice of the song (assign_song_slices): singing
+            # the REAL words makes the mouth shapes and phrasing match what the
+            # track is doing under this stretch of the film.
+            sings = _clean(str(scene_meta.get("sings") or "").replace("\n", " / "))
+            if sings:
+                sections.append(f"[SONG]\n{who} sing{'' if len(people_names) > 1 else 's'} "
+                                f"exactly these words of the song, in time with "
+                                f"the beat: \"{sings}\"")
         else:
             # A shot with no lines is one the model will otherwise babble into —
             # measured on real establishing wides. Say it outright; the
