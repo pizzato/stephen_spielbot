@@ -261,17 +261,38 @@ PY
 # HF cache on first use; fetch them now so the first multilingual narration
 # doesn't stall mid-render. Parallel across hosts, best-effort — a failure just
 # means the worker downloads lazily later (or via Settings → Voice models).
+# Step 4 recreated the TTS container moments ago, so wait for it to answer on
+# :8189 before posting — otherwise a perfectly healthy install warns for every
+# host just because the container hadn't finished starting.
 banner "Pre-warming TTS narration models"
 for host in $HOSTS; do
     (
-        if curl -sf -X POST "http://${host}:8189/prewarm" \
-                -H 'Content-Type: application/json' \
-                -d '{"engine": "chatterbox-multilingual"}' \
-                --max-time 3600 >/dev/null; then
-            echo "[tts] chatterbox-multilingual ready on $host"
-        else
+        warn() {
             echo "[tts] WARNING: pre-warm failed on $host — it will download on first use."
-        fi
+            exit 0
+        }
+
+        ready=""
+        for _ in $(seq 1 60); do  # ≤5 min
+            if curl -sf --max-time 5 "http://${host}:8189/health" >/dev/null 2>&1; then
+                ready=1
+                break
+            fi
+            sleep 5
+        done
+        [[ -n "$ready" ]] || warn
+
+        for backoff in 5 15 0; do
+            if curl -sf -X POST "http://${host}:8189/prewarm" \
+                    -H 'Content-Type: application/json' \
+                    -d '{"engine": "chatterbox-multilingual"}' \
+                    --max-time 3600 >/dev/null; then
+                echo "[tts] chatterbox-multilingual ready on $host"
+                exit 0
+            fi
+            [[ "$backoff" == 0 ]] || sleep "$backoff"
+        done
+        warn
     ) &
 done
 wait
