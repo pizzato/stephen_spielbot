@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
-  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard,
+  VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -70,7 +70,7 @@ const waitFilmTask = (taskId) => new Promise((resolve, reject) => {
 
 function SceneCard({
   scene, index, total, jobId, workDir, resolution, style,
-  voices, filmVoice, voiceMeta = {}, castOpts = [],
+  voices, filmVoice, voiceMeta = {}, castOpts = [], actedSilent = false,
   onDelete, onMove, onSaved, onRerenderStart, onRerenderDone, initialTask,
 }) {
   const [editing, setEditing] = useState(false)
@@ -473,7 +473,8 @@ function SceneCard({
                 <Field label={<RegenLabel busy={fieldBusy === 'title'} onRegen={(instr) => regenField('title', instr)} chips={REGEN_CHIPS.title}>Title</RegenLabel>}>
                   <input className="input" value={title} onChange={(e) => setTitle(e.target.value)} />
                 </Field>
-                <SceneTypeControls scene={sceneType} castOpts={castOpts} onChange={changeType} onCommit={commitType}
+                <SceneTypeControls scene={sceneType} castOpts={castOpts} actedSilent={actedSilent}
+                  onChange={changeType} onCommit={commitType}
                   onConvert={async (m) => {
                     setError('')
                     try {
@@ -1820,6 +1821,9 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
   const [jobId, setJobId] = useState('')
   const [resolution, setResolution] = useState('')
   const [style, setStyle] = useState('')
+  // The film's style performs its silent scenes on H3 (h3_silent_scenes): those
+  // scenes are then written through the acted fields, same as the dialogue ones.
+  const [actedSilent, setActedSilent] = useState(false)
   const [voices, setVoices] = useState([])
   const [filmVoice, setFilmVoice] = useState('')
   const [loaded, setLoaded] = useState(false)
@@ -1839,6 +1843,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
       onTitle?.(r.title || '')
       setResolution(r.resolution || '')
       setStyle(r.style || '')
+      setActedSilent(!!r.acted_silent)
       setVoices(r.voices || [])
       setFilmVoice(r.voice || 'Default (F5-TTS)')
     } catch (e) {
@@ -1997,6 +2002,7 @@ function ScenesTab({ workDir, meta = {}, onTitle, onSwitchToFilm }) {
               filmVoice={filmVoice}
               voiceMeta={voiceMeta}
               castOpts={castOpts}
+              actedSilent={actedSilent}
               onDelete={handleDelete}
               onMove={handleMove}
               onSaved={load}
@@ -2027,6 +2033,10 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
   const [tab, setTab] = useState(EDIT_TABS.has(initialTab) ? initialTab : 'film')
   const [filmTitle, setFilmTitle] = useState('')
   const [actedMix, setActedMix] = useState('none')   // none | some | all
+  // Any scene that renders as an H3 take — the acted ones plus, when the style
+  // performs them, the silent ones. Those takes are conditioned on reference
+  // images, so this is what decides whether the film needs its visuals wall.
+  const [hasRefTakes, setHasRefTakes] = useState(false)
   const [filmScenes, setFilmScenes] = useState([])    // for the visuals card's scene scoping
   const [filmJobId, setFilmJobId] = useState('')
   const [charReload, setCharReload] = useState(0)     // bumped when the bar adds a character
@@ -2056,6 +2066,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       const list = r.scenes || []
       setActedMix(list.length && list.every(acted) ? 'all'
         : list.some(acted) ? 'some' : 'none')
+      setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent)))
       setFilmScenes(list)
       setFilmJobId(r.job_id || '')
     }).catch(() => {})
@@ -2083,7 +2094,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
-          { value: 'characters', label: actedMix !== 'none' ? 'Characters & visuals' : 'Characters' },
+          { value: 'characters', label: hasRefTakes ? 'Characters & visuals' : 'Characters' },
           // ONE look whatever the mix: the Scenes editor (every scene, every
           // mode, shiftable between them) plus, when anything is acted, the
           // Acted scenes view — cast slots, portraits, voices, takes.
@@ -2109,7 +2120,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
         <>
           {/* ONE bar for every reference — characters and things together —
               leading the wall, same as the Script screen. */}
-          {actedMix !== 'none' ? (
+          {hasRefTakes ? (
             <div className="bento" style={{ marginBottom: 20 }}>
               <ScriptVisuals jobId={filmJobId}
                 onAddCharacter={filmJobId ? async () => {
@@ -2117,7 +2128,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
                   setCharReload((k) => k + 1)
                 } : undefined}
                 sceneIds={filmScenes.map((s) => s.id)}
-                castNames={[...new Set(filmScenes.flatMap((s) => (s.lines || []).map((l) => l.speaker)).filter(Boolean))]}
+                castNames={[...new Set([...filmScenes.flatMap((s) => s.cast || []),
+                  ...filmScenes.flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
                 settingHint={filmScenes.map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
             </div>
           ) : (
