@@ -64,9 +64,17 @@ What the take is built from depends on what the scene has:
   (at most two, from the same characters), alongside the setting, camera and soundscape a
   dialogue scene gets, and those portraits join the frame as references — which is what
   keeps a face consistent between a silent beat and the acted scene beside it. A scene with
-  nobody in it simply opens on its frame. The [Script editor](manual/script.md) shows the
-  same **On screen** picker on a silent scene, so a hand-written or converted one can be
-  cast by hand.
+  nobody in it simply opens on its frame.
+- **The film's locations, wardrobe and reference stills.** A performed silent take is fed
+  the same reference wall as a dialogue take, so those films get the **Characters &
+  visuals** tab even when nobody in them ever speaks.
+
+Because the take is built from those fields, the [Script editor](manual/script.md) and a
+film's edit screen write a silent scene through the **acted setup** whenever the style
+performs it — on screen, setting, duration, action beats, camera and sound, the dialogue
+editor minus the dialogue — rather than a bare duration. The image and video prompts stay
+beside it: the image paints the frame the take opens on, and the video prompt stands in as
+the setting while that field is empty.
 
 Nothing else about the scene changes: it is still silent by contract. The prompt says so
 outright, and the same gate that watches an establishing wide transcribes the take and

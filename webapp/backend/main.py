@@ -1206,20 +1206,30 @@ def _job_style_name(job_id: str) -> str:
 
 def _film_reference_usage(wd: Path) -> tuple[set, bool]:
     """(cast names in any scene, film has acted scenes) — what the reference
-    wall means by "used by this video". Case-insensitive names."""
+    wall means by "used by this video". Case-insensitive names.
+
+    "Acted" is the render-time predicate, not the mode alone: a style that
+    performs its silent scenes (h3_silent_scenes) shoots them as Ref2VA takes,
+    and those takes are fed the same locations and wardrobe — so a film made of
+    them needs its visuals wall exactly as a dialogue film does."""
     names: set = set()
     has_acted = False
     try:
+        job_id = job_id_from_work_dir(wd)
         store = DurableStore.default()
         try:
-            rows = store.scene_rows(job_id_from_work_dir(wd))
+            rows = store.scene_rows(job_id)
         finally:
             store.close()
         if not rows and (wd / "script.json").exists():
             rows = json.loads((wd / "script.json").read_text())
+        jc = dict(_film_job_config(wd))
+        if not jc.get("style_name"):
+            jc["style_name"] = _job_style_name(job_id)
+        acted_cfg = _acted_silent_cfg(jc)
         for r in rows or []:
             md = (r.get("metadata") or {}) if isinstance(r, dict) else {}
-            if performance_mode.is_performance_mode(md.get("mode")):
+            if performance_mode.renders_acted({"metadata": md}, acted_cfg):
                 has_acted = True
             for n in (md.get("cast") or []):
                 if str(n).strip():
@@ -11238,6 +11248,10 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
         "work_dir": str(wd),
         "title": title,
         "style": style,
+        # Are this film's SILENT scenes performed on H3 (h3_silent_scenes)? They
+        # are then written through the same fields as an acted scene, so the
+        # editor gives them the acted setup rather than a bare duration.
+        "acted_silent": _acted_silent_cfg(jc)["h3_silent_scenes"],
         "resolution": resolution,
         "voice": jc.get("default_voice", ""),
         "voices": gapp.get_voice_choices(),
