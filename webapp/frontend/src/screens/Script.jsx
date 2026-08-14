@@ -926,7 +926,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
           // view with its cast slots, takes and prompts.
-          { value: 'characters', label: someActedShape ? 'Characters & visuals' : 'Characters' },
+          { value: 'characters', label: someActedShape ? 'Characters & artifacts' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
           ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
@@ -1339,7 +1339,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </div>
                   <div className="muted mt-16" style={{ fontSize: 12 }}>
                     Portraits, voices, and the scenery &amp; wardrobe reference images are
-                    managed in <strong>Characters &amp; visuals</strong>.
+                    managed in <strong>Characters &amp; artifacts</strong>.
                   </div>
                 </Card>
               ) : null}

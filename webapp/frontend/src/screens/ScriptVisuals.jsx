@@ -19,6 +19,9 @@ const KIND_META = {
   wardrobe: { label: 'Wardrobe', icon: 'shirt' },
   image: { label: 'Image', icon: 'image' },
   video: { label: 'Video', icon: 'film' },
+  // A soundtrack ARTIFACT: the whole track is pinned into the H3 takes of the
+  // scenes it applies to, and the picture is generated to match it.
+  audio: { label: 'Soundtrack', icon: 'music' },
 }
 
 function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
@@ -53,7 +56,18 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
           onClick={() => run('del', () => api.deleteVisual(jobId, v.id))} />
       </div>
 
-      {v.image_url
+      {v.kind === 'audio'
+        ? <div className="stack gap-8" style={{ padding: '18px 0' }}>
+            {v.audio_url
+              ? <audio controls src={v.audio_url} style={{ width: '100%' }} />
+              : <div style={{ width: '100%', padding: '22px 0', borderRadius: 10, display: 'flex',
+                              alignItems: 'center', justifyContent: 'center',
+                              background: 'var(--well, rgba(127,127,127,.10))',
+                              border: '1px dashed var(--line, #ccc)' }}>
+                  <Icon name="music" style={{ color: 'var(--ink-3)', fontSize: 26 }} />
+                </div>}
+          </div>
+        : v.image_url
         ? <img src={v.image_url} alt={v.name}
             style={{ width: '100%', aspectRatio: '1', objectFit: 'cover', borderRadius: 10 }} />
         : <div style={{ width: '100%', aspectRatio: '1', borderRadius: 10, display: 'flex',
@@ -68,7 +82,9 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
           onBlur={(e) => e.target.value !== v.name && patch({ name: e.target.value })} />
       </Field>
       <Field label="Description"
-        hint={v.kind === 'image' || v.kind === 'video'
+        hint={v.kind === 'audio'
+          ? 'What this track is, for your own reference. The takes it applies to are generated AGAINST it — mouths and movement follow the sound — and keep it as their audio.'
+          : v.kind === 'image' || v.kind === 'video'
           ? 'WHAT this is — the model is told to match exactly this where it appears.'
           : 'What the image should show. Painted with no people in it.'}>
         <textarea className="textarea" rows={2} defaultValue={v.description} disabled={!!busy}
@@ -106,18 +122,19 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
         {/* A real photo of the actual room or garment beats anything painted,
             so uploading is a first-class option, not a fallback. */}
         <label className="btn btn--ghost btn--sm btn--block" style={{ cursor: busy ? 'default' : 'pointer' }}>
-          <Icon name="upload" /> {v.kind === 'video' ? 'Upload a video' : 'Upload an image'}
-          <input type="file" accept={v.kind === 'video' ? 'video/*' : 'image/*'} hidden disabled={!!busy}
+          <Icon name="upload" /> {v.kind === 'audio' ? 'Upload audio' : v.kind === 'video' ? 'Upload a video' : 'Upload an image'}
+          <input type="file" accept={v.kind === 'audio' ? 'audio/*' : v.kind === 'video' ? 'video/*' : 'image/*'} hidden disabled={!!busy}
             onChange={async (e) => {
               const f = e.target.files?.[0]
               e.target.value = ''
               if (f) await run('img', async () => api.uploadVisualImage(jobId, v.id, f.name, await fileToDataUrl(f)))
             }} />
         </label>
-        {v.kind !== 'video' && (
+        {v.kind !== 'video' && v.kind !== 'audio' && (
           <Button block size="sm" variant="ghost" icon="paste" disabled={!!busy}
             onClick={pasteImage}>Paste an image</Button>
         )}
+        {v.kind !== 'audio' && (
         <div className="row gap-6">
           <input className="input" style={{ flex: 1, fontSize: 12.5 }} disabled={!!busy}
             placeholder={v.kind === 'video' ? 'Video URL or page…' : 'Image URL or page…'}
@@ -126,7 +143,8 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
           <Button size="sm" variant="ghost" icon="link" disabled={!!busy || !urlDraft.trim()}
             onClick={() => run('img', () => api.visualFromUrl(jobId, v.id, urlDraft.trim()).then(() => setUrlDraft('')))}>Fetch</Button>
         </div>
-        {v.kind !== 'video' && (
+        )}
+        {v.kind !== 'video' && v.kind !== 'audio' && (
           <GuidedRegenButton block size="sm" variant="ghost" icon="rotate-right"
             label={v.has_image ? 'Regenerate image' : 'Generate image'} busyLabel="Painting…"
             busy={busy === 'img'} disabled={!!busy}
@@ -161,7 +179,7 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
       // "Generate image" already paints the right room.
       await api.addVisual(jobId, kind === 'location'
         ? { kind, name: 'Location', description: settingHint }
-        : { kind, name: { wardrobe: 'Outfit', image: 'Reference', video: 'Video reference' }[kind] || 'Reference' })
+        : { kind, name: { wardrobe: 'Outfit', image: 'Reference', video: 'Video reference', audio: 'Soundtrack' }[kind] || 'Reference' })
       await load()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -175,7 +193,8 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
             Everything the film renders from, in one place: the <strong>characters</strong>,
             the <strong>location</strong> that keeps every scene in the same room, the
             {' '}<strong>wardrobe</strong> that keeps a character in the same clothes — and
-            any other <strong>image</strong> or <strong>video</strong> the model should match.
+            any other <strong>image</strong> or <strong>video</strong> the model should match —
+            plus <strong>soundtrack</strong> audio the takes are generated against.
           </span>
           <div className="row gap-8 row--wrap">
             {onAddCharacter && (
@@ -190,6 +209,8 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
               onClick={() => add('image')}>Add image</Button>
             <Button variant="ghost" size="sm" icon="film" disabled={!!busy}
               onClick={() => add('video')}>Add video</Button>
+            <Button variant="ghost" size="sm" icon="music" disabled={!!busy}
+              onClick={() => add('audio')}>Add soundtrack</Button>
           </div>
         </div>
       </Card>
@@ -202,9 +223,9 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
           the same <Picture N> slots — but edit in Settings, not here. */}
       {catalogue.map((a) => (
         <CatalogueRefCard key={`cat-${a.id}`} name={a.name}
-          kind={a.kind === 'wardrobe' ? 'Wardrobe' : 'Location'}
+          kind={(KIND_META[a.kind] || KIND_META.location).label}
           description={a.description} imageUrl={a.image_url}
-          icon={a.kind === 'wardrobe' ? 'shirt' : 'location-dot'}
+          icon={(KIND_META[a.kind] || KIND_META.location).icon}
           editHint="Settings → Assets" />
       ))}
       {!visuals.length && !catalogue.length && (

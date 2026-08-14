@@ -249,7 +249,10 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
           ? 'Switching converts the scene — same theme and feel, the other shape — and keeps the version you leave: switch back and it is restored, not redone.'
           : 'Narration = voice-over over a still that moves. Dialogue = the characters act and speak on camera, in one take. Silent = visuals only, no voice.'}>
         <div className="row gap-8 center">
-          {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
+          {/* A singing scene IS silent under the hood (no lines, take muted),
+              but it should say what it is: a music-video beat. */}
+          {[['narration', 'Narration'], ['dialogue', 'Dialogue'],
+            ['silent', scene.singing ? '♪ Music video' : 'Silent']].map(([m, lbl]) => (
             <Button key={m} variant={(m === 'dialogue' ? isActedMode(mode) : mode === m) ? 'primary' : 'ghost'}
               disabled={converting} onClick={() => setMode(m)}>{lbl}</Button>
           ))}

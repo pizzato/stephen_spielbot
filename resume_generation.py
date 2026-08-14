@@ -711,6 +711,14 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         except Exception:
             logger.warning("Scene %d: could not cut song segment %s — rendering "
                            "without the pinned track", scene.id, window, exc_info=True)
+    if track_audio is None:
+        # A SOUNDTRACK artifact (Characters & artifacts → audio) that applies
+        # to this scene: pinned the same way, for any acted take in any film.
+        from app import scene_track_audio
+        art = scene_track_audio(work_dir, scene.id)
+        if art is not None:
+            track_audio = art
+            logger.info("Scene %d: pinning soundtrack artifact %s", scene.id, art.name)
 
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
@@ -793,9 +801,11 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # A singing take (song film) is MEANT to carry a voice: the silent-shot
     # gate below would hear the singing and retake it forever. No gate — its
     # own audio is discarded outright (muted after the gates), because the
-    # film's real song covers the whole picture.
+    # film's real song covers the whole picture. The same stand-down applies
+    # to any take with a PINNED soundtrack: the audio was provided, so there
+    # is nothing to verify against the script.
     verify_on = (shot_gate.available() and bool(cfg.get("performance_verify", True))
-                 and not meta.get("singing"))
+                 and not meta.get("singing") and track_audio is None)
 
     # A shot with NO lines must be silent — and the model does babble into
     # them against instructions ("and seal it in a thween", heard in a real

@@ -3562,9 +3562,14 @@ class VisualImageBody(BaseModel):
 def _visual_to_json(wd: Path, v: dict) -> dict:
     img = gapp._script_visual_image_path(wd, v.get("ref_image"))
     has_image = bool(img and img.exists() and img.stat().st_size > 0)
+    aud = gapp._script_visual_image_path(wd, v.get("source_audio"))
+    has_audio = bool(aud and aud.exists() and aud.stat().st_size > 0)
     return {**v, "has_image": has_image,
             "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
-                          if has_image else "")}
+                          if has_image else ""),
+            "has_audio": has_audio,
+            "audio_url": (f"/api/file?path={aud}&t={int(aud.stat().st_mtime)}"
+                          if has_audio else "")}
 
 
 def _visuals_ok(wd: Path) -> dict:

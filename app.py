@@ -2424,7 +2424,7 @@ def _script_character_image_path(work_dir: Path, filename: str) -> Path | None:
 # location = the space; wardrobe = someone's clothes; image = any other
 # reference the model should match (a prop, a vehicle, a logo…); video = the
 # same, ingested from a clip — its extracted frame is what feeds the slot.
-VISUAL_KINDS = ("location", "wardrobe", "image", "video")
+VISUAL_KINDS = ("location", "wardrobe", "image", "video", "audio")
 
 
 def _assets_dir() -> Path:
@@ -2571,6 +2571,8 @@ def _norm_visuals(raw) -> list[dict]:
             # Wardrobe belongs to someone; a location belongs to the scene.
             "character": str(item.get("character") or "").strip(),
             "ref_image": str(item.get("ref_image") or "").strip(),
+            # An audio artifact's track file (soundtrack pinned into takes).
+            "source_audio": str(item.get("source_audio") or "").strip(),
             # Empty = every scene. The common case (one studio for the whole
             # film) then needs no per-scene bookkeeping at all.
             "scenes": scenes,
@@ -2600,7 +2602,8 @@ def add_script_visual(work_dir, name: str = "", kind: str = "location",
     normalization and shows as an editable card (same rule as characters)."""
     visuals = read_script_visuals(work_dir)
     placeholder = {"location": "New location", "wardrobe": "New outfit",
-                   "image": "New reference", "video": "New video reference"}
+                   "image": "New reference", "video": "New video reference",
+                   "audio": "New soundtrack"}
     visuals.append({"name": name.strip() or placeholder.get(kind, "New reference"),
                     "kind": kind, "description": description, "character": character})
     return write_script_visuals(work_dir, visuals)
@@ -2624,20 +2627,42 @@ def delete_script_visual(work_dir, visual_id: str) -> list[dict]:
         img = _script_visual_image_path(work_dir, vis["ref_image"])
         if img and img.exists():
             img.unlink(missing_ok=True)
+    if vis and vis.get("source_audio"):
+        aud = _script_visual_image_path(work_dir, vis["source_audio"])
+        if aud and aud.exists():
+            aud.unlink(missing_ok=True)
     return write_script_visuals(work_dir, [v for v in visuals if v.get("id") != visual_id])
 
 
 _VIDEO_EXTS = (".mp4", ".mov", ".webm", ".mkv", ".m4v")
+_AUDIO_ASSET_EXTS = (".wav", ".mp3", ".m4a", ".flac", ".ogg", ".aac", ".opus")
 
 
 def set_script_visual_media(work_dir, visual_id: str, raw: bytes,
                             filename: str = "") -> list[dict]:
-    """Store uploaded bytes — image OR video — as a visual's reference.
+    """Store uploaded bytes — image, video, OR audio — as a visual's reference.
 
     A video is kept beside the visual and a representative frame (1s in, where
     fades have usually resolved) is extracted as the reference image, since the
-    picture slots feed the model stills."""
-    if Path(str(filename or "")).suffix.lower() not in _VIDEO_EXTS:
+    picture slots feed the model stills. An AUDIO file makes the visual a
+    SOUNDTRACK artifact: the whole track is pinned into the H3 takes of the
+    scenes it applies to, and the picture is generated to match it — there is
+    no reference image at all."""
+    suffix = Path(str(filename or "")).suffix.lower()
+    if suffix in _AUDIO_ASSET_EXTS:
+        work_dir = Path(work_dir)
+        visuals = read_script_visuals(work_dir)
+        vis = next((v for v in visuals if v.get("id") == visual_id), None)
+        if vis is None:
+            raise ValueError(f"Unknown visual {visual_id!r} for this script.")
+        d = _script_visuals_dir(work_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        src = d / f"{visual_id}{suffix}"
+        src.write_bytes(raw)
+        vis["source_audio"] = src.name
+        vis["kind"] = "audio"
+        return write_script_visuals(work_dir, visuals)
+    if suffix not in _VIDEO_EXTS:
         return set_script_visual_image(work_dir, visual_id, raw)
     import subprocess
 
@@ -2813,6 +2838,27 @@ def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
             if img and img.exists():
                 out.append({**v, "_ref_path": str(img)})
     return out
+
+
+def scene_track_audio(work_dir, scene_id) -> Path | None:
+    """The SOUNDTRACK artifact that applies to one scene, if any.
+
+    An audio artifact (Characters & artifacts → Soundtrack) is pinned into the
+    scene's H3 take — audio-driven generation, the picture made to match the
+    track — and the take keeps that sound. Scoping follows the same rule as
+    every other artifact: an empty scenes list applies to the whole film. The
+    first applying artifact wins. A song film's own per-scene segments outrank
+    artifacts — the renderer checks those first."""
+    for v in read_script_visuals(work_dir):
+        if v.get("kind") != "audio" or not v.get("enabled", True):
+            continue
+        if v.get("scenes") and int(scene_id) not in v["scenes"]:
+            continue
+        if v.get("source_audio"):
+            p = _script_visual_image_path(work_dir, v["source_audio"])
+            if p and p.exists():
+                return p
+    return None
 
 
 def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:

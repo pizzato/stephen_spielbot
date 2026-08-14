@@ -187,6 +187,42 @@ class VocalistNoteTests(unittest.TestCase):
             self.assertEqual(app.vocalist_note({"voices": []}, "s", Path("/tmp")), "")
 
 
+class AudioArtifactTests(unittest.TestCase):
+    def test_audio_upload_becomes_a_scoped_soundtrack(self):
+        import tempfile
+        import app
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            visuals = app.add_script_visual(wd, name="Beat", kind="audio")
+            vid = visuals[-1]["id"]
+            app.set_script_visual_media(wd, vid, b"RIFFxxxxWAVE", filename="beat.wav")
+            # No scene list = the whole film.
+            track = app.scene_track_audio(wd, 1)
+            self.assertIsNotNone(track)
+            self.assertTrue(str(track).endswith(".wav"))
+            # Scoped to scene 2 only.
+            app.update_script_visual(wd, vid, scenes=[2])
+            self.assertIsNone(app.scene_track_audio(wd, 1))
+            self.assertIsNotNone(app.scene_track_audio(wd, 2))
+            # Disabled = off everywhere; deletion removes the file.
+            app.update_script_visual(wd, vid, enabled=False)
+            self.assertIsNone(app.scene_track_audio(wd, 2))
+            app.update_script_visual(wd, vid, enabled=True)
+            app.delete_script_visual(wd, vid)
+            self.assertIsNone(app.scene_track_audio(wd, 2))
+
+    def test_audio_assets_never_join_the_picture_wall(self):
+        import tempfile
+        import app
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            visuals = app.add_script_visual(wd, name="Beat", kind="audio")
+            app.set_script_visual_media(wd, visuals[-1]["id"], b"RIFFxxxxWAVE",
+                                        filename="beat.wav")
+            pics = app.scene_visuals(wd, 1, cast=[], cfg={"styles": [], "assets": []})
+            self.assertEqual(pics, [])
+
+
 class SongFormatNoteTests(unittest.TestCase):
     def test_staging_note_forbids_voices_and_asks_for_the_performer(self):
         from webapp.backend.main import _build_dialogue_note, _story_format_note
