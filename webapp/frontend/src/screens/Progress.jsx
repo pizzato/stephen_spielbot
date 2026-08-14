@@ -16,8 +16,50 @@ const workerLine = (w) =>
 // Short display name from a worker URL or bare host (e.g. http://s1:8188 → s1).
 const shortHost = (url) => { try { return new URL(url).hostname } catch { return url } }
 
+// How far along one scene is, from the files it has on disk so far.
+const sceneStage = (s) =>
+  s.has_final ? ['ok', 'Rendered']
+    : s.has_video ? ['info', 'Video']
+      : s.has_narration ? ['accent', 'Voiced']
+        : ['neutral', 'Waiting']
+
+// One read-only scene on the wall: the clip as soon as it exists, else the
+// first frame, else a placeholder — so a running render can be checked without
+// opening the work folder (or risking the film editor's mutating actions).
+function SceneTile({ scene, index, aspect }) {
+  const [tone, label] = sceneStage(scene)
+  return (
+    <div style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--paper-2)' }}>
+      <div style={{ position: 'relative', aspectRatio: aspect, background: '#000' }}>
+        {scene.video_url
+          ? <video src={scene.video_url} poster={scene.preview_url || undefined} preload="none" controls
+              style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
+          : scene.preview_url
+            ? <img src={scene.preview_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
+            : <div className={`gfill g${index % 6}`} style={{ position: 'absolute', inset: 0 }} />
+        }
+        <span style={{ position: 'absolute', top: 6, left: 8, fontWeight: 700, fontSize: 11, color: '#fff', background: 'rgba(0,0,0,.5)', padding: '2px 7px', borderRadius: 4, pointerEvents: 'none' }}>
+          {String(index + 1).padStart(2, '0')}
+        </span>
+      </div>
+      <div style={{ padding: '8px 10px' }}>
+        <div className="row center between gap-6">
+          <div style={{ fontSize: 12.5, fontWeight: 600, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {scene.title || `Scene ${index + 1}`}
+          </div>
+          <Chip tone={tone} dot>{label}</Chip>
+        </div>
+        {!scene.video_url && scene.has_narration && (
+          <audio src={scene.narration_url} controls preload="none" style={{ width: '100%', height: 30, marginTop: 6 }} />
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Progress({ workDir, job, go, onOpenScript }) {
   const [p, setP] = useState(null)
+  const [wall, setWall] = useState(null)   // /api/films/scenes payload — the read-only scene wall
   const [error, setError] = useState('')
   const [action, setAction] = useState('')
   const timer = useRef(null)
@@ -34,6 +76,24 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
     timer.current = setInterval(tick, 2500)
     return () => { alive = false; clearInterval(timer.current) }
   }, [workDir])
+
+  // Poll the scene files too (same source as the film editor), so intermediary
+  // clips and narrations are visible while the render is still going. Quietly
+  // absent until the work dir and script exist.
+  const wallDir = p?.work_dir || workDir
+  useEffect(() => {
+    if (!wallDir) return
+    let alive = true
+    const tick = async () => {
+      try {
+        const data = await api.filmScenes(wallDir)
+        if (alive) setWall(data)
+      } catch { /* work dir not created or script not divided yet */ }
+    }
+    tick()
+    const t = setInterval(tick, 5000)
+    return () => { alive = false; clearInterval(t) }
+  }, [wallDir])
 
   const pct = p?.pct ?? 0
   const done = p?.done
@@ -179,6 +239,23 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
             </div>
           </Card>
         </div>
+
+        {wall?.scenes?.length > 0 && (() => {
+          const m = /\((\d+)[×x](\d+)\)/.exec(wall.resolution || '')
+          const aspect = m ? `${m[1]} / ${m[2]}` : '16 / 9'
+          const rendered = wall.scenes.filter((s) => s.has_final).length
+          return (
+            <Card span={12} padLg className="reveal reveal-d2">
+              <div className="row center between">
+                <span className="label-sm">Scenes</span>
+                <span className="muted mono" style={{ fontSize: 11 }}>{rendered}/{wall.scenes.length} rendered</span>
+              </div>
+              <div className="mt-16" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
+                {wall.scenes.map((s, i) => <SceneTile key={s.id} scene={s} index={i} aspect={aspect} />)}
+              </div>
+            </Card>
+          )
+        })()}
       </div>
     </div>
   )
