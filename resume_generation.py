@@ -43,9 +43,9 @@ from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
-    concat_audio, concatenate_scenes, extract_last_frame,
-    ensure_video_resolution, mix_background_music,
-    write_silence_wav as _write_silence_wav,
+    concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
+    extract_last_frame, ensure_video_resolution, mix_background_music,
+    trim_video, write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
 from pipeline import scene_context as _scene_context
@@ -893,6 +893,20 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         mux_video_audio(clip, silence, muted)
         muted.replace(clip)
         silence.unlink(missing_ok=True)
+        # The film must run EXACTLY the song's length: H3 renders on a frame
+        # grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that excess
+        # compounds scene by scene into audible drift against the overlaid
+        # track. Trim each take to its own window — the pinned segment covers
+        # [0, window] of the clip, so what's cut is only the unpinned tail.
+        if window:
+            want = float(window[1]) - float(window[0])
+            have = _get_duration(clip)
+            if want > 0 and have > want + 0.03:
+                trimmed = clip.with_suffix(".trimmed.mp4")
+                trim_video(clip, trimmed, want)
+                trimmed.replace(clip)
+                logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
+                            "song's timeline", scene.id, have, want)
 
     # The kept take's continuation point, on the worker that shot it. Written
     # after the gate so it belongs to the clip that survived, not to a reject.
@@ -1736,7 +1750,15 @@ def main(work_dir: Path) -> None:
         lease_seconds=900,
         start_message="assembling final video",
     ) as final_run:
-        concatenate_scenes(scene_finals, combined)
+        if singing_film:
+            # A music video cuts HARD on the beat: crossfades both blur the
+            # audio-driven sync and shorten the timeline by their overlap,
+            # drifting every later scene against the song. The takes are
+            # trimmed to their exact windows, so back-to-back they run
+            # precisely the track's length.
+            concatenate_scenes_hard_cut(scene_finals, combined)
+        else:
+            concatenate_scenes(scene_finals, combined)
 
         if music_on and music_path.exists():
             write_progress(status_file, 95,
