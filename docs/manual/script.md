@@ -121,6 +121,13 @@ only for a style that [performs its silent scenes](../performance_films.md#silen
 name who is in the shot and the scene is acted from their portraits instead of animated
 from a still. Leave it empty and nothing changes.
 
+When the style *does* perform them, the silent scene is written through the **acted
+fields below** instead — on screen, setting, duration, action, camera, sound — because
+that is what the take is built from. It is the dialogue editor minus the dialogue, and
+the film gets the **Characters & visuals** wall like any other performance film. The
+image and video prompts stay: the image still paints the frame the take opens on, and
+the video prompt stands in as the setting while that field is empty.
+
 Every field label has a regenerate button that rewrites just that field with the LLM,
 optionally with a free-text instruction. Edits save when you leave the field.
 

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
-import { styleLineage } from '../styleUtils.js'
+import { styleLineage, resolveStyle } from '../styleUtils.js'
 
 // Quick-instruction presets for the "tell it how" Re-generate popovers.
 const REGEN_CHIPS = {
@@ -38,7 +38,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // slot number, so it gets its own view. A film made ENTIRELY of them replaces
   // the narration-shaped Scenes tab with it; a mixed film keeps both.
   const acted = (s) => s.mode === 'dialogue' || s.mode === 'performance'
-  const someActed = (job?.scenes || []).some(acted)
   const allActed = !!(job?.scenes || []).length && (job?.scenes || []).every(acted)
   const [view, setView] = useState(job ? 'cover' : 'scripts')
   const [error, setError] = useState('')
@@ -93,6 +92,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       setCastStyles({ styles: cfg.styles || [], defaultStyle: cfg.default_style || '' })
     }).catch(() => {})
   }, [])
+
+  // Does this job's style perform its SILENT scenes on H3 (h3_silent_scenes)?
+  // Those scenes are then staged exactly like the acted ones — same fields,
+  // same portraits and reference images — so the editor shows them the same way.
+  // (Keyed on the style NAME — see `styleKey` below, which the cast picker
+  // shares; a loaded script keeps the visual-style TEXT in `style`.)
+  const actedSilent = !!resolveStyle(castStyles.styles,
+    job?.style_name || job?.style || castStyles.defaultStyle)?.h3_silent_scenes
+  const someActed = (job?.scenes || []).some(acted)
+  // Every scene that renders as an H3 take — the acted ones plus, when the
+  // style performs them, the silent ones. Those takes are conditioned on
+  // reference images, so this is what decides whether the film needs the
+  // visuals wall (locations, wardrobe, stills) beside its characters.
+  const someActedShape = (job?.scenes || []).some((s) => hasActedShape(s.mode, actedSilent))
 
   // Story tab (story-first scripts only) — the prose draft the scenes come
   // from; null hides the tab (classic scripts 404 here). Chapters are editable:
@@ -598,9 +611,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // job's style inherits — the global pool and its style lineage (mirrors the
   // backend's _style_characters; the resolver falls back to catalogue
   // portraits/voices). The shot editing itself lives in SceneTypeControls.
-  const lineageNames = new Set(styleLineage(castStyles.styles,
-    job?.style || castStyles.defaultStyle).map((s) => s.name))
-  const styleCast = job?.style === '(none)' ? []
+  // Keyed on the style's NAME: a script loaded from disk keeps that in
+  // `style_name` and its visual-style TEXT in `style`, and matching the text
+  // against the hierarchy offered none of the style's own cast.
+  const styleKey = job?.style_name || job?.style || castStyles.defaultStyle
+  const lineageNames = new Set(styleLineage(castStyles.styles, styleKey).map((s) => s.name))
+  const styleCast = styleKey === '(none)' ? []
     : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
   const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
@@ -885,7 +901,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
           // view with its cast slots, takes and prompts.
-          { value: 'characters', label: someActed ? 'Characters & visuals' : 'Characters' },
+          { value: 'characters', label: someActedShape ? 'Characters & visuals' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
           ...(someActed ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
@@ -1158,7 +1174,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   <input className="input" value={d.title || ''} onChange={(e) => setField('title', e.target.value)} onBlur={() => persist(cur)} />
                 </Field>
 
-                <SceneTypeControls scene={d} castOpts={castOpts}
+                <SceneTypeControls scene={d} castOpts={castOpts} actedSilent={actedSilent}
                   onChange={(patch, commit) => { patchScene(patch); if (commit) persist(cur, { ...scenes[cur], ...patch }) }}
                   onCommit={() => persist(cur)}
                   onConvert={async (m) => {
@@ -1223,11 +1239,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </Card>
 
             <div className="col-4 stack gap-16">
-              {isActedMode(d.mode) ? (
+              {hasActedShape(d.mode, actedSilent) ? (
                 <Card className="reveal reveal-d2">
                   <span className="label-sm">References</span>
                   <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                    An acted scene renders from these references.
+                    {isActedMode(d.mode)
+                      ? 'An acted scene renders from these references.'
+                      : 'This silent beat is performed on H3 — it renders from these references and its first frame.'}
                   </div>
                   <div className="row gap-10 row--wrap mt-16">
                     {(d.cast || []).map((n, i) => {
@@ -1383,11 +1401,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </div>
           </Card>
 
-          {someActed ? (
+          {someActedShape ? (
             <ScriptVisuals jobId={job.job_id}
               onAddCharacter={addCharacter} addingCharacter={charBusy === 'add'}
               sceneIds={(job.scenes || []).map((s) => s.id)}
               castNames={[...new Set([...castCatalogue.map((c) => c.name),
+                // Whoever is on screen anywhere — a silent take's cast never
+                // speaks, so the lines alone would hide them from "worn by".
+                ...(job.scenes || []).flatMap((s) => s.cast || []),
                 ...(job.scenes || []).flatMap((s) => (s.lines || []).map((l) => l.speaker))].filter(Boolean))]}
               settingHint={(job.scenes || []).map((s) => s.setting || s.metadata?.setting).find(Boolean) || ''} />
           ) : (

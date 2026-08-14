@@ -151,7 +151,8 @@ export function DurationInput({ value, onChange, disabled, maxMinutes = 40 }) {
 // Scene-type controls shared by the Script editor and the video edit screen so
 // they stay identical. Renders the Narration | Dialogue | Silent selector and,
 // for dialogue, the shot sequence editor (speaking + silent shots); for silent,
-// the duration. `scene` = {mode, lines, duration}; onChange(patch) merges into
+// the duration — plus, when the style performs its silent beats, everything an
+// acted scene has. `scene` = {mode, lines, duration}; onChange(patch) merges into
 // it; onCommit() persists (called on blur and after discrete edits). The
 // narration textarea stays in each parent (it owns its own regen wiring).
 // An ACTED scene is written through its fields — who is on screen, where, what
@@ -159,6 +160,13 @@ export function DurationInput({ value, onChange, disabled, maxMinutes = 40 }) {
 // assembled from them (ActedPrompt below shows it). Nothing is typed twice.
 export const ACTED_MODES = ['dialogue', 'performance']
 export const isActedMode = (m) => ACTED_MODES.includes(m || '')
+
+// Does this scene get the ACTED setup on screen? A dialogue scene always; a
+// silent one when the style performs its silent beats on H3 (h3_silent_scenes)
+// — the take is then built from the very same fields, so the editor is the same
+// minus the dialogue. Mirrors performance.renders_acted on the backend.
+export const hasActedShape = (mode, actedSilent) =>
+  isActedMode(mode) || (mode === 'silent' && !!actedSilent)
 
 function BeatRows({ beats, seconds, onChange, onCommit }) {
   const set = (i, k, v) => onChange(beats.map((b, j) => (i === j ? { ...b, [k]: v } : b)))
@@ -186,7 +194,8 @@ function BeatRows({ beats, seconds, onChange, onCommit }) {
   )
 }
 
-export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommit, onConvert }) {
+export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = false,
+  onChange, onCommit, onConvert }) {
   // onChange(patch, commit): merge patch into the scene; when commit is true the
   // parent persists the merged value immediately (discrete edits). Text inputs
   // pass commit=false and persist on blur via onCommit(). Passing the computed
@@ -195,7 +204,13 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
   const lines = scene.lines || []
   const cast = scene.cast || []
   const beats = scene.beats || []
-  const seconds = Math.round(scene.seconds || 10)
+  // A dialogue scene's length is counted from its words; a silent one's is
+  // authored, and lives in `duration` — the beats have to sit inside whichever
+  // of the two this scene actually runs for.
+  const silent = mode === 'silent'
+  const actedShape = hasActedShape(mode, actedSilent)
+  const seconds = Math.round((silent ? scene.duration || scene.seconds || 5
+    : scene.seconds) || 10)
   const commit = () => onCommit && onCommit()
   const setLine = (i, k, v, doCommit = false) =>
     onChange({ lines: lines.map((ln, idx) => idx === i ? { ...ln, [k]: v } : ln) }, doCommit)
@@ -238,10 +253,12 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
         </div>
       </Field>
 
-      {isActedMode(mode) && (
+      {actedShape && (
         <>
           <Field label="On screen"
-            hint="Who appears, in order. The first is Picture 1, the second Picture 2 — the model is told each one defines that person's face and nothing else. Keep it to two: a third face is where they start swapping.">
+            hint={silent
+              ? 'Who appears in this silent beat, in order. The first is Picture 1, the second Picture 2 — their portraits are wired in alongside the scene\'s own first frame, so a face here matches the acted scenes. Leave it empty for a beat with nobody in it. Keep it to two.'
+              : 'Who appears, in order. The first is Picture 1, the second Picture 2 — the model is told each one defines that person\'s face and nothing else. Keep it to two: a third face is where they start swapping.'}>
             <div className="row gap-8 row--wrap">
               {castOpts.map((n) => {
                 const on = cast.includes(n)
@@ -256,11 +273,27 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
             </div>
           </Field>
 
-          <Field label="Setting" hint="Where this happens and what is around them. This is the scenery the model builds — there is no separate first frame for an acted scene.">
+          <Field label="Setting"
+            hint={silent
+              ? 'Where this happens and what is around them — the scenery the take is built in. Leave it empty and the scene\'s video prompt stands in.'
+              : 'Where this happens and what is around them. This is the scenery the model builds — there is no separate first frame for an acted scene.'}>
             <textarea className="textarea" rows={2} value={scene.setting || ''}
               onChange={(e) => onChange({ setting: e.target.value }, false)} onBlur={commit} />
           </Field>
 
+          {silent ? (
+            <Field label="Duration (seconds)"
+              hint="How long the take runs — and the window the beats below sit in. H3 holds this to 5–12 s, or up to ~23 s with Chained scenes on.">
+              <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
+                value={scene.duration || 5}
+                onChange={(e) => {
+                  // Both, always: the renderer sizes an acted take from
+                  // `seconds` and would otherwise hold a stale length.
+                  const v = Number(e.target.value) || 0
+                  onChange({ duration: v, seconds: v }, false)
+                }} onBlur={commit} />
+            </Field>
+          ) : (
           <Field label="Dialogue" hint="One continuous take: each line is acted in that character's own voice. About 2.5 words a second, so roughly 22 words fit in a ten-second scene.">
             <div className="stack gap-10">
               {lines.length === 0 && <span className="muted" style={{ fontSize: 12.5 }}>Nobody speaks — the scene plays silent.</span>}
@@ -292,6 +325,7 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
               <div><Button variant="ghost" icon="plus" onClick={addLine}>Add line</Button></div>
             </div>
           </Field>
+          )}
 
           <Field label={`Action — ${seconds}s`}
             hint="Timed beats inside the take. These reach the model as [0s-4s] windows, so they are how you place a move at a moment.">
@@ -312,9 +346,12 @@ export function SceneTypeControls({ scene = {}, castOpts = [], onChange, onCommi
         </>
       )}
 
-      {mode === 'silent' && (
+      {/* A silent scene the style ANIMATES from a first frame: no take is
+          staged, so it keeps the plain length + cast pair. (When the style
+          acts its silent scenes it gets the full setup above instead.) */}
+      {silent && !actedShape && (
         <>
-          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion. A style that performs its silent scenes holds this to H3's window: 5–12 s, or up to ~23 s with Chained scenes on.">
+          <Field label="Duration (seconds)" hint="Silent scene — visuals only, no voice-over. The Image prompt and Video prompt drive the frame and motion.">
             <input className="input" type="number" min={1} step={1} style={{ maxWidth: 120 }}
               value={scene.duration || 5} onChange={(e) => onChange({ duration: Number(e.target.value) || 0 }, false)} onBlur={commit} />
           </Field>

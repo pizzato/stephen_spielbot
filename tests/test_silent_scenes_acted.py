@@ -360,6 +360,70 @@ class SettingsTests(unittest.TestCase):
         self.assertIsNone(m._build_dialogue_note("narration", ["Ana"], acted_silent=True))
 
 
+class ReferenceWallTests(unittest.TestCase):
+    """The editor's Characters & visuals wall follows the RENDER, not the mode.
+
+    A performed silent take is fed the same locations, wardrobe and stills as a
+    dialogue take, so a film made of them needs the wall just as much — reading
+    the mode alone hid it and left the film with characters only.
+    """
+
+    def _usage(self, flag):
+        import webapp.backend.main as m
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wd = Path(tmp.name) / "film-20260813-194405"
+        wd.mkdir()
+        (wd / "script.json").write_text(json.dumps([
+            {"id": 1, "title": "beat", "image_prompt": "i", "video_prompt": "v",
+             "narration": "", "metadata": {"mode": "silent", "cast": ["Ana"]}}]))
+        store = unittest.mock.Mock()
+        store.scene_rows.return_value = []
+        mock = unittest.mock
+        with mock.patch.object(m.DurableStore, "default", classmethod(lambda cls: store)), \
+             mock.patch.object(m, "_film_job_config",
+                               return_value={"style_name": "S", "h3_silent_scenes": flag}):
+            return m._film_reference_usage(wd)
+
+    def test_a_performed_silent_film_gets_the_wall(self):
+        names, has_acted = self._usage(True)
+        self.assertTrue(has_acted)
+        self.assertEqual(names, {"ana"})
+
+    def test_an_animated_silent_film_does_not(self):
+        self.assertFalse(self._usage(False)[1])
+
+
+class FilmEditorFlagTests(unittest.TestCase):
+    """The film editor has to be TOLD the film performs its silent scenes —
+    that flag is what puts the acted setup on a silent scene's card."""
+
+    def test_film_scenes_reports_the_flag(self):
+        import webapp.backend.main as m
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        out = Path(tmp.name) / "videos"
+        out.mkdir()
+        wd = out / "film-20260813-194405"
+        wd.mkdir()
+        (wd / "script.json").write_text(json.dumps([
+            {"id": 1, "title": "beat", "image_prompt": "i", "video_prompt": "v",
+             "narration": "", "metadata": {"mode": "silent", "cast": ["Ana"]}}]))
+        (wd / "job_config.json").write_text(json.dumps(
+            {"style_name": "S", "h3_silent_scenes": True}))
+        store = unittest.mock.Mock()
+        store.scene_rows.return_value = []
+        store.get_job.return_value = None
+        mock = unittest.mock
+        with mock.patch.object(m.gapp, "OUTPUT_DIR", out), \
+             mock.patch.object(m.DurableStore, "default", classmethod(lambda cls: store)), \
+             mock.patch.object(m.gapp, "load_config", return_value={}), \
+             mock.patch.object(m.gapp, "get_voice_choices", return_value=[]):
+            payload = m.film_scenes(work_dir=str(wd))
+        self.assertTrue(payload["acted_silent"])
+        self.assertEqual(payload["scenes"][0]["cast"], ["Ana"])
+
+
 class AssemblyTests(unittest.TestCase):
     """An acted silent film must reach its final cut.
 
