@@ -85,6 +85,9 @@ export default function Create({ seed, meta, onGenerated }) {
   const [songUrl, setSongUrl] = useState('')
   const [songBusy, setSongBusy] = useState(false)
   const [clipSecs, setClipSecs] = useState(5)  // performed-clip length; the track divides into these
+  const [svcVoice, setSvcVoice] = useState('')   // "Sing this as [voice]" — actual re-voicing (seed-vc)
+  const [svcBusy, setSvcBusy] = useState(false)
+  const [sungAs, setSungAs] = useState('')
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -213,6 +216,15 @@ export default function Create({ seed, meta, onGenerated }) {
       })
       setSongUrl(r.song_url || '')
     } catch (e) { setError(e.message) } finally { setSongBusy(false) }
+  }
+
+  const convertSong = async () => {
+    setSvcBusy(true); setError('')
+    try {
+      const r = await api.songConvert(songWd, svcVoice)
+      setSongUrl(r.song_url || songUrl)
+      setSungAs(r.sung_as || svcVoice)
+    } catch (e) { setError(e.message) } finally { setSvcBusy(false) }
   }
 
   const generate = async () => {
@@ -403,10 +415,32 @@ export default function Create({ seed, meta, onGenerated }) {
                   {songUrl && <audio controls src={songUrl} style={{ height: 34 }} />}
                 </div>
                 {songUrl && (
-                  <span className="muted" style={{ fontSize: 12.5 }}>
-                    Happy with it? This exact track becomes the film’s soundtrack —
-                    the story and scenes are drafted to it next.
-                  </span>
+                  <>
+                    <Field label="Sing this as"
+                      hint="ACTUAL voice cloning: seed-vc re-voices the sung track with this library voice’s timbre — melody, timing and words kept. Runs locally; a short song takes a few minutes. Works best when the caption keeps the vocals up front. The converted track replaces the song (the original stays in the music history).">
+                      <div className="row gap-8 center row--wrap">
+                        <select className="select" style={{ maxWidth: 320 }} value={svcVoice}
+                          disabled={svcBusy} onChange={(e) => setSvcVoice(e.target.value)}>
+                          <option value="">Pick a voice…</option>
+                          {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                            <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
+                          ))}
+                        </select>
+                        <Button variant="ghost" icon="microphone-lines"
+                          disabled={svcBusy || songBusy || !svcVoice}
+                          onClick={convertSong}>
+                          {svcBusy ? 'Re-voicing…' : 'Convert the vocals'}
+                        </Button>
+                        {sungAs && !svcBusy && (
+                          <span className="muted" style={{ fontSize: 12.5 }}>♪ now sung as <strong>{sungAs}</strong></span>
+                        )}
+                      </div>
+                    </Field>
+                    <span className="muted" style={{ fontSize: 12.5 }}>
+                      Happy with it? This exact track becomes the film’s soundtrack —
+                      the story and scenes are drafted to it next.
+                    </span>
+                  </>
                 )}
               </>
             )}

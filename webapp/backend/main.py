@@ -2788,6 +2788,78 @@ def song_generate(body: SongGenerateBody) -> dict:
     return {"task_id": task_id}
 
 
+class SongConvertBody(BaseModel):
+    work_dir: str
+    voice: str
+
+
+def _do_song_convert(wd: Path, voice: str) -> dict:
+    """Re-voice the approved song as a library voice (seed-vc, run locally).
+
+    The original stays in the music history; the converted track becomes
+    background_music.wav — the one file the whole music-video pipeline hangs
+    off, so the per-scene segments pinned into the takes sing in this voice
+    too."""
+    from pipeline import svc
+    from pipeline.assembler import _get_duration
+
+    ref = gapp.voice_path_for(voice)
+    if not ref or not Path(ref).exists():
+        raise RuntimeError(f"No reference clip for voice {voice!r}.")
+    track = wd / "background_music.wav"
+    if not track.exists():
+        raise RuntimeError("Generate the song first.")
+    data = {}
+    try:
+        data = json.loads((wd / "song.json").read_text())
+    except Exception:
+        pass
+    try:
+        music_history.seed_if_empty(wd, track, data.get("caption") or "")
+    except Exception:
+        gapp.logger.warning("Could not seed original song into history", exc_info=True)
+    staged = wd / "background_music.staging.wav"
+    svc.convert_song(track, Path(ref), staged)
+    staged.replace(track)
+    try:
+        music_history.record(wd, track, f"sung as {voice}")
+    except Exception:
+        gapp.logger.warning("Could not record converted song", exc_info=True)
+    data.update({"sung_as": voice, "converted_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    dur = _get_duration(track)
+    return {"ok": True, "duration": dur, "sung_as": voice,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}"}
+
+
+def _run_song_convert_task(task_id: str, wd: Path, voice: str) -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done",
+                                  "result": _do_song_convert(wd, voice)}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/song/convert")
+def song_convert(body: SongConvertBody) -> dict:
+    """Start re-voicing the song as *voice* in the background; poll
+    /api/script/generate/status with the returned task id."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not (body.voice or "").strip():
+        raise HTTPException(400, "Pick a voice to sing it.")
+    from pipeline import svc
+    if not svc.available():
+        raise HTTPException(503, "Voice conversion is not installed — run "
+                                 "scripts/install_svc.sh on the controller.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_song_convert_task,
+                     args=(task_id, wd, body.voice.strip()), daemon=True).start()
+    return {"task_id": task_id}
+
+
 @api.get("/api/jobs/{job_id}/song")
 def get_job_song(job_id: str) -> dict:
     """A song film's song.json — the caption and tagged lyrics the music model

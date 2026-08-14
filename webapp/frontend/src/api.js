@@ -135,6 +135,16 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Song generation failed.')
     }
   },
+  // "Sing this as [voice]": re-voice the generated song with seed-vc.
+  songConvert: async (workDir, voice) => {
+    const { task_id } = await req('POST', '/song/convert', { work_dir: workDir, voice })
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Voice conversion failed.')
+    }
+  },
   divideStory: async (body) => {
     const { task_id } = await req('POST', '/script/story/divide', body)
     for (;;) {

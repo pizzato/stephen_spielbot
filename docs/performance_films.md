@@ -119,8 +119,17 @@ pipeline changes in three places:
   Remix screen's *Generate again* re-sings the same lyrics; edit the caption there to
   change the sound, or edit `song.json` for the words.
 
-**Whose voice sings?** Neither music engine can clone a voice — the vocalist is whatever
-the caption describes. So the render describes the **lead performer's cast library voice**
+**Whose voice sings?** Two levels. The music engines can't clone a voice, so at
+generation time the chosen singing voice only *describes* the vocalist (below). But the
+song panel's **"Sing this as [voice]"** step is an actual clone: seed-vc re-voices the
+generated track with any library voice's timbre — melody, timing and words kept — from
+its ~10 s reference clip, zero-shot. Install it once with `scripts/install_svc.sh`
+(controller-local; GPL-3.0, see THIRD_PARTY_NOTICES). It converts the whole mix, so
+captions that keep the vocals up front clone best. The converted track replaces
+`background_music.wav` — the film, and every pinned per-scene segment, then sings in
+that voice.
+
+At generation time, the fallback description: the render describes the **lead performer's cast library voice**
 (gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
 accent"*) and appends it to the caption: the singer on screen and the voice on the track
 are matched by description, not by cloning. Pick the character's voice in the script's

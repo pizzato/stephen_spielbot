@@ -59,6 +59,12 @@ a convenience summary, **not** legal advice — always check the linked model ca
 - **ComfyUI** — GPL-3.0 (run as a separate service; not linked into this code).
 - **FFmpeg** — used as an external binary; your build is typically LGPL/GPL.
   Stephen Spielbot calls it as a subprocess and does not bundle it.
+- **seed-vc** (singing-voice conversion — the song panel's "Sing this as
+  [voice]" step) — GPL-3.0. Installed on the controller by
+  `scripts/install_svc.sh` and invoked as a **separate process**
+  (`pipeline/svc.py`), never imported or bundled; its model weights download
+  from Hugging Face on first use. Fine for self-hosted use; consider the GPL
+  terms before redistributing an installation that includes it.
 
 ## Code installed into the worker containers
 

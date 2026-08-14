@@ -223,6 +223,38 @@ class AudioArtifactTests(unittest.TestCase):
             self.assertEqual(pics, [])
 
 
+class SvcTests(unittest.TestCase):
+    def test_convert_song_builds_the_singing_command(self):
+        import tempfile
+        from pipeline import svc
+        calls = {}
+
+        def fake_run(cmd, **kw):
+            calls["cmd"] = cmd
+            out = Path(cmd[cmd.index("--output") + 1]) / "vc_out.wav"
+            out.write_bytes(b"RIFF")
+
+            class P:
+                returncode, stderr, stdout = 0, "", ""
+            return P()
+
+        with unittest.mock.patch.object(svc, "available", return_value=True), \
+             unittest.mock.patch.object(svc.subprocess, "run", fake_run), \
+             tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "converted.wav"
+            svc.convert_song(Path("/x/src.wav"), Path("/x/ref.wav"), out)
+            self.assertTrue(out.exists())
+            # f0 conditioning is what makes it a SINGING conversion.
+            self.assertIn("--f0-condition", calls["cmd"])
+            self.assertIn(str(Path("/x/ref.wav")), calls["cmd"])
+
+    def test_missing_install_is_a_clear_error(self):
+        from pipeline import svc
+        with unittest.mock.patch.object(svc, "available", return_value=False):
+            with self.assertRaisesRegex(RuntimeError, "install_svc"):
+                svc.convert_song(Path("/x"), Path("/y"), Path("/z"))
+
+
 class SongFormatNoteTests(unittest.TestCase):
     def test_staging_note_forbids_voices_and_asks_for_the_performer(self):
         from webapp.backend.main import _build_dialogue_note, _story_format_note
