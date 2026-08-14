@@ -28,6 +28,25 @@ story, each image, each narration, music, each scene video, each mux, and final 
 Each row shows its name, its status, and the attempt count (`2/3`). A failed task shows its
 error inline. This is the ground truth about what actually ran, and it survives restarts.
 
+### Scenes
+
+The film's scene wall, read straight from the work directory as the render goes — the
+same files the [film editor](edit-film.md) shows, without waiting for the render to
+finish (and without the editor's re-render buttons getting in an active render's way).
+
+Each scene tile shows the furthest thing that exists on disk so far: the finished clip
+(playable in place), else the first frame, else a placeholder — with a stage chip:
+
+| Chip | Meaning |
+|---|---|
+| **Waiting** | Nothing on disk yet |
+| **Voiced** | Narration recorded (an audio player appears on the tile) |
+| **Video** | A raw clip exists, not yet muxed with its audio |
+| **Rendered** | The scene's final clip is done |
+
+The wall appears as soon as the script has been divided into scenes and refreshes on its
+own every few seconds.
+
 ### Time estimate
 
 The remaining time, the full-render estimate, and the worker mix behind it
