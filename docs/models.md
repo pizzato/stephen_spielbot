@@ -272,7 +272,7 @@ per worker from **Settings → Infrastructure → Music models**.
 | Engine | Character | License |
 |---|---|---|
 | **ACE-Step 1.5 Turbo** (default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
-| **MiniMax Music 3** (opt-in) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps — minutes per film. Song-shaped and higher fidelity, capped at 6 minutes | MiniMax-Music3 Community License |
+| **MiniMax Music 3** (opt-in) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps. Song-shaped and higher fidelity, capped at 6 minutes. Measured on a GB10 worker: **83 s for a 30 s bed** | MiniMax-Music3 Community License |
 
 MiniMax Music 3 notes:
 
@@ -287,6 +287,10 @@ MiniMax Music 3 notes:
 - It stops at **6 minutes** (the model is trained to ~5). A longer film gets a
   shorter bed, and the final mix loops it rather than leaving the tail silent —
   the same safety net covers a song the model chooses to end early.
+- The autoregressive stage runs at ~15.7 audio frames/s on a GB10 (25 frames =
+  1 s of music), so cost scales with the bed's length: a 30 s bed measured 83 s
+  end to end, and a two-minute film's bed lands around four minutes. ACE-Step
+  does the same job in seconds — this is the trade for the fidelity.
 - **License restrictions**: requires a visible "MiniMax-Music3" credit on any
   commercial product using it, and machine-generated disclosure; separate
   authorization above US$20M yearly revenue. There is no territory restriction

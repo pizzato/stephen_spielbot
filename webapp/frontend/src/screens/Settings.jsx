@@ -1902,7 +1902,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   </div>
                 )
               })}
-              <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds; it also stops at 6 minutes, and a longer film loops the bed.</div>
+              <div className="field__hint">MiniMax Music 3 is ~14 GB per worker and needs ComfyUI ≥ v0.33.0 for its nodes — “not installed” with the weights already downloaded means the worker container needs a rebuild. It writes song-shaped tracks and takes minutes where ACE-Step takes seconds (measured on a GB10: 83 s for a 30 s bed); it also stops at 6 minutes, and a longer film loops the bed.</div>
             </div>
           </Card>
 
