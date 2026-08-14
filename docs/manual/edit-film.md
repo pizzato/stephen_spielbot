@@ -3,8 +3,9 @@
 `#/edit/<film>` — `#/remix/<film>` is a deep-link alias for the same screen.
 
 Post-production on a finished film. Tabs: **Film**, **Characters & visuals** (plain
-**Characters** on films with no acted scenes), **Scenes** — and **Acted scenes** whenever
-the film has any.
+**Characters** on films with no takes shot on the reference engine), **Scenes** — and
+**Acted scenes** whenever the film has any such take, spoken or
+[performed silent](../performance_films.md#silent-scenes-performed).
 
 Nothing here re-renders the whole film. Every operation touches the smallest thing it can
 and re-muxes the final cut atomically when it's done.
@@ -224,3 +225,7 @@ The acted view from the [Script screen](script.md#acted-scenes), with each scene
 rendered clip in it: cast slots with portraits and voices, reference thumbnails, the
 editable dialogue and assembled prompt, **Re-generate scene**, **Shoot this scene again**,
 the **Takes** strip (every re-shoot kept), and **Reassemble film**.
+
+It covers every take the film shot on H3 — including its
+[performed silent scenes](../performance_films.md#silent-scenes-performed), which appear
+as the same card marked *silent*, without the dialogue editor.

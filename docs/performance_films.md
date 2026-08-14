@@ -74,7 +74,12 @@ film's edit screen write a silent scene through the **acted setup** whenever the
 performs it — on screen, setting, duration, action beats, camera and sound, the dialogue
 editor minus the dialogue — rather than a bare duration. The image and video prompts stay
 beside it: the image paints the frame the take opens on, and the video prompt stands in as
-the setting while that field is empty.
+the setting while that field is empty. Below them sits the **Acted prompt** — the
+assembled H3 text, exactly as a dialogue scene shows it, editable as a pinned override.
+
+A performed silent scene is also listed in the **Acted scenes** view on both screens, as
+the same card a spoken take gets — numbered reference slots, the prompt, the rendered take
+and its re-shoots — marked *silent* and without the dialogue editor.
 
 Nothing else about the scene changes: it is still silent by contract. The prompt says so
 outright, and the same gate that watches an establishing wide transcribes the take and
