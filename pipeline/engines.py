@@ -8,7 +8,9 @@ settings carry ``image_engine`` (scene generation) and ``edit_engine`` (the
 
 ``VIDEO_ENGINES`` is the same idea for the scene I2V model (per-style
 ``video_engine``): ``ltx25`` is the default LTX path, ``minimax-h3`` is
-opt-in. Unlike the image engines, video engines are not Apache-only — each
+opt-in. ``MUSIC_ENGINES`` is the same again for the background bed (per-style
+``music_engine``): ``ace-step`` is the default, ``minimax-music3`` is opt-in.
+Unlike the image engines, video and music engines are not Apache-only — each
 entry carries its license terms and the Settings UI surfaces them.
 
 Only commercial-usable (Apache-2.0) engines are bundled:
@@ -482,3 +484,85 @@ def public_list_video() -> list[dict]:
 def public_list_reference() -> list[dict]:
     """Compact Ref2VA engine descriptors (performance films)."""
     return [_public_video(e) for e in VIDEO_ENGINES.values() if e.get("reference")]
+
+
+# ── Music engines (per-style ``music_engine``) ───────────────────────────────
+# The background-music bed, generated once per film and mixed under the
+# narration. ACE-Step 1.5 Turbo is the default; MiniMax Music 3 is opt-in and
+# needs newer ComfyUI nodes. Both graphs take the same three placeholders
+# (TAGS/DURATION/SEED), so comfyui.generate_music only swaps the workflow file.
+MUSIC_ENGINES: dict[str, dict] = {
+    "ace-step": {
+        "key": "ace-step",
+        "label": "ACE-Step 1.5 Turbo",
+        "sub": "Fast · 8 steps · instrumental beds · commercial OK",
+        "workflow": "ace_music.json",
+        "commercial_ok": True,
+        "license": "Apache-2.0",
+        # EmptyAceStep15LatentAudio accepts up to 1000 s — far past any film.
+        "max_seconds": 1000.0,
+        "timeout": 600,
+        "probe": ("UNETLoader", "unet_name", "acestep_v1.5_turbo.safetensors"),
+        "models": [
+            _model("Comfy-Org/ace_step_1.5_ComfyUI_files",
+                   "split_files/diffusion_models/acestep_v1.5_turbo.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/ace_step_1.5_ComfyUI_files",
+                   "split_files/vae/ace_1.5_vae.safetensors", "models/vae"),
+            _model("Comfy-Org/ace_step_1.5_ComfyUI_files",
+                   "split_files/text_encoders/qwen_0.6b_ace15.safetensors", "models/text_encoders"),
+            _model("Comfy-Org/ace_step_1.5_ComfyUI_files",
+                   "split_files/text_encoders/qwen_4b_ace15.safetensors", "models/text_encoders"),
+        ],
+    },
+    "minimax-music3": {
+        "key": "minimax-music3",
+        "label": "MiniMax Music 3",
+        "sub": "Slow · 30 steps · song-shaped · restricted license",
+        "workflow": "minimax_music.json",
+        "commercial_ok": True,
+        "license": "MiniMax-Music3 Community License",
+        "license_note": ("Requires a visible “MiniMax-Music3” credit on any commercial "
+                         "product using it, and machine-generated disclosure; separate "
+                         "authorization above US$20M yearly revenue."),
+        # The AR stage caps at MAX_AUDIO_FRAMES/AUDIO_FRAMES_PER_SECOND = 9000/25.
+        # The model is trained to ~5 min, so anything past that is a hard stop —
+        # generate_music clamps and the mix loops the bed over a longer film.
+        "max_seconds": 360.0,
+        # An 8B autoregressive pass plus 30 DiT steps: minutes, not seconds.
+        "timeout": 1800,
+        # Nodes landed in ComfyUI v0.33.0 — older workers have no graph at all
+        # (a clean "node not found", not black frames, but gate it anyway so the
+        # Settings availability chip can say "worker needs a rebuild").
+        "requires_node": "MiniMaxMusic3TextEncode",
+        "min_comfyui": (0, 33, 0),
+        "too_old_note": "its nodes are not registered there",
+        "probe": ("UNETLoader", "unet_name", "minimax_music3_dit_fp16.safetensors"),
+        "models": [
+            _model("Comfy-Org/MiniMax-Music-3",
+                   "diffusion_models/minimax_music3_dit_fp16.safetensors",
+                   "models/diffusion_models"),
+            _model("Comfy-Org/MiniMax-Music-3",
+                   "text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors",
+                   "models/text_encoders"),
+            _model("Comfy-Org/MiniMax-Music-3",
+                   "vae/minimax_music3_dav.safetensors", "models/vae"),
+        ],
+    },
+}
+
+DEFAULT_MUSIC_ENGINE = "ace-step"
+
+
+def get_music(key: str) -> dict | None:
+    return MUSIC_ENGINES.get((key or "").strip())
+
+
+def resolve_music(key: str) -> dict:
+    """Return the music-engine dict for *key*, falling back to the default."""
+    return dict(get_music(key) or MUSIC_ENGINES[DEFAULT_MUSIC_ENGINE])
+
+
+def public_list_music() -> list[dict]:
+    """Compact music-engine descriptors for the Settings UI."""
+    return [_public_video(e) for e in MUSIC_ENGINES.values()]

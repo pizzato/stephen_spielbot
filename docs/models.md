@@ -16,7 +16,7 @@ rebuilds.
 | [LTX 2.5](https://huggingface.co/Lightricks/LTX-2.5) | ~40 GB | Scene video generation (default engine; gated repo — needs an HF token) |
 | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) | ~28 GB | Keyframed establishing shots + Remix spatial upscalers |
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
-| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music |
+| [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music (default engine) |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
 
@@ -70,6 +70,14 @@ If you'd rather fetch them yourself:
     huggingface-cli download Comfy-Org/ace_step_1.5_ComfyUI_files split_files/text_encoders/qwen_4b_ace15.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
     ```
 
+=== "MiniMax Music 3 (~14 GB, opt-in)"
+
+    ```bash
+    huggingface-cli download Comfy-Org/MiniMax-Music-3 diffusion_models/minimax_music3_dit_fp16.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
+    huggingface-cli download Comfy-Org/MiniMax-Music-3 text_encoders/minimax_music3_text_encoder_pruned_int8_convrot.safetensors --local-dir models/text_encoders --local-dir-use-symlinks False
+    huggingface-cli download Comfy-Org/MiniMax-Music-3 vae/minimax_music3_dav.safetensors --local-dir models/vae --local-dir-use-symlinks False
+    ```
+
 The legacy FLUX.1 schnell engine is optional (covers use the style's own image
 engine — their titles are drawn with real fonts, not by the model):
 
@@ -106,7 +114,7 @@ LTX 2.5 notes:
   automatically. The 2.3 checkpoint stays installed for the keyframed
   establishing shots and the Remix upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.32.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
   render rather than failing mid-graph.
 - Clips render at **24 fps** (2.3 ran at 25) through the same two-pass
@@ -123,7 +131,7 @@ MiniMax H3 notes:
   encoder, video + audio VAEs) from **Settings → Infrastructure → Video models** —
   it is *not* part of the bulk install.
 - Its nodes ship with **ComfyUI itself (≥ v0.30.0)** — rebuild the worker
-  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.30.0`) if the engine shows
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
   "not installed" with the weights already downloaded.
 - Generation is capped at ~1 MP (768×1344-class); larger style resolutions render
   at the cap and are reframed back to the plan size. Clips run 4–15 s at 24 fps.
@@ -254,6 +262,36 @@ huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va
 huggingface-cli download Comfy-Org/MiniMax-H3 diffusion_models/minimax_h3_ref2va_int8_convrot.safetensors --local-dir models/diffusion_models --local-dir-use-symlinks False
 ```
 
+## Music engines (per style)
+
+Each style picks the model that writes its background bed under **Settings →
+Styles → Narrator & audio → Music model** (shown only when music is on); child
+styles inherit the choice like every other style field. Download either engine
+per worker from **Settings → Infrastructure → Music models**.
+
+| Engine | Character | License |
+|---|---|---|
+| **ACE-Step 1.5 Turbo** (default) | ~5 GB, 8 sampling steps, seconds per film. Instrumental beds from a tag list, any length | Apache-2.0 |
+| **MiniMax Music 3** (opt-in) | ~14 GB, an 8B autoregressive pass plus 30 DiT steps — minutes per film. Song-shaped and higher fidelity, capped at 6 minutes | MiniMax-Music3 Community License |
+
+MiniMax Music 3 notes:
+
+- Its nodes ship with **ComfyUI itself (≥ v0.33.0)** — rebuild the worker
+  containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
+  "not installed" with the weights already downloaded. Renders are refused
+  up-front on an older worker rather than failing mid-graph.
+- The film's **music description** becomes the model's *caption*. It reads best
+  as a structured brief — genre and tempo, then mood, then instrumentation — and
+  should say *instrumental* explicitly, since the model is trained to write songs
+  with vocals. The bed is always generated with empty lyrics.
+- It stops at **6 minutes** (the model is trained to ~5). A longer film gets a
+  shorter bed, and the final mix loops it rather than leaving the tail silent —
+  the same safety net covers a song the model chooses to end early.
+- **License restrictions**: requires a visible "MiniMax-Music3" credit on any
+  commercial product using it, and machine-generated disclosure; separate
+  authorization above US$20M yearly revenue. There is no territory restriction
+  (unlike MiniMax H3). The picker shows the same note.
+
 ## Gated weights
 
 Some Hugging Face repos require accepting a license. Set a **Hugging Face token** in
@@ -279,7 +317,9 @@ The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration mod
 commercial-friendly on purpose. The original F5-TTS narration weights are offered only as
 an opt-in **non-commercial** preview. MiniMax H3 is opt-in with its own
 [community license](#video-engines-per-style) — territory-restricted and
-attribution-bearing; review it before switching a publishing style over.
+attribution-bearing; review it before switching a publishing style over. MiniMax
+Music 3 is opt-in under a [separate community license](#music-engines-per-style)
+— no territory restriction, but it wants a visible "MiniMax-Music3" credit.
 
 Read [model licensing](tts_licensing.md) and
 [THIRD_PARTY_NOTICES.md](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)

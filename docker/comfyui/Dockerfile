@@ -69,7 +69,7 @@ FROM ${BASE_IMAGE}
 # v0.32.0 adds native LTX 2.5 (gemma4 'ltxv' CLIP + 2.5 transformer/VAEs) for
 # the opt-in ltx25 engine. Bumping this wants a chained H3 render re-check —
 # H3 Motion Context monkey-patches ComfyUI internals and self-tests on load.
-ARG COMFYUI_REF=v0.32.0
+ARG COMFYUI_REF=v0.33.0
 ARG TORCH_INDEX_URL
 ARG TORCH_SPEC
 

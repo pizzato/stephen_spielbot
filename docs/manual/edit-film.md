@@ -92,8 +92,9 @@ stays available.
 
 ### Background music
 
-Edit the music prompt and **Regenerate music**. This re-runs ACE-Step on a GPU worker and
-re-muxes with your current levels. Every generated track is kept in a version strip.
+Edit the music prompt and **Regenerate music**. This re-runs the film's
+[music engine](../models.md#music-engines-per-style) on a GPU worker and re-muxes with
+your current levels. Every generated track is kept in a version strip.
 
 ---
 

@@ -194,6 +194,9 @@ DEFAULT_CFG = {
     # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
+    # Music engine per style (see pipeline/engines.py MUSIC_ENGINES): which model
+    # writes the background bed. Default = ACE-Step 1.5.
+    "default_music_engine": "ace-step",
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,
@@ -471,6 +474,8 @@ STYLE_FIELD_TO_FLAT = {
     "second_pass_steps":    "second_pass_steps",
     # Narrator & audio mix
     "music_enabled":        "music_enabled",
+    # Music engine selection (background bed) — see pipeline/engines.py MUSIC_ENGINES
+    "music_engine":         "default_music_engine",
     "music_vol":            "music_vol",
     "voice_vol":            "voice_vol",
     "ambient_vol":          "ambient_vol",
@@ -765,6 +770,12 @@ def _norm_video_engine(value) -> str:
     return value if engines.get_video(value) else engines.DEFAULT_VIDEO_ENGINE
 
 
+def _norm_music_engine(value) -> str:
+    """Coerce a music engine key to a known one (see pipeline/engines.py
+    MUSIC_ENGINES), falling back to the default (ACE-Step 1.5)."""
+    return value if engines.get_music(value) else engines.DEFAULT_MUSIC_ENGINE
+
+
 def _norm_video_steps(value) -> int:
     """Clamp the per-style video steps override to 0..50 (0 = engine default)."""
     try:
@@ -995,6 +1006,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
         _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
         _coerce(row, "reference_engine", _norm_reference_engine)
+        _coerce(row, "music_engine", _norm_music_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)

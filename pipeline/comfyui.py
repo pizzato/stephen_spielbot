@@ -986,17 +986,20 @@ def check_engine_supported(engine: dict, comfy_url: str = COMFYUI_URL) -> None:
     The w4a8 checkpoints need loader support from ComfyUI 0.31.0; an older
     worker does not error — it returns BLACK FRAMES. A silent black render
     that costs ten minutes and passes the speech gate is the worst possible
-    failure, so this is checked before queueing.
+    failure, so this is checked before queueing. Engines that fail some other
+    way on an old worker (music graphs just hit a missing node) say so through
+    ``too_old_note``.
     """
     need = engine.get("min_comfyui")
     if not need:
         return
     have = comfyui_version(comfy_url)
     if have and have < tuple(need):
+        note = engine.get("too_old_note") or "it would render black frames"
         raise RuntimeError(
             f"{engine['label']} needs ComfyUI >= {'.'.join(map(str, need))} but "
-            f"{comfy_url} runs {'.'.join(map(str, have))} — it would render black "
-            f"frames. Rebuild that worker (COMFYUI_REF) or pick another engine.")
+            f"{comfy_url} runs {'.'.join(map(str, have))} — {note}. "
+            f"Rebuild that worker (COMFYUI_REF) or pick another engine.")
 
 
 # ── H3 Motion Context ────────────────────────────────────────────────────────
@@ -1959,8 +1962,16 @@ def generate_music(
     tags: str | None = None,
     seed: int | None = None,
     comfy_url: str = COMFYUI_URL,
+    music_engine: str | None = None,
 ) -> Path:
-    """Generate background music using ACE-Step 1.5 and save to output_path."""
+    """Generate the background-music bed and save it to output_path.
+
+    *music_engine* is a key from ``engines.MUSIC_ENGINES`` (default ACE-Step
+    1.5). Every music graph takes the same TAGS/DURATION/SEED placeholders, so
+    the engine only picks the workflow file, the duration ceiling and how long
+    to wait. A film longer than the engine's ceiling gets a shorter bed —
+    assembler.mix_background_music loops it to cover the picture.
+    """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
 
@@ -1970,16 +1981,20 @@ def generate_music(
             "cinematic, atmospheric, instrumental, orchestral, peaceful"
         )
 
-    workflow = _load_workflow("ace_music.json")
+    eng = _engines.resolve_music(music_engine)
+    check_engine_supported(eng, comfy_url)
+    duration = min(round(duration_seconds, 1), eng["max_seconds"])
+
+    workflow = _load_workflow(eng["workflow"])
     workflow = _fill_template(workflow, {
         "TAGS":     tags,
-        "DURATION": round(duration_seconds, 1),
+        "DURATION": duration,
         "SEED":     seed,
     })
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-    _wait_for_completion(prompt_id, client_id, timeout=600, comfy_url=comfy_url)
+    _wait_for_completion(prompt_id, client_id, timeout=eng["timeout"], comfy_url=comfy_url)
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:

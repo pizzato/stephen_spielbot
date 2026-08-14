@@ -157,7 +157,7 @@ MODELS_DIR=${REMOTE_MODELS}
 COMFYUI_INPUT_DIR=${REMOTE_HOME}/github/ComfyUI/input
 # Pinned ComfyUI release: v0.32.0 = first with native LTX 2.5 support
 # (v0.30.0 added the MiniMax H3 nodes, v0.31.0 the w4a8 loaders).
-COMFYUI_REF=v0.32.0
+COMFYUI_REF=v0.33.0
 BASE_IMAGE=nvidia/cuda:13.0.1-runtime-ubuntu24.04
 TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 COMFYUI_PORT=${COMFYUI_PORT}

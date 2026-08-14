@@ -1015,6 +1015,16 @@ def mix_background_music(
     logger.info("[ffmpeg] mix_background_music: video=%.1fs music=%.1fs voice_vol=%.2f music_vol=%.2f",
                 video_dur, music_dur, voice_volume, volume)
 
+    # A bed shorter than the picture would leave the tail silent (amix stops at
+    # the video's length but the music input has already run dry). Beds used to
+    # be generated over-length, so this never fired; MiniMax Music 3 caps at
+    # 6 minutes and may end a song early, so loop it back to the top instead.
+    loop_music = music_dur > 0 and music_dur < video_dur - 1
+    if loop_music:
+        logger.info("[ffmpeg] music (%.1fs) is shorter than the film (%.1fs) — looping the bed",
+                    music_dur, video_dur)
+    music_in = (["-stream_loop", "-1"] if loop_music else []) + ["-i", str(music_path)]
+
     use_ambient = ambient_path and Path(ambient_path).exists() and ambient_volume > 0
     if use_ambient:
         filter_str = (
@@ -1023,14 +1033,14 @@ def mix_background_music(
             f"[2:a]volume={ambient_volume:.3f}[amb];"
             "[voice][bg][amb]amix=inputs=3:duration=first:dropout_transition=3:normalize=0[aout]"
         )
-        inputs = ["-i", str(video_path), "-i", str(music_path), "-i", str(ambient_path)]
+        inputs = ["-i", str(video_path), *music_in, "-i", str(ambient_path)]
     else:
         filter_str = (
             f"[0:a]volume={voice_volume:.3f}[voice];"
             f"[1:a]volume={volume:.3f}[bg];"
             "[voice][bg]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]"
         )
-        inputs = ["-i", str(video_path), "-i", str(music_path)]
+        inputs = ["-i", str(video_path), *music_in]
 
     try:
         _run([
