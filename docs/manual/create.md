@@ -58,7 +58,9 @@ film is treated as a Short, which the predictive model weighs differently.
 ## Visual style
 
 Free text appended to every scene's image prompt — *"Cinematic 35mm, golden hour, painterly
-lighting"*. Locked while a style is active.
+lighting"*. Locked to the style's own visual style while a style is active — unless that
+style leaves it blank, in which case the field stays free and what you write applies to
+this film only.
 
 ## Narrator voice
 
