@@ -50,6 +50,11 @@ the format does to the render.
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
   what gets divided, so extend it before drafting the story.
 
+Every step on this tab can also run unattended — see
+[what automation makes](settings.md#what-automation-makes). With its song review gate on,
+automation writes and generates the song and then leaves it here: listen, change what you
+want, and **Draft the story →** picks the film back up in its queue slot.
+
 ## Story
 
 The prose behind the scenes, one
