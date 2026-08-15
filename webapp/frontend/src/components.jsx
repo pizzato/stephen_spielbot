@@ -941,6 +941,10 @@ export function MusicVersionStrip({ versions, selected, onSelect, busy }) {
               opacity: busy && !isSel ? 0.5 : 1,
             }}>
               <audio src={fileUrl(v.path)} controls preload="none" style={{ height: 34, flex: '0 0 auto', maxWidth: '60%' }} />
+              {/* A song film's versions come from two acts — the engine's own
+                  singer, and a seed-vc re-voicing of it — so the voice is
+                  called out rather than buried in the prompt text. */}
+              {v.voice && <Chip>♪ {v.voice}</Chip>}
               <span className="muted" title={v.desc} style={{
                 flex: 1, minWidth: 0, fontSize: 12, overflow: 'hidden',
                 textOverflow: 'ellipsis', whiteSpace: 'nowrap',

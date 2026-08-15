@@ -33,8 +33,11 @@ the format does to the render.
   lyrics keeps the sound you have (and writes to it), re-writing the sound describes the
   music for the lyrics you have. Either way both halves are saved, unsaved edits included.
 - **Save edits** keeps your typing; **Generate the song** renders the track on a worker,
-  and **Sing this as [voice]** re-voices it with seed-vc. Every generation and re-voicing
-  is kept as a version — the one marked *In use* is the film's track.
+  and **Sing this as [voice]** re-voices it with seed-vc — always converting the sung
+  original, never a previous re-voicing. Every generation and re-voicing is kept as a
+  version — the one marked *In use* is the film's track, and they travel with the film
+  so either side of a re-voicing can be
+  [put back after the render](edit-film.md#a-song-films-song) too.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics.
 

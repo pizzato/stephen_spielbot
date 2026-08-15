@@ -2536,11 +2536,16 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         src = wd
         wd = gapp._script_work_dir(video_title or user_topic)
         gapp.logger.info("Story divide: %s already has scenes — forking to %s", src, wd)
-        # A song film's approved song travels with the fork — it IS the film.
+        # A song film's approved song travels with the fork — it IS the film —
+        # and so do its kept versions, so the fork can still put the original
+        # generation back after a re-voicing.
         import shutil
-        for name in ("song.json", "background_music.wav"):
+        for name in ("song.json", "background_music.wav", "music_history.json"):
             if (src / name).exists():
                 shutil.copy2(src / name, wd / name)
+        if (src / "music_history").is_dir():
+            shutil.copytree(src / "music_history", wd / "music_history",
+                            dirs_exist_ok=True)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -2854,10 +2859,16 @@ class SongConvertBody(BaseModel):
 def _do_song_convert(wd: Path, voice: str) -> dict:
     """Re-voice the approved song as a library voice (seed-vc, run locally).
 
-    The original stays in the music history; the converted track becomes
-    background_music.wav — the one file the whole music-video pipeline hangs
-    off, so the per-scene segments pinned into the takes sing in this voice
-    too."""
+    Both sides of the conversion are kept: the sung original is captured into
+    the music history first (if it wasn't already), and the converted track is
+    recorded as its own version before becoming background_music.wav — the one
+    file the whole music-video pipeline hangs off, so the per-scene segments
+    pinned into the takes sing in this voice too. Either version can be put
+    back (and re-mixed into the final) from the Song tab or the film editor.
+
+    The conversion runs on the newest version that came out of the music
+    engine, not on whatever is canonical: re-voicing an already re-voiced track
+    would clone a clone."""
     from pipeline import svc
     from pipeline.assembler import _get_duration
 
@@ -2876,10 +2887,14 @@ def _do_song_convert(wd: Path, voice: str) -> dict:
         music_history.seed_if_empty(wd, track, data.get("caption") or "")
     except Exception:
         gapp.logger.warning("Could not seed original song into history", exc_info=True)
+    source, source_id = track, None
+    sung = music_history.latest_sung(wd)
+    if sung and Path(sung["path"]).exists():
+        source, source_id = Path(sung["path"]), sung["id"]
     cfg = gapp.load_config()
     staged = wd / "background_music.staging.wav"
     svc.convert_song(
-        track, Path(ref), staged,
+        source, Path(ref), staged,
         # 30 steps by default (seed-vc's own default is 25; 50 is the
         # high-polish setting), and the diffusion runs on the configured GPU
         # worker when one is named — the controller's Apple GPU is ~12x
@@ -2888,7 +2903,8 @@ def _do_song_convert(wd: Path, voice: str) -> dict:
         worker=str(cfg.get("svc_worker") or ""))
     staged.replace(track)
     try:
-        music_history.record(wd, track, f"sung as {voice}")
+        music_history.record(wd, track, f"sung as {voice}", voice=voice,
+                             source_id=source_id)
     except Exception:
         gapp.logger.warning("Could not record converted song", exc_info=True)
     data.update({"sung_as": voice, "converted_at": time.time()})
@@ -2954,6 +2970,23 @@ def get_job_song(job_id: str) -> dict:
             "selected": hist.get("selected")}
 
 
+def _stamp_song_voice(wd: Path, version_id: int) -> str:
+    """Point song.json's ``sung_as`` at whoever sings the version now in use.
+
+    The label has to follow the track: reverting to the original generation
+    must stop claiming a re-voicing. Returns the voice ("" for the original)."""
+    voice = ((music_history.find(wd, version_id) or {}).get("voice") or "")
+    path = wd / "song.json"
+    if path.exists():
+        try:
+            data = json.loads(path.read_text())
+            data["sung_as"] = voice
+            path.write_text(json.dumps(data, indent=2))
+        except Exception:
+            gapp.logger.warning("Could not update sung_as in song.json", exc_info=True)
+    return voice
+
+
 @api.post("/api/jobs/{job_id}/song/select")
 def select_song_version(job_id: str, body: dict) -> dict:
     """The accept/revert step: put a kept version (the original generation, or
@@ -2967,7 +3000,8 @@ def select_song_version(job_id: str, body: dict) -> dict:
         track = music_history.select(wd, vid)
     except Exception as e:
         raise HTTPException(404, str(e)[:200])
-    return {"ok": True,
+    sung_as = _stamp_song_voice(wd, vid)
+    return {"ok": True, "sung_as": sung_as,
             "song_url": f"/api/file?path={track}&t={int(time.time())}",
             **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
 
@@ -6055,6 +6089,8 @@ class RemixVideoSelectBody(BaseModel):
 
 def _remix_song_info(wd: Path) -> dict | None:
     """A song film's song, for the film editor — None for every other film."""
+    from pipeline import svc
+
     path = wd / "song.json"
     if not path.exists():
         return None
@@ -6065,6 +6101,10 @@ def _remix_song_info(wd: Path) -> dict | None:
     return {"lyrics": str(data.get("lyrics") or ""),
             "caption": str(data.get("caption") or ""),
             "sung_as": str(data.get("sung_as") or ""),
+            # Whether "sing it as" can run at all — seed-vc is an optional
+            # controller-local install, so the editor says so rather than
+            # offering a button that 503s.
+            "svc_available": svc.available(),
             "job_id": job_id_from_work_dir(wd)}
 
 
@@ -7013,6 +7053,95 @@ def remix_regen_music(body: MusicRegenBody) -> dict:
     return {"ok": True, "task_id": tid}
 
 
+def _remux_with_current_music(wd: Path) -> str:
+    """Re-mux the film's final with whatever background_music.wav now holds, at
+    the volumes that produced it. Raises RuntimeError if the mix fails."""
+    combined = wd / "combined.mp4"
+    if not combined.exists():
+        raise RuntimeError(f"combined.mp4 not found in {wd.name} — render the film first.")
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    ambient = wd / "ambient.wav"
+    final_path, message = gapp.on_remix(
+        str(combined), str(wd / "background_music.wav"),
+        str(ambient) if ambient.exists() else "",
+        voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
+        music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
+        ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+    )
+    if not final_path:
+        raise RuntimeError(message or "Re-mux failed.")
+    _maybe_burn_first_frame_cover(wd, final_path)
+    return final_path
+
+
+class SongRevoiceBody(BaseModel):
+    work_dir: str
+    voice: str
+
+
+def _run_song_revoice(task_id: str, wd: Path, voice: str) -> None:
+    """Background thread: re-voice a finished song film's song, then re-mux.
+
+    The slow half is seed-vc (minutes), so this runs as a film task like the
+    music regen beside it. Both the sung original and the re-voicing stay in
+    the music history — the version strip is where you compare them and put
+    either one back."""
+    started = _film_task_started_at(task_id) or time.time()
+    try:
+        _film_checkpoint(task_id)
+        _film_tasks[task_id] = {"status": "running", "step": "revoice"}
+        result = _do_song_convert(wd, voice)
+        _film_checkpoint(task_id)
+        _film_tasks[task_id]["step"] = "mux"
+        final_path = _remux_with_current_music(wd)
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "sung_as": result.get("sung_as", voice),
+            "music_history": music_history.history(wd),
+        }
+    except Exception as e:
+        (wd / "background_music.staging.wav").unlink(missing_ok=True)
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name=f"Re-voiced the song as {voice}",
+            failed_name="Song re-voicing failed",
+            cancelled_name="Song re-voicing cancelled",
+            detail=wd.name,
+        )
+
+
+@api.post("/api/remix/song-voice")
+def remix_song_voice(body: SongRevoiceBody) -> dict:
+    """Sing a finished film's song as a library voice, then re-mux the final."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not (wd / "song.json").exists():
+        raise HTTPException(404, "This film has no song.")
+    if not (wd / "background_music.wav").exists():
+        raise HTTPException(404, "This film has no song track to re-voice.")
+    if not (body.voice or "").strip():
+        raise HTTPException(400, "Pick a voice to sing it.")
+    from pipeline import svc
+    if not svc.available():
+        raise HTTPException(503, "Voice conversion is not installed — run "
+                                 "scripts/install_svc.sh on the controller.")
+    tid = f"song_revoice_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "revoice"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "music",
+        "started_at": time.time(),
+    }
+    threading.Thread(target=_run_song_revoice,
+                     args=(tid, wd, body.voice.strip()), daemon=True).start()
+    return {"ok": True, "task_id": tid}
+
+
 class MusicSelectBody(BaseModel):
     work_dir: str
     version_id: int
@@ -7032,6 +7161,9 @@ def select_music(body: MusicSelectBody) -> dict:
         music_path = music_history.select(wd, int(body.version_id))
     except (ValueError, FileNotFoundError) as e:
         raise HTTPException(404, str(e))
+    # A song film labels itself with whoever sings the track in use, so putting
+    # the original generation back has to clear a previous re-voicing.
+    sung_as = _stamp_song_voice(wd, int(body.version_id))
 
     combined = wd / "combined.mp4"
     if not combined.exists():
@@ -7054,6 +7186,7 @@ def select_music(body: MusicSelectBody) -> dict:
     return {
         "ok": True,
         "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+        "sung_as": sung_as,
         "music_history": music_history.history(wd),
     }
 

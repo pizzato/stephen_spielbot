@@ -668,6 +668,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [musicHistory, setMusicHistory] = useState(null)
   const [videoHistory, setVideoHistory] = useState(null)
   const [musicBusy, setMusicBusy] = useState(false)
+  const [songVoice, setSongVoice] = useState('')    // "Sing it as" (song films)
   const [narratorBusy, setNarratorBusy] = useState(false)
   const [upscaleBusy, setUpscaleBusy] = useState(false)
   const [localizeLangs, setLocalizeLangs] = useState({})
@@ -730,6 +731,12 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         setMusicDesc(d.music_desc || '')
         setMusicHistory(d.music_history)
         setVideoHistory(d.video_history)
+        // Re-voicing clones a reference clip, so only library voices qualify —
+        // and only one still in the library (a film can name a deleted voice).
+        if (d.song) {
+          const opts = (d.voices || []).filter((v) => v !== 'Default (F5-TTS)')
+          setSongVoice(opts.includes(d.song.sung_as) ? d.song.sung_as : (opts[0] || ''))
+        }
       })
       .catch((e) => setError(e.message))
 
@@ -893,14 +900,49 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
   }
 
+  // Re-voice a song film's song (seed-vc) and re-mux the final with it. Slow
+  // — minutes — so it runs as a film task, like the music regen above.
+  const revoiceSong = async () => {
+    setMusicBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.revoiceSong(data.work_dir, songVoice)
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              setData((d) => ({
+                ...d,
+                ...(t.final_url ? { final_url: t.final_url } : {}),
+                song: d.song ? { ...d.song, sung_as: t.sung_as || songVoice } : d.song,
+              }))
+              if (t.music_history) setMusicHistory(t.music_history)
+              setStatus(`Re-voiced the song as ${songVoice} and re-muxed the film — the original is still below.`)
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Re-voicing ${t.status}.`))
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
+  }
+
   const selectMusic = async (versionId) => {
     setMusicBusy(true); setError(''); setStatus('')
     try {
       const r = await api.selectMusic(data.work_dir, versionId)
-      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      setData((d) => ({
+        ...d,
+        ...(r.final_url ? { final_url: r.final_url } : {}),
+        song: d.song ? { ...d.song, sung_as: r.sung_as || '' } : d.song,
+      }))
       if (r.music_history) setMusicHistory(r.music_history)
       const chosen = r.music_history?.versions?.find((v) => v.id === r.music_history.selected)
-      if (chosen && chosen.desc) setMusicDesc(chosen.desc)
+      // A re-voicing's label ("sung as X") is not a music prompt — only adopt
+      // the description of a version that actually came out of the engine.
+      if (chosen && chosen.desc && !chosen.voice) setMusicDesc(chosen.desc)
       setStatus('Switched the soundtrack and re-muxed the film.')
     } catch (e) { setError(e.message) } finally { setMusicBusy(false) }
   }
@@ -1486,7 +1528,29 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                 placeholder="cinematic orchestral background music, atmospheric, instrumental" />
             </Field>
           </div>
-          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button></div>
+          <div className="mt-24 row center gap-10 row--wrap">
+            <Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button>
+            {data?.song && (
+              <>
+                <select className="select" style={{ maxWidth: 240 }} value={songVoice}
+                  disabled={anyBusy} onChange={(e) => setSongVoice(e.target.value)}>
+                  {(data.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                    <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(meta.config?.voices))}</option>
+                  ))}
+                </select>
+                <Button variant="ghost" icon="microphone-lines"
+                  disabled={anyBusy || !songVoice || !data.song.svc_available}
+                  onClick={revoiceSong}>Sing it as {songVoice}</Button>
+              </>
+            )}
+          </div>
+          {data?.song && (
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+              {data.song.svc_available
+                ? <>Re-voicing keeps the melody, timing and words and swaps the singer&apos;s timbre — a few minutes on seed-vc, then the film is re-muxed. It always converts the <strong>sung original</strong>, never a previous re-voicing, and both stay below.{data.song.sung_as ? <> Currently sung as <strong>{data.song.sung_as}</strong>.</> : null}</>
+                : <>Re-voicing needs seed-vc on the controller — run <code>scripts/install_svc.sh</code> to enable it.</>}
+            </p>
+          )}
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
             onSelect={selectMusic} busy={anyBusy} />
         </Card>
