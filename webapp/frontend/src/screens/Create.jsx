@@ -46,6 +46,12 @@ export default function Create({ seed, meta, onGenerated }) {
     return raw ? resolveStyle(styleList, raw.name) : null
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
+  // The visual style locks only when the style actually HAS one. A style that
+  // leaves it blank has nothing to sync to, so the field stays free to write
+  // (whatever is typed is combined with the profile server-side) instead of
+  // sitting disabled and empty, showing its example placeholder as if that
+  // were the locked-in style.
+  const styleLocked = locked && !!(profile?.visual_style || '').trim()
 
   // Legacy scene-count seeds (old queue items / re-drafts) → the length those
   // scenes used to produce (~9 s each).
@@ -313,9 +319,11 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
 
             <Field label="Visual style"
-              hint={locked ? 'Set by the style — pick “No style” to experiment.' : "Applied to every scene's image prompt."}>
+              hint={styleLocked ? 'Set by the style — pick “No style” to experiment.'
+                : locked ? "This style sets no visual style — write one for this film."
+                  : "Applied to every scene's image prompt."}>
               <input className="input" placeholder="Cinematic 35mm, golden hour, painterly lighting"
-                value={style} disabled={locked} onChange={(e) => setStyle(e.target.value)} />
+                value={style} disabled={styleLocked} onChange={(e) => setStyle(e.target.value)} />
             </Field>
 
             <Field label="Narrator voice"
