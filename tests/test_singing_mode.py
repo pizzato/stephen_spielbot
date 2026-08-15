@@ -366,10 +366,8 @@ class SongRewriteTests(TempConfigCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
 
-class SongVersionTests(TempConfigCase):
-    """Every song a film has sung is kept and can be put back: the engine's
-    own vocals, and each seed-vc re-voicing of them. Both sides of a
-    re-voicing are remixable into the final."""
+class _SongFilmCase(TempConfigCase):
+    """A generated song film in a work dir, ready for the studio's operations."""
 
     def setUp(self):
         super().setUp()
@@ -396,6 +394,12 @@ class SongVersionTests(TempConfigCase):
             store.create_or_update_job(self.job_id, self.wd, "Rooftop")
         finally:
             store.close()
+
+
+class SongVersionTests(_SongFilmCase):
+    """Every song a film has sung is kept and can be put back: the engine's
+    own vocals, and each seed-vc re-voicing of them. Both sides of a
+    re-voicing are remixable into the final."""
 
     def _convert(self, voice="Nora", output=b"as-nora"):
         """Run a re-voicing with seed-vc stubbed out; returns the source path
@@ -469,6 +473,78 @@ class SongVersionTests(TempConfigCase):
         # Re-mixed from the freshly converted track, at the song film's volume.
         self.assertEqual(mix.call_args[0][1], str(self.wd / "background_music.wav"))
         self.assertEqual(len(backend._film_tasks[task]["music_history"]["versions"]), 2)
+
+
+class SongEndingTests(_SongFilmCase):
+    """A song that ends abruptly has two cures: pad the take's ending with a
+    faded tail, or sing it again with room to land the ending."""
+
+    def _extend(self, seconds=3.0, output=b"as-generated-plus-tail"):
+        def fake_extend(src, out, extra, **kw):
+            Path(out).write_bytes(output)
+            return out
+
+        with unittest.mock.patch("pipeline.assembler.extend_audio_tail", fake_extend), \
+             unittest.mock.patch("pipeline.assembler._get_duration", return_value=48.0):
+            return backend.song_extend(backend.SongExtendBody(
+                work_dir=str(self.wd), seconds=seconds))
+
+    def test_the_abrupt_take_survives_the_extension(self):
+        res = self._extend()
+
+        h = backend.music_history.history(self.wd)
+        self.assertEqual(len(h["versions"]), 2)
+        self.assertEqual(Path(h["versions"][0]["path"]).read_bytes(), b"as-generated")
+        self.assertEqual(h["selected"], h["versions"][1]["id"])
+        self.assertEqual(h["versions"][1]["source_id"], h["versions"][0]["id"])
+        self.assertIn("+3s", h["versions"][1]["desc"])
+        # The longer track is the film's, and its new length is what the scene
+        # division will divide.
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(),
+                         b"as-generated-plus-tail")
+        self.assertEqual(res["duration"], 48.0)
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["duration"], 48.0)
+
+    def test_extending_a_revoicing_stays_that_voice(self):
+        def fake_convert(source, ref, out, **kw):
+            Path(out).write_bytes(b"as-nora")
+            return out
+
+        with unittest.mock.patch("pipeline.svc.convert_song", fake_convert):
+            backend._do_song_convert(self.wd, "Nora")
+        self._extend()
+
+        versions = backend.music_history.history(self.wd)["versions"]
+        self.assertEqual(versions[-1]["voice"], "Nora")
+        # …so the next "sing this as" still converts the engine's own vocals.
+        self.assertEqual(Path(backend.music_history.latest_sung(self.wd)["path"]).read_bytes(),
+                         b"as-generated")
+
+    def test_the_tail_has_to_be_a_sane_length(self):
+        for bad in (0, 45):
+            with self.assertRaises(HTTPException) as ctx:
+                backend.song_extend(backend.SongExtendBody(
+                    work_dir=str(self.wd), seconds=bad))
+            self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_regenerating_longer_asks_for_more_than_is_playing(self):
+        """The added seconds land on the track's REAL length, not the length
+        originally asked for — "5 seconds longer than this" is literal."""
+        data = json.loads((self.wd / "song.json").read_text())
+        data["duration"] = 44.2
+        (self.wd / "song.json").write_text(json.dumps(data))
+
+        with unittest.mock.patch.object(backend, "_run_song_generate_task"):
+            backend.song_generate(backend.SongGenerateBody(
+                work_dir=str(self.wd), add_seconds=5))
+
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 49.2)
+
+    def test_a_plain_regeneration_keeps_the_length(self):
+        with unittest.mock.patch.object(backend, "_run_song_generate_task"):
+            backend.song_generate(backend.SongGenerateBody(work_dir=str(self.wd)))
+
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45)
 
 
 class SongInstructionTests(unittest.TestCase):

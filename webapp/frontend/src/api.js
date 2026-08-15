@@ -135,6 +135,9 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Song generation failed.')
     }
   },
+  // Extend an abrupt ending: the take's last seconds fade out into `seconds` of
+  // tail. ffmpeg on the controller, so it answers directly (no polling).
+  songExtend: (workDir, seconds) => req('POST', '/song/extend', { work_dir: workDir, seconds }),
   // "Sing this as [voice]": re-voice the generated song with seed-vc.
   songConvert: async (workDir, voice) => {
     const { task_id } = await req('POST', '/song/convert', { work_dir: workDir, voice })

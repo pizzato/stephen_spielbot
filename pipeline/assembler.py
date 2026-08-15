@@ -119,6 +119,35 @@ def write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
     return path
 
 
+def extend_audio_tail(input_path: Path, output_path: Path, extra_seconds: float,
+                      fade: float = 2.0) -> Path:
+    """Give a track a softer, longer ending: fade its last *fade* seconds out and
+    pad *extra_seconds* of silence after them.
+
+    A song that stops mid-bar sounds like a cut cable. Nothing is re-generated —
+    the take is untouched up to the fade — so this is the cheap fix for an
+    ending that is merely blunt (a song that never got to *finish* has to be
+    generated longer instead). The fade is capped at a quarter of the track so
+    a short one doesn't become one long decay.
+    """
+    duration = _get_duration(input_path)
+    fade = max(0.0, min(fade, duration / 4))
+    filters = []
+    if fade > 0.05:
+        filters.append(f"afade=t=out:st={duration - fade:.3f}:d={fade:.3f}")
+    filters.append(f"apad=pad_dur={extra_seconds:.3f}")
+    logger.info("[ffmpeg] extend_audio_tail: %.1fs +%.1fs (fade %.1fs)",
+                duration, extra_seconds, fade)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-af", ",".join(filters),
+        "-c:a", "pcm_s16le",
+        str(output_path),
+    ])
+    return output_path
+
+
 def _get_video_dimensions(path: Path) -> tuple[int, int]:
     result = subprocess.run(
         [

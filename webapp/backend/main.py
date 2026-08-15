@@ -2767,6 +2767,15 @@ class SongGenerateBody(BaseModel):
     caption: str = ""
     lyrics: str = ""
     voice: str = ""
+    # "Re-generate X seconds longer": added to the song's current length before
+    # it is sung again, so the model has room to land an ending it was cutting
+    # off. 0 = generate at the length it already has.
+    add_seconds: float = 0
+
+
+# Most an ending may be stretched by in one go — either as a padded tail or as
+# a longer re-generation.
+_MAX_SONG_EXTEND = 30.0
 
 
 def _do_song_generate(wd: Path) -> dict:
@@ -2840,6 +2849,14 @@ def song_generate(body: SongGenerateBody) -> dict:
         data["caption"] = body.caption.strip()
     if body.voice is not None:
         data["voice"] = (body.voice or "").strip()
+    if body.add_seconds:
+        add = float(body.add_seconds)
+        if not (0.5 <= add <= _MAX_SONG_EXTEND):
+            raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
+        # Longer than what the user is HEARING (the generated track's real
+        # length), falling back to the length asked for if nothing was sung yet.
+        base = float(data.get("duration") or data.get("seconds") or 0) or 60.0
+        data["seconds"] = round(base + add, 1)
     if not (data.get("lyrics") or "").strip():
         raise HTTPException(400, "The song has no lyrics.")
     data["updated_at"] = time.time()
@@ -2849,6 +2866,72 @@ def song_generate(body: SongGenerateBody) -> dict:
     threading.Thread(target=_run_song_generate_task, args=(task_id, wd),
                      daemon=True).start()
     return {"task_id": task_id}
+
+
+class SongExtendBody(BaseModel):
+    work_dir: str
+    seconds: float = 3.0
+
+
+def _do_song_extend(wd: Path, seconds: float) -> dict:
+    """Give the generated song a longer ending: its last couple of seconds are
+    faded out and *seconds* of silence padded after them.
+
+    This keeps the take — nothing is re-generated and no worker is involved —
+    so a song that merely stops dead gets a proper ending without losing the
+    arrangement that was approved. The extended track becomes the film's, and
+    the abrupt one stays in the music history to be put back."""
+    from pipeline.assembler import _get_duration, extend_audio_tail
+
+    track = wd / "background_music.wav"
+    if not track.exists():
+        raise RuntimeError("Generate the song first.")
+    try:
+        data = json.loads((wd / "song.json").read_text())
+    except Exception:
+        data = {}
+    # The un-extended take is a version in its own right — capture it before it
+    # is overwritten.
+    try:
+        music_history.seed_if_empty(wd, track, data.get("caption") or "")
+    except Exception:
+        gapp.logger.warning("Could not seed the song into history", exc_info=True)
+    hist = music_history.history(wd)
+    source = next((v for v in hist["versions"] if v["id"] == hist["selected"]), None)
+    staged = wd / "background_music.staging.wav"
+    extend_audio_tail(track, staged, seconds)
+    staged.replace(track)
+    dur = _get_duration(track)
+    try:
+        # A padded re-voicing is still sung by that voice: carrying the label
+        # over keeps the version list honest and keeps the next re-voicing off
+        # an already-converted track.
+        music_history.record(wd, track, f"+{seconds:g}s ending",
+                             voice=(source or {}).get("voice") or "",
+                             source_id=(source or {}).get("id"))
+    except Exception:
+        gapp.logger.warning("Could not record the extended song", exc_info=True)
+    data.update({"duration": dur, "updated_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    return {"ok": True, "duration": dur,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}",
+            **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
+
+
+@api.post("/api/song/extend")
+def song_extend(body: SongExtendBody) -> dict:
+    """Extend the song's ending by *seconds* without re-generating it (ffmpeg
+    on the controller, so it returns when it's done)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    secs = float(body.seconds or 0)
+    if not (0.5 <= secs <= _MAX_SONG_EXTEND):
+        raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
+    try:
+        return _do_song_extend(wd, secs)
+    except Exception as e:
+        raise HTTPException(500, f"Extending the song failed: {str(e).splitlines()[0][:300]}")
 
 
 class SongConvertBody(BaseModel):
