@@ -6242,6 +6242,34 @@ class RemixVideoSelectBody(BaseModel):
     version_id: int
 
 
+def _is_music_video(wd: Path) -> bool:
+    """True for a song film — the "Music video" format.
+
+    song.json is written when the song is authored and travels with every fork,
+    so it is the same marker the film editor keys its song card on (see
+    _remix_song_info)."""
+    return (wd / "song.json").exists()
+
+
+def _mix_volumes(wd: Path, jc: dict | None = None,
+                 cfg: dict | None = None) -> tuple[float, float, float]:
+    """(voice, music, ambient) percentages for this film's audio mix — the
+    film's own saved volumes, falling back to the global config's.
+
+    A music video mixes to MUSIC ONLY: its singing takes are shipped muted and
+    the generated song is the entire soundtrack, so voice and ambience are
+    pinned to zero here as well as at render time. Anything else — a stray
+    spoken beat the writer left in, a soundscape, an older film rendered before
+    the render stamped these volumes — would bleed in under the track."""
+    jc = _film_job_config(wd) if jc is None else jc
+    cfg = gapp.load_config() if cfg is None else cfg
+    if _is_music_video(wd):
+        return 0.0, float(jc.get("music_vol", 100)), 0.0
+    return (float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
+            float(jc.get("music_vol", cfg.get("music_vol", 18))),
+            float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))))
+
+
 def _remix_song_info(wd: Path) -> dict | None:
     """A song film's song, for the film editor — None for every other film."""
     from pipeline import svc
@@ -6290,15 +6318,18 @@ def remix_load(work_dir: str = Query("")) -> dict:
     except Exception:
         meta = {}
     _title = _video_title_for(wd)
+    mix_vols = _mix_volumes(wd, jc, cfg)
     return {
         "work_dir": str(wd),
         "final_url": _busted_file_url(final_vid),
         # False for performance films: there is no music or narration stem to
         # re-balance, so the mix controls have nothing to act on.
         "can_remix": can_remix,
-        "voice_vol": jc.get("voice_vol", cfg.get("voice_vol", 100)),
-        "music_vol": jc.get("music_vol", cfg.get("music_vol", 18)),
-        "ambient_vol": jc.get("ambient_vol", cfg.get("ambient_vol", 0)),
+        # A music video's levels are pinned to music-only (see _mix_volumes) —
+        # the mixer card shows and offers exactly that.
+        "voice_vol": mix_vols[0],
+        "music_vol": mix_vols[1],
+        "ambient_vol": mix_vols[2],
         "voice": jc.get("default_voice", ""),
         "voices": gapp.get_voice_choices(),
         "music_desc": jc.get("music_desc", ""),
@@ -6332,11 +6363,17 @@ def remix_apply(body: RemixBody) -> dict:
     if not music.exists():
         raise HTTPException(400, "This film has no music or narration track to re-mix — "
                                  "its audio was generated with the picture.")
+    # A music video's mix is the song alone whatever arrives here: the editor
+    # offers it no voice/ambient sliders, so a non-zero level could only come
+    # from a stale client.
+    voice_vol, ambient_vol = body.voice_vol, body.ambient_vol
+    if _is_music_video(wd):
+        voice_vol = ambient_vol = 0.0
     with _track_op("Remixing audio", wd.name):
         final_path, message = gapp.on_remix(
             str(combined), str(music),
             str(ambient) if ambient.exists() else "",
-            voice_vol=body.voice_vol, music_vol=body.music_vol, ambient_vol=body.ambient_vol,
+            voice_vol=voice_vol, music_vol=body.music_vol, ambient_vol=ambient_vol,
         )
         if final_path:
             _maybe_burn_first_frame_cover(wd, final_path)
@@ -6418,12 +6455,13 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         cfg = gapp.load_config()
         ambient = wd / "ambient.wav"
         concatenate_scenes(scene_finals, combined)
+        voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
         mix_background_music(
             combined, music_path, final_path,
-            volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
-            voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+            volume=music_vol / 100.0,
+            voice_volume=voice_vol / 100.0,
             ambient_path=ambient if ambient.exists() else None,
-            ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+            ambient_volume=ambient_vol / 100.0,
         )
         _maybe_burn_first_frame_cover(wd, final_path)
         _film_tasks[task_id] = {
@@ -6704,12 +6742,13 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
     cfg = gapp.load_config()
     concatenate_scenes(scene_finals, combined)
     staged_final = wd / "final_localize.staging.mp4"
+    voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
     mix_background_music(
         combined, music_path, staged_final,
-        volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
-        voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+        volume=music_vol / 100.0,
+        voice_volume=voice_vol / 100.0,
         ambient_path=ambient if ambient.exists() else None,
-        ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+        ambient_volume=ambient_vol / 100.0,
     )
     staged_final.replace(final_path)
     # Styles that auto-stamp the cover into the opening get the stamp on the
@@ -7021,9 +7060,7 @@ def _build_dubbed_audio(wd: Path, lang: str) -> Path:
         out = lang_dir / "dubbed_audio.m4a"
         music = wd / "background_music.wav"
         ambient = wd / "ambient.wav"
-        ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
-        voice_vol = float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0
-        music_vol = float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0
+        voice_vol, music_vol, ambient_vol = (v / 100.0 for v in _mix_volumes(wd, jc, cfg))
         if music.exists():
             # Same mix mix_background_music applies to the published final, so
             # the dub sounds identical to the film — just voiced in *lang*.
@@ -7140,12 +7177,11 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         _film_tasks[task_id]["step"] = "mux"
         cfg = gapp.load_config()
         ambient = wd / "ambient.wav"
+        voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
         final_path, message = gapp.on_remix(
             str(combined), str(music_path),
             str(ambient) if ambient.exists() else "",
-            voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
-            music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
-            ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+            voice_vol=voice_vol, music_vol=music_vol, ambient_vol=ambient_vol,
         )
         if not final_path:
             raise RuntimeError(message or "Re-mux failed after regenerating music.")
@@ -7217,12 +7253,11 @@ def _remux_with_current_music(wd: Path) -> str:
     jc = _film_job_config(wd)
     cfg = gapp.load_config()
     ambient = wd / "ambient.wav"
+    voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
     final_path, message = gapp.on_remix(
         str(combined), str(wd / "background_music.wav"),
         str(ambient) if ambient.exists() else "",
-        voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
-        music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
-        ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+        voice_vol=voice_vol, music_vol=music_vol, ambient_vol=ambient_vol,
     )
     if not final_path:
         raise RuntimeError(message or "Re-mux failed.")
@@ -7329,13 +7364,12 @@ def select_music(body: MusicSelectBody) -> dict:
     jc = _film_job_config(wd)
     cfg = gapp.load_config()
     ambient = wd / "ambient.wav"
+    voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
     with _track_op("Selecting music", wd.name):
         final_path, message = gapp.on_remix(
             str(combined), str(music_path),
             str(ambient) if ambient.exists() else "",
-            voice_vol=float(jc.get("voice_vol", cfg.get("voice_vol", 100))),
-            music_vol=float(jc.get("music_vol", cfg.get("music_vol", 18))),
-            ambient_vol=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))),
+            voice_vol=voice_vol, music_vol=music_vol, ambient_vol=ambient_vol,
         )
         if final_path:
             _maybe_burn_first_frame_cover(wd, final_path)
@@ -7574,14 +7608,15 @@ def _temporal_upscale_scenes_to_final(
         music_path = wd / "background_music.wav"
         ambient = wd / "ambient.wav"
         if music_path.exists():
+            voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
             mix_background_music(
                 combined,
                 music_path,
                 staged_final,
-                volume=float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0,
-                voice_volume=float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0,
+                volume=music_vol / 100.0,
+                voice_volume=voice_vol / 100.0,
                 ambient_path=ambient if ambient.exists() else None,
-                ambient_volume=float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0,
+                ambient_volume=ambient_vol / 100.0,
             )
         else:
             shutil.copy2(combined, staged_final)
@@ -12465,9 +12500,7 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
 
     jc = _film_job_config(wd)
     cfg = gapp.load_config()
-    voice_vol = float(jc.get("voice_vol", cfg.get("voice_vol", 100))) / 100.0
-    music_vol = float(jc.get("music_vol", cfg.get("music_vol", 18))) / 100.0
-    ambient_vol = float(jc.get("ambient_vol", cfg.get("ambient_vol", 0))) / 100.0
+    voice_vol, music_vol, ambient_vol = (v / 100.0 for v in _mix_volumes(wd, jc, cfg))
 
     with _reassemble_lock(wd), _track_op(op_name, wd.name):
         from pipeline.assembler import (concatenate_scenes, ensure_video_resolution,

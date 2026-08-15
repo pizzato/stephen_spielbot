@@ -1006,8 +1006,10 @@ def main(work_dir: Path) -> None:
     # ── Song film (the "Music video" format) ─────────────────────────────────
     # Scenes stamped "singing" perform the film's song on camera; the song
     # itself (tagged lyrics + caption, written at divide time) lives in
-    # song.json. The track IS the soundtrack, so music is forced on at full
-    # volume, and the caption gains a description of the cast singer's library
+    # song.json. The track IS the soundtrack — the whole mix, not a bed: music
+    # is forced on at full volume and voice/ambience are pinned to zero, so a
+    # stray spoken beat or a soundscape can never bleed in under the song. The
+    # caption gains a description of the cast singer's library
     # voice — the closest the music model gets to singing AS that character.
     # The same keys are stamped back into job_config.json so the film editor's
     # re-mix and the Remix screen's music re-generation stay consistent.
@@ -1041,6 +1043,8 @@ def main(work_dir: Path) -> None:
         cfg["music_lyrics"] = (song.get("lyrics") or "").strip()
         cfg["music_enabled"] = True
         cfg["music_vol"] = 100
+        cfg["voice_vol"] = 0
+        cfg["ambient_vol"] = 0
         logger.info("Song film: %d singing scene(s), lyrics %s, vocalist %r",
                     sum(1 for s in scenes if _performance.is_singing(s)),
                     "present" if cfg["music_lyrics"] else "MISSING", note)
@@ -1048,6 +1052,7 @@ def main(work_dir: Path) -> None:
             jc_path = work_dir / "job_config.json"
             jc = json.loads(jc_path.read_text()) if jc_path.exists() else {}
             jc.update({"music_enabled": True, "music_vol": 100,
+                       "voice_vol": 0, "ambient_vol": 0,
                        "music_desc": cfg["music_desc"],
                        "music_lyrics": cfg["music_lyrics"]})
             jc_path.write_text(json.dumps(jc, indent=2))

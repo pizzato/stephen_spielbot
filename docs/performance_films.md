@@ -115,8 +115,11 @@ pipeline changes in three places:
   double the real vocals. The speech gate stands down for these takes — singing is what
   was asked for.
 - **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
-  whole film (a song film with the 18 % bed gain would be a near-silent music video). The
-  film editor's *Sing it again* re-sings the same lyrics; edit the caption there to
+  whole film (a song film with the 18 % bed gain would be a near-silent music video), and
+  it is the *whole* mix: voice and ambient levels are pinned to **0 %**, at render and at
+  every later re-mix, so a stray spoken beat or a soundscape can never bleed in under the
+  track. The film editor offers a music video one level — Music — for that reason. Its
+  *Sing it again* re-sings the same lyrics; edit the caption there to
   change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
   with the LLM — both the words and the sound.
 
