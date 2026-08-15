@@ -2857,7 +2857,7 @@ class SongConvertBody(BaseModel):
 
 
 def _do_song_convert(wd: Path, voice: str) -> dict:
-    """Re-voice the approved song as a library voice (seed-vc, run locally).
+    """Re-voice the approved song as a library voice (seed-vc).
 
     Both sides of the conversion are kept: the sung original is captured into
     the music history first (if it wasn't already), and the converted track is
@@ -2893,14 +2893,18 @@ def _do_song_convert(wd: Path, voice: str) -> dict:
         source, source_id = Path(sung["path"]), sung["id"]
     cfg = gapp.load_config()
     staged = wd / "background_music.staging.wav"
+    # Re-voicing is UI work like a cover: stamping activity makes a running
+    # render hold a worker idle, so the conversion lands on a free GPU
+    # instead of queueing behind (or contending with) the render.
+    ui_activity.mark_active()
     svc.convert_song(
         source, Path(ref), staged,
         # 30 steps by default (seed-vc's own default is 25; 50 is the
-        # high-polish setting), and the diffusion runs on the configured GPU
-        # worker when one is named — the controller's Apple GPU is ~12x
-        # slower than real time.
+        # high-polish setting), and the diffusion goes to whichever GPU
+        # worker is free — the controller's Apple GPU, the fallback when
+        # none takes it, is ~12x slower than real time.
         diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
-        worker=str(cfg.get("svc_worker") or ""))
+        workers=svc.candidate_workers(cfg))
     staged.replace(track)
     try:
         music_history.record(wd, track, f"sung as {voice}", voice=voice,
