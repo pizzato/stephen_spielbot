@@ -241,7 +241,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
     && python3 -m venv --system-site-packages /opt/seed-vc/.venv \
     && grep -vE "^torch|^--extra-index-url|^torchvision|^torchaudio" \
         /opt/seed-vc/requirements.txt > /tmp/svc-reqs.txt \
-    && /opt/seed-vc/.venv/bin/pip install --no-cache-dir -r /tmp/svc-reqs.txt
+    && /opt/seed-vc/.venv/bin/pip install --no-cache-dir -r /tmp/svc-reqs.txt torchcodec
 
 EXPOSE 8188
 

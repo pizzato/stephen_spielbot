@@ -39,6 +39,7 @@ fi
 grep -vE "^torch|^--extra-index-url|^torchvision|^torchaudio" requirements.txt \
     > /tmp/svc-reqs.txt
 .venv/bin/pip install -q -r /tmp/svc-reqs.txt
+.venv/bin/pip install -q torchcodec
 .venv/bin/python - <<'PYEOF'
 import torch
 assert torch.cuda.is_available(), "no CUDA visible in the container"
