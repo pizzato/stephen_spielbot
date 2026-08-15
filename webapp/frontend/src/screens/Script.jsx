@@ -152,10 +152,6 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       setView('song')
       if (song.voice && !songVoiceSel) setSongVoiceSel(song.voice)
     }
-    // Default the split to ~5 s takes once the song's real length is known.
-    if (song?.duration && !scenesSong) {
-      setScenesSong(Math.max(1, Math.round(Number(song.duration) / 5)))
-    }
   }, [song])
   const saveSong = async () => {
     setBusy('song-save'); setError(''); setSongMsg('')
@@ -197,7 +193,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         topic: b.topic || job.topic || '', minutes: b.minutes || 0,
         style_name: job.style_name || '', format: 'song',
         voice: b.voice || '', resolution: b.resolution || '',
-        n_scenes: Math.max(1, Number(scenesSong) || 1), work_dir: job.work_dir,
+        n_scenes: Number(scenesSong) || 0,   // 0 = Auto (the backend splits it)
+        work_dir: job.work_dir,
       })
       setStory(data.story || null)
       setMinutesTarget(String(storyMinutes(data.story)))
@@ -1055,17 +1052,27 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
               {song.song_url && (
                 <div className="row center between row--wrap gap-12 mt-8">
+                  {/* Same control, same shape as Create's Scenes: blank = Auto
+                      (takes of about SONG_SCENE_SECONDS), a count overrides. */}
                   <Field label="Scenes"
                     hint={(() => {
                       const dur = Number(song.duration) || 0
-                      const n = Math.max(1, Number(scenesSong) || 1)
-                      return dur
-                        ? `The film runs the song's length (${dur.toFixed(0)} s), split ${n} way${n === 1 ? '' : 's'} — ${n} scene${n === 1 ? '' : 's'} of ~${(dur / n).toFixed(1)} s, each performed against its own stretch of the track. Fewer scenes are longer takes.`
-                        : 'How many performed scenes the song is split into — each is generated against its own stretch of the track.'
+                      const auto = Math.max(1, Math.round(dur / 5))
+                      const n = Number(scenesSong) || 0
+                      if (!dur) return 'How many performed scenes the song is split into — each is generated against its own stretch of the track.'
+                      return n > 0
+                        ? `The song's ${dur.toFixed(0)} s split ${n} way${n === 1 ? '' : 's'} — ~${(dur / n).toFixed(1)} s a scene. Fewer scenes are longer takes.`
+                        : `Automatic — the song's ${dur.toFixed(0)} s becomes ${auto} scene${auto === 1 ? '' : 's'} of ~${(dur / auto).toFixed(1)} s. Set a count to make the scenes longer or shorter.`
                     })()}>
-                    <input className="input" type="number" min={1} max={200} step={1}
-                      style={{ width: 100 }} value={scenesSong}
-                      onChange={(e) => setScenesSong(e.target.value)} />
+                    <div className="row center gap-8">
+                      <input className="input" type="number" min={0} max={200} step={1}
+                        style={{ width: 110 }} placeholder="Auto"
+                        value={scenesSong || ''}
+                        onChange={(e) => setScenesSong(Math.max(0, Math.min(200, parseInt(e.target.value, 10) || 0)))} />
+                      {scenesSong > 0 && (
+                        <Button variant="ghost" onClick={() => setScenesSong(0)}>Auto</Button>
+                      )}
+                    </div>
                   </Field>
                   <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                     disabled={!!busy}

@@ -51,6 +51,11 @@ import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
 import pipeline.performance as performance_mode  # noqa: E402
+
+# A music video's AUTO split: takes of about this long. Short takes keep a
+# performance tight against the beat, and the song's length divided by this is
+# the scene count the Song tab shows (an explicit count overrides it).
+SONG_SCENE_SECONDS = 5.0
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import cadence  # noqa: E402
@@ -2410,7 +2415,8 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                 total = acted_n * acted_secs
             # The film runs the SONG's length, so the only division is how many
             # scenes to split it into (the Song tab's "Scenes"). An explicit
-            # count wins; clip_secs is the older way of saying the same thing.
+            # count wins; clip_secs is the older way of saying the same thing;
+            # neither given means AUTO — takes of about SONG_SCENE_SECONDS.
             try:
                 want_n = int(body.n_scenes or 0)
             except (TypeError, ValueError):
@@ -2418,7 +2424,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             clip = float(body.clip_secs or 0)
             if want_n > 0:
                 acted_n = min(gapp.MAX_SCENES, want_n)
-            elif clip > 0:
+            else:
+                if clip <= 0:
+                    clip = SONG_SCENE_SECONDS
                 clip = min(max(clip, float(performance_mode.MIN_SCENE_SECONDS)),
                            performance_mode.H3_CEILING_SECONDS)
                 acted_n = max(1, round(total / clip))
