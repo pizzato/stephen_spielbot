@@ -40,8 +40,9 @@ const PIPELINE = [
   ['image', 'Images', 'FLUX paints each scene’s first frame, with consistent recurring characters'],
   ['film', 'Video', 'LTX or MiniMax H3 animates every scene from its still through ComfyUI'],
   ['microphone-lines', 'Narration', 'F5-TTS speaks the script with voice cloning'],
-  ['masks-theater', 'Acted scenes', 'In dialogue and mixed films, MiniMax H3 performs the characters — picture and voice generated together from their portraits'],
+  ['masks-theater', 'Acted scenes', 'In dialogue, mixed and silent films, MiniMax H3 performs the characters — picture and voice generated together from their portraits'],
   ['music', 'Music', 'ACE-Step or MiniMax Music 3 scores it from a mood description'],
+  ['guitar', 'Music videos', 'Or the film is the song: the music model sings the story’s lyrics and the cast performs them on camera'],
   ['clapperboard', 'Assembly', 'FFmpeg cuts it all into one finished film'],
 ]
 

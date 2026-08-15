@@ -34,8 +34,9 @@ publishing and audience.
 
 </div>
 
-Two screens aren't in the sidebar: [Edit film](edit-film.md), reached by opening a film,
-and [Prompts](prompts.md), opened from Settings → Infrastructure.
+Three screens aren't in the sidebar: [Edit film](edit-film.md), reached by opening a film;
+[Prompts](prompts.md), opened from Settings → Infrastructure; and **About**, opened from
+the sidebar handle at the bottom or the Home hero card.
 
 ### Sidebar indicators
 

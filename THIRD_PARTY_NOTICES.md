@@ -61,10 +61,16 @@ a convenience summary, **not** legal advice — always check the linked model ca
   Stephen Spielbot calls it as a subprocess and does not bundle it.
 - **seed-vc** (singing-voice conversion — the song panel's "Sing this as
   [voice]" step) — GPL-3.0. Installed on the controller by
-  `scripts/install_svc.sh` and invoked as a **separate process**
-  (`pipeline/svc.py`), never imported or bundled; its model weights download
-  from Hugging Face on first use. Fine for self-hosted use; consider the GPL
-  terms before redistributing an installation that includes it.
+  `scripts/install_svc.sh`, and inside each worker's ComfyUI container by the
+  image build (or `make svc-install`), where the diffusion actually runs. It is
+  invoked as a **separate process** (`pipeline/svc.py`), never imported or
+  bundled; its model weights download from Hugging Face on first use. Fine for
+  self-hosted use; consider the GPL terms before redistributing an installation
+  that includes it.
+- **demucs** (vocal-stem separation, so a re-voicing converts the voice and not
+  the arrangement) — MIT, its `htdemucs` weights released under the same
+  license. Installed into the same seed-vc virtualenv and run as a separate
+  process; when it is missing, the conversion falls back to the whole mix.
 
 ## Code installed into the worker containers
 
@@ -78,6 +84,7 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI-LTXVideo](https://github.com/Lightricks/ComfyUI-LTXVideo) | `docker/comfyui` (cloned + patched at build time) | LTX-2 Community License Agreement |
 | [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) | `docker/comfyui` | Apache-2.0 |
 | [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context) | `docker/comfyui` (pinned; omit with an empty `H3_MOTION_CONTEXT_REF`) | GPL-3.0 |
+| [seed-vc](https://github.com/Plachtaa/seed-vc) (song re-voicing; run with `docker exec`, never imported) | `docker/comfyui` (cloned into `/opt/seed-vc`; `make svc-install` adds it to older containers) | GPL-3.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
 
