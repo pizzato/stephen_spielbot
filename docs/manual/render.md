@@ -110,7 +110,12 @@ immediately (it polls on its own anyway).
 ### Reading it
 
 Live entries carry a spinner, a detail line, an ETA, and a percentage; queued ones show an
-hourglass. Completed entries show how long they took and when.
+hourglass. Completed entries show how long they took and when — and whether they failed.
+
+The song studio's slow steps appear here too, grouped under their film: **Singing the
+song** while the music engine renders the track, **Re-voicing the song as &lt;voice&gt;**
+while seed-vc converts it, and the same for a music video written unattended by
+automation. So do the character portraits painted after a script is written.
 
 This is the screen to open when several films are rendering at once and you want to know
 which worker is doing what.

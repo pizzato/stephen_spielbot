@@ -24,7 +24,7 @@ import time
 import urllib.parse
 import urllib.request
 import uuid
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager, contextmanager, nullcontext
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -332,6 +332,10 @@ _RERENDER_STEP_LABELS = {
     "music": "composing music",
     "finalize": "assembling film",
     "mux": "muxing audio",
+    "revoice": "singing it in the new voice",
+    "translate": "translating the script",
+    "continuing": "extending the take",
+    "acted scene": "shooting the take",
 }
 
 
@@ -483,7 +487,8 @@ def _append_activity_locked(
 
 
 @contextmanager
-def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = ""):
+def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = "",
+              category: str | None = None):
     started = time.time()
     op_id = uuid.uuid4().hex
     with _op_lock:
@@ -496,16 +501,23 @@ def _track_op(name: str, detail: str = "", work_dir: str = "", title: str = ""):
             work_dir=work_dir,
             title=title,
             event_id=op_id,
+            category=category,
         )
+    status = "done"
     try:
         yield
+    except BaseException:
+        # A failed op must not land in the history claiming it succeeded.
+        status = "error"
+        raise
     finally:
         end = time.time()
         with _op_lock:
             _current_ops.pop(op_id, None)
             _append_activity_locked(
                 name, detail, end, started,
-                work_dir=work_dir, title=title, status="done",
+                work_dir=work_dir, title=title, status=status,
+                category=category,
             )
 
 
@@ -547,6 +559,8 @@ def _film_op_for(component: str) -> str:
         return "narrator_scene"
     if component == "music":
         return "music_regen"
+    if component == "song_revoice":
+        return "song_revoice"
     if component in ("narration", "image", "video"):
         return f"rerender_{component}"
     return ""
@@ -603,10 +617,14 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
                 scene_id = int(parts[1])
             except ValueError:
                 scene_id = 0
-    if scene_id > 0 and component != "narrator":
+    if scene_id > 0 and component == "continue":
+        name = f"Continuing scene {scene_id}"
+    elif scene_id > 0 and component != "narrator":
         name = f"Re-rendering scene {scene_id}"
     elif component == "final_upscale" or task_id.startswith("final_upscale_"):
         name = "Upscaling final video"
+    elif component == "song_revoice" or task_id.startswith("song_revoice_"):
+        name = "Re-voicing the song"
     elif component == "music" or task_id.startswith("music_regen_"):
         name = "Regenerating music"
     elif component == "narrator" or task_id.startswith("narrator_regen_"):
@@ -614,6 +632,10 @@ def _film_task_activity_op(task_id: str, task: dict) -> dict | None:
         current, total = task.get("current"), task.get("total")
         if current and total:
             detail = f"scene {current}/{total} · {detail}" if detail else f"scene {current}/{total}"
+    elif component == "localize" or task_id.startswith("localize_"):
+        name = "Localizing film"
+    elif component == "first_frame_cover" or task_id.startswith("first_frame_cover_"):
+        name = "Burning the cover in"
     else:
         name = "Updating film"
 
@@ -737,6 +759,8 @@ def _record_film_task_activity(
         component = str(meta.get("component") or "").strip()
         if component == "music":
             film_timing.record("music_regen", end - started)
+        elif component == "song_revoice":
+            film_timing.record("song_revoice", end - started)
         elif component == "narrator":
             n = int((_film_tasks.get(task_id) or {}).get("scene_count") or 0)
             if n > 0:
@@ -2134,6 +2158,20 @@ def _do_script_generate(body: GenerateScriptBody) -> dict:
         style_name=body.style_name, auto_critic=body.auto_critic))
 
 
+def _portraits_in_background(work_dir: str, style_name: str, n: int) -> None:
+    """Daemon-thread target: paint the new cast's look images.
+
+    Tracked because it is a run of image generations on a worker — without it
+    the Activity screen shows nothing while the GPU is busy on portraits."""
+    try:
+        with _track_op(f"Painting {n} character portrait{'' if n == 1 else 's'}",
+                       Path(work_dir).name, work_dir=work_dir):
+            gapp.generate_all_script_portraits(work_dir, style_name)
+    except Exception:
+        gapp.logger.warning("Background portrait generation failed for %s",
+                            work_dir, exc_info=True)
+
+
 def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
                               user_topic: str, scenes, music_desc: str, style: str,
                               characters: list[dict],
@@ -2176,8 +2214,8 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     saved_characters = gapp._write_script_characters(work_dir, new_characters)
     if saved_characters:
         threading.Thread(
-            target=gapp.generate_all_script_portraits,
-            args=(str(work_dir), ss["name"]),
+            target=_portraits_in_background,
+            args=(str(work_dir), ss["name"], len(saved_characters)),
             daemon=True,
         ).start()
 
@@ -2817,11 +2855,16 @@ def _do_song_generate(wd: Path) -> dict:
         raise RuntimeError("No ComfyUI workers reachable.")
     pool = WorkerPool(urls)
     staged = wd / "background_music.staging.wav"
+    title = str(data.get("title") or wd.name)
     url = pool.acquire()
+    # Minutes on a GPU — tracked so the Activity screen shows the song being
+    # sung, whether it was asked for in the Song tab or by automation.
     try:
-        generate_music(str(data.get("title") or wd.name), secs, staged,
-                       caption or None, comfy_url=url, music_engine=engine,
-                       lyrics=data.get("lyrics") or None)
+        with _track_op("Singing the song", f"{int(secs)}s · {engine}",
+                       work_dir=str(wd), title=title, category="film"):
+            generate_music(title, secs, staged,
+                           caption or None, comfy_url=url, music_engine=engine,
+                           lyrics=data.get("lyrics") or None)
     finally:
         pool.release(url)
     final = wd / "background_music.wav"
@@ -2914,7 +2957,10 @@ def _do_song_extend(wd: Path, seconds: float) -> dict:
     hist = music_history.history(wd)
     source = next((v for v in hist["versions"] if v["id"] == hist["selected"]), None)
     staged = wd / "background_music.staging.wav"
-    extend_audio_tail(track, staged, seconds)
+    with _track_op("Extending the song's ending", f"+{seconds:g}s",
+                   work_dir=str(wd), title=str(data.get("title") or ""),
+                   category="film"):
+        extend_audio_tail(track, staged, seconds)
     staged.replace(track)
     dur = _get_duration(track)
     try:
@@ -2954,7 +3000,7 @@ class SongConvertBody(BaseModel):
     voice: str
 
 
-def _do_song_convert(wd: Path, voice: str) -> dict:
+def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     """Re-voice the approved song as a library voice (seed-vc).
 
     Both sides of the conversion are kept: the sung original is captured into
@@ -2995,14 +3041,21 @@ def _do_song_convert(wd: Path, voice: str) -> dict:
     # render hold a worker idle, so the conversion lands on a free GPU
     # instead of queueing behind (or contending with) the render.
     ui_activity.mark_active()
-    svc.convert_song(
-        source, Path(ref), staged,
-        # 30 steps by default (seed-vc's own default is 25; 50 is the
-        # high-polish setting), and the diffusion goes to whichever GPU
-        # worker is free — the controller's Apple GPU, the fallback when
-        # none takes it, is ~12x slower than real time.
-        diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
-        workers=svc.candidate_workers(cfg))
+    # Minutes of diffusion — it belongs on the Activity screen. The film
+    # editor's re-voicing already reports itself as a film task, so it opts out
+    # here rather than showing the same work twice.
+    op = (_track_op(f"Re-voicing the song as {voice}", data.get("title") or wd.name,
+                    work_dir=str(wd), title=str(data.get("title") or ""), category="film")
+          if track_op else nullcontext())
+    with op:
+        svc.convert_song(
+            source, Path(ref), staged,
+            # 30 steps by default (seed-vc's own default is 25; 50 is the
+            # high-polish setting), and the diffusion goes to whichever GPU
+            # worker is free — the controller's Apple GPU, the fallback when
+            # none takes it, is ~12x slower than real time.
+            diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
+            workers=svc.candidate_workers(cfg))
     staged.replace(track)
     try:
         music_history.record(wd, track, f"sung as {voice}", voice=voice,
@@ -7193,7 +7246,7 @@ def _run_song_revoice(task_id: str, wd: Path, voice: str) -> None:
     try:
         _film_checkpoint(task_id)
         _film_tasks[task_id] = {"status": "running", "step": "revoice"}
-        result = _do_song_convert(wd, voice)
+        result = _do_song_convert(wd, voice, track_op=False)
         _film_checkpoint(task_id)
         _film_tasks[task_id]["step"] = "mux"
         final_path = _remux_with_current_music(wd)
@@ -7235,8 +7288,11 @@ def remix_song_voice(body: SongRevoiceBody) -> dict:
                                  "scripts/install_svc.sh on the controller.")
     tid = f"song_revoice_{int(time.time())}"
     _film_tasks[tid] = {"status": "running", "step": "revoice"}
+    # Its own component (not "music"): a seed-vc conversion is nothing like a
+    # music generation, so it must not be labelled as one on Activity nor feed
+    # its minutes into the music regen's learned ETA.
     _film_task_meta[tid] = {
-        "work_dir": str(wd), "scene_id": 0, "component": "music",
+        "work_dir": str(wd), "scene_id": 0, "component": "song_revoice",
         "started_at": time.time(),
     }
     threading.Thread(target=_run_song_revoice,
