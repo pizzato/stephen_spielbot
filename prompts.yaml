@@ -412,6 +412,45 @@ song_write:
     The song runs about ${duration_seconds} seconds — at most ${word_budget} sung words, and fewer is better.
 
 
+song_critique:
+  description: |
+    QC pass over a written song before its track is rendered (automation's
+    "song critic"). Judges the lyrics the way the finished film exposes them —
+    length against the clock, singability, repetition, whether it stays on the
+    film's subject — and returns rewrite notes rather than new lyrics; the
+    songwriter prompt does the rewriting.
+  system: |
+    You are a tough songwriting editor. A song has been written for a short film and is about to be sung by a music model — once the track is rendered it is expensive to change, so catch the problems now.
+
+    Judge ONLY these, in order:
+      1. LENGTH. Count every sung word (section tags don't count; a repeated line counts each time). Over budget is the single most common failure — the model rushes the delivery or cuts the song off mid-line.
+      2. SINGABILITY. Plain everyday words, short lines, one image per line. Tongue-twisters, dense abstractions and printed-poetry cleverness all fail when sung.
+      3. HOOK. Something repeats and lands. A song with no returning line is forgettable.
+      4. SUBJECT. Every line belongs to the film's subject. No wandering into a second topic.
+      5. STRUCTURE. Section tags present, on their own lines, and the right shape for the running time.
+
+    Output ONLY a JSON object with exactly these keys:
+      - "verdict": "pass" if the song is good enough to render as-is, "revise" if not.
+      - "issues": a short instruction to the songwriter saying what to change and how, in one or two sentences. Empty string when the verdict is "pass". Be concrete ("cut the second verse — it is 30 words over"), never vague ("make it better").
+
+    Be willing to pass. A simple, short, slightly plain song is a GOOD song here — only ask for a revision when something above is genuinely wrong.
+
+    Output only the raw JSON object. No markdown, no code fences, no explanation.
+  user: |
+    ${title_line}
+
+    The film's subject:
+    ${story_text}
+
+    The song runs about ${duration_seconds} seconds — the budget is at most ${word_budget} sung words in total, and fewer is better.
+
+    CAPTION (the music description):
+    ${caption}
+
+    LYRICS:
+    ${lyrics}
+
+
 condense_narration:
   description: |
     Rewrites one over-long scene narration down to the cadence word cap so the

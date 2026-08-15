@@ -321,6 +321,28 @@ DEFAULT_CFG = {
     "youtube_auto_critic": False,
     # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
     "youtube_auto_critic_passes": 0,
+    # The FORMAT automation writes films in — the Create screen's Format picker,
+    # for unattended runs (narration | dialogue | mixed | silent | song).
+    # "song" is the Music-video format and pulls in the song_* steps below.
+    "youtube_auto_format": "narration",
+    # Music videos only. The song must exist BEFORE the story is divided: the
+    # scene windows are timed against the real track and each singing take has
+    # its stretch of it pinned in (audio-driven H3). Off, an automated music
+    # video falls back to estimated timings and unpinned takes.
+    "youtube_auto_song": False,
+    # Lyric QC before the track is rendered: 0 = off, 1-3 = that many judge +
+    # rewrite passes. Cheap (one LLM call a pass) next to re-rendering a track.
+    "youtube_auto_song_critic_passes": 0,
+    # The singing voice automation asks for; "" = the music engine's own
+    # vocalist. Described to the model (gender/age/tone), never cloned.
+    "youtube_auto_song_voice": "",
+    # Also RE-VOICE the finished track as that library voice (seed-vc, local
+    # GPU). Needs youtube_auto_song_voice; both versions are kept.
+    "youtube_auto_song_revoice": False,
+    # False = automation stops once the song is generated and parks it in the
+    # Song tab for review, so no story, scenes or render are built on a song
+    # you haven't heard. True = carry straight on into the script.
+    "youtube_auto_song_approve": False,
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     # Queue page sort — persisted so it survives page reloads, and authoritative:
     # automation/"Start next render" consume pending items in this order.
@@ -480,6 +502,57 @@ STYLE_FIELD_TO_FLAT = {
     "voice_vol":            "voice_vol",
     "ambient_vol":          "ambient_vol",
 }
+
+# Automation flags a style may override → the flat config key that holds the
+# GLOBAL value. Unlike STYLE_FIELD_TO_FLAT these flat keys are not a mirror of
+# the default style: they are a baseline of their own, which every style
+# inherits until it records an override in its sparse "automation" dict (and a
+# child style inherits its parent's overrides on top of that).
+#
+# Only flags that resolve against ONE film are listed. Comment polling, AI-idea
+# top-ups and publishing cadence are queue- or channel-wide, so they stay
+# global — there is no single film to resolve them against.
+# Mirrored in webapp/frontend/src/styleUtils.js — keep the two lists in sync.
+AUTOMATION_FIELD_TO_FLAT = {
+    "auto_start_job":          "youtube_auto_start_job",
+    "auto_write_scripts":      "youtube_auto_write_scripts",
+    "auto_approve_script":     "youtube_auto_approve_script",
+    "auto_critic":             "youtube_auto_critic",
+    "auto_critic_passes":      "youtube_auto_critic_passes",
+    "auto_format":             "youtube_auto_format",
+    "auto_song":               "youtube_auto_song",
+    "auto_song_critic_passes": "youtube_auto_song_critic_passes",
+    "auto_song_voice":         "youtube_auto_song_voice",
+    "auto_song_revoice":       "youtube_auto_song_revoice",
+    "auto_song_approve":       "youtube_auto_song_approve",
+}
+
+
+def _norm_passes(value, hi: int) -> int:
+    try:
+        return max(0, min(hi, int(float(value))))
+    except (TypeError, ValueError):
+        return 0
+
+
+# Every automation field is a bool unless it appears here — hand-edited YAML
+# and stale overrides are coerced on read, never trusted.
+_AUTOMATION_COERCE = {
+    "auto_critic_passes":      lambda v: _norm_passes(v, 5),
+    "auto_song_critic_passes": lambda v: _norm_passes(v, 3),
+    "auto_song_voice":         lambda v: str(v or "").strip(),
+    "auto_format":             lambda v: _norm_video_format(v),
+}
+
+
+def _norm_style_automation(value) -> dict:
+    """A style's sparse automation overrides: known fields only, coerced.
+    Absent fields are the whole point — they keep inheriting."""
+    if not isinstance(value, dict):
+        return {}
+    return {k: _AUTOMATION_COERCE.get(k, bool)(v)
+            for k, v in value.items() if k in AUTOMATION_FIELD_TO_FLAT}
+
 
 # Free-text style fields where a child override may embed the literal marker
 # "{parent}": it is replaced with the parent's RESOLVED text for that field
@@ -835,6 +908,16 @@ def _norm_video_scenes(value) -> int:
     return max(0, min(MAX_SCENES, v))
 
 
+# The film formats the Create screen offers (docs/performance_films.md).
+VIDEO_FORMATS = ("narration", "dialogue", "mixed", "silent", "song")
+
+
+def _norm_video_format(value) -> str:
+    """Coerce a film format to a known one; anything else is narration."""
+    v = str(value or "").strip().lower()
+    return v if v in VIDEO_FORMATS else "narration"
+
+
 def _norm_reference_engine(value) -> str:
     """Coerce a Ref2VA engine key (performance films) to a known one."""
     return engines.resolve_reference({}, value)["key"]
@@ -950,6 +1033,12 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
                 else:
                     row[field] = DEFAULT_CFG.get(flat)
                     absent.add(field)
+        # Automation overrides stay SPARSE on every style, root ones included:
+        # an absent flag follows the global baseline (automation_settings), and
+        # densifying it here would freeze today's global onto every style.
+        auto = _norm_style_automation(s.get("automation"))
+        if auto:
+            row["automation"] = auto
         normalized.append(row)
         missing.append(absent)
 
@@ -1228,6 +1317,49 @@ def _style_lineage(styles: list[dict], target: dict) -> list[dict]:
         cur = by_name.get(pname) if pname else None
     chain.reverse()
     return chain
+
+
+def automation_settings(cfg: dict, name: str = "") -> dict:
+    """Automation flags as they apply to ONE style.
+
+    The flat ``youtube_auto_*`` keys are the global baseline every style
+    inherits; a style records only what it changes, in its own sparse
+    ``automation`` dict, and a child style inherits through its parent chain
+    like any other style field (nearest ancestor wins). An unknown or empty
+    name resolves against the default style, matching ``style_settings``.
+
+    Deliberately NOT a slice of STYLE_FIELD_TO_FLAT: those flat keys are a
+    mirror of the default style, which would make "global" and "the default
+    style" the same thing and leave other root styles with no global to
+    inherit from."""
+    out = {field: cfg.get(flat, DEFAULT_CFG.get(flat))
+           for field, flat in AUTOMATION_FIELD_TO_FLAT.items()}
+    styles = [s for s in (cfg.get("styles") or []) if isinstance(s, dict)]
+    requested = (name or "").strip()
+    target = None
+    if requested != NO_STYLE:
+        target = next((s for s in styles if s.get("name") == requested), None)
+    if target is None:
+        target = next((s for s in styles if s.get("name") == cfg.get("default_style")),
+                      styles[0] if styles else None)
+    if target:
+        for s in _style_lineage(styles, target):
+            for k, v in (s.get("automation") or {}).items():
+                if k in AUTOMATION_FIELD_TO_FLAT:
+                    out[k] = v
+    return {k: _AUTOMATION_COERCE.get(k, bool)(v) for k, v in out.items()}
+
+
+def automation_enabled_anywhere(cfg: dict, field: str) -> bool:
+    """Is a boolean automation flag on globally, or overridden on by any style?
+
+    The automation tick sweeps the whole queue, so it has no single style to
+    resolve against; this decides whether a sweep is worth running at all
+    before the per-item resolution below it takes over."""
+    if cfg.get(AUTOMATION_FIELD_TO_FLAT[field]):
+        return True
+    return any(bool((s.get("automation") or {}).get(field))
+               for s in (cfg.get("styles") or []) if isinstance(s, dict))
 
 
 def style_settings(cfg: dict, name: str = "") -> dict:
