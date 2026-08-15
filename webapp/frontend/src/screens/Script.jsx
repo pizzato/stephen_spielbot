@@ -39,7 +39,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // the narration-shaped Scenes tab with it; a mixed film keeps both.
   const acted = (s) => s.mode === 'dialogue' || s.mode === 'performance'
   const allActed = !!(job?.scenes || []).length && (job?.scenes || []).every(acted)
-  const [view, setView] = useState(job ? 'cover' : 'scripts')
+  const [view, setView] = useState(job ? 'scenes' : 'scripts')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -340,10 +340,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCoverUrl('')
     setCoverMsg('')
     // A story draft (no scenes yet) opens straight into the Story view for
-    // review + division; anything with scenes lands on Cover as before.
+    // review + division; a script with scenes opens on the SCENES — what you
+    // came to review. (Cover is the publishing step, and now sits last.)
     if (!job?.job_id) return
     const hasScenes = (job.scenes || []).length
-    setView(hasScenes ? 'cover' : 'story')
+    setView(hasScenes ? 'scenes' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -978,17 +979,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'characters' && charMsg && <Banner tone="ok">{charMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
+        {/* Left to right in the order the work happens: pick a script, write
+            the song (a music video starts there), draft the story, cast the
+            characters and artifacts, edit the scenes, review the takes — and
+            the cover, which belongs to publishing, last. */}
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
-          ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           ...(song ? [{ value: 'song', label: 'Song' }] : []),
-          { value: 'cover', label: 'Cover' },
+          ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
           // view with its cast slots, takes and prompts.
           { value: 'characters', label: someActedShape ? 'Characters & Artifacts' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
           ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
+          { value: 'cover', label: 'Cover' },
         ]} />
       </div>
 
