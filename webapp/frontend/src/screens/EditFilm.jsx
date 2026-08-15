@@ -2123,7 +2123,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
-          { value: 'characters', label: hasRefTakes ? 'Characters & artifacts' : 'Characters' },
+          { value: 'characters', label: hasRefTakes ? 'Characters & Artifacts' : 'Characters' },
           // ONE look whatever the mix: the Scenes editor (every scene, every
           // mode, shiftable between them) plus, when anything is acted, the
           // Acted scenes view — cast slots, portraits, voices, takes.

@@ -2695,8 +2695,37 @@ def song_draft(body: SongDraftBody) -> dict:
                  "title": title, "style_name": ss["name"],
                  "created_at": time.time()})
     (wd / "song.json").write_text(json.dumps(song, indent=2))
-    return {"work_dir": str(wd), "caption": song["caption"],
-            "lyrics": song["lyrics"], "voice": song["voice"], "seconds": secs}
+    # A song-first job exists BEFORE any story or scenes: register it so the
+    # Script screen's Song tab (the song studio — generate, re-voice, accept)
+    # can load it and carry the flow from there.
+    create_brief = {
+        "video_title": (body.video_title or "").strip(), "topic": topic,
+        "minutes": minutes, "n_scenes": 0, "visual_style": "",
+        "voice": (body.voice or "").strip(), "resolution": ss.get("resolution") or "",
+        "style_name": ss["name"], "auto_approve": False,
+        "format": "song", "music": True,
+    }
+    _write_create_brief(wd, create_brief)
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        store.create_or_update_job(
+            job_id, wd, title,
+            config={"title": title, "video_title": (body.video_title or "").strip(),
+                    "topic": topic, "phase": "song_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
+            metadata={"scene_count": 0, "music_desc": song["caption"],
+                      "music_enabled": True})
+    finally:
+        store.close()
+    return {"work_dir": str(wd), "job_id": job_id, "title": title,
+            "video_title": (body.video_title or "").strip(), "topic": topic,
+            "style": "", "style_name": ss["name"], "music_desc": song["caption"],
+            "voice": (body.voice or "").strip() or ss.get("voice", ""),
+            "resolution": ss.get("resolution") or "", "n_scenes": 0,
+            "create_brief": create_brief, "scenes": [],
+            "caption": song["caption"], "lyrics": song["lyrics"],
+            "song_voice": song["voice"], "seconds": secs}
 
 
 class SongGenerateBody(BaseModel):
@@ -2863,7 +2892,8 @@ def song_convert(body: SongConvertBody) -> dict:
 @api.get("/api/jobs/{job_id}/song")
 def get_job_song(job_id: str) -> dict:
     """A song film's song.json — the caption and tagged lyrics the music model
-    sings (404 for every other film)."""
+    sings (404 for every other film) — plus the generated track and its kept
+    versions, so the Song tab is the whole studio in one payload."""
     wd = _job_wd_or_404(job_id)
     path = wd / "song.json"
     if not path.exists():
@@ -2872,8 +2902,34 @@ def get_job_song(job_id: str) -> dict:
         data = json.loads(path.read_text())
     except Exception:
         raise HTTPException(500, "song.json is unreadable.")
+    track = wd / "background_music.wav"
+    hist = music_history.history(wd)
     return {"caption": str(data.get("caption") or ""),
-            "lyrics": str(data.get("lyrics") or "")}
+            "lyrics": str(data.get("lyrics") or ""),
+            "voice": str(data.get("voice") or ""),
+            "sung_as": str(data.get("sung_as") or ""),
+            "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
+                         if track.exists() else ""),
+            "versions": hist.get("versions", []),
+            "selected": hist.get("selected")}
+
+
+@api.post("/api/jobs/{job_id}/song/select")
+def select_song_version(job_id: str, body: dict) -> dict:
+    """The accept/revert step: put a kept version (the original generation, or
+    a re-voiced one) back as the film's track."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        vid = int(body.get("version_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "version_id required")
+    try:
+        track = music_history.select(wd, vid)
+    except Exception as e:
+        raise HTTPException(404, str(e)[:200])
+    return {"ok": True,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}",
+            **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
 
 
 class SongUpdateBody(BaseModel):
@@ -3647,8 +3703,25 @@ def _visual_to_json(wd: Path, v: dict) -> dict:
 def _visuals_ok(wd: Path) -> dict:
     """Film visuals (editable) plus the style's asset catalogue (read-only —
     shared across films, edited in Settings → Assets). A film visual shadows a
-    same-named catalogue asset, mirroring scene_visuals' render-time rule."""
+    same-named catalogue asset, mirroring scene_visuals' render-time rule.
+
+    A song film's SONG is listed first as a read-only soundtrack artifact —
+    it is an input of every singing take (each pins its own window of it), and
+    an input the wall doesn't show is one nobody can reason about."""
     own = [_visual_to_json(wd, v) for v in gapp.read_script_visuals(wd)]
+    track = wd / "background_music.wav"
+    if (wd / "song.json").exists() and track.exists():
+        own.insert(0, {
+            "id": "__song__", "name": "The film's song", "kind": "audio",
+            "description": ("The soundtrack every singing take is generated "
+                            "against — each scene pins its own window of it. "
+                            "Generate, re-voice and pick versions in the Song "
+                            "tab."),
+            "character": "", "ref_image": "", "source_audio": "",
+            "scenes": [], "enabled": True, "readonly": True,
+            "has_image": False, "image_url": "", "has_audio": True,
+            "audio_url": f"/api/file?path={track}&t={int(track.stat().st_mtime)}",
+        })
     taken = {(v.get("name") or "").strip().lower() for v in own}
     used, has_acted = _film_reference_usage(wd)
     catalogue = []
@@ -3840,8 +3913,12 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             # drops the dialogue editor for it rather than offering lines that
             # would turn the beat into a conversation.
             "silent": performance_mode.is_silent({"metadata": meta}),
-            # A song film's beat — performed singing the film's song.
+            # A song film's beat — performed singing the film's song; the
+            # window is the stretch of the track pinned into this take, shown
+            # as one of the take's INPUTS beside its pictures and voices.
             "singing": performance_mode.is_singing({"metadata": meta}),
+            "song_window": meta.get("song_window") or None,
+            "sings": meta.get("sings") or "",
             # True once the prompt has been hand-edited: the screen then shows
             # the override instead of re-assembling, and offers to drop it.
             "prompt_edited": bool(meta.get("prompt_override")),
@@ -3874,10 +3951,16 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         })
     from pipeline import engines as eng
     engine = eng.resolve_reference(ss, ss.get("reference_engine"))
+    track = wd / "background_music.wav"
     return {"work_dir": str(wd), "style_name": style_name,
             "job_id": job_id_from_work_dir(wd),
             "engine": {"key": engine["key"], "label": engine["label"]},
             "acted_silent": acted_cfg["h3_silent_scenes"],
+            # The film's song, when it has one — each singing take pins its
+            # own window of this file, so the screen can play exactly the
+            # slice a take was generated against.
+            "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
+                         if track.exists() and (wd / "song.json").exists() else ""),
             "scenes": scenes}
 
 

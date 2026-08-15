@@ -75,19 +75,10 @@ export default function Create({ seed, meta, onGenerated }) {
   const [busy, setBusy] = useState(false)
   const [improving, setImproving] = useState('')   // which brief field is regenerating (issue #88)
   const [error, setError] = useState('')
-  // Music-video flow: the SONG comes first. Draft writes caption + lyrics into
-  // a work dir; the audio is generated (and regenerated) from there; only then
-  // is the story drafted — from the approved lyrics — into the same dir.
-  const [songWd, setSongWd] = useState('')
-  const [songCaption, setSongCaption] = useState('')
-  const [songLyrics, setSongLyrics] = useState('')
+  // Music-video flow: the SONG comes first — "Write the song" drafts it and
+  // hands off to the Script screen's SONG TAB (the song studio: generate,
+  // listen, re-voice, accept a version, then draft the story from it).
   const [songVoice, setSongVoice] = useState('')     // '' = the model's own vocalist
-  const [songUrl, setSongUrl] = useState('')
-  const [songBusy, setSongBusy] = useState(false)
-  const [clipSecs, setClipSecs] = useState(5)  // performed-clip length; the track divides into these
-  const [svcVoice, setSvcVoice] = useState('')   // "Sing this as [voice]" — actual re-voicing (seed-vc)
-  const [svcBusy, setSvcBusy] = useState(false)
-  const [sungAs, setSungAs] = useState('')
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -203,28 +194,9 @@ export default function Create({ seed, meta, onGenerated }) {
         style_name: profile ? (profile.name || '') : NO_STYLE,
         voice: songVoice,
       })
-      setSongWd(r.work_dir); setSongCaption(r.caption); setSongLyrics(r.lyrics)
-      setSongUrl('')
-    } catch (e) { setError(e.message) } finally { setBusy(false) }
-  }
-
-  const generateSong = async () => {
-    setSongBusy(true); setError('')
-    try {
-      const r = await api.songGenerate({
-        work_dir: songWd, caption: songCaption, lyrics: songLyrics, voice: songVoice,
-      })
-      setSongUrl(r.song_url || '')
-    } catch (e) { setError(e.message) } finally { setSongBusy(false) }
-  }
-
-  const convertSong = async () => {
-    setSvcBusy(true); setError('')
-    try {
-      const r = await api.songConvert(songWd, svcVoice)
-      setSongUrl(r.song_url || songUrl)
-      setSungAs(r.sung_as || svcVoice)
-    } catch (e) { setError(e.message) } finally { setSvcBusy(false) }
+      // The song studio is the Script screen's Song tab — hand straight off.
+      onGenerated(r, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: r.style_name || profile?.name || '' })
+    } catch (e) { setError(e.message); setBusy(false) }
   }
 
   const generate = async () => {
@@ -243,10 +215,6 @@ export default function Create({ seed, meta, onGenerated }) {
         queue_item_id: seed?.queueItemId || '',
         style_name: profile ? (profile.name || '') : NO_STYLE,
         music: songFmt ? true : (musicable && music),
-        // Song-first: the story is drafted into the song's own work dir, from
-        // its lyrics; the track divides into clips of about clip_secs each.
-        work_dir: songFmt ? songWd : '',
-        clip_secs: songFmt ? (Number(clipSecs) || 0) : 0,
       }
       // Phase 1: draft the story, then open the Script screen's Story view —
       // the draft is persisted server-side, so the review survives leaving.
@@ -367,7 +335,7 @@ export default function Create({ seed, meta, onGenerated }) {
             </Field>
             )}
 
-            {songFmt && !songWd && (
+            {songFmt && (
               <Field label="Singing voice"
                 hint="Who sings the film. The vocalist is described to the music model from this voice’s gender, age and tone (matched by description, not cloned). Leave it on the model’s own vocalist to let the song decide.">
                 <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
@@ -379,79 +347,11 @@ export default function Create({ seed, meta, onGenerated }) {
               </Field>
             )}
 
-            {songFmt && songWd && (
-              <>
-                <Field label="Song — the sound"
-                  hint="What the music model is told: genre, tempo, mood, arrangement. The singing voice below is described on top of it automatically.">
-                  <textarea className="textarea" rows={3} value={songCaption}
-                    onChange={(e) => setSongCaption(e.target.value)} />
-                </Field>
-                <Field label="Song — the lyrics"
-                  hint="Sung exactly as written. Keep the section tags — [Intro], [Verse], [Chorus], [Outro] — on their own lines. The story will be drafted from these words.">
-                  <textarea className="textarea" rows={12} style={{ fontFamily: 'ui-monospace, monospace' }}
-                    value={songLyrics} onChange={(e) => setSongLyrics(e.target.value)} />
-                </Field>
-                <Field label="Singing voice"
-                  hint="Described to the music model from this voice’s gender, age and tone — matched by description, not cloned.">
-                  <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
-                    <option value="">The model’s own vocalist</option>
-                    {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
-                      <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Clip length (seconds)"
-                  hint="The song divides into performed clips of about this length — 5 gives 5-second parts. Each clip's stretch of the track is pinned into its generation, so the performance follows the music.">
-                  <input className="input" type="number" min={5} max={12} step={1}
-                    style={{ width: 110 }} value={clipSecs}
-                    onChange={(e) => setClipSecs(e.target.value)} />
-                </Field>
-                <div className="row gap-12 center row--wrap">
-                  <Button variant={songUrl ? 'ghost' : 'primary'} icon="music"
-                    disabled={songBusy || !songLyrics.trim()}
-                    onClick={generateSong}>
-                    {songBusy ? 'Singing it…' : songUrl ? 'Generate the song again' : 'Generate the song'}
-                  </Button>
-                  {songUrl && <audio controls src={songUrl} style={{ height: 34 }} />}
-                </div>
-                {songUrl && (
-                  <>
-                    <Field label="Sing this as"
-                      hint="ACTUAL voice cloning: seed-vc re-voices the sung track with this library voice’s timbre — melody, timing and words kept. Runs locally; a short song takes a few minutes. Works best when the caption keeps the vocals up front. The converted track replaces the song (the original stays in the music history).">
-                      <div className="row gap-8 center row--wrap">
-                        <select className="select" style={{ maxWidth: 320 }} value={svcVoice}
-                          disabled={svcBusy} onChange={(e) => setSvcVoice(e.target.value)}>
-                          <option value="">Pick a voice…</option>
-                          {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
-                            <option key={v} value={v}>{voiceLabel(v, vmeta)}</option>
-                          ))}
-                        </select>
-                        <Button variant="ghost" icon="microphone-lines"
-                          disabled={svcBusy || songBusy || !svcVoice}
-                          onClick={convertSong}>
-                          {svcBusy ? 'Re-voicing…' : 'Convert the vocals'}
-                        </Button>
-                        {sungAs && !svcBusy && (
-                          <span className="muted" style={{ fontSize: 12.5 }}>♪ now sung as <strong>{sungAs}</strong></span>
-                        )}
-                      </div>
-                    </Field>
-                    <span className="muted" style={{ fontSize: 12.5 }}>
-                      Happy with it? This exact track becomes the film’s soundtrack —
-                      the story and scenes are drafted to it next.
-                    </span>
-                  </>
-                )}
-              </>
-            )}
-
             <div className="row center between mt-8 row--wrap gap-16">
               <div className="stack gap-4">
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   {songFmt
-                    ? (songWd
-                      ? 'The story is drafted from these lyrics, then divided into performed scenes — each covering its window of the song.'
-                      : 'The song comes first: write it, listen, regenerate until it’s right — then the story is drafted from its lyrics.')
+                    ? 'The song comes first: it opens in the Song tab, where you generate it, re-voice it, pick the version you like — and draft the story from it.'
                     : "You'll review the story next, then divide it into scenes."}
                   {format === 'dialogue' && ` Each scene becomes one acted clip of about ${Math.round(est.sceneSecs)} seconds.`}
                   {format === 'silent' && ` Each scene becomes one clip of about ${Math.round(est.sceneSecs)} seconds, with no voice-over.`}
@@ -460,7 +360,7 @@ export default function Create({ seed, meta, onGenerated }) {
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />
               </div>
-              {songFmt && !songWd ? (
+              {songFmt ? (
                 <Button variant="primary" size="lg" iconRight="music"
                   disabled={!videoTitle.trim() || busy}
                   onClick={draftSong}>
@@ -468,9 +368,9 @@ export default function Create({ seed, meta, onGenerated }) {
                 </Button>
               ) : (
                 <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
-                  disabled={!videoTitle.trim() || busy || (songFmt && songBusy)}
+                  disabled={!videoTitle.trim() || busy}
                   onClick={generate}>
-                  {busy ? 'Drafting the story…' : songFmt ? '2. Draft the story →' : '1. Draft the story →'}
+                  {busy ? 'Drafting the story…' : '1. Draft the story →'}
                 </Button>
               )}
             </div>

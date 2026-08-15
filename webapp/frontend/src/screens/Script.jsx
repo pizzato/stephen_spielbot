@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
+import { useState, useEffect, useRef } from 'react'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -133,16 +133,68 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [song, setSong] = useState(null)
   const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
   const [songMsg, setSongMsg] = useState('')
+  const [songVoiceSel, setSongVoiceSel] = useState('')  // "Sing this as" voice
+  const [clipSecsSong, setClipSecsSong] = useState(5)
+  const songStudioOpened = useRef(false)
+  const refreshSong = () => api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
   useEffect(() => {
-    setSong(null); setSongDraft(null); setSongMsg('')
+    setSong(null); setSongDraft(null); setSongMsg(''); songStudioOpened.current = false
     if (job?.job_id) api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
   }, [job?.job_id])
+  // A song-first job lands here BEFORE any story or scenes exist — open
+  // straight onto the studio, once.
+  useEffect(() => {
+    if (song && !(job?.scenes || []).length && !songStudioOpened.current) {
+      songStudioOpened.current = true
+      setView('song')
+      if (song.voice && !songVoiceSel) setSongVoiceSel(song.voice)
+    }
+  }, [song])
   const saveSong = async () => {
     setBusy('song-save'); setError(''); setSongMsg('')
     try {
       const s = await api.saveSong(job.job_id, (songDraft ?? song).caption, (songDraft ?? song).lyrics)
-      setSong({ caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
-      setSongMsg('Song saved — the next render (or a music re-generation) sings this version.')
+      setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      setSongMsg('Song saved — the next generation sings this version.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const generateSongTrack = async () => {
+    setBusy('song-gen'); setError(''); setSongMsg('')
+    try {
+      const cur = songDraft ?? song
+      await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
+                               lyrics: cur.lyrics, voice: songVoiceSel })
+      setSongDraft(null); await refreshSong()
+      setSongMsg('Song generated — listen below, re-voice it, or draft the story.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const convertSongVoice = async () => {
+    setBusy('song-convert'); setError(''); setSongMsg('')
+    try {
+      await api.songConvert(job.work_dir, songVoiceSel)
+      await refreshSong()
+      setSongMsg(`Re-voiced as ${songVoiceSel} — listen and keep it, or pick an earlier version below.`)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const selectSongVersion = async (versionId) => {
+    setBusy('song-select'); setError('')
+    try { await api.songSelectVersion(job.job_id, versionId); await refreshSong() }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const draftStoryFromSong = async () => {
+    setBusy('song-story'); setError(''); setSongMsg('')
+    try {
+      const b = job.create_brief || {}
+      const data = await api.generateStory({
+        video_title: job.video_title || job.title || '',
+        topic: b.topic || job.topic || '', minutes: b.minutes || 0,
+        style_name: job.style_name || '', format: 'song',
+        voice: b.voice || '', resolution: b.resolution || '',
+        clip_secs: Number(clipSecsSong) || 0, work_dir: job.work_dir,
+      })
+      setStory(data.story || null)
+      setMinutesTarget(String(storyMinutes(data.story)))
+      setView('story')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const minutesTargetN = Number(minutesTarget)
@@ -926,7 +978,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
           // view with its cast slots, takes and prompts.
-          { value: 'characters', label: someActedShape ? 'Characters & artifacts' : 'Characters' },
+          { value: 'characters', label: someActedShape ? 'Characters & Artifacts' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
           ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
         ]} />
@@ -957,19 +1009,69 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), lyrics: e.target.value })} />
               </Field>
               <div className="row gap-8">
-                <Button variant="primary" disabled={!songDraft || busy === 'song-save'}
-                  onClick={saveSong}>{busy === 'song-save' ? 'Saving…' : 'Save song'}</Button>
-                {songDraft && <Button variant="ghost" onClick={() => setSongDraft(null)}>Discard edits</Button>}
+                <Button variant="ghost" disabled={!songDraft || !!busy}
+                  onClick={saveSong}>{busy === 'song-save' ? 'Saving…' : 'Save edits'}</Button>
+                {songDraft && <Button variant="quiet" onClick={() => setSongDraft(null)}>Discard edits</Button>}
               </div>
+
+              <Field label="Singing voice"
+                hint="Steers the described vocalist at generation, and is the target for re-voicing below.">
+                <select className="select" style={{ maxWidth: 340 }} value={songVoiceSel}
+                  disabled={!!busy} onChange={(e) => setSongVoiceSel(e.target.value)}>
+                  <option value="">The model’s own vocalist</option>
+                  {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
+                </select>
+              </Field>
+
+              <div className="row gap-12 center row--wrap">
+                <Button variant={song.song_url ? 'ghost' : 'primary'} icon="music"
+                  disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
+                  onClick={generateSongTrack}>
+                  {busy === 'song-gen' ? 'Singing it…' : song.song_url ? 'Generate again' : '1. Generate the song'}
+                </Button>
+                {song.song_url && !!songVoiceSel && (
+                  <Button variant="ghost" icon="microphone-lines" disabled={!!busy}
+                    onClick={convertSongVoice}>
+                    {busy === 'song-convert' ? 'Re-voicing…' : `2. Sing this as ${songVoiceSel}`}
+                  </Button>
+                )}
+                {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
+              </div>
+              {song.song_url && (
+                <audio controls src={song.song_url} style={{ width: '100%', height: 36 }} />
+              )}
+
+              {/* Accept or go back: every generation and every re-voicing is a
+                  kept version — the one marked "In use" is the film's track. */}
+              <MusicVersionStrip versions={song.versions || []} selected={song.selected}
+                busy={busy === 'song-select'} onSelect={selectSongVersion} />
+
+              {song.song_url && (
+                <div className="row center between row--wrap gap-12 mt-8">
+                  <Field label="Clip length (seconds)"
+                    hint="The song divides into performed clips of about this length — each clip's stretch of the track is pinned into its generation.">
+                    <input className="input" type="number" min={5} max={12} step={1}
+                      style={{ width: 100 }} value={clipSecsSong}
+                      onChange={(e) => setClipSecsSong(e.target.value)} />
+                  </Field>
+                  <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
+                    disabled={!!busy}
+                    onClick={draftStoryFromSong}>
+                    {busy === 'song-story' ? 'Drafting the story…' : '3. Draft the story →'}
+                  </Button>
+                </div>
+              )}
             </div>
           </Card>
           <Card span={4} well className="reveal reveal-d2">
-            <span className="label-sm">How it's used</span>
+            <span className="label-sm">The song studio</span>
             <p className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
-              This film is a <strong>music video</strong>: the music model sings these words
-              over the whole film, and the cast performs them on camera in silent acted
-              takes (their own audio is muted). Music is locked on at full volume.
-              After a render, Remix → <em>Generate again</em> re-sings the saved song.
+              This film is a <strong>music video</strong> and the song leads: generate it,
+              listen, re-voice it as a library voice (an actual clone — only the vocal stem
+              is converted, the instruments stay untouched), and pick the version you want
+              from the list. Only then is the story drafted from these lyrics, and every
+              scene performs its own stretch of this exact track. It also appears under
+              Characters &amp; Artifacts, since it is an input of every singing take.
             </p>
           </Card>
         </div>

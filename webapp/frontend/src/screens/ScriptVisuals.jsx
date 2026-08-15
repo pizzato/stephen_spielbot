@@ -216,8 +216,18 @@ export default function ScriptVisuals({ jobId, sceneIds = [], castNames = [], se
       </Card>
       {children}
       {visuals.map((v) => (
+        v.readonly ? (
+          /* The film's SONG: an input of every singing take, so it belongs on
+             the wall — but it is edited in the Song tab, not here. */
+          <Card key={v.id} span={4} className="stack gap-10">
+            <span className="label-sm"><Icon name="music" /> {v.name}</span>
+            <audio controls preload="none" src={v.audio_url} style={{ width: '100%' }} />
+            <p className="muted" style={{ fontSize: 12.5, margin: 0 }}>{v.description}</p>
+          </Card>
+        ) : (
         <VisualCard key={v.id} v={v} jobId={jobId} sceneIds={sceneIds} castNames={castNames}
           onChanged={load} onError={setError} />
+        )
       ))}
       {/* Catalogue assets sit at the same level as the film's own — they feed
           the same <Picture N> slots — but edit in Settings, not here. */}

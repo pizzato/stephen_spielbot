@@ -224,7 +224,7 @@ See [Characters](../characters.md) for how consistency is enforced across scenes
 
 The location and wardrobe **catalogue** — reference images that outlive one film, scoped
 to styles exactly like characters (global pool + per-style, children inherit). A film's
-[Characters & artifacts](script.md#characters--artifacts) wall shows the catalogue entries it
+[Characters & Artifacts](script.md#characters--artifacts) wall shows the catalogue entries it
 actually uses, read-only; a film's own visual of the same name shadows the catalogue one.
 Each asset has a name, kind, description, an owning style, and a reference image —
 generated in the owning style's look or uploaded.

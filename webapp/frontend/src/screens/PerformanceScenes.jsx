@@ -189,7 +189,7 @@ function SceneEditor({ scene, jobId, onSaved }) {
 }
 
 
-function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged }) {
+function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged, songUrl = '' }) {
   const [reshoot, setReshoot] = useState('')
   const [takeBusy, setTakeBusy] = useState(false)
   const rerender = async (instruction) => {
@@ -250,6 +250,23 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
           once there is a video. */}
       {!scene.has_video && reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
         <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
+      )}
+
+      {/* ── The take's SOUNDTRACK input: the stretch of the film's song this
+             scene is generated against (audio-driven H3). Playable directly —
+             the #t media fragment plays exactly the pinned window. ── */}
+      {scene.song_window && songUrl && (
+        <div className="stack gap-6">
+          <span className="label-sm">
+            Soundtrack · {Number(scene.song_window[0]).toFixed(1)}s–{Number(scene.song_window[1]).toFixed(1)}s of the film's song
+          </span>
+          <audio controls preload="none" style={{ width: '100%', height: 32 }}
+            src={`${songUrl}#t=${scene.song_window[0]},${scene.song_window[1]}`} />
+          <span className="muted" style={{ fontSize: 12 }}>
+            Pinned into this take — the performance is generated to match this exact
+            slice, and it plays under the scene in the final film.
+          </span>
+        </div>
       )}
 
       {/* ── Cast: each numbered slot IS the portrait / the voice clip, and the
@@ -389,7 +406,7 @@ export default function PerformanceScenes({ workDir, jobId, voiceOpts = [], voic
       {assembleMsg && <Banner tone="ok">{assembleMsg}</Banner>}
       {data.scenes.map((s) => (
         <SceneCard key={s.id} scene={s} seconds={s.seconds} jobId={jobId || data.job_id}
-          workDir={workDir}
+          workDir={workDir} songUrl={data.song_url || ''}
           voiceOpts={voiceOpts} voiceMeta={voiceMeta} onChanged={load} />
       ))}
       {!data.scenes.length && (

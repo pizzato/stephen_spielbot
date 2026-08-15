@@ -2,7 +2,7 @@
 
 `#/edit/<film>` — `#/remix/<film>` is a deep-link alias for the same screen.
 
-Post-production on a finished film. Tabs: **Film**, **Characters & artifacts** (plain
+Post-production on a finished film. Tabs: **Film**, **Characters & Artifacts** (plain
 **Characters** on films with no takes shot on the reference engine), **Scenes** — and
 **Acted scenes** whenever the film has any such take, spoken or
 [performed silent](../performance_films.md#silent-scenes-performed).
@@ -99,7 +99,7 @@ your current levels. Every generated track is kept in a version strip.
 
 ---
 
-## Characters & artifacts
+## Characters & Artifacts
 
 The same reference wall as the [Script screen](script.md#characters--visuals): one bar
 adds **character · location · wardrobe · image · video**, the film's own entries are

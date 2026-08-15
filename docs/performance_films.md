@@ -67,7 +67,7 @@ What the take is built from depends on what the scene has:
   nobody in it simply opens on its frame.
 - **The film's locations, wardrobe and reference stills.** A performed silent take is fed
   the same reference wall as a dialogue take, so those films get the **Characters &
-  artifacts** tab even when nobody in them ever speaks.
+  Artifacts** tab even when nobody in them ever speaks.
 
 Because the take is built from those fields, the [Script editor](manual/script.md) and a
 film's edit screen write a silent scene through the **acted setup** whenever the style
@@ -204,7 +204,7 @@ photographed), keeping the reference budget tight — measured, three picture re
 hold; more and the weakest starts dropping.
 
 **Scenery, wardrobe, and free-form references** — the `<Picture N>` slots beyond the
-portraits — live with the characters, under **Characters & artifacts**, on both the Script
+portraits — live with the characters, under **Characters & Artifacts**, on both the Script
 screen and the film's edit screen. One bar adds them all: **character, location, wardrobe,
 image** (any other thing the model should match — a prop, a vehicle, a logo; the
 description tells the model what it is), **video** (a clip whose extracted frame feeds
