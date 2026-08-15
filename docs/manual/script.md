@@ -38,8 +38,17 @@ the format does to the render.
   version — the one marked *In use* is the film's track, and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
+- **Ending** fixes a song that stops dead, by however many seconds you type:
+    - **Extend the ending** keeps the take you have — its last couple of seconds are faded
+      out and that many seconds of silence padded after them. It runs on the controller,
+      so it is instant, and the arrangement is untouched.
+    - **Re-generate that much longer** sings it again that much longer than what is
+      playing, so the model has room to land the ending and finish the words. It is a
+      fresh take, so the arrangement changes.
+    - Either way the previous track stays in the version list and can be put back.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
-  **Draft the story →** writes the story from these lyrics.
+  **Draft the story →** writes the story from these lyrics. The song's *current* length is
+  what gets divided, so extend it before drafting the story.
 
 Every step on this tab can also run unattended — see
 [what automation makes](settings.md#what-automation-makes). With its song review gate on,

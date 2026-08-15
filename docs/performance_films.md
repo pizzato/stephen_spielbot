@@ -120,6 +120,14 @@ pipeline changes in three places:
   change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
   with the LLM — both the words and the sound.
 
+**When it stops dead.** Both engines fill exactly the seconds they are asked for, so a
+song can end mid-bar or mid-word. The Song tab's **Ending** control cures either fault:
+*Extend the ending* fades the take's last seconds out into a tail of silence (ffmpeg on
+the controller — the approved arrangement is kept and the extended track becomes the
+film's, so the scene division divides the longer length), while *Re-generate that much
+longer* asks the engine for the current length plus those seconds, which gives it room to
+finish but yields a fresh take. Both keep the previous track as a version.
+
 **Whose voice sings?** Two levels. The music engines can't clone a voice, so at
 generation time the chosen singing voice only *describes* the vocalist (below). But the
 song panel's **"Sing this as [voice]"** step is an actual clone: seed-vc re-voices the

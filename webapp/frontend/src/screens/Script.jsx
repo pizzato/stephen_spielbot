@@ -140,6 +140,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // length, so this is the only division there is — same "Scenes" control as
   // every other film, just dividing a fixed length instead of a chosen one.
   const [scenesSong, setScenesSong] = useState(0)
+  // How much a blunt ending is stretched by — as a padded tail, or as a longer
+  // re-generation (both take the same number of seconds).
+  const [extendSecs, setExtendSecs] = useState('3')
+  const extendSecsN = Number(extendSecs)
+  const extendOk = Number.isFinite(extendSecsN) && extendSecsN >= 0.5 && extendSecsN <= 30
   const songStudioOpened = useRef(false)
   const refreshSong = () => api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
   useEffect(() => {
@@ -181,14 +186,30 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         : 'Sound re-written — generate the song again to hear it.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
-  const generateSongTrack = async () => {
-    setBusy('song-gen'); setError(''); setSongMsg('')
+  // Re-generate the song. `addSeconds` sings it that much longer than the take
+  // now playing — the fix for an ending the model never got to finish (it is a
+  // fresh take; the current one stays in the version list).
+  const generateSongTrack = async (addSeconds = 0) => {
+    setBusy(addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
       await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
-                               lyrics: cur.lyrics, voice: songVoiceSel })
+                               lyrics: cur.lyrics, voice: songVoiceSel,
+                               add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
-      setSongMsg('Song generated — listen below, re-voice it, or draft the story.')
+      setSongMsg(addSeconds
+        ? `Sung again about ${addSeconds}s longer — listen, and pick whichever take ends better below.`
+        : 'Song generated — listen below, re-voice it, or draft the story.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  // The other half of the same problem: keep this take and just give it a
+  // proper ending — its last seconds fade out into a tail of silence.
+  const extendSongTail = async () => {
+    setBusy('song-extend'); setError(''); setSongMsg('')
+    try {
+      await api.songExtend(job.work_dir, extendSecsN)
+      await refreshSong()
+      setSongMsg(`Ending extended by ${extendSecsN}s — the abrupt take is still in the list below.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const convertSongVoice = async () => {
@@ -1061,7 +1082,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row gap-12 center row--wrap">
                 <Button variant={song.song_url ? 'ghost' : 'primary'} icon="music"
                   disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
-                  onClick={generateSongTrack}>
+                  onClick={() => generateSongTrack()}>
                   {busy === 'song-gen' ? 'Singing it…' : song.song_url ? 'Generate again' : '1. Generate the song'}
                 </Button>
                 {song.song_url && !!songVoiceSel && (
@@ -1074,6 +1095,28 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </div>
               {song.song_url && (
                 <audio controls src={song.song_url} style={{ width: '100%', height: 36 }} />
+              )}
+
+              {/* Ends abruptly? Two different cures for two different faults —
+                  a blunt ending needs a tail, an unfinished one needs room. */}
+              {song.song_url && (
+                <Field label="Ending"
+                  hint={`Currently ${(Number(song.duration) || 0).toFixed(0)} s. Extending the take fades its last seconds out into ${extendOk ? extendSecsN : 'X'} s of silence — instant, nothing is re-generated, and the arrangement you approved is untouched. Re-generating longer sings it again with room to land the ending and finish the words, which is a fresh take. Either way the current one stays in the list below.`}>
+                  <div className="row center gap-8 row--wrap">
+                    <input className="input" type="number" min={0.5} max={30} step={0.5}
+                      style={{ width: 110 }} value={extendSecs} disabled={!!busy}
+                      onChange={(e) => setExtendSecs(e.target.value)} />
+                    <span className="muted" style={{ fontSize: 12.5 }}>seconds</span>
+                    <Button variant="ghost" icon="wave-square"
+                      disabled={!!busy || !extendOk} onClick={extendSongTail}>
+                      {busy === 'song-extend' ? 'Extending…' : 'Extend the ending'}
+                    </Button>
+                    <Button variant="ghost" icon="music"
+                      disabled={!!busy || !extendOk} onClick={() => generateSongTrack(extendSecsN)}>
+                      {busy === 'song-gen-longer' ? 'Singing it longer…' : 'Re-generate that much longer'}
+                    </Button>
+                  </div>
+                </Field>
               )}
 
               {/* Accept or go back: every generation and every re-voicing is a
