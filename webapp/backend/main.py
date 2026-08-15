@@ -4048,8 +4048,14 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
                 shutil.copy2(sp, new_wd / suffix)
     # story.json keeps a story-mode source's prose draft, so the duplicate still
     # shows the Story tab and can redraft/re-divide.
+    # song.json + background_music.wav carry a MUSIC VIDEO's song: its lyrics,
+    # its caption, and the approved (optionally re-voiced) track the scenes were
+    # sliced against. Without them the duplicate re-generates a DIFFERENT song,
+    # and every scene's song_window then points into music that no longer
+    # exists — the film is silently re-cut against a track nobody approved.
     for extra in ("description.txt", "cover.png", "cover_bg.png", "cover_phrase.txt",
-                  "characters.json", "create_brief.json", "story.json"):
+                  "characters.json", "create_brief.json", "story.json",
+                  "song.json", "background_music.wav"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
