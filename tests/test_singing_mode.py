@@ -366,6 +366,111 @@ class SongRewriteTests(TempConfigCase):
         self.assertEqual(ctx.exception.status_code, 400)
 
 
+class SongVersionTests(TempConfigCase):
+    """Every song a film has sung is kept and can be put back: the engine's
+    own vocals, and each seed-vc re-voicing of them. Both sides of a
+    re-voicing are remixable into the final."""
+
+    def setUp(self):
+        super().setUp()
+        self.voice_ref = self.output_dir / "nora.wav"
+        self.voice_ref.write_bytes(b"ref")
+        self.write_config({"styles": [_style("Hero")], "default_style": "Hero",
+                           "characters": [], "characters_migrated_v2": True,
+                           "voices": [{"name": "Nora", "path": str(self.voice_ref)}]})
+        p = unittest.mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir)
+        p.start()
+        self.addCleanup(p.stop)
+        d = unittest.mock.patch("pipeline.assembler._get_duration", return_value=45.0)
+        d.start()
+        self.addCleanup(d.stop)
+        self.wd = self.output_dir / "song-film"
+        self.wd.mkdir()
+        (self.wd / "song.json").write_text(json.dumps(
+            {"caption": "slow piano ballad", "lyrics": "[Verse]\nwords",
+             "seconds": 45, "title": "Rooftop", "style_name": "Hero"}))
+        (self.wd / "background_music.wav").write_bytes(b"as-generated")
+        store = DurableStore.default()
+        try:
+            self.job_id = backend.job_id_from_work_dir(self.wd)
+            store.create_or_update_job(self.job_id, self.wd, "Rooftop")
+        finally:
+            store.close()
+
+    def _convert(self, voice="Nora", output=b"as-nora"):
+        """Run a re-voicing with seed-vc stubbed out; returns the source path
+        the converter was handed."""
+        seen = {}
+
+        def fake_convert(source, ref, out, **kw):
+            seen["source"] = Path(source)
+            Path(out).write_bytes(output)
+            return out
+
+        with unittest.mock.patch("pipeline.svc.convert_song", fake_convert):
+            backend._do_song_convert(self.wd, voice)
+        return seen["source"]
+
+    def test_the_original_and_the_revoicing_are_both_kept(self):
+        self._convert()
+
+        h = backend.music_history.history(self.wd)
+        self.assertEqual(len(h["versions"]), 2)
+        self.assertEqual(Path(h["versions"][0]["path"]).read_bytes(), b"as-generated")
+        self.assertEqual(Path(h["versions"][1]["path"]).read_bytes(), b"as-nora")
+        self.assertEqual(h["versions"][0]["voice"], "")
+        self.assertEqual(h["versions"][1]["voice"], "Nora")
+        # The re-voicing is what the film sings now.
+        self.assertEqual(h["selected"], h["versions"][1]["id"])
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(), b"as-nora")
+
+    def test_a_second_revoicing_converts_the_original_not_the_clone(self):
+        self._convert(output=b"as-nora")
+        source = self._convert(voice="Nora", output=b"as-nora-again")
+
+        self.assertEqual(source.read_bytes(), b"as-generated")
+        self.assertEqual(len(backend.music_history.history(self.wd)["versions"]), 3)
+
+    def test_putting_the_original_back_stops_claiming_a_revoicing(self):
+        self._convert()
+        original = backend.music_history.history(self.wd)["versions"][0]["id"]
+
+        res = backend.select_song_version(self.job_id, {"version_id": original})
+
+        self.assertEqual(res["sung_as"], "")
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(), b"as-generated")
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["sung_as"], "")
+
+    def test_the_film_editor_revoices_and_remuxes(self):
+        """The edit tab's path: convert, then re-mix the final so the film
+        actually plays the new vocals."""
+        (self.wd / "combined.mp4").write_bytes(b"mp4")
+        final = self.output_dir / "rooftop.mp4"
+        final.write_bytes(b"mp4")
+        task = "song_revoice_test"
+        backend._film_task_meta[task] = {"work_dir": str(self.wd), "scene_id": 0,
+                                         "component": "music", "started_at": 0}
+        self.addCleanup(backend._film_task_meta.pop, task, None)
+        self.addCleanup(backend._film_tasks.pop, task, None)
+
+        def fake_convert(source, ref, out, **kw):
+            Path(out).write_bytes(b"as-nora")
+            return out
+
+        with unittest.mock.patch("pipeline.svc.convert_song", fake_convert), \
+             unittest.mock.patch.object(backend.gapp, "on_remix",
+                                        return_value=(str(final), "")) as mix, \
+             unittest.mock.patch.object(backend, "_maybe_burn_first_frame_cover"):
+            backend._run_song_revoice(task, self.wd, "Nora")
+
+        self.assertEqual(backend._film_tasks[task]["status"], "done",
+                         backend._film_tasks[task].get("error"))
+        self.assertEqual(backend._film_tasks[task]["sung_as"], "Nora")
+        # Re-mixed from the freshly converted track, at the song film's volume.
+        self.assertEqual(mix.call_args[0][1], str(self.wd / "background_music.wav"))
+        self.assertEqual(len(backend._film_tasks[task]["music_history"]["versions"]), 2)
+
+
 class SongInstructionTests(unittest.TestCase):
     def test_instruction_rides_the_song_prompt(self):
         cfg = {}

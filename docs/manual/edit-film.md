@@ -97,6 +97,32 @@ Edit the music prompt and **Regenerate music**. This re-runs the film's
 [music engine](../models.md#music-engines-per-style) on a GPU worker and re-muxes with
 your current levels. Every generated track is kept in a version strip.
 
+#### A song film's song
+
+For a [music video](../performance_films.md#singing-films-the-music-video-format) the
+card becomes **The film's song**: the lyrics as sung (read-only here — the words are the
+[Script screen's](script.md#song) to edit), the sound caption, **Sing it again**, and
+**Sing it as [voice]**.
+
+*Sing it as* is the seed-vc re-voicing: melody, timing and words kept, the singer's
+timbre swapped for a library voice's. It takes a few minutes, then the film is re-muxed
+so the finished cut plays the new vocals. Two things make it safe to try:
+
+- **Nothing is thrown away.** The sung original and every re-voicing are kept side by
+  side in the version strip — play each one, and **Use** puts it back and re-mixes the
+  final immediately (ffmpeg only, no GPU). Before and after are both one click from
+  being the released soundtrack.
+- **It always converts the original vocals**, never the previous re-voicing, so trying a
+  second voice doesn't clone a clone.
+
+The picture doesn't change: the takes were shot against the song and ship muted, so
+re-voicing after the render swaps the soundtrack alone. (Re-voice from the Script
+screen's [Song tab](script.md#song) *before* rendering and the per-scene stretches pinned
+into the takes sing in that voice too.)
+
+Re-voicing needs seed-vc on the controller (`scripts/install_svc.sh`); without it the
+button is disabled and says so.
+
 ---
 
 ## Characters & Artifacts

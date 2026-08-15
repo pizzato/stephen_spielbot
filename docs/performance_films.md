@@ -130,6 +130,15 @@ captions that keep the vocals up front clone best. The converted track replaces
 `background_music.wav` — the film, and every pinned per-scene segment, then sings in
 that voice.
 
+**Both sides are kept.** The sung original and every re-voicing live on as music
+versions (`music_history/` in the work dir, and they travel with a story re-divide), so
+either can be put back with one click — from the Song tab before the render, or from the
+finished film's [edit screen](manual/edit-film.md#a-song-films-song), which also *does*
+the re-voicing and re-mixes the final with whichever version you pick. A re-voicing
+always converts the sung original rather than the last conversion, so a second voice is a
+clone of the engine's vocals and not of the first clone. After the render only the
+soundtrack changes — the takes were shot against the song and ship muted.
+
 At generation time, the fallback description: the render describes the **lead performer's cast library voice**
 (gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
 accent"*) and appends it to the caption: the singer on screen and the voice on the track

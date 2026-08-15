@@ -81,6 +81,46 @@ def test_select_unknown_version_raises(tmp_path):
         raise AssertionError("expected ValueError for unknown version id")
 
 
+def test_a_revoicing_records_its_voice_and_source(tmp_path):
+    _write(_music(tmp_path), b"as-generated")
+    mh.record(tmp_path, _music(tmp_path), "folk ballad")
+    original = mh.history(tmp_path)["versions"][0]["id"]
+    _write(_music(tmp_path), b"as-nora")
+    h = mh.record(tmp_path, _music(tmp_path), "sung as Nora", voice="Nora",
+                  source_id=original)
+
+    assert h["versions"][0]["voice"] == ""          # the engine's own singer
+    assert h["versions"][-1]["voice"] == "Nora"
+    assert h["versions"][-1]["source_id"] == original
+
+
+def test_latest_sung_skips_revoicings(tmp_path):
+    """A second "sing this as" must convert the ORIGINAL vocals, not the
+    previous clone — so the source is the newest un-revoiced version."""
+    _write(_music(tmp_path), b"first-generation")
+    mh.record(tmp_path, _music(tmp_path), "folk ballad")
+    _write(_music(tmp_path), b"second-generation")
+    mh.record(tmp_path, _music(tmp_path), "louder folk ballad")
+    _write(_music(tmp_path), b"as-nora")
+    mh.record(tmp_path, _music(tmp_path), "sung as Nora", voice="Nora")
+
+    sung = mh.latest_sung(tmp_path)
+    assert Path(sung["path"]).read_bytes() == b"second-generation"
+
+
+def test_latest_sung_is_none_without_a_generation(tmp_path):
+    assert mh.latest_sung(tmp_path) is None
+
+
+def test_find_returns_the_version_or_none(tmp_path):
+    _write(_music(tmp_path), b"one")
+    h = mh.record(tmp_path, _music(tmp_path), "first", voice="Nora")
+    vid = h["versions"][0]["id"]
+
+    assert mh.find(tmp_path, vid)["voice"] == "Nora"
+    assert mh.find(tmp_path, 999) is None
+
+
 def test_history_filters_missing_files(tmp_path):
     _write(_music(tmp_path), b"one")
     mh.record(tmp_path, _music(tmp_path))

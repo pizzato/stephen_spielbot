@@ -12,6 +12,12 @@ The canonical ``background_music.wav`` always holds the *selected* version, so t
 re-mux/render paths (which read that filename) are untouched. Each version also
 records the prompt (``music_desc``) that produced it, so the UI can label them.
 
+A song film's versions come from two different acts, so each one also records
+``voice`` — empty for a straight generation, the library voice for a seed-vc
+re-voicing — and ``source_id``, the version a re-voicing was converted from.
+That is what keeps the before/after pair of a re-voicing legible (and lets the
+next re-voicing start from the *sung* original rather than stacking clones).
+
 All versions are kept (no pruning) — the user explicitly wants to compare every
 generation. A module-level lock guards the read-modify-write, and ``_save`` writes
 atomically so readers never see a half-written manifest.
@@ -59,7 +65,8 @@ def _save(work_dir: Path, data: dict) -> None:
     os.replace(tmp, p)
 
 
-def _add_version(work_dir: Path, music: Path, entry: dict, desc: str = "") -> dict:
+def _add_version(work_dir: Path, music: Path, entry: dict, desc: str = "",
+                 voice: str = "", source_id: int | None = None) -> dict:
     """Copy *music* into the history dir as a new version and select it.
 
     Mutates and returns *entry*; the caller saves the manifest."""
@@ -68,13 +75,16 @@ def _add_version(work_dir: Path, music: Path, entry: dict, desc: str = "") -> di
     vid = int(entry.get("next_id", 1))
     fname = f"background_music_v{vid}.wav"
     shutil.copy2(music, hist / fname)
-    entry.setdefault("versions", []).append({"id": vid, "file": fname, "desc": desc or ""})
+    entry.setdefault("versions", []).append(
+        {"id": vid, "file": fname, "desc": desc or "", "voice": voice or "",
+         "source_id": int(source_id) if source_id else None})
     entry["selected"] = vid
     entry["next_id"] = vid + 1
     return entry
 
 
-def seed_if_empty(work_dir: Path, current: Path, desc: str = "") -> None:
+def seed_if_empty(work_dir: Path, current: Path, desc: str = "",
+                  voice: str = "") -> None:
     """Capture an existing music track as the first kept version before it's
     overwritten, so the original generation isn't silently discarded."""
     work_dir, current = Path(work_dir), Path(current)
@@ -84,16 +94,17 @@ def seed_if_empty(work_dir: Path, current: Path, desc: str = "") -> None:
         data = _load(work_dir)
         if data.get("versions"):
             return
-        _add_version(work_dir, current, data, desc)
+        _add_version(work_dir, current, data, desc, voice)
         _save(work_dir, data)
 
 
-def record(work_dir: Path, music: Path, desc: str = "") -> dict:
+def record(work_dir: Path, music: Path, desc: str = "", voice: str = "",
+           source_id: int | None = None) -> dict:
     """Add the just-generated track as a new selected version. Returns ``history``."""
     work_dir = Path(work_dir)
     with _LOCK:
         data = _load(work_dir)
-        _add_version(work_dir, Path(music), data, desc)
+        _add_version(work_dir, Path(music), data, desc, voice, source_id)
         _save(work_dir, data)
     return history(work_dir)
 
@@ -120,8 +131,9 @@ def select(work_dir: Path, version_id: int) -> Path:
 
 
 def history(work_dir: Path) -> dict:
-    """Return ``{"versions": [{"id", "path", "desc"}], "selected": id|None}`` for
-    API responses, dropping any version whose file has gone missing."""
+    """Return ``{"versions": [{"id", "path", "desc", "voice", "source_id"}],
+    "selected": id|None}`` for API responses, dropping any version whose file
+    has gone missing."""
     work_dir = Path(work_dir)
     data = _load(work_dir)
     hist = _hist_dir(work_dir)
@@ -129,9 +141,25 @@ def history(work_dir: Path) -> dict:
     for v in data.get("versions", []):
         f = hist / v["file"]
         if f.exists():
-            versions.append({"id": int(v["id"]), "path": str(f), "desc": v.get("desc", "")})
+            versions.append({"id": int(v["id"]), "path": str(f),
+                             "desc": v.get("desc", ""), "voice": v.get("voice", ""),
+                             "source_id": v.get("source_id")})
     selected = data.get("selected")
     valid = {v["id"] for v in versions}
     if selected not in valid:
         selected = versions[-1]["id"] if versions else None
     return {"versions": versions, "selected": selected}
+
+
+def find(work_dir: Path, version_id: int) -> dict | None:
+    """One kept version (with its on-disk ``path``), or None."""
+    return next((v for v in history(work_dir)["versions"]
+                 if v["id"] == int(version_id)), None)
+
+
+def latest_sung(work_dir: Path) -> dict | None:
+    """The newest version that came out of the music engine rather than a
+    re-voicing — the track a "sing this as X" should convert FROM, so a second
+    re-voicing clones the original vocals instead of the previous clone."""
+    return next((v for v in reversed(history(work_dir)["versions"])
+                 if not v.get("voice")), None)
