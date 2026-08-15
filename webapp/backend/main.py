@@ -2977,22 +2977,15 @@ class SongUpdateBody(BaseModel):
     lyrics: str = ""
 
 
-@api.put("/api/jobs/{job_id}/song")
-def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
-    """Save edited song lyrics/caption. The render reads song.json directly,
-    so an edit made before (or between) renders is what gets sung."""
-    wd = _job_wd_or_404(job_id)
+def _save_song_text(wd: Path, caption: str, lyrics: str) -> dict:
+    """Write the song's words and sound into song.json (and the job_config
+    mirror a rendered film re-sings from). Returns the saved song.json."""
     path = wd / "song.json"
-    if not path.exists():
-        raise HTTPException(404, "This film has no song.")
-    if not (body.lyrics or "").strip():
-        raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
     try:
         data = json.loads(path.read_text())
     except Exception:
         data = {}
-    data.update({"caption": (body.caption or "").strip(),
-                 "lyrics": body.lyrics.strip(), "updated_at": time.time()})
+    data.update({"caption": caption, "lyrics": lyrics, "updated_at": time.time()})
     path.write_text(json.dumps(data, indent=2))
     # A film that already rendered stamped the song into job_config.json for
     # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
@@ -3000,12 +2993,102 @@ def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
     if jc_path.exists():
         try:
             jc = json.loads(jc_path.read_text())
-            jc["music_lyrics"] = data["lyrics"]
+            jc["music_lyrics"] = lyrics
             jc_path.write_text(json.dumps(jc, indent=2))
         except Exception:
             gapp.logger.warning("Could not mirror song edit into job_config.json",
                                 exc_info=True)
+    return data
+
+
+@api.put("/api/jobs/{job_id}/song")
+def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
+    """Save edited song lyrics/caption. The render reads song.json directly,
+    so an edit made before (or between) renders is what gets sung."""
+    wd = _job_wd_or_404(job_id)
+    if not (wd / "song.json").exists():
+        raise HTTPException(404, "This film has no song.")
+    if not (body.lyrics or "").strip():
+        raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
+    data = _save_song_text(wd, (body.caption or "").strip(), body.lyrics.strip())
     return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"]}
+
+
+class SongRegenBody(BaseModel):
+    field: str = "lyrics"          # "lyrics" | "caption" (the Sound field)
+    caption: str = ""              # what the editor currently shows…
+    lyrics: str = ""               # …so a re-write never drops unsaved edits
+    instruction: str = ""          # optional "tell it how" steering
+
+
+@api.post("/api/jobs/{job_id}/song/regenerate")
+def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
+    """Re-write ONE half of the song with the LLM — the lyrics, or the Sound
+    caption the music model is given. The other half is kept as the editor has
+    it and steers the re-write: new lyrics for the sound you liked, or a new
+    sound for the lyrics you liked. Both halves are saved, so the re-write is
+    what the next generation sings."""
+    if body.field not in ("lyrics", "caption"):
+        raise HTTPException(400, f"Unknown field: {body.field}")
+    wd = _job_wd_or_404(job_id)
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "This film has no song.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        raise HTTPException(500, "song.json is unreadable.")
+    caption = (body.caption or data.get("caption") or "").strip()
+    lyrics = (body.lyrics or data.get("lyrics") or "").strip()
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, data.get("style_name") or "")
+    brief = _read_create_brief(wd)
+    video_title = (brief.get("video_title") or "").strip()
+    topic = (brief.get("topic") or data.get("title") or "").strip()
+    # The song's asked-for length is the lyric budget; a generated track's real
+    # duration is closer still.
+    secs = float(data.get("duration") or data.get("seconds") or 0) or 60.0
+    label = video_title or topic or wd.name
+
+    if body.field == "lyrics":
+        extra = (ss.get("extra_instructions") or "").strip()
+        try:
+            with _track_op("Re-writing the lyrics", label):
+                song = story_mode.write_song(
+                    None, secs,
+                    language=gapp._norm_tts_language(ss.get("tts_language")),
+                    topic=f"{topic}\n\n{extra}" if extra else topic,
+                    video_title=video_title,
+                    # The sound the user kept is the direction the new words
+                    # are written to (its own caption is discarded).
+                    music_hint=caption,
+                    instruction=body.instruction or "")
+        except Exception as e:
+            raise HTTPException(503, f"Lyric re-write failed: {str(e).splitlines()[0][:200]}")
+        lyrics = song["lyrics"]
+    else:
+        system = ("You describe the MUSIC of a song for a music-generation model. "
+                  "Return ONLY the description: 20-40 words, comma-separated — genre and "
+                  "tempo/BPM, mood, then the lead instruments and groove. Never describe "
+                  "the vocalist's gender, age or voice (that is added automatically), and "
+                  "never write \"instrumental\".")
+        user = (
+            f"Song: {video_title or topic or '(untitled)'}\n"
+            f"It runs about {int(secs)} seconds.\n"
+            f"Current description: {caption or '(none yet)'}\n\n"
+            f"The lyrics it has to carry:\n{lyrics or '(none yet)'}\n\n"
+            "Write a fresh description of the music for these lyrics."
+            + _instruction_note(body.instruction)
+        )
+        try:
+            with _track_op("Re-writing the sound", label):
+                caption = _llm_complete(system, user, cfg, max_tokens=300).strip().strip('"').strip()
+        except Exception as e:
+            raise HTTPException(503, f"Sound re-write failed: {str(e).splitlines()[0][:200]}")
+
+    saved = _save_song_text(wd, caption, lyrics)
+    return {"ok": True, "field": body.field,
+            "caption": saved["caption"], "lyrics": saved["lyrics"]}
 
 
 @api.get("/api/jobs/{job_id}/story")

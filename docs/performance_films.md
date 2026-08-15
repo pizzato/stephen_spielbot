@@ -117,7 +117,8 @@ pipeline changes in three places:
 - **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
   whole film (a song film with the 18 % bed gain would be a near-silent music video). The
   Remix screen's *Generate again* re-sings the same lyrics; edit the caption there to
-  change the sound, or edit `song.json` for the words.
+  change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
+  with the LLM — both the words and the sound.
 
 **Whose voice sings?** Two levels. The music engines can't clone a voice, so at
 generation time the chosen singing voice only *describes* the vocalist (below). But the
