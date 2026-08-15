@@ -23,6 +23,7 @@ process, never imported. demucs (MIT) lives in the same venv.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -41,12 +42,21 @@ def available() -> bool:
 
 
 def convert_song(source: Path, voice_ref: Path, output: Path,
-                 diffusion_steps: int = 50, timeout: int = 3600) -> Path:
+                 diffusion_steps: int = 30, timeout: int = 3600,
+                 worker: str = "") -> Path:
     """Re-voice *source* (a sung track) with the timbre of *voice_ref*.
 
     Separates the vocal stem, converts only it, and remixes it (level-matched
     to the original vocals) over the untouched instruments. Writes the result
     to *output* and returns it.
+
+    *diffusion_steps* trades speed for polish: seed-vc's own default is 25;
+    30 is this pipeline's default, 50 the high-quality setting (config key
+    ``svc_diffusion_steps``). *worker* names a GPU worker host (config key
+    ``svc_worker``) to run the diffusion on — a CUDA GB10 converts near real
+    time where the controller's Apple GPU runs at ~12x real time. Separation
+    and remixing stay local either way (they are the cheap part); a remote
+    failure falls back to converting locally rather than failing the song.
     """
     if not available():
         raise RuntimeError(
@@ -59,12 +69,14 @@ def convert_song(source: Path, voice_ref: Path, output: Path,
             logger.warning("[svc] demucs unavailable — converting the WHOLE "
                            "mix (instruments will smear; fine only for "
                            "a-cappella-leaning tracks)")
-            _convert(source, voice_ref, output, diffusion_steps, timeout)
+            _convert_anywhere(source, voice_ref, output, diffusion_steps,
+                              timeout, worker)
             _normalize_loudness(output)
             return output
         vocals, backing = stems
         converted = work / "converted_vocals.wav"
-        _convert(vocals, voice_ref, converted, diffusion_steps, timeout)
+        _convert_anywhere(vocals, voice_ref, converted, diffusion_steps,
+                          timeout, worker)
         # The converted stem comes back much quieter than the original
         # (~18 dB measured) — match it to the level the original vocals sat
         # at in the mix, then lay it back over the untouched backing.
@@ -73,6 +85,72 @@ def convert_song(source: Path, voice_ref: Path, output: Path,
     logger.info("[svc] re-voiced %s with %s → %s (vocal stem)", source.name,
                 voice_ref.name, output.name)
     return output
+
+
+def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
+                      diffusion_steps: int, timeout: int, worker: str) -> None:
+    """The diffusion pass, on the named GPU worker when one is configured —
+    falling back to the controller on any remote failure, because a slow
+    conversion beats a failed one."""
+    if (worker or "").strip():
+        try:
+            _convert_remote(worker.strip(), source, voice_ref, output,
+                            diffusion_steps, timeout)
+            return
+        except Exception as e:
+            logger.warning("[svc] remote conversion on %s failed (%s) — "
+                           "converting locally", worker, e)
+    _convert(source, voice_ref, output, diffusion_steps, timeout)
+
+
+# Where scripts/install_svc_worker.sh lays seed-vc down INSIDE the worker's
+# ComfyUI container (it reuses the container's CUDA torch via a
+# system-site-packages venv).
+_REMOTE_DIR = "/opt/seed-vc"
+_REMOTE_CONTAINER = "spielbot-worker-comfyui-1"
+
+
+def _convert_remote(host: str, source: Path, voice_ref: Path, output: Path,
+                    diffusion_steps: int, timeout: int) -> None:
+    """Run the seed-vc diffusion inside *host*'s worker container (CUDA).
+
+    Plain scp + docker cp + docker exec — the same transport worker.sh uses.
+    Files travel by copy: the audio is seconds of wav, the diffusion is the
+    minutes, so the copies are noise."""
+    def _sh(args, step, tmo=120):
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=tmo)
+        if proc.returncode != 0:
+            tail = (proc.stderr or proc.stdout or "").strip().splitlines()[-3:]
+            raise RuntimeError(f"{step}: " + " | ".join(tail))
+        return proc
+
+    job = f"svc_{os.getpid()}_{source.stem}"
+    _sh(["scp", "-q", str(source), f"{host}:/tmp/{job}_src.wav"], "scp source")
+    _sh(["scp", "-q", str(voice_ref), f"{host}:/tmp/{job}_ref.wav"], "scp voice ref")
+    _sh(["ssh", host,
+         f"docker cp /tmp/{job}_src.wav {_REMOTE_CONTAINER}:/tmp/{job}_src.wav && "
+         f"docker cp /tmp/{job}_ref.wav {_REMOTE_CONTAINER}:/tmp/{job}_ref.wav"],
+        "stage into container")
+    _sh(["ssh", host,
+         f"docker exec {_REMOTE_CONTAINER} {_REMOTE_DIR}/.venv/bin/python "
+         f"{_REMOTE_DIR}/inference.py "
+         f"--source /tmp/{job}_src.wav --target /tmp/{job}_ref.wav "
+         f"--output /tmp/{job}_out --diffusion-steps {diffusion_steps} "
+         f"--length-adjust 1.0 --inference-cfg-rate 0.7 --f0-condition True"],
+        "remote inference", tmo=timeout)
+    _sh(["ssh", host,
+         f"docker exec {_REMOTE_CONTAINER} sh -c "
+         f"'cp /tmp/{job}_out/*.wav /tmp/{job}_done.wav' && "
+         f"docker cp {_REMOTE_CONTAINER}:/tmp/{job}_done.wav /tmp/{job}_done.wav"],
+        "collect output")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    _sh(["scp", "-q", f"{host}:/tmp/{job}_done.wav", str(output)], "scp result")
+    subprocess.run(["ssh", host,
+                    f"rm -f /tmp/{job}_src.wav /tmp/{job}_ref.wav /tmp/{job}_done.wav; "
+                    f"docker exec {_REMOTE_CONTAINER} rm -rf /tmp/{job}_src.wav "
+                    f"/tmp/{job}_ref.wav /tmp/{job}_out /tmp/{job}_done.wav"],
+                   capture_output=True, timeout=60)
+    logger.info("[svc] remote diffusion on %s done (%d steps)", host, diffusion_steps)
 
 
 def _convert(source: Path, voice_ref: Path, output: Path,

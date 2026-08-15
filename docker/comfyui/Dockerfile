@@ -231,6 +231,18 @@ RUN if [ -d custom_nodes/ComfyUI-H3-Motion-Context ]; then \
         cat /tmp/h3_audio_track.py >> custom_nodes/ComfyUI-H3-Motion-Context/nodes.py; \
     fi
 
+# seed-vc (GPL-3.0, see THIRD_PARTY_NOTICES.md): singing-voice conversion for
+# the song panel's "Sing this as [voice]" step, run on this worker's CUDA when
+# the controller names it (`svc_worker`). The venv reuses the image's CUDA
+# torch; only the pure-python deps are added. Weights download on first use.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/Plachtaa/seed-vc.git /opt/seed-vc \
+    && python3 -m venv --system-site-packages /opt/seed-vc/.venv \
+    && grep -vE "^torch|^--extra-index-url|^torchvision|^torchaudio" \
+        /opt/seed-vc/requirements.txt > /tmp/svc-reqs.txt \
+    && /opt/seed-vc/.venv/bin/pip install --no-cache-dir -r /tmp/svc-reqs.txt
+
 EXPOSE 8188
 
 # Models are mounted at /opt/ComfyUI/models by compose (not baked — ~49 GB).

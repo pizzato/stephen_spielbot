@@ -2847,8 +2847,16 @@ def _do_song_convert(wd: Path, voice: str) -> dict:
         music_history.seed_if_empty(wd, track, data.get("caption") or "")
     except Exception:
         gapp.logger.warning("Could not seed original song into history", exc_info=True)
+    cfg = gapp.load_config()
     staged = wd / "background_music.staging.wav"
-    svc.convert_song(track, Path(ref), staged)
+    svc.convert_song(
+        track, Path(ref), staged,
+        # 30 steps by default (seed-vc's own default is 25; 50 is the
+        # high-polish setting), and the diffusion runs on the configured GPU
+        # worker when one is named — the controller's Apple GPU is ~12x
+        # slower than real time.
+        diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
+        worker=str(cfg.get("svc_worker") or ""))
     staged.replace(track)
     try:
         music_history.record(wd, track, f"sung as {voice}")
