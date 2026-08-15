@@ -39,9 +39,9 @@ performed on H3 from their own first frame (plus the portraits of anyone in shot
 wordless beat matches the takes it cuts against.
 
 Around the pipeline, the web app also handles the full channel workflow: a render
-queue with automation — unattended in any format, music videos included, their song
-written, sung and re-voiced before the pictures are made — AI-suggested video ideas,
-per-scene editing with image
+queue with automation — global or per style, unattended in any format, music videos
+included, their song written, sung and re-voiced before the pictures are made —
+AI-suggested video ideas, per-scene editing with image
 inpainting, clip trimming and version history, misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with

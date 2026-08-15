@@ -79,6 +79,10 @@ Styles can have a **parent**. A child stores only what it overrides and resolves
 through the chain, so "Documentary Shorts" can be "Documentary, but portrait and six
 scenes".
 
+A style also carries its own [automation](#automation) — how much of the pipeline runs
+unattended for its films — edited on the Automation tab rather than here, because those
+settings have a global baseline of their own that every style inherits.
+
 ### Identity & destination
 
 | Field | Purpose |
@@ -288,33 +292,45 @@ engagement prompt**, and **auto-respond**.
 
 Off by default. Each checkbox is one gate you're handing over.
 
-### YouTube automation
+### Scope: Global, then per style
 
-- **⚡ Fully automated mode** — turns on every step below
-- **Fetch & evaluate comments on a schedule**
-- **Auto-approve requests above the confidence threshold**
-- **Auto-start the next queue item with a ready script** — loops until the queue is empty
-- **Auto-write scripts for queued items but don't render** — they wait unapproved for you
-  to review, edit, and approve
-- **Auto-approve scripts** — also writes missing scripts and renders them without review
-- **Run the script critic on every automation-written script** — QC for consistency,
-  repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
-  scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
-- **Top up the queue with an AI idea when it runs empty** — needs auto-approved scripts.
-  **Clear declined ideas** here lets previously declined topics resurface (ignored ones
-  stay hidden)
-- **Auto-post to YouTube the moment a film finishes** — off means it waits in the publish
-  queue
-- **Default privacy** — `private`, `unlisted`, or `public`
+The tab opens on a **scope picker** — the same one the
+[Characters](#characters) tab uses: a **Global** pill, then your style hierarchy. Global is
+the baseline every style automates by; picking a style shows the same settings for that
+style alone, and it records **only what you change**. Everything else keeps following
+Global — live, so changing Global later moves every style that hasn't overridden it.
 
-The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
-drafts to review, and *auto-start with approval required* renders only what you've ticked.
+A child style inherits its parent's overrides on top of Global, nearest ancestor winning.
+Under each setting a line says where the value comes from — *Follows Global*, *Follows
+“BHOB”* — and once you override it, that line offers the inherited value back: click it to
+drop the override and follow again. The number on a pill is how many overrides that style
+has recorded.
+
+So one channel can prepare scripts for you to review while another renders music videos
+end to end, from one queue.
+
+Only the settings that resolve against a single **film** are scoped this way. Comment
+fetching, AI-idea top-ups and publishing are queue- or channel-wide — there is no one film
+to resolve them against — so they appear under Global only.
 
 ### What automation makes
 
+Per style (see above), or globally as the baseline.
+
+- **Auto-write scripts for queued items but don't render** — they wait unapproved for you
+  to review, edit, and approve
+- **Auto-approve scripts** — also writes missing scripts and renders them without review
+- **Auto-start the next queue item with a ready script** — loops until the queue is empty.
+  Off for a style, its films are prepared but never started for you
+- **Run the script critic on every automation-written script** — QC for consistency,
+  repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
+  scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
 - **Format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
   [format](create.md#format) automation writes films in, answered once instead of per film.
   Films you start yourself on the Create screen still pick their own
+
+The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
+drafts to review, and *auto-start with approval required* renders only what you've ticked.
 
 Choosing **Music video** unfolds the song steps, because a music video is built the other
 way round from every other film — the song comes first and the pictures follow it:
@@ -337,6 +353,20 @@ way round from every other film — the song comes first and the pictures follow
   Song tab: no story, no scenes and no render are built on a song you haven't heard. Open
   the film's Song tab, listen, and **Draft the story** to carry it on into the normal
   script review
+
+### YouTube automation
+
+Global only.
+
+- **⚡ Fully automated mode** — turns on every global step, in this card and the one above
+- **Fetch & evaluate comments on a schedule**
+- **Auto-approve requests above the confidence threshold**
+- **Top up the queue with an AI idea when it runs empty** — needs a style that auto-approves
+  scripts. **Clear declined ideas** here lets previously declined topics resurface (ignored
+  ones stay hidden)
+- **Auto-post to YouTube the moment a film finishes** — off means it waits in the publish
+  queue
+- **Default privacy** — `private`, `unlisted`, or `public`
 
 ### X automation
 

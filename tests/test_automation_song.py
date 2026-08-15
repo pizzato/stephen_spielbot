@@ -12,7 +12,6 @@ import json
 import os
 import tempfile
 import unittest
-from pathlib import Path
 from unittest import mock
 
 os.environ.setdefault("HOME", tempfile.mkdtemp(prefix="spielbot-test-home-"))

@@ -2217,7 +2217,7 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     # attach below can auto-start a render — its edits must land while nothing
     # is rendering. Best-effort: a critic failure never fails script creation.
     if body.auto_critic:
-        p = int(cfg.get("youtube_auto_critic_passes") or 0)
+        p = gapp.automation_settings(cfg, ss["name"])["auto_critic_passes"]
         try:
             _do_critic_run(job_id, CriticRunBody(passes=p or 1, until_converged=(p == 0)))
             store = DurableStore.default()
@@ -11683,9 +11683,10 @@ def _start_queue_item(item: dict) -> dict:
         # its song rendered BEFORE the story is divided (see _auto_song_first),
         # so that runs inline here too — the song review gate doesn't apply on
         # this path, which only ever runs for an item already cleared to render.
-        fmt = _auto_format(cfg)
+        auto = gapp.automation_settings(cfg, style_name)
+        fmt = auto["auto_format"]
         song_wd = ""
-        if _auto_song_needed(cfg):
+        if fmt == "song" and auto["auto_song"]:
             song_wd = _auto_song_first(
                 cfg, title=title, topic=topic, minutes=minutes,
                 style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
@@ -11694,7 +11695,7 @@ def _start_queue_item(item: dict) -> dict:
             video_title=title, topic=topic, minutes=minutes, resolution=resolution,
             style_name=style_name, format=fmt, work_dir=song_wd,
             n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
-            auto_critic=bool(cfg.get("youtube_auto_critic"))))
+            auto_critic=auto["auto_critic"]))
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=0, voice=ss.get("voice", ""),
@@ -11817,8 +11818,9 @@ def queue_from_job(body: FromJobBody) -> dict:
     # the global auto-approve mode is on). In review mode an enqueued-but-
     # unapproved script waits for the Queue's Approve action — enqueuing is not
     # approving.
-    if (cfg.get("youtube_auto_start_job") and not gapp._is_job_running()
-            and (body.approved or cfg.get("youtube_auto_approve_script"))):
+    _auto = gapp.automation_settings(cfg, body.style_name)
+    if (_auto["auto_start_job"] and not gapp._is_job_running()
+            and (body.approved or _auto["auto_approve_script"])):
         item = next((q for q in yt.load_queue() if q.get("id") == entry["id"]), None)
         if item:
             try:
@@ -13635,12 +13637,13 @@ def _retryable_failed(cfg: dict) -> dict | None:
     failed = [q for q in yt.load_queue()
               if q.get("status") == "failed"
               and int(q.get("retry_count") or 0) < _MAX_AUTO_RETRIES]
-    if not cfg.get("youtube_auto_approve_script"):
-        # Review gate on: only retry items the user approved — the same rule
-        # fresh starts follow. (A started render stamps approved=True, so any
-        # item that ran and failed already qualifies.)
-        failed = [q for q in failed if q.get("approved") and q.get("script_ready")
-                  and q.get("work_dir") and q.get("video_job_id")]
+    # Review gate on (for the item's OWN style): only retry items the user
+    # approved — the same rule fresh starts follow. (A started render stamps
+    # approved=True, so any item that ran and failed already qualifies.)
+    failed = [q for q in failed
+              if gapp.automation_settings(cfg, (q.get("gen_style_name") or "").strip())["auto_approve_script"]
+              or (q.get("approved") and q.get("script_ready")
+                  and q.get("work_dir") and q.get("video_job_id"))]
     if not failed:
         return None
     failed.sort(key=lambda q: q.get("updated_at") or q.get("created_at") or 0)
@@ -13650,17 +13653,19 @@ def _retryable_failed(cfg: dict) -> dict | None:
     return item
 
 
-def _auto_format(cfg: dict) -> str:
+def _auto_format(cfg: dict, style_name: str = "") -> str:
     """The film format automation writes in (Settings → Automation → Format).
 
     The Create screen asks a human which format each film is; unattended runs
-    have nobody to ask, so this one setting answers for all of them."""
-    return gapp._norm_video_format(cfg.get("youtube_auto_format"))
+    have nobody to ask, so the setting answers for them — globally, or per
+    style where a style overrides it."""
+    return gapp.automation_settings(cfg, style_name)["auto_format"]
 
 
-def _auto_song_needed(cfg: dict) -> bool:
-    """Is the song step part of automation's format? Music videos only."""
-    return _auto_format(cfg) == "song" and bool(cfg.get("youtube_auto_song"))
+def _auto_song_needed(cfg: dict, style_name: str = "") -> bool:
+    """Is the song step part of this style's automation? Music videos only."""
+    auto = gapp.automation_settings(cfg, style_name)
+    return auto["auto_format"] == "song" and auto["auto_song"]
 
 
 def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
@@ -13678,15 +13683,16 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
 
     Returns the song's ``{"work_dir", "job_id"}``. Raises on failure — the
     caller leaves the queue item pending and tries again next tick."""
+    auto = gapp.automation_settings(cfg, style_name)
     drafted = song_draft(SongDraftBody(
         video_title=title, topic=topic, minutes=minutes, style_name=style_name,
-        voice=str(cfg.get("youtube_auto_song_voice") or "").strip(),
+        voice=auto["auto_song_voice"],
         n_scenes=n_scenes, queue_item_id=queue_item_id))
     wd = Path(drafted["work_dir"])
 
     # Lyric QC before the track is rendered: a bad song caught here costs one
     # LLM call, caught after the render it costs a worker slot and a re-voice.
-    passes = max(0, min(3, int(cfg.get("youtube_auto_song_critic_passes") or 0)))
+    passes = auto["auto_song_critic_passes"]
     if passes:
         data = json.loads((wd / "song.json").read_text())
         secs = float(data.get("seconds") or 0)
@@ -13714,8 +13720,8 @@ def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
     # Re-voice the finished track as a library voice (seed-vc). The engine's
     # own vocalist is kept as a version either way, so this is recoverable
     # from the Song tab.
-    voice = str(cfg.get("youtube_auto_song_voice") or "").strip()
-    if voice and cfg.get("youtube_auto_song_revoice"):
+    voice = auto["auto_song_voice"]
+    if voice and auto["auto_song_revoice"]:
         try:
             _do_song_convert(wd, voice)
         except Exception:
@@ -13733,7 +13739,10 @@ def _auto_write_scripts(cfg: dict) -> int:
 
     Independent of auto-start: with auto-start also on (review mode), the user
     approves a parked script and the next tick renders it. Items keep their
-    queue position — each script is linked in place. Returns the count written."""
+    queue position — each script is linked in place. Returns the count written.
+
+    Every flag is resolved against the ITEM's style, so one style can prepare
+    scripts (or music videos) while another is left alone."""
     written = 0
     for q in _ordered_pending(cfg):
         if q.get("script_ready") and q.get("work_dir") and q.get("video_job_id"):
@@ -13743,21 +13752,24 @@ def _auto_write_scripts(cfg: dict) -> int:
         item_id = q.get("id")
         title = q.get("final_title", "")
         style_name = (q.get("gen_style_name") or "").strip()
+        auto = gapp.automation_settings(cfg, style_name)
+        if not auto["auto_write_scripts"]:
+            continue  # this style prepares nothing unattended
         ss = gapp.style_settings(cfg, style_name)
         minutes = _queue_item_minutes(q, ss)
         topic = q.get("video_prompt") or title
         resolution = q.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
-        fmt = _auto_format(cfg)
+        fmt = auto["auto_format"]
         song_wd = ""
         try:
-            if _auto_song_needed(cfg):
+            if fmt == "song" and auto["auto_song"]:
                 # Music video: the song comes first and the story follows it.
                 song = _auto_song_first(
                     cfg, title=title, topic=topic, minutes=minutes,
                     style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
                     queue_item_id=item_id)
                 song_wd = song["work_dir"]
-                if not cfg.get("youtube_auto_song_approve"):
+                if not auto["auto_song_approve"]:
                     # Song review gate: stop here. Nothing — story, scenes or
                     # render — gets built on a song nobody has heard yet. The
                     # Song tab's "Draft the story" is the human continuation,
@@ -13774,7 +13786,7 @@ def _auto_write_scripts(cfg: dict) -> int:
                 video_title=title, topic=topic, minutes=minutes, resolution=resolution,
                 style_name=style_name, format=fmt, work_dir=song_wd,
                 n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
-                auto_critic=bool(cfg.get("youtube_auto_critic"))))
+                auto_critic=auto["auto_critic"]))
         except Exception:
             continue
         # Re-check the slot is still pending before attaching: script generation
@@ -13804,27 +13816,35 @@ def _auto_start_best() -> dict | None:
     if gapp._is_job_running():
         return None
     cfg = gapp.load_config()
-    pending = _ordered_pending(cfg)
-    if cfg.get("youtube_auto_approve_script"):
-        # Auto-approve on: take the next pending item and render it end-to-end,
-        # writing the script first when the item doesn't have one. An item whose
-        # song is parked for review is the one exception — its film waits for
-        # the song to be approved, however freely scripts are approved.
-        startable = [q for q in pending if not (q.get("song_parked") and not q.get("script_ready"))]
-        item = {**startable[0]} if startable else None  # fresh copy
-    else:
-        # Review gate on: only render the next item the user has explicitly
-        # approved (and that has a written script). A script being present is
-        # not enough — approval is a separate, deliberate action, so a freshly
-        # written/linked script waits until the user Approves it. Never generate
+
+    def _startable(q: dict) -> bool:
+        """Can automation start THIS item, under its own style's rules?"""
+        auto = gapp.automation_settings(cfg, (q.get("gen_style_name") or "").strip())
+        if not auto["auto_start_job"]:
+            return False   # this style's films wait to be started by hand
+        if q.get("song_parked") and not q.get("script_ready"):
+            # Its song is parked for review: the film waits for the song to be
+            # approved, however freely this style approves scripts.
+            return False
+        if auto["auto_approve_script"]:
+            # Auto-approve on: render it end-to-end, writing the script first
+            # when the item doesn't have one.
+            return True
+        # Review gate on: only render an item the user has explicitly approved
+        # (and that has a written script). A script being present is not
+        # enough — approval is a separate, deliberate action. Never generate
         # scripts here either; script-less items wait for the user.
-        item = next((q for q in pending
-                     if q.get("approved") and q.get("script_ready")
-                     and q.get("work_dir") and q.get("video_job_id")), None)
+        return bool(q.get("approved") and q.get("script_ready")
+                    and q.get("work_dir") and q.get("video_job_id"))
+
+    item = next(({**q} for q in _ordered_pending(cfg) if _startable(q)), None)
     if not item:
         # Nothing fresh to start — retry a failed item before inventing new work.
         item = _retryable_failed(cfg)
-    if not item and cfg.get("youtube_auto_approve_script") and cfg.get("youtube_auto_ai_ideas"):
+    if (not item and cfg.get("youtube_auto_ai_ideas")
+            # An invented idea has no style yet (_auto_pick_suggestion picks
+            # one), so the gate is "some style renders without review".
+            and gapp.automation_enabled_anywhere(cfg, "auto_approve_script")):
         # Queue idle — opt-in fallback: invent an AI idea to keep the channel
         # fed. _auto_pick_suggestion picks the best unused idea, marks it used
         # (so it's closed and never re-picked), and generates a fresh batch
@@ -14413,12 +14433,12 @@ def _automation_tick() -> dict:
             # unapproved. Runs before auto-start so the freshly written scripts
             # are visible to it — they stay unapproved, so review-mode auto-start
             # won't pick them up until the user approves.
-            if cfg.get("youtube_auto_write_scripts"):
+            if gapp.automation_enabled_anywhere(cfg, "auto_write_scripts"):
                 try:
                     out["scripts_written"] = _auto_write_scripts(cfg)
                 except Exception as e:
                     out["scripts_error"] = str(e)[:120]
-            if cfg.get("youtube_auto_start_job"):
+            if gapp.automation_enabled_anywhere(cfg, "auto_start_job"):
                 out["started"] = _auto_start_best()
             # Publishing. Finished videos are enqueued in the loop regardless of
             # mode (the queue is the canonical inbox), so here we only *release*
@@ -14525,9 +14545,13 @@ def _automation_loop():
                 _enqueue_finished_for_publish(recent_only=True)
             except Exception:
                 pass
-            if any(cfg.get(k) for k in (
-                    "youtube_auto_fetch_evaluate", "youtube_auto_start_job", "youtube_auto_write_scripts",
-                    "youtube_auto_post", "x_auto_fetch_evaluate", "x_auto_post", "publish_schedule_enabled")):
+            if (any(cfg.get(k) for k in (
+                    "youtube_auto_fetch_evaluate", "youtube_auto_post", "x_auto_fetch_evaluate",
+                    "x_auto_post", "publish_schedule_enabled"))
+                    # Per-style flags: a style overriding one on is enough to
+                    # make the tick worth running, whatever the global says.
+                    or gapp.automation_enabled_anywhere(cfg, "auto_start_job")
+                    or gapp.automation_enabled_anywhere(cfg, "auto_write_scripts")):
                 _automation_tick()
         except Exception:
             pass

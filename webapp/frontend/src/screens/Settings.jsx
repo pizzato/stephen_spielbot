@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo, useRef } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
-import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS } from '../styleUtils.js'
+import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
+  globalAutomation, resolveAutomation, automationSource } from '../styleUtils.js'
 
 const toLines = (v) => Array.isArray(v) ? v.join('\n') : (v || '')
 const fromLines = (s) => (s || '').split('\n').map((x) => x.trim()).filter(Boolean)
@@ -1113,6 +1114,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
   const [charBust, setCharBust] = useState(0)   // cache-bust token for character thumbnails
   const [charLightbox, setCharLightbox] = useState(null)  // character being viewed full-res
   const [charScope, setCharScope] = useState('')          // Characters tab: selected home ('' = Global)
+  const [autoScope, setAutoScope] = useState('')          // Automation tab: selected scope ('' = Global)
   const [error, setError] = useState('')
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
@@ -1463,6 +1465,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       next = { name: cur.name, parent: pname }
       for (const [k, v] of Object.entries(cur)) {
         if (k === 'name' || k === 'parent') continue
+        if (k === 'automation') {
+          // Automation overrides collapse per FLAG, not as a whole object, so
+          // adopting a parent keeps only the flags that really differ from it.
+          const kept = Object.fromEntries(Object.entries(v || {})
+            .filter(([f, fv]) => JSON.stringify(fv) !== JSON.stringify((pe.automation || {})[f])))
+          if (Object.keys(kept).length) next.automation = kept
+          continue
+        }
         if (JSON.stringify(v) !== JSON.stringify(pe[k])) next[k] = v
       }
     } else {
@@ -2787,32 +2797,229 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           </Card>
         </>)}
 
-        {tab === 'automation' && (<>
-          {/* ── YouTube automation ── */}
+        {tab === 'automation' && (() => {
+          // Automation is browsed by scope, the same way characters are: a
+          // Global pill (the baseline every style inherits) then the style
+          // hierarchy. Per-FILM flags — what gets written, critiqued, sung and
+          // started — resolve per style; comment polling, AI-idea top-ups and
+          // publishing are queue- or channel-wide, so they only show on Global.
+          const knownStyles = new Set(styles.map((s) => s.name))
+          const scope = autoScope && knownStyles.has(autoScope) ? autoScope : ''
+          const overridesOf = (name) => (styles.find((s) => s.name === name)?.automation) || {}
+          const own = scope ? overridesOf(scope) : {}
+          // What this scope resolves to, and what it would fall back to if it
+          // dropped its own overrides — the pair every hint below is built from.
+          const av = scope ? resolveAutomation(styles, scope, cfg) : globalAutomation(cfg)
+          const inherited = scope ? resolveAutomation(styles, scope, cfg, -1) : {}
+          const setAuto = (k, v) => {
+            if (!scope) return set(AUTOMATION_FIELDS[k], v)
+            // Inheritance is equality (as on the Styles tab): setting a flag
+            // back to what it would inherit drops the override, so the style
+            // keeps following its parent — and the global — live.
+            editCfg((c) => ({
+              ...c,
+              styles: (c.styles || []).map((s) => {
+                if (s.name !== scope) return s
+                const next = { ...(s.automation || {}) }
+                if (JSON.stringify(v ?? null) === JSON.stringify(inherited[k] ?? null)) delete next[k]
+                else next[k] = v
+                const { automation: _drop, ...rest } = s
+                return Object.keys(next).length ? { ...rest, automation: next } : rest
+              }),
+            }))
+          }
+          const clearAuto = (k) => setAuto(k, inherited[k])
+          const fmtAutoVal = (k, v) => {
+            if (k === 'auto_format') return { narration: 'Narration', dialogue: 'Dialogue', mixed: 'Mixed', silent: 'Silent', song: 'Music video' }[v] || String(v)
+            if (k === 'auto_song_voice') return v ? String(v) : 'the model’s own vocalist'
+            if (k === 'auto_critic_passes') return Number(v) ? `${v} passes` : 'until stable'
+            if (k === 'auto_song_critic_passes') return Number(v) ? `${v} passes` : 'off'
+            return v ? 'on' : 'off'
+          }
+          // Per-flag inheritance hint, mirroring the Styles tab's ParentVal:
+          // says where the value comes from, and offers the inherited one back.
+          const AutoVal = ({ k }) => {
+            if (!scope) return null
+            const src = automationSource(styles, scope, k)
+            const from = src || 'Global'
+            if (!(k in own)) return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Follows {src ? `“${src}”` : 'Global'}.</div>
+            return (
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {src ? `“${src}”` : 'Global'}: <a role="button" tabIndex={0} title={`Use ${from}’s value again`}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  onClick={() => clearAuto(k)}><em>{fmtAutoVal(k, inherited[k])}</em></a> — click to use it.
+              </div>
+            )
+          }
+          const pill = (key, label, { icon, depth = 0 } = {}) => {
+            const n = Object.keys(key ? overridesOf(key) : {}).length
+            return (
+              <Button variant={scope === key ? 'primary' : 'ghost'} icon={icon}
+                title={key === '' ? 'The baseline every style inherits' : `${n} override${n === 1 ? '' : 's'}`}
+                onClick={() => setAutoScope(key)}>
+                {`${depth ? '↳ ' : ''}${label}`}
+                {n > 0 && <span style={{ opacity: 0.55, fontWeight: 500 }}>{n}</span>}
+              </Button>
+            )
+          }
+          return (<>
+          {/* ── Scope picker ── */}
+          <Card span={12} className="reveal reveal-d1">
+            <div className="row center between">
+              <span className="label-sm">Automation</span>
+              <span className="muted" style={{ fontSize: 11.5 }}>Global is the baseline; a style overrides only what it changes, and styles under it inherit that.</span>
+            </div>
+            {styles.some((s) => s.parent) ? (() => {
+              const cells = []
+              let row = 0   // row 0 = the Global pill
+              styleTreeOrder(styles).forEach((o, j, arr) => {
+                if (j === 0 || o.depth !== arr[j - 1].depth + 1) row++
+                cells.push({ ...o, row })
+              })
+              const cols = cells.reduce((m, c) => Math.max(m, c.depth), 0) + 1
+              return (
+                <div className="mt-16" style={{ overflowX: 'auto' }}>
+                  <div style={{ display: 'inline-grid', gridTemplateColumns: `repeat(${cols}, max-content)`, gap: 6, alignItems: 'center' }}>
+                    <div style={{ gridRow: 1, gridColumn: 1 }}>{pill('', 'Global', { icon: 'globe' })}</div>
+                    {cells.map((cell) => (
+                      <div key={cell.style.name} style={{ gridRow: cell.row + 1, gridColumn: cell.depth + 1 }}>
+                        {pill(cell.style.name, cell.style.name, { depth: cell.depth })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )
+            })() : (
+              <div className="row gap-6 row--wrap mt-16">
+                <div>{pill('', 'Global', { icon: 'globe' })}</div>
+                {styles.map((s) => <div key={s.name}>{pill(s.name, s.name)}</div>)}
+              </div>
+            )}
+            <div className="field__hint" style={{ marginTop: 12 }}>
+              {scope === ''
+                ? <>These are the settings every style automates by, unless it says otherwise. Comment fetching, AI-idea top-ups and publishing are queue- and channel-wide, so they live here only.</>
+                : (<>
+                  {styleLineage(styles, scope).slice(0, -1).map((a) => (
+                    <span key={a.name}>
+                      <a role="button" tabIndex={0} title={`Show “${a.name}”`}
+                        style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                        onClick={() => setAutoScope(a.name)}>{a.name}</a>{' ▸ '}
+                    </span>
+                  ))}
+                  <strong>{scope}</strong> — how automation treats this style's films. Everything follows Global until you change it here.
+                </>)}
+            </div>
+          </Card>
+
+          {/* ── What automation makes: per-film flags, resolved per style.
+               The Create screen's Format picker for unattended runs, with the
+               music-video steps unfolding under it. ── */}
+          <Card span={12} className="reveal reveal-d1">
+            <span className="label-sm">What automation makes{scope ? ` · ${scope}` : ''}</span>
+            <div className="stack gap-16 mt-16">
+              <div>
+                <Check checked={!!av.auto_write_scripts} onChange={(v) => setAuto('auto_write_scripts', v)} label="Auto-write scripts for queued items but don't render — they wait unapproved for you to review, edit and approve" />
+                <AutoVal k="auto_write_scripts" />
+              </div>
+              <div>
+                <Check checked={!!av.auto_approve_script} onChange={(v) => setAuto('auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
+                <AutoVal k="auto_approve_script" />
+              </div>
+              <div>
+                <Check checked={!!av.auto_start_job} onChange={(v) => setAuto('auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
+                <AutoVal k="auto_start_job" />
+              </div>
+              <div>
+                <Check checked={!!av.auto_critic} onChange={(v) => setAuto('auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
+                <AutoVal k="auto_critic" />
+              </div>
+              {!!av.auto_critic && (
+                <div style={{ paddingLeft: 26 }}>
+                  <div className="row center gap-10">
+                    <span className="muted" style={{ fontSize: 12.5 }}>Critic passes</span>
+                    <select className="select" value={String(av.auto_critic_passes ?? 0)}
+                      onChange={(e) => setAuto('auto_critic_passes', Number(e.target.value))} style={{ maxWidth: 180 }}>
+                      <option value="0">Until stable (≤5)</option>
+                      <option value="1">1 pass</option>
+                      <option value="2">2 passes</option>
+                      <option value="3">3 passes</option>
+                      <option value="5">5 passes</option>
+                    </select>
+                  </div>
+                  <AutoVal k="auto_critic_passes" />
+                </div>
+              )}
+              <div>
+                <Field label="Format"
+                  hint="The format automation writes films in — what you'd pick on the Create screen, answered once for every unattended film. Films you start yourself still choose their own.">
+                  <Segmented value={av.auto_format || 'narration'}
+                    onChange={(v) => setAuto('auto_format', v)}
+                    options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
+                              { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
+                              { value: 'song', label: 'Music video' }]} />
+                </Field>
+                <AutoVal k="auto_format" />
+              </div>
+              {av.auto_format === 'song' && (<>
+                <div>
+                  <Check checked={!!av.auto_song} onChange={(v) => setAuto('auto_song', v)}
+                    label="Write and generate the song before the story — the scenes are then timed against the real track and each take sings its own stretch of it (off = the song is only made at render time, and the takes have nothing to sing to)" />
+                  <AutoVal k="auto_song" />
+                </div>
+                {!!av.auto_song && (<>
+                  <div style={{ paddingLeft: 26 }}>
+                    <div className="row center gap-10">
+                      <span className="muted" style={{ fontSize: 12.5 }}>Song critic</span>
+                      <select className="select" value={String(av.auto_song_critic_passes ?? 0)}
+                        onChange={(e) => setAuto('auto_song_critic_passes', Number(e.target.value))} style={{ maxWidth: 220 }}>
+                        <option value="0">Off — sing the first draft</option>
+                        <option value="1">1 pass</option>
+                        <option value="2">2 passes</option>
+                        <option value="3">3 passes</option>
+                      </select>
+                      <span className="muted" style={{ fontSize: 12.5 }}>QC the lyrics — length, singability, hook — before the track is rendered</span>
+                    </div>
+                    <AutoVal k="auto_song_critic_passes" />
+                  </div>
+                  <div style={{ paddingLeft: 26 }}>
+                    <div className="row center gap-10">
+                      <span className="muted" style={{ fontSize: 12.5 }}>Singing voice</span>
+                      <select className="select" value={av.auto_song_voice || ''}
+                        onChange={(e) => setAuto('auto_song_voice', e.target.value)} style={{ maxWidth: 260 }}>
+                        <option value="">The model’s own vocalist</option>
+                        {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                          <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>
+                        ))}
+                      </select>
+                      <span className="muted" style={{ fontSize: 12.5 }}>Described to the music model (gender, age, tone) — not cloned</span>
+                    </div>
+                    <AutoVal k="auto_song_voice" />
+                  </div>
+                  <div>
+                    <Check checked={!!av.auto_song_revoice} disabled={!av.auto_song_voice}
+                      onChange={(v) => setAuto('auto_song_revoice', v)}
+                      label="Re-voice the finished track as that voice (voice conversion, runs on the controller) — the sung original is kept as a version either way" />
+                    <AutoVal k="auto_song_revoice" />
+                  </div>
+                  <div>
+                    <Check checked={!!av.auto_song_approve} onChange={(v) => setAuto('auto_song_approve', v)}
+                      label="Auto-approve songs — carry straight on into the story. Off, automation stops once the song exists and parks it in the Song tab, so no film is built on a song you haven't heard" />
+                    <AutoVal k="auto_song_approve" />
+                  </div>
+                </>)}
+              </>)}
+            </div>
+          </Card>
+
+          {scope !== '' ? null : (<>
+          {/* ── YouTube automation — queue- and channel-wide, Global only ── */}
           <Card span={12} className="reveal reveal-d1">
             <span className="label-sm">YouTube automation</span>
             <div className="stack gap-16 mt-16">
-              <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every step below" />
+              <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every global step, here and above" />
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
-              <Check checked={!!cfg.youtube_auto_start_job} onChange={(v) => set('youtube_auto_start_job', v)} label="Auto-start the next queue item with a ready script — loops until the queue is empty" />
-              <Check checked={!!cfg.youtube_auto_write_scripts} onChange={(v) => set('youtube_auto_write_scripts', v)} label="Auto-write scripts for queued items but don't render — they wait unapproved for you to review, edit and approve" />
-              <Check checked={!!cfg.youtube_auto_approve_script} onChange={(v) => set('youtube_auto_approve_script', v)} label="Auto-approve scripts — also write missing scripts and render them without review" />
-              <Check checked={!!cfg.youtube_auto_critic} onChange={(v) => set('youtube_auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
-              {!!cfg.youtube_auto_critic && (
-                <div className="row center gap-10" style={{ paddingLeft: 26 }}>
-                  <span className="muted" style={{ fontSize: 12.5 }}>Critic passes</span>
-                  <select className="select" value={String(cfg.youtube_auto_critic_passes ?? 0)}
-                    onChange={(e) => set('youtube_auto_critic_passes', Number(e.target.value))} style={{ maxWidth: 180 }}>
-                    <option value="0">Until stable (≤5)</option>
-                    <option value="1">1 pass</option>
-                    <option value="2">2 passes</option>
-                    <option value="3">3 passes</option>
-                    <option value="5">5 passes</option>
-                  </select>
-                </div>
-              )}
-              <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs auto-approved scripts)" />
+              <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs a style that auto-approves scripts)" />
               <div className="row center between row--wrap gap-10" style={{ paddingLeft: 26 }}>
                 <span className="muted" style={{ fontSize: 12.5 }}>Declined ideas are kept out of new AI suggestions. Clear the list to let those topics resurface — ignored ideas stay hidden.</span>
                 <Button variant="ghost" icon="trash-can" disabled={clearingDeclined} onClick={resetDeclinedIdeas}>{clearingDeclined ? 'Clearing…' : 'Clear declined ideas'}</Button>
@@ -2821,56 +3028,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Field label="Default privacy">
                 <Segmented value={cfg.youtube_post_privacy || 'private'} onChange={(v) => set('youtube_post_privacy', v)} options={['private', 'unlisted', 'public']} />
               </Field>
-            </div>
-          </Card>
-
-          {/* ── What automation makes: the Create screen's Format picker, for
-               unattended runs. Music videos need their own steps, so they
-               unfold under it. ── */}
-          <Card span={12} className="reveal reveal-d1">
-            <span className="label-sm">What automation makes</span>
-            <div className="stack gap-16 mt-16">
-              <Field label="Format"
-                hint="The format automation writes films in — what you'd pick on the Create screen, answered once for every unattended film. Films you start yourself still choose their own.">
-                <Segmented value={cfg.youtube_auto_format || 'narration'}
-                  onChange={(v) => set('youtube_auto_format', v)}
-                  options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
-                            { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
-                            { value: 'song', label: 'Music video' }]} />
-              </Field>
-              {cfg.youtube_auto_format === 'song' && (<>
-                <Check checked={!!cfg.youtube_auto_song} onChange={(v) => set('youtube_auto_song', v)}
-                  label="Write and generate the song before the story — the scenes are then timed against the real track and each take sings its own stretch of it (off = the song is only made at render time, and the takes have nothing to sing to)" />
-                {!!cfg.youtube_auto_song && (<>
-                  <div className="row center gap-10" style={{ paddingLeft: 26 }}>
-                    <span className="muted" style={{ fontSize: 12.5 }}>Song critic</span>
-                    <select className="select" value={String(cfg.youtube_auto_song_critic_passes ?? 0)}
-                      onChange={(e) => set('youtube_auto_song_critic_passes', Number(e.target.value))} style={{ maxWidth: 220 }}>
-                      <option value="0">Off — sing the first draft</option>
-                      <option value="1">1 pass</option>
-                      <option value="2">2 passes</option>
-                      <option value="3">3 passes</option>
-                    </select>
-                    <span className="muted" style={{ fontSize: 12.5 }}>QC the lyrics — length, singability, hook — before the track is rendered</span>
-                  </div>
-                  <div className="row center gap-10" style={{ paddingLeft: 26 }}>
-                    <span className="muted" style={{ fontSize: 12.5 }}>Singing voice</span>
-                    <select className="select" value={cfg.youtube_auto_song_voice || ''}
-                      onChange={(e) => set('youtube_auto_song_voice', e.target.value)} style={{ maxWidth: 260 }}>
-                      <option value="">The model’s own vocalist</option>
-                      {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => (
-                        <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>
-                      ))}
-                    </select>
-                    <span className="muted" style={{ fontSize: 12.5 }}>Described to the music model (gender, age, tone) — not cloned</span>
-                  </div>
-                  <Check checked={!!cfg.youtube_auto_song_revoice} disabled={!cfg.youtube_auto_song_voice}
-                    onChange={(v) => set('youtube_auto_song_revoice', v)}
-                    label="Re-voice the finished track as that voice (voice conversion, runs on the controller) — the sung original is kept as a version either way" />
-                  <Check checked={!!cfg.youtube_auto_song_approve} onChange={(v) => set('youtube_auto_song_approve', v)}
-                    label="Auto-approve songs — carry straight on into the story. Off, automation stops once the song exists and parks it in the Song tab, so no film is built on a song you haven't heard" />
-                </>)}
-              </>)}
             </div>
           </Card>
           {/* ── X automation (issue #107) ── */}
@@ -2922,7 +3079,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               </Field>
             </div>
           </Card>
-        </>)}
+          </>)}
+          </>)
+        })()}
 
       </div>
     </div>
