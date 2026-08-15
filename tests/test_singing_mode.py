@@ -623,6 +623,51 @@ class SongEndingTests(_SongFilmCase):
         self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45)
 
 
+class MusicOnlyMixTests(_SongFilmCase):
+    """A music video's final mix is the song and nothing else: the takes are
+    shipped muted, so any voice or ambience left in the cut would only be a
+    stray spoken beat bleeding in under the track."""
+
+    def test_a_music_video_mixes_music_only(self):
+        (self.wd / "job_config.json").write_text(json.dumps(
+            {"music_vol": 100, "voice_vol": 100, "ambient_vol": 40}))
+
+        self.assertEqual(backend._mix_volumes(self.wd), (0.0, 100.0, 0.0))
+
+    def test_every_other_film_keeps_its_own_levels(self):
+        wd = self.output_dir / "documentary"
+        wd.mkdir()
+        (wd / "job_config.json").write_text(json.dumps(
+            {"music_vol": 18, "voice_vol": 100, "ambient_vol": 40}))
+
+        self.assertEqual(backend._mix_volumes(wd), (100.0, 18.0, 40.0))
+
+    def test_the_mixer_card_shows_the_song_alone(self):
+        (self.wd / "combined.mp4").write_bytes(b"mp4")
+        (self.wd / "job_config.json").write_text(json.dumps(
+            {"music_vol": 100, "voice_vol": 100, "ambient_vol": 40}))
+
+        data = backend.remix_load(str(self.wd))
+
+        self.assertEqual((data["voice_vol"], data["music_vol"], data["ambient_vol"]),
+                         (0.0, 100.0, 0.0))
+
+    def test_a_stale_client_cannot_mix_voice_back_in(self):
+        (self.wd / "combined.mp4").write_bytes(b"mp4")
+        final = self.output_dir / "rooftop.mp4"
+        final.write_bytes(b"mp4")
+
+        with unittest.mock.patch.object(backend.gapp, "on_remix",
+                                        return_value=(str(final), "ok")) as mix, \
+             unittest.mock.patch.object(backend, "_maybe_burn_first_frame_cover"):
+            backend.remix_apply(backend.RemixBody(
+                work_dir=str(self.wd), voice_vol=100, music_vol=100, ambient_vol=60))
+
+        self.assertEqual(mix.call_args.kwargs["voice_vol"], 0.0)
+        self.assertEqual(mix.call_args.kwargs["ambient_vol"], 0.0)
+        self.assertEqual(mix.call_args.kwargs["music_vol"], 100)
+
+
 class SongInstructionTests(unittest.TestCase):
     def test_instruction_rides_the_song_prompt(self):
         cfg = {}

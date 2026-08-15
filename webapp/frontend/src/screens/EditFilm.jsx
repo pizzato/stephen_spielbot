@@ -1335,9 +1335,16 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         {data.can_remix !== false && (
         <Card span={4} padLg className="reveal reveal-d2">
           <span className="label-sm">Re-mix audio</span>
-          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Balance the levels and re-mux without re-rendering the video.</p>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            {data?.song
+              ? 'A music video plays its song and nothing else — set how loud, and re-mux without re-rendering the video.'
+              : 'Balance the levels and re-mux without re-rendering the video.'}
+          </p>
           <div className="stack gap-22 mt-24">
-            {[['voice', 'Voice', 'microphone-lines'], ['music', 'Music', 'music'], ['ambient', 'Ambient', 'wind']].map(([k, label, ic]) => (
+            {(data?.song
+              ? [['music', 'Music', 'music']]
+              : [['voice', 'Voice', 'microphone-lines'], ['music', 'Music', 'music'], ['ambient', 'Ambient', 'wind']]
+            ).map(([k, label, ic]) => (
               <Field key={k} label={<span className="row center gap-10"><Icon name={ic} style={{ color: 'var(--ink-3)', width: 16 }} /> {label}</span>} hint={`${vol[k]}%`}>
                 <input className="slider" type="range" min={0} max={150} value={vol[k]} onChange={set(k)} />
               </Field>

@@ -56,6 +56,10 @@ while the audio keeps running. Re-renders re-apply the burn automatically.
 Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix film**. This
 balances the levels and re-muxes without re-rendering any video.
 
+A [music video](../performance_films.md#singing-films-the-music-video-format) gets the **Music**
+slider alone: its takes ship muted and the song is the entire soundtrack, so voice and
+ambience stay at 0% however the film is re-mixed.
+
 ### Narrator
 
 Change the narrator voice for **every** scene and rebuild the final audio. Per-scene voices
