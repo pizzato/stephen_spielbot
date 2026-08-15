@@ -274,7 +274,9 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Length — ${fmtDuration(minutes)}`}
-                  hint={acted
+                  hint={songFmt
+                    ? 'How long the SONG runs. The film runs exactly as long as the song, and you split it into scenes in the Song tab.'
+                    : acted
                     ? `${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of ~${Math.round(est.sceneSecs)} s — no narration to budget.`
                     : `${lengthEstimateLabel(minutes, effectiveWpm(meta, profile || {}, voice).wpm, profile?.tts_sentence_pause, sceneCount, bounds)} at ${voice || 'the narrator'}’s cadence.`}>
                   <input className="slider" type="range" min={0.5} max={30} step={0.25} value={minutes} onChange={(e) => setMinutes(+e.target.value)} />
@@ -287,6 +289,10 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </div>
 
+            {/* A music video's scene count is chosen in the Song tab, once the
+                song exists and its real length is known — an input here would
+                be ignored, which is exactly what made this confusing. */}
+            {!songFmt && (
             <Field label="Scenes"
               hint={sceneCount > 0
                 ? (lengthGaveWay
@@ -302,6 +308,7 @@ export default function Create({ seed, meta, onGenerated }) {
                 )}
               </div>
             </Field>
+            )}
 
             <Field label="Visual style"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : "Applied to every scene's image prompt."}>

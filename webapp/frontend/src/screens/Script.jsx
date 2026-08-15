@@ -134,7 +134,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
   const [songMsg, setSongMsg] = useState('')
   const [songVoiceSel, setSongVoiceSel] = useState('')  // "Sing this as" voice
-  const [clipSecsSong, setClipSecsSong] = useState(5)
+  // How many performed scenes the song splits into. The film runs the SONG's
+  // length, so this is the only division there is — same "Scenes" control as
+  // every other film, just dividing a fixed length instead of a chosen one.
+  const [scenesSong, setScenesSong] = useState(0)
   const songStudioOpened = useRef(false)
   const refreshSong = () => api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
   useEffect(() => {
@@ -148,6 +151,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       songStudioOpened.current = true
       setView('song')
       if (song.voice && !songVoiceSel) setSongVoiceSel(song.voice)
+    }
+    // Default the split to ~5 s takes once the song's real length is known.
+    if (song?.duration && !scenesSong) {
+      setScenesSong(Math.max(1, Math.round(Number(song.duration) / 5)))
     }
   }, [song])
   const saveSong = async () => {
@@ -190,7 +197,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         topic: b.topic || job.topic || '', minutes: b.minutes || 0,
         style_name: job.style_name || '', format: 'song',
         voice: b.voice || '', resolution: b.resolution || '',
-        clip_secs: Number(clipSecsSong) || 0, work_dir: job.work_dir,
+        n_scenes: Math.max(1, Number(scenesSong) || 1), work_dir: job.work_dir,
       })
       setStory(data.story || null)
       setMinutesTarget(String(storyMinutes(data.story)))
@@ -1048,11 +1055,17 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
               {song.song_url && (
                 <div className="row center between row--wrap gap-12 mt-8">
-                  <Field label="Clip length (seconds)"
-                    hint="The song divides into performed clips of about this length — each clip's stretch of the track is pinned into its generation.">
-                    <input className="input" type="number" min={5} max={12} step={1}
-                      style={{ width: 100 }} value={clipSecsSong}
-                      onChange={(e) => setClipSecsSong(e.target.value)} />
+                  <Field label="Scenes"
+                    hint={(() => {
+                      const dur = Number(song.duration) || 0
+                      const n = Math.max(1, Number(scenesSong) || 1)
+                      return dur
+                        ? `The film runs the song's length (${dur.toFixed(0)} s), split ${n} way${n === 1 ? '' : 's'} — ${n} scene${n === 1 ? '' : 's'} of ~${(dur / n).toFixed(1)} s, each performed against its own stretch of the track. Fewer scenes are longer takes.`
+                        : 'How many performed scenes the song is split into — each is generated against its own stretch of the track.'
+                    })()}>
+                    <input className="input" type="number" min={1} max={200} step={1}
+                      style={{ width: 100 }} value={scenesSong}
+                      onChange={(e) => setScenesSong(e.target.value)} />
                   </Field>
                   <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
                     disabled={!!busy}

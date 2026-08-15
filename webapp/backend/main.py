@@ -2408,8 +2408,17 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
                     total = 0.0
             if total <= 0:
                 total = acted_n * acted_secs
+            # The film runs the SONG's length, so the only division is how many
+            # scenes to split it into (the Song tab's "Scenes"). An explicit
+            # count wins; clip_secs is the older way of saying the same thing.
+            try:
+                want_n = int(body.n_scenes or 0)
+            except (TypeError, ValueError):
+                want_n = 0
             clip = float(body.clip_secs or 0)
-            if clip > 0:
+            if want_n > 0:
+                acted_n = min(gapp.MAX_SCENES, want_n)
+            elif clip > 0:
                 clip = min(max(clip, float(performance_mode.MIN_SCENE_SECONDS)),
                            performance_mode.H3_CEILING_SECONDS)
                 acted_n = max(1, round(total / clip))
@@ -2924,6 +2933,9 @@ def get_job_song(job_id: str) -> dict:
             "lyrics": str(data.get("lyrics") or ""),
             "voice": str(data.get("voice") or ""),
             "sung_as": str(data.get("sung_as") or ""),
+            # The generated track's real length (else the asked-for length) —
+            # what the clip-length control divides into scenes.
+            "duration": float(data.get("duration") or data.get("seconds") or 0),
             "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
                          if track.exists() else ""),
             "versions": hist.get("versions", []),
