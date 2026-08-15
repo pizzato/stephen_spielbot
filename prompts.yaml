@@ -379,31 +379,37 @@ story_divide:
 
 song_write:
   description: |
-    Song films (the "Music video" format): write the film's song from the
-    approved story — tagged lyrics the music model sings verbatim, plus a
-    structured caption (genre, tempo, mood, arrangement). The vocalist is NOT
-    described here: the render appends the cast singer's voice
-    (gender/age/tone) automatically.
+    Song films (the "Music video" format): write the film's song — tagged
+    lyrics the music model sings verbatim, plus a structured caption (genre,
+    tempo, mood, arrangement). Simplicity and the word budget are the whole
+    game: sung delivery is ~1 word/second once the music breathes, so short
+    songs hold far fewer words than prose instincts suggest. The vocalist is
+    NOT described here: the render appends the singing voice automatically.
   system: |
-    You are a songwriter turning a short film's story into the song that IS its soundtrack — the film shows its characters performing this song on camera, music-video style.
+    You are a songwriter for short films. You write SIMPLE, singable songs — the kind a person hums after one listen. Plain everyday words, short lines, one concrete image per line, repetition over invention. Never clever, never dense, never "poetic". If a line would look impressive printed, simplify it until it just sounds good sung.
 
     Output ONLY a JSON object with exactly these keys:
-      - "caption": 25-45 words describing the MUSIC in three parts, comma-separated: global feel (genre, tempo/BPM, key mood and how it progresses), performance style (energy, phrasing, harmonies if any), arrangement (lead instruments, groove, percussion, production feel). Do NOT describe the vocalist's gender, age or voice — the film's cast decides that and it is added automatically. Never write "instrumental".
-      - "lyrics": the complete lyrics, structured with section tags on their own lines: [Intro], [Verse], [Pre-Chorus], [Chorus], [Bridge], [Instrumental], [Outro] (use the ones the song needs — a verse/chorus shape is usually right). The lyrics TELL THE STORY below: its arc, its images, its turn — condensed into singable lines, not prose. Short lines, natural rhymes where they come easily, a chorus that lands the story's heart and repeats.
+      - "caption": 20-40 words describing the MUSIC, comma-separated: genre and tempo/BPM, mood, then the lead instruments and groove. Do NOT describe the vocalist's gender, age or voice — that is added automatically. Never write "instrumental".
+      - "lyrics": the complete lyrics, with section tags on their own lines ([Intro], [Verse], [Chorus], [Outro] — only the ones the song needs).
 
-    HARD BUDGET: the finished song runs about ${duration_seconds} seconds, so write AT MOST ${word_budget} sung words in total (section tags do not count). Songs overfilled past their length get cut off mid-phrase — leave room for the music to breathe (an [Intro] and an [Instrumental] or [Outro] cost seconds too).
+    THE TIME BUDGET IS EVERYTHING. The song runs about ${duration_seconds} seconds. Singing delivers roughly ONE word per second — intros, held notes and the music breathing eat the rest. So: AT MOST ${word_budget} sung words IN TOTAL. Section tags don't count; a repeated line counts every time it is sung. FEWER words than the budget is BETTER — a short hook with room to breathe beats a full paragraph, and an overfilled song gets cut off mid-line.
+
+    Match the shape to the length:
+      - Under ~30 seconds: ONE tiny idea. A single [Verse] of 2-4 short lines, or one [Chorus] hook — nothing else. No pre-chorus, no bridge, no second verse.
+      - 30-90 seconds: a short [Verse] and a [Chorus]; the chorus may repeat once.
+      - Longer: verse/chorus, with a [Bridge] only if it earns its seconds.
 
     Output only the raw JSON object. No markdown, no code fences, no explanation.
   user: |
     ${title_line}
 
-    THE STORY the song must tell:
+    WHAT THE SONG IS ABOUT (stay on this — the whole song is this one subject):
     ${story_text}
 
-    Musical direction to build on (mood/genre hint from the story outline):
+    Musical direction to build on:
     ${music_hint}${language_note}
 
-    The song runs about ${duration_seconds} seconds — at most ${word_budget} sung words.
+    The song runs about ${duration_seconds} seconds — at most ${word_budget} sung words, and fewer is better.
 
 
 condense_narration:

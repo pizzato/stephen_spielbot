@@ -2015,7 +2015,9 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             "most scenes (the face that keeps returning is what makes it a music video) — "
             "with pure story imagery between the performance shots. Write each scene's "
             "\"beats\" as performance action (singing to camera, turning, walking, "
-            "dancing, a look), spread across the whole take.")
+            "dancing, a look), spread across the whole take. Every scene's imagery comes "
+            "STRAIGHT FROM THE SONG — what the lyrics sing about at that stretch of the "
+            "track, or the performer singing it; nothing the song doesn't sing about.")
     else:
         balance = (
             "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
@@ -2423,9 +2425,15 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
     if song_wd is not None and (song_data.get("lyrics") or "").strip():
         dialogue_note = (
             (dialogue_note or "") +
-            "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED. The story "
-            "must tell exactly what these lyrics tell, in their order — "
-            "it is the video this song plays over:\n" + song_data["lyrics"])
+            "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED — this story is "
+            "the VIDEO for it, nothing more. Stay entirely inside the song's "
+            "world: its subject, mood and images ARE the film's, and every beat "
+            "must be something the lyrics sing or directly show. Keep it SIMPLE "
+            "and visual — a music video is pictures following a song, not a "
+            "plot. No subplots, no extra characters, no backstory, no twist the "
+            "song doesn't sing about; the same few images the song repeats are "
+            "what the camera returns to. These are the lyrics:\n"
+            + song_data["lyrics"])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(

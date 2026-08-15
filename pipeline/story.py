@@ -634,7 +634,11 @@ def write_song(story: dict | None, target_seconds: float,
     # so the song is written straight from it and the story follows the
     # lyrics afterwards.
     seconds = max(15, int(target_seconds or 0) or 180)
-    word_budget = max(40, int(seconds * 1.7))
+    # ~1 sung word per second: singing is SLOW — intros, held notes and the
+    # music breathing eat most of the clock. The old 1.7 w/s with a 40-word
+    # floor overfilled every short song (a 15 s track was asked to carry 40
+    # words and came out either rushed or cut off mid-line).
+    word_budget = max(10, int(seconds * 1.2))
     lang_name = narration_language_name(language)
     language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
                      f"section tags and the caption stay in English."
