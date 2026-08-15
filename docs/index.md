@@ -30,7 +30,8 @@ app; one or more **GPU workers** do the rendering.
 | 4 | **Narration** | [F5-TTS](https://github.com/SWivid/F5-TTS) speaks the script in a cloned voice — or [Chatterbox Multilingual](https://github.com/resemble-ai/chatterbox) for 23 languages |
 | 5 | **Dialogue** | Scenes can instead be acted: the characters speak on screen, picture and voice generated together by [MiniMax H3](https://github.com/MiniMax-AI) — see [acted scenes](performance_films.md) |
 | 6 | **Music** | [ACE-Step](https://github.com/ace-step/ACE-Step) (or the opt-in [MiniMax Music 3](models.md#music-engines-per-style)) scores it from the LLM's mood description, mixed in at the very end — or switched off per style or per film |
-| 7 | **Assembly** | FFmpeg mixes it all into one film with synced audio |
+| 7 | **Song** | Or the film *is* the music: the [Music-video format](performance_films.md#singing-films-the-music-video-format) has the LLM write the story as lyrics, the music model sing them, and the cast perform the song on camera |
+| 8 | **Assembly** | FFmpeg mixes it all into one film with synced audio |
 
 Everything is reviewable and editable between steps. Nothing renders until you approve
 the script, and nothing publishes until you say so.
@@ -43,7 +44,8 @@ the script, and nothing publishes until you say so.
 
     Requests collect in a [render queue](manual/queue.md) with optional
     [automation](manual/settings.md#automation) — from "draft scripts but wait for me"
-    all the way to fully hands-free.
+    all the way to fully hands-free, set globally or
+    [per style](manual/settings.md#scope-global-then-per-style).
 
 -   :material-lightbulb-on: **Ideas, not blank pages**
 

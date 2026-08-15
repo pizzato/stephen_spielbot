@@ -116,7 +116,7 @@ pipeline changes in three places:
   was asked for.
 - **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
   whole film (a song film with the 18 % bed gain would be a near-silent music video). The
-  Remix screen's *Generate again* re-sings the same lyrics; edit the caption there to
+  film editor's *Sing it again* re-sings the same lyrics; edit the caption there to
   change the sound. The script's [Song tab](manual/script.md#song) edits — or re-writes
   with the LLM — both the words and the sound.
 

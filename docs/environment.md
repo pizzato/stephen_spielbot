@@ -39,7 +39,7 @@ See [model licensing](tts_licensing.md) before pointing these at other weights.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the Remix temporal AI upscaler. Blank uses the packaged LTX-2.3 IC-LoRA workflow |
+| `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the film editor's temporal AI upscaler. Blank uses the packaged LTX-2.3 IC-LoRA workflow |
 | `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Timeout for the temporal AI upscaler, in seconds |
 
 ## Storage

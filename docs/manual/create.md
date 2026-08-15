@@ -2,8 +2,9 @@
 
 `#/create`
 
-Set the brief for a new film. Pressing **Generate script** costs one LLM call and produces
-a script you then review — no GPU work happens here.
+Set the brief for a new film. Pressing **1. Draft the story** (or **1. Write the song** for
+a music video) costs one LLM call and produces a draft you then review — no GPU work
+happens here.
 
 ## Style
 
@@ -33,10 +34,11 @@ the title; *Sharper angle*, *More detail*, *Simpler* for the direction.
 
 ## Length, Scenes and Resolution
 
-**Length** is a slider in minutes. The script's word budget comes from the narrator's
-cadence (words per minute — measured per voice, see Settings → Voices), and the story is
-divided into scenes of 10–15 seconds each; the hint under the slider shows the estimated
-word count and scene count live. Picking a style prefills its default length.
+**Length** is a slider in minutes — for a music video it is how long the *song* runs, and
+the film runs exactly as long as the song. The script's word budget comes from the
+narrator's cadence (words per minute — measured per voice, see Settings → Voices), and the
+story is divided into scenes of 10–15 seconds each; the hint under the slider shows the
+estimated word count and scene count live. Picking a style prefills its default length.
 
 **Scenes** decides how many scenes that length becomes. Left on *Auto* it's whatever the
 length needs at the usual scene size — about 12 seconds of narration each, or one ~10 s
@@ -106,8 +108,17 @@ sense alone.
 **Score this film with background music** — on by default, following the style. Music is
 mixed in at the very end, never baked into a scene, so switching it off simply leaves the
 film with its voices and room tone. An all-dialogue film has no score at all: the acted
-takes already carry their own sound. A **music-video** film is the opposite extreme — it
-*is* its song, so the toggle is locked on and the track plays at full volume.
+takes already carry their own sound, so the toggle is disabled. A **music-video** film is
+the opposite extreme — it *is* its song, played at full volume, so the toggle disappears
+and a **Singing voice** picker takes its place.
+
+## Singing voice
+
+Music videos only. Who sings the film: the vocalist is described to the music model from
+this voice's gender, age and tone — matched by description, never cloned, because the music
+engines cannot be handed a voice. Left on *the model's own vocalist*, the song decides. You
+can change it, and actually re-voice the finished track, in the
+[Song tab](script.md#song).
 
 ## Auto-approve
 
@@ -126,6 +137,10 @@ simply doesn't appear.
 
 **1. Draft the story** writes the prose and moves you to [Script](script.md), where you
 review it and divide it into scenes.
+
+For a **music video** the button reads **1. Write the song** instead, and lands you on the
+[Song tab](script.md#song): the song is written first, you generate and audition it there,
+and the story is drafted from the finished track.
 
 If you arrived here from a queued request, a banner says so — generating fills that
 existing queue slot and keeps its position. If you arrived via **Re-draft** from an existing

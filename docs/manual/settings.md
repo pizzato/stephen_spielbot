@@ -5,8 +5,8 @@
 Studio configuration. Everything here writes to
 [`~/.config/video-generator/config.yaml`](../configuration.md).
 
-Six tabs: **Infrastructure**, **Styles**, **Characters**, **Voices**, **Channels**,
-**Automation**.
+Seven tabs: **Infrastructure**, **Styles**, **Characters**, **Assets**, **Voices**,
+**Channels**, **Automation**.
 
 !!! warning "Unsaved edits are protected"
     Navigating away with staged changes prompts first. And after pulling code that changes
@@ -45,8 +45,22 @@ placeholder.
 
 ### Image models
 
-The **Hugging Face token** used to auto-download gated engine weights onto the workers.
-Per-style engine choice lives in the [Styles](#styles) tab.
+The **Hugging Face token** used to auto-download gated engine weights onto the workers,
+then every image engine with its licence and an install state — **Download** pushes the
+weights to every ComfyUI worker over SSH. Per-style engine choice lives in the
+[Styles](#styles) tab.
+
+### Video models
+
+The same list for the scene engines — LTX 2.5, the MiniMax H3 variants and their Turbo
+distillations — with each one's licence note. Nodes ship with ComfyUI itself, so
+*not installed* on a worker whose weights are present usually means its container needs a
+rebuild. See [Models → Video engines](../models.md#video-engines-per-style).
+
+### Music models
+
+ACE-Step 1.5 and the opt-in MiniMax Music 3, downloaded the same way. See
+[Models → Music engines](../models.md#music-engines-per-style).
 
 ### Voice models
 
@@ -228,7 +242,7 @@ See [Characters](../characters.md) for how consistency is enforced across scenes
 
 The location and wardrobe **catalogue** — reference images that outlive one film, scoped
 to styles exactly like characters (global pool + per-style, children inherit). A film's
-[Characters & Artifacts](script.md#characters--artifacts) wall shows the catalogue entries it
+[Characters & Artifacts](script.md#characters-artifacts) wall shows the catalogue entries it
 actually uses, read-only; a film's own visual of the same name shadows the catalogue one.
 Each asset has a name, kind, description, an owning style, and a reference image —
 generated in the owning style's look or uploaded.

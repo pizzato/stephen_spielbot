@@ -112,7 +112,7 @@ LTX 2.5 notes:
 - It replaced LTX 2.3 as the scene engine outright (same license terms, ~26%
   faster at production size); configs still naming `ltx23` fall back to it
   automatically. The 2.3 checkpoint stays installed for the keyframed
-  establishing shots and the Remix upscalers.
+  establishing shots and the film editor's upscalers.
 - Native support ships with **ComfyUI itself (≥ v0.32.0)** — rebuild the worker
   containers (`docker/comfyui/` pins `COMFYUI_REF=v0.33.0`) if the engine shows
   "not installed" with the weights already downloaded. Older workers refuse the
