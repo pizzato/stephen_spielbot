@@ -122,6 +122,12 @@ LTX 2.5 notes:
   pass knobs and the per-style video negative prompt apply as before. The
   distilled transformer replaces 2.3's distill LoRA, so the LoRA-strength knob
   has no effect on this engine.
+- It can also render **audio-driven**: a soundtrack segment is encoded with the
+  audio VAE and frozen in the AV latent, so the sampler denoises only the
+  picture against the real sound. The per-style **Singing scenes** picker uses
+  this to shoot a [song film's](performance_films.md#singing-films-the-music-video-format)
+  takes on LTX instead of H3 (needs the Lightricks ComfyUI-LTXVideo node pack,
+  already baked into the worker image).
 - Same license family as 2.3: free commercial use under US$10M annual revenue,
   no territory restrictions.
 

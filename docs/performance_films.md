@@ -109,11 +109,17 @@ pipeline changes in three places:
   and for song films it must *not* say "instrumental".
 - **The cast performs it.** Every scene is staged as a **performed silent take** —
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
-  no style toggle needed — stamped `singing` in its metadata. The prompt asks for a
+  no style toggle needed — stamped `singing` in its metadata, with **its own stretch of
+  the real song pinned into the generation** (audio-driven: the model hears that segment,
+  so mouth and movement follow the actual music). The prompt asks for a
   visible performance (mouth moving with the words, moving with the beat) instead of the
-  silent film's closed mouth, and the take ships **muted**: its own a-cappella audio would
+  silent film's closed mouth, and the take ships **muted**: its own audio would
   double the real vocals. The speech gate stands down for these takes — singing is what
-  was asked for.
+  was asked for. **Settings → Video models → Singing scenes** picks the engine that
+  shoots them: **MiniMax H3** (the default) performs from the cast's portraits, while
+  **LTX 2.5** animates each scene's first-frame still with the same pinned segment frozen
+  in its AV latent — several times faster, with the likeness carried by the first frame
+  instead of portrait references.
 - **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
   whole film (a song film with the 18 % bed gain would be a near-silent music video). The
   Remix screen's *Generate again* re-sings the same lyrics; edit the caption there to
@@ -142,9 +148,10 @@ language, so non-English songs need Music 3. And Music 3 caps a track at ~6 minu
 longer film loops the song, restart audible, so keep song films short.
 
 !!! note "It is still one song under many takes"
-    H3 cannot lip-sync to an external track (it writes picture and audio together), so a
-    music video is the honest shape of a "singing character": the film's real vocals come
-    from the music engine, and the takes perform them.
+    Both engines write picture and audio together, so the sync comes from pinning: each
+    take is generated *against* its frozen stretch of the real track, then muted. A music
+    video is the honest shape of a "singing character": the film's real vocals come from
+    the music engine, and the takes perform them.
 
 ## What you need first
 

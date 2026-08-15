@@ -99,6 +99,46 @@ class PromptTests(unittest.TestCase):
         self.assertIn("no music of any kind", prompt)
 
 
+class LtxSingingTests(unittest.TestCase):
+    """The song_video_engine opt-in: singing takes on LTX with a pinned track."""
+
+    def test_ltx_prompt_describes_the_performance(self):
+        meta = {"mode": "silent", "singing": True, "cast": ["Ada"],
+                "setting": "a rain-washed rooftop at night",
+                "sings": "city lights below\nwe are not done"}
+        prompt = perf.build_ltx_singing_prompt(meta, style_note="neon noir")
+        self.assertIn("rain-washed rooftop", prompt)
+        self.assertIn("neon noir", prompt)
+        self.assertIn("visibly singing", prompt)
+        self.assertIn("city lights below / we are not done", prompt)
+        # No H3 reference-slot language — LTX has no reference slots.
+        self.assertNotIn("<Picture", prompt)
+        self.assertNotIn("[REFERENCE USE]", prompt)
+
+    def test_ltx_prompt_override_wins(self):
+        meta = {"singing": True, "prompt_override": "exactly this",
+                "setting": "ignored"}
+        self.assertEqual(perf.build_ltx_singing_prompt(meta), "exactly this")
+
+    def test_song_track_engine_is_opt_in(self):
+        import resume_generation as rg
+        # Default and the explicit "h3" both stay on the reference engine.
+        self.assertIsNone(rg.song_track_engine({}))
+        self.assertIsNone(rg.song_track_engine({"song_video_engine": "h3"}))
+        # The opt-in resolves to the LTX engine with the pinned-track graph.
+        eng = rg.song_track_engine({"song_video_engine": "ltx25"})
+        self.assertEqual(eng["key"], "ltx25")
+        self.assertEqual(eng["track_workflow"], "ltx25_i2v_track.json")
+        # A typo (or a non-LTX engine) must NOT fall back to the default LTX
+        # engine and silently opt the style in.
+        self.assertIsNone(rg.song_track_engine({"song_video_engine": "ltx99"}))
+        self.assertIsNone(rg.song_track_engine({"song_video_engine": "minimax-h3"}))
+        # Styles-list fallback, same shape as chain_scenes_flag.
+        cfg = {"styles": [{"name": "Songs", "song_video_engine": "ltx25"}]}
+        self.assertEqual(rg.song_track_engine(cfg, "Songs")["key"], "ltx25")
+        self.assertIsNone(rg.song_track_engine(cfg, "Other"))
+
+
 class ProseBeatsTests(unittest.TestCase):
     def test_a_prose_beats_string_becomes_one_whole_take_beat(self):
         # The LLM sometimes writes "beats" as a sentence instead of a timed

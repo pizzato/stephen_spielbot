@@ -156,6 +156,12 @@ VIDEO_ENGINES: dict[str, dict] = {
         "commercial_ok": True,
         "license": "LTX-2.x Community License",
         "workflow": "ltx25_i2v.json",
+        # Same graph with a PINNED soundtrack: the track's audio latent is
+        # frozen (noise_mask=0) so the sampler denoises only the picture,
+        # against the real music — song films use it to shoot singing takes
+        # on LTX instead of H3 (song_video_engine). Needs the Lightricks
+        # ComfyUI-LTXVideo pack's LTXVSetAudioRefTokens (in the worker image).
+        "track_workflow": "ltx25_i2v_track.json",
         # LTX 2.5 runs at 24 fps (2.3 runs at 25) and its latent wants frame
         # counts of the form 8k+1 — comfyui.generate_video_continuation reads
         # both off the engine.

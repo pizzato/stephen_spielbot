@@ -589,6 +589,43 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     return "\n\n".join(sections)
 
 
+def build_ltx_singing_prompt(scene_meta: dict, *, style_note: str = "") -> str:
+    """The prompt for a singing take shot on LTX with a PINNED track.
+
+    LTX I2V has no reference slots — the cast's look comes from the opening
+    frame — so this is plain descriptive prose, not the H3 section prompt:
+    the scene, who performs, that they visibly sing the real lyrics (the model
+    hears them: the track is frozen in the AV latent), and the camera. A
+    hand-edited ``prompt_override`` wins outright, same contract as H3.
+    """
+    direction = _clean(scene_meta.get("direction"))
+    override = _clean(scene_meta.get("prompt_override"))
+    if override:
+        return f"{override} {direction}" if direction else override
+    cast = [c for c in (scene_meta.get("cast") or []) if _clean(c)]
+    who = " and ".join(cast) if cast else "The performer"
+    verb = "are" if len(cast) > 1 else "is"
+    parts = []
+    setting = _clean(scene_meta.get("setting"))
+    look = " ".join(x for x in (setting, _clean(style_note)) if x)
+    if look:
+        parts.append(_unterminated(look) + ".")
+    parts.append(f"{who} {verb} performing a song on camera for the whole shot: "
+                 "visibly singing along with the soundtrack, mouth opening and "
+                 "moving with the sung words, expressive face, swaying and "
+                 "moving with the beat. The mouth is never closed and still.")
+    sings = _clean(str(scene_meta.get("sings") or "").replace("\n", " / "))
+    if sings:
+        parts.append(f"{who} sing{'' if len(cast) > 1 else 's'} exactly these "
+                     f"words, in time with the music: \"{sings}\"")
+    camera = _unterminated(scene_meta.get("camera")) or \
+        "locked off at chest height, slight handheld drift, no push, no zoom"
+    parts.append(f"Camera: {camera}.")
+    if direction:
+        parts.append(direction)
+    return " ".join(parts)
+
+
 def spoken_text(scene_meta: dict) -> str:
     """Everything said in the scene, for captions and the description."""
     return " ".join(line["text"] for line in norm_lines(scene_meta.get("lines")))

@@ -2449,6 +2449,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="reference_engine" />
                 </Field>
               )}
+              {engineInfo && (
+                <Field label="Singing scenes — music videos"
+                  hint="How a song film's singing takes are shot. Both pin the scene's stretch of the real song into the generation so the mouth and movement follow the music. H3 performs from the cast's portraits (best likeness, slow). LTX 2.5 animates the scene's first-frame still with the song frozen in its audio latent — several times faster; the likeness rides on the first frame instead of portrait references.">
+                  <select className="select" value={eff.song_video_engine || 'h3'} onChange={(e) => setStyleField('song_video_engine', e.target.value)}>
+                    <option value="h3">MiniMax H3 — acted from portraits (default)</option>
+                    <option value="ltx25">LTX 2.5 — pinned track, first-frame still</option>
+                  </select>
+                  <ParentVal k="song_video_engine" />
+                </Field>
+              )}
               {engineInfo && (String(eff.video_engine || engineInfo.default_video_engine || '').startsWith('minimax')
                 || String(eff.reference_engine || engineInfo.default_reference_engine || '').startsWith('minimax')) && (
                 <Field label="Sampling steps — every MiniMax render"

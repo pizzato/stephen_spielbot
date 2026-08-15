@@ -371,6 +371,35 @@ def chain_scenes_flag(cfg: dict, style_name: str = "") -> bool:
     return bool(flag)
 
 
+def song_track_engine(cfg: dict, style_name: str = "") -> dict | None:
+    """The style's ``song_video_engine``, resolved — or None for the acted path.
+
+    A song film's singing takes render on the reference engine (H3 Ref2VA) by
+    default. This per-style key points them at an LTX-family video engine with
+    a pinned-track workflow instead ("ltx25"): the same frozen song segment
+    drives the picture, several times faster than H3. Flat key first, styles
+    fallback — same shape as chain_scenes_flag, same reason.
+    """
+    key = cfg.get("song_video_engine")
+    if key is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or style_name or ""):
+                key = s.get("song_video_engine")
+                break
+    key = str(key or "").strip()
+    if not key or key == "h3":
+        return None
+    # get_video, not resolve_video: the resolver falls back to the DEFAULT
+    # engine, and a typo silently opting a style into this path is exactly
+    # the surprise the explicit key exists to prevent.
+    eng = _engines.get_video(key)
+    if eng and eng.get("family") == "ltx" and eng.get("track_workflow"):
+        return dict(eng)
+    logger.warning("song_video_engine %r is not an LTX engine with a pinned-track "
+                   "workflow — singing takes stay on the reference engine", key)
+    return None
+
+
 def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
                          vid_width: int, vid_height: int) -> Path | None:
     """The image a SILENT acted scene opens on, generated if it isn't there yet.
@@ -659,6 +688,80 @@ def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
     return out
 
 
+def _finish_singing_take(clip: Path, window, scene_id: int) -> None:
+    """Mute and trim a singing take, whichever engine shot it.
+
+    Muted: the film's generated song is the only audio a music video carries,
+    and the take's own vocals under the real track would double them.
+
+    Trimmed: the film must run EXACTLY the song's length. Video engines render
+    on a frame grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that
+    excess compounds scene by scene into audible drift against the overlaid
+    track. Trim each take to its own window — the pinned segment covers
+    [0, window] of the clip, so what's cut is only the unpinned tail.
+    """
+    silence = clip.with_suffix(".silence.wav")
+    _write_silence_wav(silence, _get_duration(clip))
+    muted = clip.with_suffix(".muted.mp4")
+    mux_video_audio(clip, silence, muted)
+    muted.replace(clip)
+    silence.unlink(missing_ok=True)
+    if window:
+        want = float(window[1]) - float(window[0])
+        have = _get_duration(clip)
+        if want > 0 and have > want + 0.03:
+            trimmed = clip.with_suffix(".trimmed.mp4")
+            trim_video(clip, trimmed, want)
+            trimmed.replace(clip)
+            logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
+                        "song's timeline", scene_id, have, want)
+
+
+def _render_singing_clip_ltx(scene, meta, work_dir, cfg, clip: Path, *, engine,
+                             comfy_url, vid_width, vid_height,
+                             track_audio: Path, window,
+                             fallback_frame: Path | None = None) -> Path:
+    """Shoot a singing take on LTX with the song segment PINNED.
+
+    The segment's audio latent is frozen in the AV latent (the engine's
+    track_workflow), so the sampler denoises only the picture — mouth and
+    movement follow the real music, same contract as the audio-driven H3
+    path, at LTX speed. The cast's look comes from the scene's opening frame
+    (ensure_opening_frame made one for every silent scene with an image
+    prompt); without one the first portrait stands in.
+    """
+    from pipeline.comfyui import generate_video_continuation
+
+    frame = None
+    for ext in ("_preview.png", "_first_frame.png"):
+        p = work_dir / f"scene_{scene.id:02d}{ext}"
+        if p.exists() and p.stat().st_size > 0:
+            frame = p
+            break
+    if frame is None:
+        frame = fallback_frame
+    if frame is None:
+        raise RuntimeError(
+            f"Scene {scene.id}: no opening frame for the LTX singing take — "
+            "give the scene an image prompt (or a portrait) so it has a "
+            "picture to open on")
+
+    prompt = _performance.build_ltx_singing_prompt(meta, style_note=cfg.get("style", ""))
+    negative = ((scene.get("negative_prompt") if isinstance(scene, dict)
+                 else getattr(scene, "negative_prompt", "")) or "")
+    want = float(window[1]) - float(window[0])
+    lw, lh = ltx_dimensions(vid_width, vid_height)
+    logger.info("Scene %d: singing take on %s — %.1fs pinned to the track, from %s",
+                scene.id, engine.get("key"), want, frame.name)
+    generate_video_continuation(
+        prompt, negative, frame, clip,
+        width=lw, height=lh, duration_seconds=want,
+        comfy_url=comfy_url, video_engine=engine, track_audio=track_audio)
+    _finish_singing_take(clip, window, scene.id)
+    ensure_video_resolution(clip, vid_width, vid_height)
+    return clip
+
+
 def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
                              vid_width, vid_height, style_name,
                              extra_pictures: list[dict] | None = None,
@@ -719,6 +822,19 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         if art is not None:
             track_audio = art
             logger.info("Scene %d: pinning soundtrack artifact %s", scene.id, art.name)
+
+    # The style may point singing takes at LTX instead (song_video_engine):
+    # the same pinned segment drives the picture through the engine's frozen
+    # audio latent, several times faster than H3. Only a windowed song take
+    # qualifies — the window is what sizes the clip and the later trim.
+    if meta.get("singing") and window and track_audio is not None:
+        ltx_eng = song_track_engine(cfg, style_name)
+        if ltx_eng is not None:
+            return _render_singing_clip_ltx(
+                scene, meta, work_dir, cfg, clip, engine=ltx_eng,
+                comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
+                track_audio=track_audio, window=window,
+                fallback_frame=ref_images[0] if ref_images else None)
 
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
@@ -884,29 +1000,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                     " (best of retakes)" if _miss(best, transcript) else "")
 
     if meta.get("singing"):
-        # Ship the singing take MUTED: the film's generated song is the only
-        # audio a music video carries, and H3's own a-cappella take under the
-        # real track would double the vocals.
-        silence = clip.with_suffix(".silence.wav")
-        _write_silence_wav(silence, _get_duration(clip))
-        muted = clip.with_suffix(".muted.mp4")
-        mux_video_audio(clip, silence, muted)
-        muted.replace(clip)
-        silence.unlink(missing_ok=True)
-        # The film must run EXACTLY the song's length: H3 renders on a frame
-        # grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that excess
-        # compounds scene by scene into audible drift against the overlaid
-        # track. Trim each take to its own window — the pinned segment covers
-        # [0, window] of the clip, so what's cut is only the unpinned tail.
-        if window:
-            want = float(window[1]) - float(window[0])
-            have = _get_duration(clip)
-            if want > 0 and have > want + 0.03:
-                trimmed = clip.with_suffix(".trimmed.mp4")
-                trim_video(clip, trimmed, want)
-                trimmed.replace(clip)
-                logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
-                            "song's timeline", scene.id, have, want)
+        _finish_singing_take(clip, window, scene.id)
 
     # The kept take's continuation point, on the worker that shot it. Written
     # after the gate so it belongs to the clip that survived, not to a reject.

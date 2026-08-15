@@ -691,18 +691,32 @@ def generate_video_continuation(
     second_pass_steps: int = 6,
     comfy_url: str = COMFYUI_URL,
     video_engine: dict | None = None,
+    track_audio: Path | None = None,
 ) -> Path:
     """Continue a video clip from its last frame using LTX I2V.
 
     *video_engine* is an LTX-family entry from ``engines.VIDEO_ENGINES``; it
     supplies the workflow, fps and frame-count grid. None falls back to the
-    default registry engine (LTX 2.5)."""
+    default registry engine (LTX 2.5).
+
+    *track_audio* pins a soundtrack into the generation: the track is encoded
+    with the audio VAE and frozen in the AV latent, so the sampler denoises
+    only the PICTURE — motion and mouths follow the real music (the engine's
+    ``track_workflow`` graph). Song films use it to shoot singing takes."""
     eng = video_engine or _engines.VIDEO_ENGINES[_engines.DEFAULT_VIDEO_ENGINE]
     check_engine_supported(eng, comfy_url=comfy_url)
+    if track_audio is not None and not eng.get("track_workflow"):
+        raise RuntimeError(
+            f"Video engine {eng.get('key')} has no pinned-track workflow — "
+            "cannot render an audio-driven clip on it")
     fps = int(eng.get("fps") or LTX_FPS)
     length = _frame_count(length, duration_seconds, fps=fps,
                           multiple=int(eng.get("frame_multiple") or 0))
-    positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
+    if track_audio is None:
+        positive_prompt, negative_prompt = _steer_audio_natural(positive_prompt, negative_prompt)
+    # A pinned track skips the diegetic-sound steering: its "singing, song"
+    # negative would fight the very performance the track is there to drive,
+    # and the clip's audio is frozen anyway.
 
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -712,8 +726,9 @@ def generate_video_continuation(
 
     image_name = _upload_image(last_frame_path, comfy_url=comfy_url)
 
-    workflow = _load_workflow(eng["workflow"])
-    workflow = _fill_template(workflow, {
+    workflow = _load_workflow(eng["track_workflow"] if track_audio is not None
+                              else eng["workflow"])
+    fills = {
         "POSITIVE_PROMPT":   positive_prompt,
         "NEGATIVE_PROMPT":   negative_prompt,
         "WIDTH":             width,
@@ -725,7 +740,10 @@ def generate_video_continuation(
         "IMAGE_NAME":        image_name,
         "FIRST_PASS_CFG":    first_pass_cfg,
         "FIRST_PASS_SIGMAS": _gen_first_pass_sigmas(first_pass_steps),
-    })
+    }
+    if track_audio is not None:
+        fills["AUDIO_NAME"] = _upload_audio(track_audio, comfy_url=comfy_url)
+    workflow = _fill_template(workflow, fills)
     if "3" in workflow:  # 2.3's distill LoRA node; 2.5's distilled transformer is standalone
         workflow["3"]["inputs"]["strength_model"] = lora_strength
     _apply_second_pass(workflow, second_pass_cfg, second_pass_steps)

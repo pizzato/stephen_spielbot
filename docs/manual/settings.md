@@ -153,6 +153,7 @@ A film can hold two kinds of scene, and each has its own model, picked side by s
 |---|---|
 | **Narrated & silent scenes** | Each scene from its first-frame still (LTX 2.5 or MiniMax H3 I2V). In a *mixed* film these scenes render on H3 automatically so the whole film matches the acted takes |
 | **Acted (dialogue) scenes** | Each acted scene — picture and spoken dialogue in one pass — from the characters' portraits and cast voices (a MiniMax H3 Ref2VA variant) |
+| **Singing scenes — music videos** | How a [song film's](../performance_films.md#singing-films-the-music-video-format) singing takes are shot. Both choices pin the scene's stretch of the real song into the generation. **MiniMax H3** (default) performs from the cast's portraits — best likeness, slow. **LTX 2.5** animates the scene's first-frame still with the song frozen in its audio latent — several times faster; the likeness rides on the first frame instead of portrait references |
 
 **Sampling steps** beneath them is one knob for both: it overrides the step count of every
 MiniMax render in the style — narrated I2V and acted Ref2VA alike. 0 keeps each engine's

@@ -194,6 +194,10 @@ DEFAULT_CFG = {
     # Ref2VA model for acted scenes: portraits
     # and dialogue instead of a first frame. Narrated films never use it.
     "default_reference_engine": "minimax-h3-ref-w4a8",
+    # Where a song film's singing takes render: "h3" = the reference engine
+    # (audio-driven Ref2VA, the default) or "ltx25" = LTX 2.5 with the song
+    # segment pinned into its AV latent — same sync contract, much faster.
+    "default_song_video_engine": "h3",
     # Music engine per style (see pipeline/engines.py MUSIC_ENGINES): which model
     # writes the background bed. Default = ACE-Step 1.5.
     "default_music_engine": "ace-step",
@@ -457,6 +461,8 @@ STYLE_FIELD_TO_FLAT = {
     "h3_silent_scenes":     "default_h3_silent_scenes",
     # Ref2VA engine for performance films — see pipeline/engines.py
     "reference_engine":     "default_reference_engine",
+    # Engine for a song film's singing takes ("h3" | "ltx25")
+    "song_video_engine":    "default_song_video_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
     "tts_engine":           "default_tts_engine",
     # Narration language (multilingual TTS engines only)
@@ -770,6 +776,16 @@ def _norm_video_engine(value) -> str:
     return value if engines.get_video(value) else engines.DEFAULT_VIDEO_ENGINE
 
 
+def _norm_song_video_engine(value) -> str:
+    """Coerce the singing-take engine: "h3" (reference engine, the default) or
+    an LTX-family video engine carrying a pinned-track workflow ("ltx25")."""
+    key = str(value or "").strip()
+    eng = engines.get_video(key)
+    if eng and eng.get("family") == "ltx" and eng.get("track_workflow"):
+        return key
+    return "h3"
+
+
 def _norm_music_engine(value) -> str:
     """Coerce a music engine key to a known one (see pipeline/engines.py
     MUSIC_ENGINES), falling back to the default (ACE-Step 1.5)."""
@@ -1006,6 +1022,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
         _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
         _coerce(row, "reference_engine", _norm_reference_engine)
+        _coerce(row, "song_video_engine", _norm_song_video_engine)
         _coerce(row, "music_engine", _norm_music_engine)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)

@@ -205,6 +205,82 @@ class LTX25WorkflowTests(unittest.TestCase):
             upload.assert_not_called()
 
 
+class LTX25TrackWorkflowTests(unittest.TestCase):
+    """The pinned-track graph: a real song segment frozen in the AV latent."""
+
+    def _generate(self):
+        eng = engines.resolve_video({}, "ltx25")
+        captured = {}
+
+        def fake_queue(workflow, client_id, comfy_url=None):
+            captured["workflow"] = workflow
+            return "pid"
+
+        outputs = [{"filename": "ltx.mp4", "type": "output"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            frame = Path(tmp) / "frame.png"
+            frame.write_bytes(b"png")
+            seg = Path(tmp) / "seg.wav"
+            seg.write_bytes(b"wav")
+            out = Path(tmp) / "out.mp4"
+            with mock.patch.object(comfyui, "_upload_image", return_value="frame.png"), \
+                 mock.patch.object(comfyui, "_upload_audio", return_value="seg.wav") as up_audio, \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=outputs), \
+                 mock.patch.object(comfyui, "comfyui_version", return_value=(0, 33, 0)), \
+                 mock.patch.object(comfyui, "_download_output",
+                                   side_effect=lambda item, dest, comfy_url=None: dest):
+                comfyui.generate_video_continuation(
+                    "Ada sings on a rooftop", "blurry", frame, out,
+                    width=832, height=480, seed=7, duration_seconds=5.0,
+                    video_engine=eng, track_audio=seg,
+                )
+            captured["uploaded_audio"] = up_audio.call_args.args[0]
+        return captured
+
+    def test_track_workflow_pins_the_segment(self):
+        cap = self._generate()
+        wf = cap["workflow"]
+        self.assertTrue(str(cap["uploaded_audio"]).endswith("seg.wav"))
+        # The track feeds the audio VAE encoder, and its FROZEN latent replaces
+        # the empty audio latent in BOTH sampling passes — the sampler denoises
+        # only the picture, against the real music.
+        self.assertEqual(wf["40"]["inputs"]["audio"], "seg.wav")
+        self.assertEqual(wf["41"]["inputs"]["audio"], ["40", 0])
+        self.assertEqual(wf["42"]["class_type"], "LTXVSetAudioRefTokens")
+        self.assertEqual(wf["12"]["inputs"]["audio_latent"], ["42", 2])
+        self.assertEqual(wf["23"]["inputs"]["audio_latent"], ["42", 2])
+        # The ref-token conditioning reaches both guiders.
+        self.assertEqual(wf["13"]["inputs"]["positive"], ["42", 0])
+        self.assertEqual(wf["25"]["inputs"]["negative"], ["42", 1])
+        self.assertNotIn("LTXVEmptyLatentAudio",
+                         {n["class_type"] for n in wf.values()})
+        # Video parameterization matches the plain graph.
+        self.assertEqual(wf["8"]["inputs"]["length"], 121)
+        self.assertEqual(wf["35"]["inputs"]["image"], "frame.png")
+
+    def test_pinned_track_skips_the_diegetic_steering(self):
+        # _steer_audio_natural's negative refuses "singing, song" — applied to
+        # a pinned singing take it would fight the very performance the track
+        # is there to drive.
+        cap = self._generate()
+        wf = cap["workflow"]
+        self.assertNotIn("diegetic", wf["4"]["inputs"]["text"])
+        self.assertNotIn("singing", wf["5"]["inputs"]["text"])
+
+    def test_track_on_an_engine_without_the_workflow_is_refused(self):
+        eng = dict(engines.resolve_video({}, "ltx25"))
+        eng.pop("track_workflow")
+        with mock.patch.object(comfyui, "comfyui_version", return_value=(0, 33, 0)), \
+             mock.patch.object(comfyui, "_upload_image") as upload:
+            with self.assertRaises(RuntimeError):
+                comfyui.generate_video_continuation(
+                    "p", "n", Path("f"), Path("o"),
+                    video_engine=eng, track_audio=Path("seg.wav"))
+            upload.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()
 
