@@ -1178,6 +1178,21 @@ def main(work_dir: Path) -> None:
                 for name in (_performance.scene_meta(s).get("cast") or []):
                     if name not in singer_names:
                         singer_names.append(name)
+        # A singing scene the writer left castless has no portrait to perform
+        # from, and on Ref2VA the portrait IS the identity — that scene then
+        # stars whoever its first frame happens to depict, a different face
+        # from the rest of the film. A music video is performed by its singer:
+        # inherit the cast the other singing scenes named.
+        if singer_names:
+            for s in scenes:
+                if not _performance.is_singing(s):
+                    continue
+                meta = getattr(s, "metadata_extra", None)
+                if isinstance(meta, dict) and not (meta.get("cast") or []):
+                    meta["cast"] = list(singer_names)
+                    logger.info("Scene %s: castless singing take — performing as %s",
+                                s.id, ", ".join(singer_names))
+
         from app import vocalist_note, voice_descriptor
         # The song-first flow picked an explicit SINGING voice; a cast
         # member's voice is the fallback for films that skipped that step.

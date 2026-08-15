@@ -6,6 +6,7 @@ h3_silent_scenes says, prompted to visibly sing, shipped muted — while the rea
 vocals come from the music engine singing the film's tagged lyrics
 (song.json), captioned to match the cast singer's library voice.
 """
+import inspect
 import json
 import sys
 import unittest
@@ -139,10 +140,33 @@ class LtxSingingTests(unittest.TestCase):
             # ...and no more than one grid step of overshoot to trim back off.
             self.assertLess(frames / 24 - want, 8 / 24)
 
+    def test_a_castless_singing_scene_inherits_the_films_singer(self):
+        # Ref2VA conditions identity on the PORTRAIT. A singing scene with no
+        # cast resolves no portrait, so it performs from its first frame alone
+        # and stars a different face than the rest of the music video.
+        import resume_generation as rg
+        scenes = [_singing(cast=("Lucy",)), _singing(cast=())]
+        scenes[1].metadata_extra["cast"] = []
+        singer_names = []
+        for s in scenes:
+            for name in (perf.scene_meta(s).get("cast") or []):
+                if name not in singer_names:
+                    singer_names.append(name)
+        self.assertEqual(singer_names, ["Lucy"])
+        # The renderer fills the gap from the singers the other scenes named.
+        src = inspect.getsource(rg.main)
+        self.assertIn("castless singing take", src)
+        for s in scenes:
+            meta = s.metadata_extra
+            if not (meta.get("cast") or []):
+                meta["cast"] = list(singer_names)
+        self.assertEqual([s.metadata_extra["cast"] for s in scenes],
+                         [["Lucy"], ["Lucy"]])
+
     def test_a_short_take_is_padded_not_left_adrift(self):
         # Fault-proofing for EVERY engine: H3 overshoots its slot and gets
         # trimmed, but nothing caught a take that lands UNDER it.
-        import inspect
+
         import resume_generation as rg
         src = inspect.getsource(rg._finish_singing_take)
         self.assertIn("_pad_video_tail", src)
