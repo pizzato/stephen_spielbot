@@ -4969,7 +4969,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
                        f"{plan['scene_words_max']} words — the scene must stay 10-15 seconds "
                        f"spoken. One flowing sentence, or two short ones.")
 
-    system = ("You are a documentary script writer for short, AI-generated videos. "
+    system = ("You are a script writer for short, AI-generated films. "
               "Be concise and return ONLY what the task asks for — no preamble, no labels.")
     user = (
         f"Video title: {video_title or topic}\nTopic: {topic}\nVisual style: {style}\n"
@@ -5946,6 +5946,21 @@ class RemixVideoSelectBody(BaseModel):
     version_id: int
 
 
+def _remix_song_info(wd: Path) -> dict | None:
+    """A song film's song, for the film editor — None for every other film."""
+    path = wd / "song.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    return {"lyrics": str(data.get("lyrics") or ""),
+            "caption": str(data.get("caption") or ""),
+            "sung_as": str(data.get("sung_as") or ""),
+            "job_id": job_id_from_work_dir(wd)}
+
+
 @api.get("/api/remix")
 def remix_load(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
@@ -5987,6 +6002,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "video_history": final_video_history.history(wd),
+        # A song film's song, so the finished film still shows WHAT is being
+        # sung (lyrics, current voice) and can re-sing / re-voice from here.
+        "song": _remix_song_info(wd),
         # Short text on the cover image + first-frame burn: saved override,
         # else derived from the title (edit it from the cover card).
         "cover_phrase": cover_phrase_for(wd, _title),

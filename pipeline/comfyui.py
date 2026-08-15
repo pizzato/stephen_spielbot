@@ -2020,7 +2020,7 @@ def generate_music(
 
     if tags is None:
         tags = (
-            f"ambient documentary background music, {topic}, "
+            f"cinematic ambient background music, {topic}, "
             "cinematic, atmospheric, instrumental, orchestral, peaceful"
         )
 

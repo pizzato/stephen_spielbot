@@ -1460,16 +1460,33 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         </Card>
 
         <Card span={8} padLg className="reveal reveal-d2">
-          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} /> Background music</span>
-          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
+          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} />
+            {data?.song ? 'The film’s song' : 'Background music'}</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            {data?.song
+              ? 'This film is a music video — the song below is its whole soundtrack, and each scene was generated against its own stretch of it. Pick any kept version (the original vocalist, a re-voicing) and the film re-mixes instantly.'
+              : 'Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.'}
+          </p>
+          {data?.song && (
+            <div className="mt-16">
+              <Field label={`Lyrics${data.song.sung_as ? ` · sung as ${data.song.sung_as}` : ''}`}
+                hint="What the song sings, exactly. Regenerating the music re-sings these words.">
+                <pre style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, lineHeight: 1.6,
+                              margin: 0, padding: '12px 14px', whiteSpace: 'pre-wrap',
+                              background: 'var(--paper-2)', borderRadius: 'var(--r-sm)',
+                              border: '1px solid var(--line)' }}>{data.song.lyrics}</pre>
+              </Field>
+            </div>
+          )}
           <div className="mt-24">
-            <Field label="Music prompt" hint="What the soundtrack should sound like">
+            <Field label={data?.song ? 'The sound (music caption)' : 'Music prompt'}
+              hint="What the soundtrack should sound like">
               <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy || upscaleBusy}
                 onChange={(e) => setMusicDesc(e.target.value)}
                 placeholder="cinematic orchestral background music, atmospheric, instrumental" />
             </Field>
           </div>
-          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button></div>
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
             onSelect={selectMusic} busy={anyBusy} />
         </Card>

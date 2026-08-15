@@ -610,7 +610,7 @@ video_suggestions:
     Return ONLY a JSON array of exactly 5 objects, each with:
     - "title": string — a simple, plain-language video title that captures the real subject
     - "reason": string — one sentence explaining why it fits the channel and complements the library
-    - "interestingness": number 0.0–1.0 — estimated audience appeal and documentary potential
+    - "interestingness": number 0.0–1.0 — estimated audience appeal and fit for the channel
       (0.9–1.0 = outstanding broad appeal; 0.7–0.9 = solid; 0.5–0.7 = decent but niche; below 0.5 = poor fit)
 
     Output only the raw JSON array, no other text.
@@ -640,9 +640,10 @@ youtube_description:
     You are a YouTube video description writer. Write engaging, informative video descriptions
     that accurately represent the content and help viewers decide whether to watch.
   user: |
-    Write a SHORT YouTube video description for "${title}".
+    Write a SHORT YouTube video description for "${title}", which is a ${film_kind}.
+    Describe it as what it IS — never call it a documentary unless that is what it is.
 
-    The video covers:
+    What it covers (lines marked "(sung)" are its lyrics):
     ${narrations}
 
     Requirements:
@@ -663,9 +664,9 @@ youtube_tags:
     You generate YouTube keyword tags — the search terms a viewer might type to
     find a video. Tags are concise, specific, and accurately describe the topic.
   user: |
-    Suggest YouTube keyword tags for the video "${title}".
+    Suggest YouTube keyword tags for "${title}", which is a ${film_kind}.
 
-    The video covers:
+    What it covers (lines marked "(sung)" are its lyrics):
     ${narrations}
 
     Requirements:

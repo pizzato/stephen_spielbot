@@ -257,6 +257,31 @@ class SvcTests(unittest.TestCase):
                 svc.convert_song(Path("/x"), Path("/y"), Path("/z"))
 
 
+class FilmKindTests(unittest.TestCase):
+    def test_a_music_video_is_never_called_a_documentary(self):
+        from pipeline.llm import film_kind, _film_content_lines
+        sung = [{"narration": "", "metadata": {"mode": "silent", "singing": True,
+                                               "sings": "Wobbly knees\nThen she flies"}}]
+        self.assertEqual(film_kind(sung), "music video")
+        # The lyrics ARE the content — a song film used to produce the empty
+        # string here and fall to "A documentary about …".
+        self.assertIn("(sung) Wobbly knees / Then she flies",
+                      _film_content_lines(sung))
+
+    def test_other_kinds(self):
+        from pipeline.llm import film_kind
+        self.assertEqual(film_kind([{"narration": "Words.", "metadata": {}}]),
+                         "documentary")
+        self.assertEqual(film_kind([{"metadata": {"mode": "dialogue",
+                                                  "lines": [{"speaker": "A", "text": "hi"}]}}]),
+                         "acted short film")
+        self.assertEqual(film_kind([{"metadata": {"mode": "silent"}}]),
+                         "silent short film")
+        self.assertEqual(film_kind([{"metadata": {"mode": "dialogue"}},
+                                    {"narration": "x", "metadata": {}}]),
+                         "short film")
+
+
 class SongFormatNoteTests(unittest.TestCase):
     def test_staging_note_forbids_voices_and_asks_for_the_performer(self):
         from webapp.backend.main import _build_dialogue_note, _story_format_note
