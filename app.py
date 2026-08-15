@@ -321,6 +321,28 @@ DEFAULT_CFG = {
     "youtube_auto_critic": False,
     # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
     "youtube_auto_critic_passes": 0,
+    # The FORMAT automation writes films in — the Create screen's Format picker,
+    # for unattended runs (narration | dialogue | mixed | silent | song).
+    # "song" is the Music-video format and pulls in the song_* steps below.
+    "youtube_auto_format": "narration",
+    # Music videos only. The song must exist BEFORE the story is divided: the
+    # scene windows are timed against the real track and each singing take has
+    # its stretch of it pinned in (audio-driven H3). Off, an automated music
+    # video falls back to estimated timings and unpinned takes.
+    "youtube_auto_song": False,
+    # Lyric QC before the track is rendered: 0 = off, 1-3 = that many judge +
+    # rewrite passes. Cheap (one LLM call a pass) next to re-rendering a track.
+    "youtube_auto_song_critic_passes": 0,
+    # The singing voice automation asks for; "" = the music engine's own
+    # vocalist. Described to the model (gender/age/tone), never cloned.
+    "youtube_auto_song_voice": "",
+    # Also RE-VOICE the finished track as that library voice (seed-vc, local
+    # GPU). Needs youtube_auto_song_voice; both versions are kept.
+    "youtube_auto_song_revoice": False,
+    # False = automation stops once the song is generated and parks it in the
+    # Song tab for review, so no story, scenes or render are built on a song
+    # you haven't heard. True = carry straight on into the script.
+    "youtube_auto_song_approve": False,
     "youtube_fully_automated": False,          # derived mirror of the auto_* steps above (true iff all on); no behaviour of its own
     # Queue page sort — persisted so it survives page reloads, and authoritative:
     # automation/"Start next render" consume pending items in this order.
@@ -833,6 +855,16 @@ def _norm_video_scenes(value) -> int:
     except (TypeError, ValueError):
         return 0
     return max(0, min(MAX_SCENES, v))
+
+
+# The film formats the Create screen offers (docs/performance_films.md).
+VIDEO_FORMATS = ("narration", "dialogue", "mixed", "silent", "song")
+
+
+def _norm_video_format(value) -> str:
+    """Coerce a film format to a known one; anything else is narration."""
+    v = str(value or "").strip().lower()
+    return v if v in VIDEO_FORMATS else "narration"
 
 
 def _norm_reference_engine(value) -> str:

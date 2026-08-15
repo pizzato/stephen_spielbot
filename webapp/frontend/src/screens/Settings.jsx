@@ -2823,6 +2823,56 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               </Field>
             </div>
           </Card>
+
+          {/* ── What automation makes: the Create screen's Format picker, for
+               unattended runs. Music videos need their own steps, so they
+               unfold under it. ── */}
+          <Card span={12} className="reveal reveal-d1">
+            <span className="label-sm">What automation makes</span>
+            <div className="stack gap-16 mt-16">
+              <Field label="Format"
+                hint="The format automation writes films in — what you'd pick on the Create screen, answered once for every unattended film. Films you start yourself still choose their own.">
+                <Segmented value={cfg.youtube_auto_format || 'narration'}
+                  onChange={(v) => set('youtube_auto_format', v)}
+                  options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
+                            { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
+                            { value: 'song', label: 'Music video' }]} />
+              </Field>
+              {cfg.youtube_auto_format === 'song' && (<>
+                <Check checked={!!cfg.youtube_auto_song} onChange={(v) => set('youtube_auto_song', v)}
+                  label="Write and generate the song before the story — the scenes are then timed against the real track and each take sings its own stretch of it (off = the song is only made at render time, and the takes have nothing to sing to)" />
+                {!!cfg.youtube_auto_song && (<>
+                  <div className="row center gap-10" style={{ paddingLeft: 26 }}>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Song critic</span>
+                    <select className="select" value={String(cfg.youtube_auto_song_critic_passes ?? 0)}
+                      onChange={(e) => set('youtube_auto_song_critic_passes', Number(e.target.value))} style={{ maxWidth: 220 }}>
+                      <option value="0">Off — sing the first draft</option>
+                      <option value="1">1 pass</option>
+                      <option value="2">2 passes</option>
+                      <option value="3">3 passes</option>
+                    </select>
+                    <span className="muted" style={{ fontSize: 12.5 }}>QC the lyrics — length, singability, hook — before the track is rendered</span>
+                  </div>
+                  <div className="row center gap-10" style={{ paddingLeft: 26 }}>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Singing voice</span>
+                    <select className="select" value={cfg.youtube_auto_song_voice || ''}
+                      onChange={(e) => set('youtube_auto_song_voice', e.target.value)} style={{ maxWidth: 260 }}>
+                      <option value="">The model’s own vocalist</option>
+                      {(meta.voices || []).filter((v) => v !== 'Default (F5-TTS)').map((v) => (
+                        <option key={v} value={v}>{voiceLabel(v, voiceMetaMap(cfg.voices))}</option>
+                      ))}
+                    </select>
+                    <span className="muted" style={{ fontSize: 12.5 }}>Described to the music model (gender, age, tone) — not cloned</span>
+                  </div>
+                  <Check checked={!!cfg.youtube_auto_song_revoice} disabled={!cfg.youtube_auto_song_voice}
+                    onChange={(v) => set('youtube_auto_song_revoice', v)}
+                    label="Re-voice the finished track as that voice (voice conversion, runs on the controller) — the sung original is kept as a version either way" />
+                  <Check checked={!!cfg.youtube_auto_song_approve} onChange={(v) => set('youtube_auto_song_approve', v)}
+                    label="Auto-approve songs — carry straight on into the story. Off, automation stops once the song exists and parks it in the Song tab, so no film is built on a song you haven't heard" />
+                </>)}
+              </>)}
+            </div>
+          </Card>
           {/* ── X automation (issue #107) ── */}
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">X automation</span>

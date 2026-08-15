@@ -2478,6 +2478,11 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": fmt,
+        # Carried, not re-derived: a music video's brief was written by
+        # /api/song/draft before this story existed, and the queue slot it
+        # belongs to is only recorded there.
+        "queue_item_id": ((body.queue_item_id or "").strip()
+                          or str(_read_create_brief(work_dir).get("queue_item_id") or "")),
         # A song film IS its song — music can't be opted out of.
         "music": True if fmt == "song" else (
             bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music)),
@@ -2636,7 +2641,12 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         auto_approve=bool(body.auto_approve),
         voice=(body.voice or brief.get("voice") or "").strip(),
         resolution=(body.resolution or brief.get("resolution") or "").strip(),
-        queue_item_id=body.queue_item_id,
+        # The brief's slot is the fallback: a music video automation parked for
+        # review is continued from the Song tab, which knows the work dir but
+        # not the queue item — without this the finished script would open a
+        # second slot instead of filling the one that is waiting for it.
+        queue_item_id=(body.queue_item_id
+                       or str(brief.get("queue_item_id") or "")),
         style_name=ss["name"],
         format=fmt,
         auto_critic=body.auto_critic,
@@ -2694,6 +2704,10 @@ class SongDraftBody(BaseModel):
     style_name: str = ""
     voice: str = ""          # the SINGING voice (library name); "" = model's pick
     n_scenes: int = 0        # how many scenes to split the song into; 0 = Auto
+    # The queue slot this song belongs to, when automation drafted it. Kept in
+    # the create brief so the script written from the song later links back to
+    # that slot rather than opening a second one.
+    queue_item_id: str = ""
 
 
 @api.post("/api/song/draft")
@@ -2738,6 +2752,7 @@ def song_draft(body: SongDraftBody) -> dict:
         "voice": (body.voice or "").strip(), "resolution": ss.get("resolution") or "",
         "style_name": ss["name"], "auto_approve": False,
         "format": "song", "music": True,
+        "queue_item_id": (body.queue_item_id or "").strip(),
     }
     _write_create_brief(wd, create_brief)
     job_id = job_id_from_work_dir(wd)
@@ -11664,9 +11679,22 @@ def _start_queue_item(item: dict) -> dict:
         # Server-side automation: run generation inline (no browser connection to
         # protect) and use the result directly — the HTTP endpoint is the polling
         # wrapper around this same call.
+        # No script yet: write one in automation's format. A music video needs
+        # its song rendered BEFORE the story is divided (see _auto_song_first),
+        # so that runs inline here too — the song review gate doesn't apply on
+        # this path, which only ever runs for an item already cleared to render.
+        fmt = _auto_format(cfg)
+        song_wd = ""
+        if _auto_song_needed(cfg):
+            song_wd = _auto_song_first(
+                cfg, title=title, topic=topic, minutes=minutes,
+                style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
+                queue_item_id=item.get("id") or "")["work_dir"]
         gen = _do_script_generate(GenerateScriptBody(
             video_title=title, topic=topic, minutes=minutes, resolution=resolution,
-            style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
+            style_name=style_name, format=fmt, work_dir=song_wd,
+            n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
+            auto_critic=bool(cfg.get("youtube_auto_critic"))))
         start_generation(GenerateBody(
             job_id=gen["job_id"], work_dir=gen["work_dir"], video_title=title, title=title,
             n_scenes=0, voice=ss.get("voice", ""),
@@ -13622,6 +13650,80 @@ def _retryable_failed(cfg: dict) -> dict | None:
     return item
 
 
+def _auto_format(cfg: dict) -> str:
+    """The film format automation writes in (Settings → Automation → Format).
+
+    The Create screen asks a human which format each film is; unattended runs
+    have nobody to ask, so this one setting answers for all of them."""
+    return gapp._norm_video_format(cfg.get("youtube_auto_format"))
+
+
+def _auto_song_needed(cfg: dict) -> bool:
+    """Is the song step part of automation's format? Music videos only."""
+    return _auto_format(cfg) == "song" and bool(cfg.get("youtube_auto_song"))
+
+
+def _auto_song_first(cfg: dict, *, title: str, topic: str, minutes: float,
+                     style_name: str, n_scenes: int, queue_item_id: str) -> dict:
+    """Do unattended what the Song tab does by hand: write the song, QC the
+    lyrics, render the track, and re-voice it — into a fresh work dir the story
+    is then drafted FROM.
+
+    Order is the point, not convenience. A music video's scene windows are
+    timed against the REAL track and each singing take has its stretch of it
+    pinned in (audio-driven H3, resume_generation.scene_track_audio), so the
+    track has to exist before the story is divided. Left to the render, the
+    music task runs alongside the video tasks and the takes are generated with
+    no track to sing to.
+
+    Returns the song's ``{"work_dir", "job_id"}``. Raises on failure — the
+    caller leaves the queue item pending and tries again next tick."""
+    drafted = song_draft(SongDraftBody(
+        video_title=title, topic=topic, minutes=minutes, style_name=style_name,
+        voice=str(cfg.get("youtube_auto_song_voice") or "").strip(),
+        n_scenes=n_scenes, queue_item_id=queue_item_id))
+    wd = Path(drafted["work_dir"])
+
+    # Lyric QC before the track is rendered: a bad song caught here costs one
+    # LLM call, caught after the render it costs a worker slot and a re-voice.
+    passes = max(0, min(3, int(cfg.get("youtube_auto_song_critic_passes") or 0)))
+    if passes:
+        data = json.loads((wd / "song.json").read_text())
+        secs = float(data.get("seconds") or 0)
+        for _ in range(passes):
+            issues = story_mode.critique_song(
+                data, secs, topic=topic, video_title=title)
+            if not issues:
+                break
+            gapp.logger.info("Song critic: revising %s — %s", wd.name, issues[:120])
+            try:
+                revised = story_mode.write_song(
+                    None, secs,
+                    language=gapp._norm_tts_language(
+                        gapp.style_settings(cfg, style_name).get("tts_language")),
+                    topic=topic, video_title=title, instruction=issues)
+            except Exception:
+                gapp.logger.warning("Song rewrite failed — keeping the draft",
+                                    exc_info=True)
+                break
+            data.update(revised)
+            (wd / "song.json").write_text(json.dumps(data, indent=2))
+
+    _do_song_generate(wd)
+
+    # Re-voice the finished track as a library voice (seed-vc). The engine's
+    # own vocalist is kept as a version either way, so this is recoverable
+    # from the Song tab.
+    voice = str(cfg.get("youtube_auto_song_voice") or "").strip()
+    if voice and cfg.get("youtube_auto_song_revoice"):
+        try:
+            _do_song_convert(wd, voice)
+        except Exception:
+            gapp.logger.warning("Auto re-voice as %s failed — keeping the sung "
+                                "original", voice, exc_info=True)
+    return {"work_dir": str(wd), "job_id": drafted["job_id"]}
+
+
 def _auto_write_scripts(cfg: dict) -> int:
     """Write — but DON'T render — a script for every pending queue item that
     lacks one, leaving it unapproved so the user can review / edit / approve it
@@ -13636,6 +13738,8 @@ def _auto_write_scripts(cfg: dict) -> int:
     for q in _ordered_pending(cfg):
         if q.get("script_ready") and q.get("work_dir") and q.get("video_job_id"):
             continue  # already has a parked script
+        if q.get("song_parked"):
+            continue  # its song is waiting in the Song tab to be reviewed
         item_id = q.get("id")
         title = q.get("final_title", "")
         style_name = (q.get("gen_style_name") or "").strip()
@@ -13643,10 +13747,34 @@ def _auto_write_scripts(cfg: dict) -> int:
         minutes = _queue_item_minutes(q, ss)
         topic = q.get("video_prompt") or title
         resolution = q.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+        fmt = _auto_format(cfg)
+        song_wd = ""
         try:
+            if _auto_song_needed(cfg):
+                # Music video: the song comes first and the story follows it.
+                song = _auto_song_first(
+                    cfg, title=title, topic=topic, minutes=minutes,
+                    style_name=style_name, n_scenes=gapp.style_video_scenes(ss),
+                    queue_item_id=item_id)
+                song_wd = song["work_dir"]
+                if not cfg.get("youtube_auto_song_approve"):
+                    # Song review gate: stop here. Nothing — story, scenes or
+                    # render — gets built on a song nobody has heard yet. The
+                    # Song tab's "Draft the story" is the human continuation,
+                    # and it links the script back to this slot from the brief.
+                    cur = next((x for x in yt.load_queue() if x.get("id") == item_id), None)
+                    if cur and cur.get("status") == "pending":
+                        yt.update_queue_item(
+                            item_id, video_job_id=song["job_id"], work_dir=song_wd,
+                            song_parked=True, script_ready=False, approved=False,
+                            suggested_minutes=round(minutes, 2),
+                            gen_resolution=resolution, gen_style_name=ss["name"])
+                    continue
             gen = _do_script_generate(GenerateScriptBody(
                 video_title=title, topic=topic, minutes=minutes, resolution=resolution,
-                style_name=style_name, auto_critic=bool(cfg.get("youtube_auto_critic"))))
+                style_name=style_name, format=fmt, work_dir=song_wd,
+                n_scenes=gapp.style_video_scenes(ss) if fmt == "song" else 0,
+                auto_critic=bool(cfg.get("youtube_auto_critic"))))
         except Exception:
             continue
         # Re-check the slot is still pending before attaching: script generation
@@ -13679,8 +13807,11 @@ def _auto_start_best() -> dict | None:
     pending = _ordered_pending(cfg)
     if cfg.get("youtube_auto_approve_script"):
         # Auto-approve on: take the next pending item and render it end-to-end,
-        # writing the script first when the item doesn't have one.
-        item = {**pending[0]} if pending else None  # fresh copy
+        # writing the script first when the item doesn't have one. An item whose
+        # song is parked for review is the one exception — its film waits for
+        # the song to be approved, however freely scripts are approved.
+        startable = [q for q in pending if not (q.get("song_parked") and not q.get("script_ready"))]
+        item = {**startable[0]} if startable else None  # fresh copy
     else:
         # Review gate on: only render the next item the user has explicitly
         # approved (and that has a written script). A script being present is

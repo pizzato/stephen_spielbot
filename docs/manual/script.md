@@ -41,6 +41,11 @@ the format does to the render.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics.
 
+Every step on this tab can also run unattended — see
+[what automation makes](settings.md#what-automation-makes). With its song review gate on,
+automation writes and generates the song and then leaves it here: listen, change what you
+want, and **Draft the story →** picks the film back up in its queue slot.
+
 ## Story
 
 The prose behind the scenes, one

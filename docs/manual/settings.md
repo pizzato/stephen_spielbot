@@ -310,6 +310,34 @@ Off by default. Each checkbox is one gate you're handing over.
 The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
 drafts to review, and *auto-start with approval required* renders only what you've ticked.
 
+### What automation makes
+
+- **Format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
+  [format](create.md#format) automation writes films in, answered once instead of per film.
+  Films you start yourself on the Create screen still pick their own
+
+Choosing **Music video** unfolds the song steps, because a music video is built the other
+way round from every other film — the song comes first and the pictures follow it:
+
+- **Write and generate the song before the story** — the whole point of the setting. With
+  it on, automation does unattended what the [Song tab](script.md#song) does by hand: the
+  scenes are then divided against the real track's length and each performed take has its
+  own stretch of the song pinned in, so the cast sings the actual words. Off, the song is
+  only made at render time, alongside the takes — which means the takes have nothing to
+  sing to and the scene timings are guesses
+- **Song critic** — `Off`, or **1, 2, 3 passes** of QC over the lyrics (length against the
+  clock, singability, hook, subject) before the track is rendered. A pass is one LLM call;
+  a bad song caught after the render costs a worker slot
+- **Singing voice** — the [voice](#voices) automation asks for, described to the music
+  model by gender, age and tone. Left on *the model's own vocalist*, the song decides
+- **Re-voice the finished track as that voice** — runs the voice conversion on the
+  controller, as the Song tab's *Sing this as…* does. The sung original is kept as a
+  version either way, so you can put it back
+- **Auto-approve songs** — off, automation stops once the song exists and parks it in the
+  Song tab: no story, no scenes and no render are built on a song you haven't heard. Open
+  the film's Song tab, listen, and **Draft the story** to carry it on into the normal
+  script review
+
 ### X automation
 
 - **Fetch & evaluate X mentions on a schedule** — needs a paid X API tier
