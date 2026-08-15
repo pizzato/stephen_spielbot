@@ -35,6 +35,7 @@ _DEFAULTS = {
     "rerender_narration": 12.0,
     "narrator_scene": 12.0,
     "music_regen": 90.0,
+    "song_revoice": 180.0,
     "upscale_scene": 300.0,
 }
 # Ops whose duration scales with the output pixel count.
