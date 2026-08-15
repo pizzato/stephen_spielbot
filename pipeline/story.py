@@ -603,7 +603,8 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
 def write_song(story: dict | None, target_seconds: float,
                language: str | None = None, *,
                topic: str = "", video_title: str = "",
-               source_text: str = "", music_hint: str = "") -> dict:
+               source_text: str = "", music_hint: str = "",
+               instruction: str = "") -> dict:
     """The film's SONG, written from the approved story draft.
 
     A song film ("song" format) is a music video: the music engine sings the
@@ -619,6 +620,10 @@ def write_song(story: dict | None, target_seconds: float,
     The lyric budget comes from *target_seconds*: sung delivery runs well
     under two words a second, and over-length lyrics are what make the model
     rush or cut the song off mid-phrase.
+
+    *instruction* is the Song tab's "tell it how" steering on a re-write
+    ("simpler words", "make the chorus land harder"): it outranks the prompt's
+    own guidance. Empty leaves the prompt byte-identical.
     """
     cfg = _load_cfg()
     call = _call_fn(cfg)
@@ -643,15 +648,18 @@ def write_song(story: dict | None, target_seconds: float,
     language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
                      f"section tags and the caption stay in English."
                      if lang_name else "")
+    user = _prompts.user("song_write",
+                         title_line=_title_line(topic, video_title or None),
+                         story_text=source_text or topic,
+                         duration_seconds=seconds,
+                         word_budget=word_budget,
+                         music_hint=music_hint,
+                         language_note=language_note)
+    if (instruction or "").strip():
+        user += ("\n\nAdditional instruction from the user — follow it, overriding "
+                 f"the guidance above where they conflict: {instruction.strip()[:500]}")
     raw = call(
-        _prompts.system("song_write"),
-        _prompts.user("song_write",
-                      title_line=_title_line(topic, video_title or None),
-                      story_text=source_text or topic,
-                      duration_seconds=seconds,
-                      word_budget=word_budget,
-                      music_hint=music_hint,
-                      language_note=language_note),
+        _prompts.system("song_write"), user,
         word_budget * 3 + 500, "song write", retries=2,
     )
     data = _parse_claude_response(raw, "song write")

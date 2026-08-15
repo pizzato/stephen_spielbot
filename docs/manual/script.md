@@ -5,9 +5,9 @@
 The review gate. Everything the render will do is decided here, and nothing has touched a
 GPU yet except the scene preview images you ask for.
 
-Views along the top: **Scripts**, **Story**, **Cover**, **Characters** (which becomes
-**Characters & Artifacts** when the film has acted scenes), **Scenes** — and, for films with
-acted scenes, **Acted scenes**.
+Views along the top: **Scripts**, **Song** (music videos only), **Story**, **Cover**,
+**Characters** (which becomes **Characters & Artifacts** when the film has acted scenes),
+**Scenes** — and, for films with acted scenes, **Acted scenes**.
 
 ## Scripts
 
@@ -16,6 +16,27 @@ folder, **Delete** removes it. A *Story draft* chip marks scripts that are still
 no scenes yet; the loaded one is marked too.
 
 **New script** goes to [Create](create.md).
+
+## Song
+
+Only for [Music video](create.md#format) films, and the first stop for them: the song
+leads and the story is drafted from it afterwards. See
+[Singing films](../performance_films.md#singing-films-the-music-video-format) for what
+the format does to the render.
+
+- **Sound** — what the music model is told about the song (genre, tempo, mood,
+  arrangement). The lead performer's cast voice is described on top of this at render
+  time, so leave the vocalist out.
+- **Lyrics** — sung exactly as written, section tags (`[Verse]`, `[Chorus]`, …) on their
+  own lines.
+- Both boxes have a **Re-generate** button with a *tell it how* caret: re-writing the
+  lyrics keeps the sound you have (and writes to it), re-writing the sound describes the
+  music for the lyrics you have. Either way both halves are saved, unsaved edits included.
+- **Save edits** keeps your typing; **Generate the song** renders the track on a worker,
+  and **Sing this as [voice]** re-voices it with seed-vc. Every generation and re-voicing
+  is kept as a version — the one marked *In use* is the film's track.
+- **Scenes** splits the finished song into performed takes (blank = automatic), then
+  **Draft the story →** writes the story from these lyrics.
 
 ## Story
 

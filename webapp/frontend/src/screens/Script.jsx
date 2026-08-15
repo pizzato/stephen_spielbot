@@ -14,6 +14,8 @@ const REGEN_CHIPS = {
   image: ['More detail', 'Brighter', 'Different angle'],
   cover: ['Bolder', 'Simpler', 'More dramatic'],
   look: ['More detail', 'Different angle', 'Friendlier'],
+  sound: ['Slower', 'Bigger', 'Stripped back', 'Different genre'],
+  lyrics: ['Simpler words', 'Fewer words', 'Stronger chorus', 'More hopeful'],
 }
 
 // Shared style for the floating arrow / close controls in the enlarged-image view.
@@ -163,6 +165,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       const s = await api.saveSong(job.job_id, (songDraft ?? song).caption, (songDraft ?? song).lyrics)
       setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
       setSongMsg('Song saved — the next generation sings this version.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  // Re-write the words or the sound with the LLM. The half that isn't being
+  // re-written travels along as the editor shows it, so unsaved edits survive
+  // — and both halves come back saved.
+  const regenSong = async (field, instruction) => {
+    setBusy(`song-regen-${field}`); setError(''); setSongMsg('')
+    try {
+      const cur = songDraft ?? song
+      const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics, instruction)
+      setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      setSongMsg(field === 'lyrics'
+        ? 'Lyrics re-written — generate the song again to hear them sung.'
+        : 'Sound re-written — generate the song again to hear it.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const generateSongTrack = async () => {
@@ -1009,13 +1025,19 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
               {songMsg && <Banner tone="ok">{songMsg}</Banner>}
-              <Field label="Sound"
-                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The lead performer's cast voice (gender, age, tone) is described automatically on top of this at render time.">
+              <Field label={
+                <RegenLabel busy={busy === 'song-regen-caption'} disabled={!!busy}
+                  onRegen={(instr) => regenSong('caption', instr)}
+                  chips={REGEN_CHIPS.sound}>Sound</RegenLabel>}
+                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The lead performer's cast voice (gender, age, tone) is described automatically on top of this at render time. Re-generating it writes a new sound for the lyrics below.">
                 <textarea className="textarea" rows={3}
                   value={(songDraft ?? song).caption}
                   onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
               </Field>
-              <Field label="Lyrics"
+              <Field label={
+                <RegenLabel busy={busy === 'song-regen-lyrics'} disabled={!!busy}
+                  onRegen={(instr) => regenSong('lyrics', instr)}
+                  chips={REGEN_CHIPS.lyrics}>Lyrics</RegenLabel>}
                 hint="Sung exactly as written. Keep the section tags — [Intro], [Verse], [Chorus], [Bridge], [Outro] — on their own lines; they shape the song without being sung. The song runs the film's length, so cutting or adding many words changes how it fits.">
                 <textarea className="textarea" rows={18} style={{ fontFamily: 'ui-monospace, monospace' }}
                   value={(songDraft ?? song).lyrics}

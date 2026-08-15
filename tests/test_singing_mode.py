@@ -14,10 +14,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import webapp.backend.main as backend  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
 from pipeline import performance as perf  # noqa: E402
 from pipeline import story  # noqa: E402
 from pipeline.llm import Scene  # noqa: E402
-from pipeline.orchestrator import _renders_acted  # noqa: E402
+from pipeline.orchestrator import DurableStore, _renders_acted  # noqa: E402
+from test_styles import TempConfigCase, _style  # noqa: E402
 
 
 def _singing(cast=("Ada",), duration=8.0):
@@ -295,6 +298,89 @@ class SongFormatNoteTests(unittest.TestCase):
         draft = _story_format_note("song")
         self.assertIn("MUSIC VIDEO STORY", draft)
         self.assertIn("lead performer", draft)
+
+
+class SongRewriteTests(TempConfigCase):
+    """The Song tab's Re-generate: one half of the song is re-written by the
+    LLM, the half the editor sent is kept — and both are saved."""
+
+    def setUp(self):
+        super().setUp()
+        self.write_config({"styles": [_style("Hero")], "default_style": "Hero",
+                           "characters": [], "characters_migrated_v2": True})
+        p = unittest.mock.patch.object(backend.gapp, "OUTPUT_DIR", self.output_dir)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = self.output_dir / "song-film"
+        self.wd.mkdir()
+        (self.wd / "song.json").write_text(json.dumps(
+            {"caption": "slow piano ballad, 70 BPM, wistful",
+             "lyrics": "[Verse]\nold words", "seconds": 45,
+             "title": "Rooftop", "style_name": "Hero"}))
+        (self.wd / "create_brief.json").write_text(json.dumps(
+            {"topic": "a rooftop goodbye", "video_title": "Rooftop"}))
+        store = DurableStore.default()
+        try:
+            self.job_id = backend.job_id_from_work_dir(self.wd)
+            store.create_or_update_job(self.job_id, self.wd, "Rooftop")
+        finally:
+            store.close()
+
+    def _regen(self, **kw):
+        return backend.regenerate_job_song(self.job_id, backend.SongRegenBody(**kw))
+
+    def test_new_lyrics_are_written_to_the_sound_the_editor_kept(self):
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "a caption nobody asked for",
+                              "lyrics": "[Chorus]\nnew words"}) as ws:
+            res = self._regen(field="lyrics", caption="fast punk, 180 BPM",
+                              lyrics="[Verse]\nunsaved edit", instruction="fewer words")
+        self.assertEqual(res["lyrics"], "[Chorus]\nnew words")
+        # The Sound box the editor showed survives — including unsaved edits.
+        self.assertEqual(res["caption"], "fast punk, 180 BPM")
+        self.assertEqual(ws.call_args.kwargs["music_hint"], "fast punk, 180 BPM")
+        self.assertEqual(ws.call_args.kwargs["instruction"], "fewer words")
+        # …written from the film's own brief, not from the song file's title.
+        self.assertIn("a rooftop goodbye", ws.call_args.kwargs["topic"])
+        saved = json.loads((self.wd / "song.json").read_text())
+        self.assertEqual(saved["lyrics"], "[Chorus]\nnew words")
+        self.assertEqual(saved["caption"], "fast punk, 180 BPM")
+
+    def test_new_sound_describes_the_lyrics_the_editor_kept(self):
+        with unittest.mock.patch.object(
+                backend, "_llm_complete", return_value="driving synthwave, 110 BPM, hopeful") as llm:
+            res = self._regen(field="caption", caption="slow piano ballad",
+                              lyrics="[Verse]\nunsaved edit", instruction="bigger")
+        self.assertEqual(res["caption"], "driving synthwave, 110 BPM, hopeful")
+        self.assertEqual(res["lyrics"], "[Verse]\nunsaved edit")
+        user = llm.call_args.args[1]
+        self.assertIn("unsaved edit", user)      # written FOR these lyrics
+        self.assertIn("bigger", user)            # "tell it how" steering
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["caption"],
+                         "driving synthwave, 110 BPM, hopeful")
+
+    def test_only_the_two_halves_can_be_re_written(self):
+        with self.assertRaises(HTTPException) as ctx:
+            self._regen(field="voice")
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
+class SongInstructionTests(unittest.TestCase):
+    def test_instruction_rides_the_song_prompt(self):
+        cfg = {}
+        calls = []
+
+        def fake_call(system, user, max_tokens, label, retries=3):
+            calls.append(user)
+            return json.dumps({"caption": "c", "lyrics": "[Verse]\nl"})
+
+        with unittest.mock.patch.object(story, "_load_cfg", return_value=cfg), \
+             unittest.mock.patch.object(story, "_call_fn", return_value=fake_call):
+            story.write_song(None, 45, topic="t")
+            story.write_song(None, 45, topic="t", instruction="simpler words")
+        self.assertNotIn("Additional instruction", calls[0])
+        self.assertIn("simpler words", calls[1])
 
 
 if __name__ == "__main__":

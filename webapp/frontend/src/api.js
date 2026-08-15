@@ -171,6 +171,10 @@ export const api = {
   // A song film's song — the caption and tagged lyrics the music model sings.
   getSong: (jobId) => req('GET', `/jobs/${jobId}/song`),
   saveSong: (jobId, caption, lyrics) => req('PUT', `/jobs/${jobId}/song`, { caption, lyrics }),
+  // Re-write one half of the song — "lyrics" or "caption" (the Sound field);
+  // the other half is sent as the editor has it and kept.
+  regenSong: (jobId, field, caption, lyrics, instruction = '') =>
+    req('POST', `/jobs/${jobId}/song/regenerate`, { field, caption, lyrics, instruction }),
   // The accept/revert step: put a kept version back as the film's track.
   songSelectVersion: (jobId, versionId) => req('POST', `/jobs/${jobId}/song/select`, { version_id: versionId }),
   // Persist edited chapter texts so a story review can be resumed later.
