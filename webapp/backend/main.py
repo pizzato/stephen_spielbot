@@ -51,6 +51,11 @@ import pipeline.prompts as _prompts  # noqa: E402
 from pipeline.llm import generate_video_suggestions, Scene  # noqa: E402
 import pipeline.story as story_mode  # noqa: E402
 import pipeline.performance as performance_mode  # noqa: E402
+
+# A music video's AUTO split: takes of about this long. Short takes keep a
+# performance tight against the beat, and the song's length divided by this is
+# the scene count the Song tab shows (an explicit count overrides it).
+SONG_SCENE_SECONDS = 5.0
 from pipeline.orchestrator import DurableStore, job_id_from_work_dir, task_id as make_task_id, worker_id  # noqa: E402
 from pipeline.timing import estimate_eta, estimate_planned_job, humanize_eta, next_worker_free_seconds  # noqa: E402
 from pipeline import cadence  # noqa: E402
@@ -234,8 +239,15 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         "camera": meta.get("camera", ""),
         "soundscape": meta.get("soundscape", ""),
         "cast": meta.get("cast", []),
-        "beats": meta.get("beats", []),
+        # Normalized (a prose string becomes one whole-take beat): the editor
+        # maps over these, and the renderer normalizes identically.
+        "beats": performance_mode.norm_beats(
+            meta.get("beats"),
+            float(meta.get("seconds") or meta.get("duration") or 10)),
         "seconds": meta.get("seconds", 0),
+        # A song film's performance beat: acted whatever the style toggle says,
+        # so the editor must show the acted setup off the SCENE, not the style.
+        "singing": bool(meta.get("singing")),
         "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
@@ -1743,9 +1755,18 @@ class GenerateScriptBody(BaseModel):
     resolution: str = ""
     queue_item_id: str = ""
     style_name: str = ""
-    # "narration" (default) | "dialogue" | "mixed" | "silent" — see
-    # docs/performance_films.md.
+    # "narration" (default) | "dialogue" | "mixed" | "silent" | "song" — see
+    # docs/performance_films.md ("song" is the Music-video format: the film's
+    # soundtrack is a sung song and the cast performs it on camera).
     format: str = "narration"
+    # Music-video flow: the work dir /api/song/draft created (song.json, and
+    # background_music.wav once generated). The story is drafted INTO it, from
+    # its lyrics, instead of a fresh dir.
+    work_dir: str = ""
+    # Music-video flow: how long each performed clip runs. The generated
+    # track's real duration is divided into clips of about this length —
+    # 5 gives "5-second parts". 0 = the acted default (~10 s takes).
+    clip_secs: float = 0
     # Automation only: run the script critic right after generation, before the
     # script can queue/render (config: youtube_auto_critic/_passes). The
     # interactive Create flow leaves this False — the user runs it by hand.
@@ -1906,6 +1927,17 @@ def _story_format_note(fmt: str) -> str | None:
             "characters array). Ignore any video length or scene limits while "
             "drafting — the story is divided into scenes afterwards."
         )
+    if fmt == "song":
+        return (
+            "MUSIC VIDEO STORY: this story will become the SONG of a music video — "
+            "sung over performed scenes, with no narrator and no spoken lines. Plan "
+            "ONE clear lead performer among the recurring characters (never return "
+            "an empty characters array) — the person the camera keeps returning to — "
+            "and write chapter summaries whose beats are VISIBLE and singable: "
+            "images, actions and turns a song can carry, never information that "
+            "could only arrive in spoken words. Ignore any video length or scene "
+            "limits while drafting — the story is divided into scenes afterwards."
+        )
     return None
 
 
@@ -1934,8 +1966,12 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     count (_acted_scene_plan); the budgets below are written to it, since a
     scene the writer fills to the wrong length is the one that truncates."""
     fmt = (fmt or "narration").strip().lower()
-    if fmt not in ("dialogue", "mixed", "silent"):
+    if fmt not in ("dialogue", "mixed", "silent", "song"):
         return None
+    # A song film's scenes are all PERFORMED silent takes — the schema below
+    # must always ask for their cast, whatever the style's own toggle says.
+    if fmt == "song":
+        acted_silent = True
     # An acted take is bound by the model, not by the narrated scene window a
     # mixed film's plan carries: hold the asked-for length inside it.
     take_secs = min(max(float(scene_secs or 0) or performance_mode.scene_seconds(chained),
@@ -1974,6 +2010,19 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
             # The acted-silent schema below already states the budget; saying it
             # twice in one prompt is noise.
             + ("" if acted_silent else silent_budget))
+    elif fmt == "song":
+        balance = (
+            "EVERY scene must be mode \"silent\": this film is a MUSIC VIDEO — one "
+            "continuous song is laid over the whole film, so no scene carries a voice of "
+            "its own. NEVER use \"narration\" and NEVER give any scene \"lines\": nothing "
+            "said on camera survives the mix. Stage the scenes as the song's pictures: "
+            "the lead performer SINGING to camera and performing — put them in \"cast\" in "
+            "most scenes (the face that keeps returning is what makes it a music video) — "
+            "with pure story imagery between the performance shots. Write each scene's "
+            "\"beats\" as performance action (singing to camera, turning, walking, "
+            "dancing, a look), spread across the whole take. Every scene's imagery comes "
+            "STRAIGHT FROM THE SONG — what the lyrics sing about at that stretch of the "
+            "track, or the performer singing it; nothing the song doesn't sing about.")
     else:
         balance = (
             "Mix deliberately: \"dialogue\" when characters speak or interact, \"narration\" for "
@@ -1985,22 +2034,31 @@ def _build_dialogue_note(fmt: str, cast_names: list[str],
     # in BOTH directions: a brief asking for a particular staging ("mostly
     # silent", "no narrator") used to lose to the must-mix rule, and the
     # narrator's own words used to be handed to a character.
-    instructions_rule = (
-        "The TOPIC/DIRECTION outranks this mode balance whenever it speaks to staging: if it "
-        "asks for mostly silent scenes, for no narrator, or for more spoken exchanges, stage "
-        "the film the way it asks rather than the way the balance above describes. And when "
-        "it asks the narrator to introduce themselves, address the viewer, or say specific "
-        "things, stage those beats as \"narration\" scenes carrying exactly that content — "
-        "never drop them and never reassign the narrator's own words to a character."
-        if fmt != "silent" else
-        "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging. If it asks "
-        "for specific words to be said, give them to a character in a \"dialogue\" scene — a "
-        "silent film never adds a narrator."
-    )
+    if fmt == "silent":
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging. If it asks "
+            "for specific words to be said, give them to a character in a \"dialogue\" scene — a "
+            "silent film never adds a narrator.")
+    elif fmt == "song":
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this balance whenever it speaks to staging — but a "
+            "music video never adds a narrator and never stages spoken lines: the song is the "
+            "film's only voice.")
+    else:
+        instructions_rule = (
+            "The TOPIC/DIRECTION outranks this mode balance whenever it speaks to staging: if it "
+            "asks for mostly silent scenes, for no narrator, or for more spoken exchanges, stage "
+            "the film the way it asks rather than the way the balance above describes. And when "
+            "it asks the narrator to introduce themselves, address the viewer, or say specific "
+            "things, stage those beats as \"narration\" scenes carrying exactly that content — "
+            "never drop them and never reassign the narrator's own words to a character.")
     return (
         ("SILENT FILM — the story is told in PICTURES: no narrator reads it, and a character "
          "speaks only where a beat truly needs a line. "
          if fmt == "silent" else
+         "MUSIC VIDEO — the story is told in PICTURES under one continuous song: nobody "
+         "narrates and nobody speaks. "
+         if fmt == "song" else
          "ACTED SCENES — the characters SPEAK ON CAMERA rather than only a narrator. ")
         + "Add a \"mode\" field to EVERY scene object: \"dialogue\" | \"narration\" | \"silent\". "
         "A \"dialogue\" scene also gets:\n"
@@ -2135,7 +2193,9 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": (body.format or "narration").strip().lower(),
-        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
+        # A song film IS its song — music can't be opted out of.
+        "music": True if (body.format or "").strip().lower() == "song" else (
+            bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music)),
     }
     _write_create_brief(work_dir, create_brief)
 
@@ -2321,17 +2381,76 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         gapp._requested_characters(cfg, body.style_name, user_topic, body.video_title, extra)) or None
     display_topic = (body.video_title or "").strip() or user_topic.splitlines()[0][:80]
     fmt = (body.format or "narration").strip().lower()
+    # Song-first: the film's song may already exist (written and generated via
+    # /api/song/draft + /api/song/generate). Resolved up front because the
+    # TRACK's real duration is what the scene plan divides.
+    song_wd: Path | None = None
+    song_data: dict = {}
+    if fmt == "song" and (body.work_dir or "").strip():
+        cand = Path(body.work_dir)
+        if _safe_under(cand, gapp.OUTPUT_DIR) and (cand / "song.json").exists():
+            song_wd = cand
+            try:
+                song_data = json.loads((cand / "song.json").read_text())
+            except Exception:
+                song_data = {}
     plan = _plan_for_generate(body, ss)
-    if fmt in ("dialogue", "silent"):
-        # Every scene is one clip — acted, or a silent beat nobody narrates —
-        # so the length comes from clip count, not a narrator's word budget.
+    if fmt in ("dialogue", "silent", "song"):
+        # Every scene is one clip — acted, a silent beat nobody narrates, or a
+        # song film's performed take — so the length comes from clip count,
+        # not a narrator's word budget.
         acted_n, acted_secs = _acted_scene_plan(body, ss)
+        if fmt == "song":
+            # The film follows the SONG: its generated duration (else the
+            # asked-for length) divided into clips of about clip_secs each.
+            total = 0.0
+            track = (song_wd / "background_music.wav") if song_wd else None
+            if track is not None and track.exists():
+                try:
+                    from pipeline.assembler import _get_duration
+                    total = float(_get_duration(track) or 0)
+                except Exception:
+                    total = 0.0
+            if total <= 0:
+                total = acted_n * acted_secs
+            # The film runs the SONG's length, so the only division is how many
+            # scenes to split it into (the Song tab's "Scenes"). An explicit
+            # count wins; clip_secs is the older way of saying the same thing;
+            # neither given means AUTO — takes of about SONG_SCENE_SECONDS.
+            try:
+                want_n = int(body.n_scenes or 0)
+            except (TypeError, ValueError):
+                want_n = 0
+            clip = float(body.clip_secs or 0)
+            if want_n > 0:
+                acted_n = min(gapp.MAX_SCENES, want_n)
+            else:
+                if clip <= 0:
+                    clip = SONG_SCENE_SECONDS
+                clip = min(max(clip, float(performance_mode.MIN_SCENE_SECONDS)),
+                           performance_mode.H3_CEILING_SECONDS)
+                acted_n = max(1, round(total / clip))
+            acted_secs = total / max(1, acted_n)
         plan = {**plan, "n_scenes": acted_n, "scene_secs_target": acted_secs,
                 "minutes": round(acted_n * acted_secs / 60.0, 2)}
     # The draft only learns WHO tells the story (acted / mixed); the acted
     # scene schema and clip budgets bind at the divide step, so the prose
     # comes out well-formed whatever the film's length.
     dialogue_note = _story_format_note(fmt)
+    # Song-first: when the film's song already exists, the story is drafted
+    # FROM its lyrics — the song leads, the pictures follow.
+    if song_wd is not None and (song_data.get("lyrics") or "").strip():
+        dialogue_note = (
+            (dialogue_note or "") +
+            "\nTHE FILM'S SONG IS ALREADY WRITTEN AND APPROVED — this story is "
+            "the VIDEO for it, nothing more. Stay entirely inside the song's "
+            "world: its subject, mood and images ARE the film's, and every beat "
+            "must be something the lyrics sing or directly show. Keep it SIMPLE "
+            "and visual — a music video is pictures following a song, not a "
+            "plot. No subplots, no extra characters, no backstory, no twist the "
+            "song doesn't sing about; the same few images the song repeats are "
+            "what the camera returns to. These are the lyrics:\n"
+            + song_data["lyrics"])
     try:
         with _track_op("Drafting story", display_topic):
             story = story_mode.generate_story(
@@ -2344,7 +2463,7 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         raise HTTPException(500, f"Story generation failed: {str(e).splitlines()[0][:300]}")
 
     display_title = (body.video_title or "").strip() or user_topic
-    work_dir = gapp._script_work_dir(display_title)
+    work_dir = song_wd if song_wd is not None else gapp._script_work_dir(display_title)
     job_id = job_id_from_work_dir(work_dir)
     _story_path(work_dir).write_text(json.dumps(story, indent=2))
     create_brief = {
@@ -2359,7 +2478,9 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
         "style_name": body.style_name or ss["name"],
         "auto_approve": bool(body.auto_approve),
         "format": fmt,
-        "music": bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music),
+        # A song film IS its song — music can't be opted out of.
+        "music": True if fmt == "song" else (
+            bool(ss.get("music_enabled", True)) if body.music is None else bool(body.music)),
     }
     _write_create_brief(work_dir, create_brief)
     store = DurableStore.default()
@@ -2415,6 +2536,11 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         src = wd
         wd = gapp._script_work_dir(video_title or user_topic)
         gapp.logger.info("Story divide: %s already has scenes — forking to %s", src, wd)
+        # A song film's approved song travels with the fork — it IS the film.
+        import shutil
+        for name in ("song.json", "background_music.wav"):
+            if (src / name).exists():
+                shutil.copy2(src / name, wd / name)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -2448,6 +2574,51 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         raise
     except Exception as e:  # surface a clean message to the client
         raise HTTPException(500, f"Story division failed: {str(e).splitlines()[0][:300]}")
+
+    if fmt == "song":
+        # A song film: stamp the performance flag onto every silent scene (it
+        # rides scene metadata through the editor and every re-render). The
+        # song normally already exists — the song-FIRST flow wrote and
+        # generated it before the story was drafted — and is only written
+        # here as a fallback for headless runs that skipped that step.
+        story_mode.mark_singing(scenes)
+        secs = 0.0
+        if isinstance(plan, dict):
+            try:
+                secs = float(plan.get("minutes") or 0) * 60.0
+            except (TypeError, ValueError):
+                secs = 0.0
+        if secs <= 0:
+            secs = len(scenes) * performance_mode.SCENE_SECONDS
+        song = None
+        if (wd / "song.json").exists():
+            try:
+                song = json.loads((wd / "song.json").read_text())
+            except Exception:
+                song = None
+        if not (song and (song.get("lyrics") or "").strip()):
+            try:
+                with _track_op("Writing the song", display_topic):
+                    song = story_mode.write_song(story, secs, language=language)
+            except Exception as e:
+                raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
+            (wd / "song.json").write_text(json.dumps({**song, "created_at": time.time()},
+                                                     indent=2))
+        # Each singing scene gets its WINDOW of the song and the words sung in
+        # it — timed against the real generated track when one exists.
+        track_secs = None
+        track = wd / "background_music.wav"
+        if track.exists():
+            try:
+                from pipeline.assembler import _get_duration
+                track_secs = _get_duration(track) or None
+            except Exception:
+                track_secs = None
+        story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
+                                      total_seconds=track_secs or secs)
+        # The caption is the film's music description from here on — Remix
+        # shows and edits it, and the render appends the singer's voice.
+        music_desc = song.get("caption") or music_desc
 
     story["status"] = "divided"
     story["updated_at"] = time.time()
@@ -2509,6 +2680,332 @@ def story_divide(body: DivideStoryBody) -> dict:
     _script_tasks[task_id] = {"status": "running"}
     threading.Thread(target=_run_story_divide_task, args=(task_id, body), daemon=True).start()
     return {"task_id": task_id}
+
+
+class SongDraftBody(BaseModel):
+    video_title: str = ""
+    topic: str = ""
+    minutes: float = 0
+    style_name: str = ""
+    voice: str = ""          # the SINGING voice (library name); "" = model's pick
+    n_scenes: int = 0        # how many scenes to split the song into; 0 = Auto
+
+
+@api.post("/api/song/draft")
+def song_draft(body: SongDraftBody) -> dict:
+    """Song-FIRST step of the Music-video flow: write the film's song from the
+    brief alone — caption + tagged lyrics — into a fresh work dir. Generate the
+    track with /api/song/generate, iterate, and only then draft the story from
+    the approved lyrics (story/generate with this work_dir)."""
+    title = (body.video_title or "").strip() or (body.topic or "").strip()
+    if not title:
+        raise HTTPException(400, "Enter a video title or describe the song.")
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name)
+    minutes = float(body.minutes or 0) or gapp.style_video_minutes(ss)
+    secs = max(15.0, minutes * 60.0)
+    extra = (ss.get("extra_instructions") or "").strip()
+    topic = (body.topic or "").strip() or title
+    display_topic = title.splitlines()[0][:80]
+    try:
+        with _track_op("Writing the song", display_topic):
+            song = story_mode.write_song(
+                None, secs,
+                language=gapp._norm_tts_language(ss.get("tts_language")),
+                topic=f"{topic}\n\n{extra}" if extra else topic,
+                video_title=(body.video_title or "").strip())
+    except Exception as e:
+        raise HTTPException(500, f"Song writing failed: {str(e).splitlines()[0][:300]}")
+    wd = gapp._script_work_dir(title)
+    song.update({"voice": (body.voice or "").strip(), "seconds": secs,
+                 "title": title, "style_name": ss["name"],
+                 "created_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(song, indent=2))
+    # A song-first job exists BEFORE any story or scenes: register it so the
+    # Script screen's Song tab (the song studio — generate, re-voice, accept)
+    # can load it and carry the flow from there.
+    create_brief = {
+        "video_title": (body.video_title or "").strip(), "topic": topic,
+        "minutes": minutes,
+        # The scene count asked for at Create (0 = Auto) — the Song tab's
+        # Scenes control opens on it rather than asking again.
+        "n_scenes": max(0, int(body.n_scenes or 0)), "visual_style": "",
+        "voice": (body.voice or "").strip(), "resolution": ss.get("resolution") or "",
+        "style_name": ss["name"], "auto_approve": False,
+        "format": "song", "music": True,
+    }
+    _write_create_brief(wd, create_brief)
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        store.create_or_update_job(
+            job_id, wd, title,
+            config={"title": title, "video_title": (body.video_title or "").strip(),
+                    "topic": topic, "phase": "song_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
+            metadata={"scene_count": 0, "music_desc": song["caption"],
+                      "music_enabled": True})
+    finally:
+        store.close()
+    return {"work_dir": str(wd), "job_id": job_id, "title": title,
+            "video_title": (body.video_title or "").strip(), "topic": topic,
+            "style": "", "style_name": ss["name"], "music_desc": song["caption"],
+            "voice": (body.voice or "").strip() or ss.get("voice", ""),
+            "resolution": ss.get("resolution") or "", "n_scenes": 0,
+            "create_brief": create_brief, "scenes": [],
+            "caption": song["caption"], "lyrics": song["lyrics"],
+            "song_voice": song["voice"], "seconds": secs}
+
+
+class SongGenerateBody(BaseModel):
+    work_dir: str
+    caption: str = ""
+    lyrics: str = ""
+    voice: str = ""
+
+
+def _do_song_generate(wd: Path) -> dict:
+    """Render the song itself (song.json → background_music.wav) on a worker.
+
+    The finished track IS the film's final soundtrack: the render's music step
+    sees the file already present and reuses it verbatim, so what was approved
+    here is exactly what plays under the film. Each generation is kept in the
+    music history for comparison."""
+    from pipeline.assembler import _get_duration
+    from pipeline.comfyui import generate_music
+    from pipeline.worker_pool import WorkerPool
+
+    cfg = gapp.load_config()
+    data = json.loads((wd / "song.json").read_text())
+    secs = float(data.get("seconds") or 60)
+    voices = {v.get("name"): v for v in (cfg.get("voices") or []) if v.get("name")}
+    vocal = gapp.voice_descriptor(voices.get((data.get("voice") or "").strip()))
+    caption = ", ".join(x for x in ((data.get("caption") or "").strip(), vocal) if x)
+    ss = gapp.style_settings(cfg, data.get("style_name") or "")
+    engine = gapp._norm_music_engine(ss.get("music_engine"))
+    urls = gapp._preview_worker_urls()
+    if not urls:
+        raise RuntimeError("No ComfyUI workers reachable.")
+    pool = WorkerPool(urls)
+    staged = wd / "background_music.staging.wav"
+    url = pool.acquire()
+    try:
+        generate_music(str(data.get("title") or wd.name), secs, staged,
+                       caption or None, comfy_url=url, music_engine=engine,
+                       lyrics=data.get("lyrics") or None)
+    finally:
+        pool.release(url)
+    final = wd / "background_music.wav"
+    staged.replace(final)
+    try:
+        music_history.record(wd, final, caption)
+    except Exception:
+        gapp.logger.warning("Could not record song into music history", exc_info=True)
+    dur = _get_duration(final)
+    data.update({"generated_at": time.time(), "duration": dur})
+    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    return {"ok": True, "duration": dur,
+            "song_url": f"/api/file?path={final}&t={int(time.time())}"}
+
+
+def _run_song_generate_task(task_id: str, wd: Path) -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done", "result": _do_song_generate(wd)}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/song/generate")
+def song_generate(body: SongGenerateBody) -> dict:
+    """Save the (possibly edited) song and start rendering its audio in the
+    background; poll /api/script/generate/status with the returned task id."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "Draft the song first.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        data = {}
+    if (body.lyrics or "").strip():
+        data["lyrics"] = body.lyrics.strip()
+    if (body.caption or "").strip():
+        data["caption"] = body.caption.strip()
+    if body.voice is not None:
+        data["voice"] = (body.voice or "").strip()
+    if not (data.get("lyrics") or "").strip():
+        raise HTTPException(400, "The song has no lyrics.")
+    data["updated_at"] = time.time()
+    path.write_text(json.dumps(data, indent=2))
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_song_generate_task, args=(task_id, wd),
+                     daemon=True).start()
+    return {"task_id": task_id}
+
+
+class SongConvertBody(BaseModel):
+    work_dir: str
+    voice: str
+
+
+def _do_song_convert(wd: Path, voice: str) -> dict:
+    """Re-voice the approved song as a library voice (seed-vc, run locally).
+
+    The original stays in the music history; the converted track becomes
+    background_music.wav — the one file the whole music-video pipeline hangs
+    off, so the per-scene segments pinned into the takes sing in this voice
+    too."""
+    from pipeline import svc
+    from pipeline.assembler import _get_duration
+
+    ref = gapp.voice_path_for(voice)
+    if not ref or not Path(ref).exists():
+        raise RuntimeError(f"No reference clip for voice {voice!r}.")
+    track = wd / "background_music.wav"
+    if not track.exists():
+        raise RuntimeError("Generate the song first.")
+    data = {}
+    try:
+        data = json.loads((wd / "song.json").read_text())
+    except Exception:
+        pass
+    try:
+        music_history.seed_if_empty(wd, track, data.get("caption") or "")
+    except Exception:
+        gapp.logger.warning("Could not seed original song into history", exc_info=True)
+    cfg = gapp.load_config()
+    staged = wd / "background_music.staging.wav"
+    svc.convert_song(
+        track, Path(ref), staged,
+        # 30 steps by default (seed-vc's own default is 25; 50 is the
+        # high-polish setting), and the diffusion runs on the configured GPU
+        # worker when one is named — the controller's Apple GPU is ~12x
+        # slower than real time.
+        diffusion_steps=int(cfg.get("svc_diffusion_steps") or 30),
+        worker=str(cfg.get("svc_worker") or ""))
+    staged.replace(track)
+    try:
+        music_history.record(wd, track, f"sung as {voice}")
+    except Exception:
+        gapp.logger.warning("Could not record converted song", exc_info=True)
+    data.update({"sung_as": voice, "converted_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(data, indent=2))
+    dur = _get_duration(track)
+    return {"ok": True, "duration": dur, "sung_as": voice,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}"}
+
+
+def _run_song_convert_task(task_id: str, wd: Path, voice: str) -> None:
+    try:
+        _script_tasks[task_id] = {"status": "done",
+                                  "result": _do_song_convert(wd, voice)}
+    except Exception as e:
+        _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
+
+
+@api.post("/api/song/convert")
+def song_convert(body: SongConvertBody) -> dict:
+    """Start re-voicing the song as *voice* in the background; poll
+    /api/script/generate/status with the returned task id."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not (body.voice or "").strip():
+        raise HTTPException(400, "Pick a voice to sing it.")
+    from pipeline import svc
+    if not svc.available():
+        raise HTTPException(503, "Voice conversion is not installed — run "
+                                 "scripts/install_svc.sh on the controller.")
+    task_id = uuid.uuid4().hex[:12]
+    _script_tasks[task_id] = {"status": "running"}
+    threading.Thread(target=_run_song_convert_task,
+                     args=(task_id, wd, body.voice.strip()), daemon=True).start()
+    return {"task_id": task_id}
+
+
+@api.get("/api/jobs/{job_id}/song")
+def get_job_song(job_id: str) -> dict:
+    """A song film's song.json — the caption and tagged lyrics the music model
+    sings (404 for every other film) — plus the generated track and its kept
+    versions, so the Song tab is the whole studio in one payload."""
+    wd = _job_wd_or_404(job_id)
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "This film has no song.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        raise HTTPException(500, "song.json is unreadable.")
+    track = wd / "background_music.wav"
+    hist = music_history.history(wd)
+    return {"caption": str(data.get("caption") or ""),
+            "lyrics": str(data.get("lyrics") or ""),
+            "voice": str(data.get("voice") or ""),
+            "sung_as": str(data.get("sung_as") or ""),
+            # The generated track's real length (else the asked-for length) —
+            # what the clip-length control divides into scenes.
+            "duration": float(data.get("duration") or data.get("seconds") or 0),
+            "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
+                         if track.exists() else ""),
+            "versions": hist.get("versions", []),
+            "selected": hist.get("selected")}
+
+
+@api.post("/api/jobs/{job_id}/song/select")
+def select_song_version(job_id: str, body: dict) -> dict:
+    """The accept/revert step: put a kept version (the original generation, or
+    a re-voiced one) back as the film's track."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        vid = int(body.get("version_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "version_id required")
+    try:
+        track = music_history.select(wd, vid)
+    except Exception as e:
+        raise HTTPException(404, str(e)[:200])
+    return {"ok": True,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}",
+            **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
+
+
+class SongUpdateBody(BaseModel):
+    caption: str = ""
+    lyrics: str = ""
+
+
+@api.put("/api/jobs/{job_id}/song")
+def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
+    """Save edited song lyrics/caption. The render reads song.json directly,
+    so an edit made before (or between) renders is what gets sung."""
+    wd = _job_wd_or_404(job_id)
+    path = wd / "song.json"
+    if not path.exists():
+        raise HTTPException(404, "This film has no song.")
+    if not (body.lyrics or "").strip():
+        raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        data = {}
+    data.update({"caption": (body.caption or "").strip(),
+                 "lyrics": body.lyrics.strip(), "updated_at": time.time()})
+    path.write_text(json.dumps(data, indent=2))
+    # A film that already rendered stamped the song into job_config.json for
+    # the Remix regen — keep that mirror fresh so a re-sing uses the edit.
+    jc_path = wd / "job_config.json"
+    if jc_path.exists():
+        try:
+            jc = json.loads(jc_path.read_text())
+            jc["music_lyrics"] = data["lyrics"]
+            jc_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            gapp.logger.warning("Could not mirror song edit into job_config.json",
+                                exc_info=True)
+    return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"]}
 
 
 @api.get("/api/jobs/{job_id}/story")
@@ -3233,16 +3730,38 @@ class VisualImageBody(BaseModel):
 def _visual_to_json(wd: Path, v: dict) -> dict:
     img = gapp._script_visual_image_path(wd, v.get("ref_image"))
     has_image = bool(img and img.exists() and img.stat().st_size > 0)
+    aud = gapp._script_visual_image_path(wd, v.get("source_audio"))
+    has_audio = bool(aud and aud.exists() and aud.stat().st_size > 0)
     return {**v, "has_image": has_image,
             "image_url": (f"/api/file?path={img}&t={int(img.stat().st_mtime)}"
-                          if has_image else "")}
+                          if has_image else ""),
+            "has_audio": has_audio,
+            "audio_url": (f"/api/file?path={aud}&t={int(aud.stat().st_mtime)}"
+                          if has_audio else "")}
 
 
 def _visuals_ok(wd: Path) -> dict:
     """Film visuals (editable) plus the style's asset catalogue (read-only —
     shared across films, edited in Settings → Assets). A film visual shadows a
-    same-named catalogue asset, mirroring scene_visuals' render-time rule."""
+    same-named catalogue asset, mirroring scene_visuals' render-time rule.
+
+    A song film's SONG is listed first as a read-only soundtrack artifact —
+    it is an input of every singing take (each pins its own window of it), and
+    an input the wall doesn't show is one nobody can reason about."""
     own = [_visual_to_json(wd, v) for v in gapp.read_script_visuals(wd)]
+    track = wd / "background_music.wav"
+    if (wd / "song.json").exists() and track.exists():
+        own.insert(0, {
+            "id": "__song__", "name": "The film's song", "kind": "audio",
+            "description": ("The soundtrack every singing take is generated "
+                            "against — each scene pins its own window of it. "
+                            "Generate, re-voice and pick versions in the Song "
+                            "tab."),
+            "character": "", "ref_image": "", "source_audio": "",
+            "scenes": [], "enabled": True, "readonly": True,
+            "has_image": False, "image_url": "", "has_audio": True,
+            "audio_url": f"/api/file?path={track}&t={int(track.stat().st_mtime)}",
+        })
     taken = {(v.get("name") or "").strip().lower() for v in own}
     used, has_acted = _film_reference_usage(wd)
     catalogue = []
@@ -3434,6 +3953,12 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             # drops the dialogue editor for it rather than offering lines that
             # would turn the beat into a conversation.
             "silent": performance_mode.is_silent({"metadata": meta}),
+            # A song film's beat — performed singing the film's song; the
+            # window is the stretch of the track pinned into this take, shown
+            # as one of the take's INPUTS beside its pictures and voices.
+            "singing": performance_mode.is_singing({"metadata": meta}),
+            "song_window": meta.get("song_window") or None,
+            "sings": meta.get("sings") or "",
             # True once the prompt has been hand-edited: the screen then shows
             # the override instead of re-assembling, and offers to drop it.
             "prompt_edited": bool(meta.get("prompt_override")),
@@ -3466,10 +3991,16 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
         })
     from pipeline import engines as eng
     engine = eng.resolve_reference(ss, ss.get("reference_engine"))
+    track = wd / "background_music.wav"
     return {"work_dir": str(wd), "style_name": style_name,
             "job_id": job_id_from_work_dir(wd),
             "engine": {"key": engine["key"], "label": engine["label"]},
             "acted_silent": acted_cfg["h3_silent_scenes"],
+            # The film's song, when it has one — each singing take pins its
+            # own window of this file, so the screen can play exactly the
+            # slice a take was generated against.
+            "song_url": (f"/api/file?path={track}&t={int(track.stat().st_mtime)}"
+                         if track.exists() and (wd / "song.json").exists() else ""),
             "scenes": scenes}
 
 
@@ -4462,7 +4993,7 @@ def regenerate_field(job_id: str, scene_id: int, field: str = Query(...),
                        f"{plan['scene_words_max']} words — the scene must stay 10-15 seconds "
                        f"spoken. One flowing sentence, or two short ones.")
 
-    system = ("You are a documentary script writer for short, AI-generated videos. "
+    system = ("You are a script writer for short, AI-generated films. "
               "Be concise and return ONLY what the task asks for — no preamble, no labels.")
     user = (
         f"Video title: {video_title or topic}\nTopic: {topic}\nVisual style: {style}\n"
@@ -5439,6 +5970,21 @@ class RemixVideoSelectBody(BaseModel):
     version_id: int
 
 
+def _remix_song_info(wd: Path) -> dict | None:
+    """A song film's song, for the film editor — None for every other film."""
+    path = wd / "song.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    return {"lyrics": str(data.get("lyrics") or ""),
+            "caption": str(data.get("caption") or ""),
+            "sung_as": str(data.get("sung_as") or ""),
+            "job_id": job_id_from_work_dir(wd)}
+
+
 @api.get("/api/remix")
 def remix_load(work_dir: str = Query("")) -> dict:
     wd = Path(work_dir) if work_dir else gapp._latest_work_dir()
@@ -5480,6 +6026,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "music_desc": jc.get("music_desc", ""),
         "music_history": music_history.history(wd),
         "video_history": final_video_history.history(wd),
+        # A song film's song, so the finished film still shows WHAT is being
+        # sung (lyrics, current voice) and can re-sing / re-voice from here.
+        "song": _remix_song_info(wd),
         # Short text on the cover image + first-frame burn: saved override,
         # else derived from the title (edit it from the cover card).
         "cover_phrase": cover_phrase_for(wd, _title),
@@ -6284,6 +6833,14 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         # before the setting existed fall back to the style's current choice.
         music_engine = jc.get("music_engine") or gapp.style_settings(
             gapp.load_config(), jc.get("style_name") or "").get("music_engine")
+        # A song film re-sings its lyrics (stamped into job_config at render
+        # time; song.json is the source for dirs rendered before that stamp).
+        lyrics = (jc.get("music_lyrics") or "").strip()
+        if not lyrics:
+            try:
+                lyrics = str(json.loads((wd / "song.json").read_text()).get("lyrics") or "")
+            except Exception:
+                lyrics = ""
 
         # The original track was already seeded (with its own prompt) by the endpoint,
         # before the prompt was overwritten — see remix_regen_music.
@@ -6293,7 +6850,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
             # acquire() can block behind a busy GPU — re-check before submitting.
             _film_checkpoint(task_id)
             generate_music(title, music_dur, staged, (music_desc or None), comfy_url=url,
-                           music_engine=music_engine)
+                           music_engine=music_engine, lyrics=lyrics or None)
         finally:
             pool.release(url)
         staged.replace(music_path)

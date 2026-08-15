@@ -90,6 +90,7 @@ function SceneCard({
     mode: scene.mode || 'narration', lines: scene.lines || [], duration: scene.duration || 0,
     setting: scene.setting || '', camera: scene.camera || '', soundscape: scene.soundscape || '',
     cast: scene.cast || [], beats: scene.beats || [], seconds: scene.seconds || 0,
+    singing: !!scene.singing,
   })
   const [busy, setBusy] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
@@ -125,6 +126,7 @@ function SceneCard({
       mode: s.mode || 'narration', lines: s.lines || [], duration: s.duration || 0,
       setting: s.setting || '', camera: s.camera || '', soundscape: s.soundscape || '',
       cast: s.cast || [], beats: s.beats || [], seconds: s.seconds || 0,
+      singing: !!s.singing,
     })
   }
 
@@ -533,19 +535,19 @@ function SceneCard({
                     }} />
                 ) : (<>
                 <Field label={<RegenLabel busy={fieldBusy === 'image_prompt'} onRegen={(instr) => regenField('image_prompt', instr)} icon="image" chips={REGEN_CHIPS.image_prompt}>Image prompt</RegenLabel>}
-                  hint={hasActedShape(sceneType.mode, actedSilent)
+                  hint={hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
                     ? 'FLUX — the frame this take opens on' : 'FLUX — static frame'}>
                   <textarea className="textarea" rows={3} value={imagePrompt} onChange={(e) => setImagePrompt(e.target.value)} />
                 </Field>
                 <Field label={<RegenLabel busy={fieldBusy === 'video_prompt'} onRegen={(instr) => regenField('video_prompt', instr)} icon="film" chips={REGEN_CHIPS.video_prompt}>Video prompt</RegenLabel>}
-                  hint={hasActedShape(sceneType.mode, actedSilent)
+                  hint={hasActedShape(sceneType.mode, actedSilent, sceneType.singing)
                     ? 'Stands in as the setting while the Setting field above is empty'
                     : 'For the video engine (LTX / MiniMax H3) — motion & camera'}>
                   <textarea className="textarea" rows={3} value={videoPrompt} onChange={(e) => setVideoPrompt(e.target.value)} />
                 </Field>
                 {/* A performed silent take gets the same assembled H3 prompt a
                     dialogue scene shows — it is shot the same way. */}
-                {hasActedShape(sceneType.mode, actedSilent) && (
+                {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && (
                   <ActedPrompt label="Acted prompt" prompt={scene.acted_prompt || ''} edited={!!scene.prompt_edited}
                     refs={(sceneType.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                     onSave={async (text) => {
@@ -1458,16 +1460,33 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         </Card>
 
         <Card span={8} padLg className="reveal reveal-d2">
-          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} /> Background music</span>
-          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.</p>
+          <span className="label-sm row center gap-10"><Icon name="music" style={{ color: 'var(--ink-3)', width: 16 }} />
+            {data?.song ? 'The film’s song' : 'Background music'}</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            {data?.song
+              ? 'This film is a music video — the song below is its whole soundtrack, and each scene was generated against its own stretch of it. Pick any kept version (the original vocalist, a re-voicing) and the film re-mixes instantly.'
+              : 'Edit the music prompt and regenerate the soundtrack. This re-runs the music model on a GPU worker, then re-muxes the film with your current levels.'}
+          </p>
+          {data?.song && (
+            <div className="mt-16">
+              <Field label={`Lyrics${data.song.sung_as ? ` · sung as ${data.song.sung_as}` : ''}`}
+                hint="What the song sings, exactly. Regenerating the music re-sings these words.">
+                <pre style={{ fontFamily: 'ui-monospace, monospace', fontSize: 13, lineHeight: 1.6,
+                              margin: 0, padding: '12px 14px', whiteSpace: 'pre-wrap',
+                              background: 'var(--paper-2)', borderRadius: 'var(--r-sm)',
+                              border: '1px solid var(--line)' }}>{data.song.lyrics}</pre>
+              </Field>
+            </div>
+          )}
           <div className="mt-24">
-            <Field label="Music prompt" hint="What the soundtrack should sound like">
+            <Field label={data?.song ? 'The sound (music caption)' : 'Music prompt'}
+              hint="What the soundtrack should sound like">
               <textarea className="textarea" rows={3} value={musicDesc} disabled={musicBusy || upscaleBusy}
                 onChange={(e) => setMusicDesc(e.target.value)}
                 placeholder="cinematic orchestral background music, atmospheric, instrumental" />
             </Field>
           </div>
-          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : 'Regenerate music'}</Button></div>
+          <div className="mt-24"><Button variant="primary" icon="wand-magic-sparkles" disabled={anyBusy} onClick={regenMusic}>{musicBusy ? 'Regenerating music…' : data?.song ? 'Sing it again' : 'Regenerate music'}</Button></div>
           <MusicVersionStrip versions={musicHistory?.versions} selected={musicHistory?.selected}
             onSelect={selectMusic} busy={anyBusy} />
         </Card>
@@ -2092,7 +2111,8 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
     api.filmScenes(workDir).then((r) => {
       if (r.title) setFilmTitle(r.title)
       const list = r.scenes || []
-      setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent)))
+      setHasRefTakes(list.some((s) => hasActedShape(s.mode || s.metadata?.mode, r.acted_silent,
+        s.singing ?? s.metadata?.singing)))
       setFilmScenes(list)
       setFilmJobId(r.job_id || '')
     }).catch(() => {})
@@ -2120,7 +2140,7 @@ export default function EditFilm({ workDir, go, meta = {}, initialTab = 'film' }
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
         <Segmented value={tab} onChange={setTab} options={[
           { value: 'film', label: 'Film' },
-          { value: 'characters', label: hasRefTakes ? 'Characters & visuals' : 'Characters' },
+          { value: 'characters', label: hasRefTakes ? 'Characters & Artifacts' : 'Characters' },
           // ONE look whatever the mix: the Scenes editor (every scene, every
           // mode, shiftable between them) plus, when anything is acted, the
           // Acted scenes view — cast slots, portraits, voices, takes.

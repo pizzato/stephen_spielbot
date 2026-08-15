@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
+import { useState, useEffect, useRef } from 'react'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -39,7 +39,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // the narration-shaped Scenes tab with it; a mixed film keeps both.
   const acted = (s) => s.mode === 'dialogue' || s.mode === 'performance'
   const allActed = !!(job?.scenes || []).length && (job?.scenes || []).every(acted)
-  const [view, setView] = useState(job ? 'cover' : 'scripts')
+  const [view, setView] = useState(job ? 'scenes' : 'scripts')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState('')
 
@@ -105,7 +105,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // style performs them, the silent ones. Those takes are conditioned on
   // reference images, so this is what decides whether the film needs the
   // visuals wall (locations, wardrobe, stills) beside its characters.
-  const someActedShape = (job?.scenes || []).some((s) => hasActedShape(s.mode, actedSilent))
+  const someActedShape = (job?.scenes || []).some((s) => hasActedShape(s.mode, actedSilent, s.singing))
 
   // Story tab (story-first scripts only) — the prose draft the scenes come
   // from; null hides the tab (classic scripts 404 here). Chapters are editable:
@@ -128,6 +128,83 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       .then((s) => { setStory(s); setMinutesTarget(String(storyMinutes(s))) })
       .catch(() => setStory(null))
   }, [job?.job_id])
+  // A song film's song (music-video format): caption + tagged lyrics the music
+  // model sings. 404 for every other film — the tab simply doesn't appear.
+  const [song, setSong] = useState(null)
+  const [songDraft, setSongDraft] = useState(null)   // {caption, lyrics} while editing
+  const [songMsg, setSongMsg] = useState('')
+  const [songVoiceSel, setSongVoiceSel] = useState('')  // "Sing this as" voice
+  // How many performed scenes the song splits into. The film runs the SONG's
+  // length, so this is the only division there is — same "Scenes" control as
+  // every other film, just dividing a fixed length instead of a chosen one.
+  const [scenesSong, setScenesSong] = useState(0)
+  const songStudioOpened = useRef(false)
+  const refreshSong = () => api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
+  useEffect(() => {
+    setSong(null); setSongDraft(null); setSongMsg(''); songStudioOpened.current = false
+    if (job?.job_id) api.getSong(job.job_id).then(setSong).catch(() => setSong(null))
+  }, [job?.job_id])
+  // A song-first job lands here BEFORE any story or scenes exist — open
+  // straight onto the studio, once.
+  useEffect(() => {
+    if (song && !(job?.scenes || []).length && !songStudioOpened.current) {
+      songStudioOpened.current = true
+      setView('song')
+      if (song.voice && !songVoiceSel) setSongVoiceSel(song.voice)
+      // Open on the count asked for at Create (0 = Auto), so the same choice
+      // isn't made twice.
+      const asked = Number(job?.create_brief?.n_scenes) || 0
+      if (asked > 0 && !scenesSong) setScenesSong(asked)
+    }
+  }, [song])
+  const saveSong = async () => {
+    setBusy('song-save'); setError(''); setSongMsg('')
+    try {
+      const s = await api.saveSong(job.job_id, (songDraft ?? song).caption, (songDraft ?? song).lyrics)
+      setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      setSongMsg('Song saved — the next generation sings this version.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const generateSongTrack = async () => {
+    setBusy('song-gen'); setError(''); setSongMsg('')
+    try {
+      const cur = songDraft ?? song
+      await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
+                               lyrics: cur.lyrics, voice: songVoiceSel })
+      setSongDraft(null); await refreshSong()
+      setSongMsg('Song generated — listen below, re-voice it, or draft the story.')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const convertSongVoice = async () => {
+    setBusy('song-convert'); setError(''); setSongMsg('')
+    try {
+      await api.songConvert(job.work_dir, songVoiceSel)
+      await refreshSong()
+      setSongMsg(`Re-voiced as ${songVoiceSel} — listen and keep it, or pick an earlier version below.`)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const selectSongVersion = async (versionId) => {
+    setBusy('song-select'); setError('')
+    try { await api.songSelectVersion(job.job_id, versionId); await refreshSong() }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  const draftStoryFromSong = async () => {
+    setBusy('song-story'); setError(''); setSongMsg('')
+    try {
+      const b = job.create_brief || {}
+      const data = await api.generateStory({
+        video_title: job.video_title || job.title || '',
+        topic: b.topic || job.topic || '', minutes: b.minutes || 0,
+        style_name: job.style_name || '', format: 'song',
+        voice: b.voice || '', resolution: b.resolution || '',
+        n_scenes: Number(scenesSong) || 0,   // 0 = Auto (the backend splits it)
+        work_dir: job.work_dir,
+      })
+      setStory(data.story || null)
+      setMinutesTarget(String(storyMinutes(data.story)))
+      setView('story')
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
   const minutesTargetN = Number(minutesTarget)
   const minutesTargetOk = Number.isFinite(minutesTargetN) && minutesTargetN >= 0.25 && minutesTargetN <= 40
   const minutesTargetChanged = !!story && minutesTargetOk
@@ -263,10 +340,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setCoverUrl('')
     setCoverMsg('')
     // A story draft (no scenes yet) opens straight into the Story view for
-    // review + division; anything with scenes lands on Cover as before.
+    // review + division; a script with scenes opens on the SCENES — what you
+    // came to review. (Cover is the publishing step, and now sits last.)
     if (!job?.job_id) return
     const hasScenes = (job.scenes || []).length
-    setView(hasScenes ? 'cover' : 'story')
+    setView(hasScenes ? 'scenes' : 'story')
   }, [job?.job_id, meta.config?.resolution, meta.default_resolution])
 
   // Load saved description + cover whenever the Cover tab is opened. A fresh
@@ -620,7 +698,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // against the hierarchy offered none of the style's own cast.
   const styleKey = job?.style_name || job?.style || castStyles.defaultStyle
   const lineageNames = new Set(styleLineage(castStyles.styles, styleKey).map((s) => s.name))
-  const styleCast = styleKey === '(none)' ? []
+  // "(none)" imposes no STYLE cast but still sees the global pool — mirrors
+  // the backend's _style_characters, whose resolver casts those at render.
+  const styleCast = styleKey === '(none)'
+    ? globalCast.filter((x) => !x.style).map((x) => x.name)
     : globalCast.filter((x) => !x.style || lineageNames.has(x.style)).map((x) => x.name)
   const castOpts = [...new Set([...characters.map((c) => c.name), ...styleCast])].filter(Boolean)
 
@@ -898,16 +979,21 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'characters' && charMsg && <Banner tone="ok">{charMsg}</Banner>}
 
       <div className="reveal reveal-d1" style={{ marginBottom: 20 }}>
+        {/* Left to right in the order the work happens: pick a script, write
+            the song (a music video starts there), draft the story, cast the
+            characters and artifacts, edit the scenes, review the takes — and
+            the cover, which belongs to publishing, last. */}
         <Segmented value={view} onChange={(v) => { setView(v); setError('') }} options={[
           { value: 'scripts', label: 'Scripts' },
+          ...(song ? [{ value: 'song', label: 'Song' }] : []),
           ...(story || (job && !(job.scenes || []).length) ? [{ value: 'story', label: 'Story' }] : []),
-          { value: 'cover', label: 'Cover' },
           // ONE look whatever the mix: the Scenes editor (where every scene
           // can shift mode) plus, when anything is acted, the Acted scenes
           // view with its cast slots, takes and prompts.
-          { value: 'characters', label: someActedShape ? 'Characters & visuals' : 'Characters' },
+          { value: 'characters', label: someActedShape ? 'Characters & Artifacts' : 'Characters' },
           { value: 'scenes', label: 'Scenes' },
           ...(someActedShape ? [{ value: 'performance', label: 'Acted scenes' }] : []),
+          { value: 'cover', label: 'Cover' },
         ]} />
       </div>
 
@@ -915,6 +1001,109 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {view === 'performance' && job && (
         <PerformanceScenes workDir={job.work_dir} jobId={job.job_id}
           voiceOpts={voiceOpts} voiceMeta={voiceMeta} />
+      )}
+
+      {/* ── Song tab (music-video films): the words and sound the film sings ── */}
+      {view === 'song' && song && (
+        <div className="bento">
+          <Card span={8} padLg className="reveal reveal-d1">
+            <div className="stack gap-22">
+              {songMsg && <Banner tone="ok">{songMsg}</Banner>}
+              <Field label="Sound"
+                hint="What the music model is told about the song — genre, tempo, mood, arrangement. The lead performer's cast voice (gender, age, tone) is described automatically on top of this at render time.">
+                <textarea className="textarea" rows={3}
+                  value={(songDraft ?? song).caption}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), caption: e.target.value })} />
+              </Field>
+              <Field label="Lyrics"
+                hint="Sung exactly as written. Keep the section tags — [Intro], [Verse], [Chorus], [Bridge], [Outro] — on their own lines; they shape the song without being sung. The song runs the film's length, so cutting or adding many words changes how it fits.">
+                <textarea className="textarea" rows={18} style={{ fontFamily: 'ui-monospace, monospace' }}
+                  value={(songDraft ?? song).lyrics}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), lyrics: e.target.value })} />
+              </Field>
+              <div className="row gap-8">
+                <Button variant="ghost" disabled={!songDraft || !!busy}
+                  onClick={saveSong}>{busy === 'song-save' ? 'Saving…' : 'Save edits'}</Button>
+                {songDraft && <Button variant="quiet" onClick={() => setSongDraft(null)}>Discard edits</Button>}
+              </div>
+
+              <Field label="Singing voice"
+                hint="Steers the described vocalist at generation, and is the target for re-voicing below.">
+                <select className="select" style={{ maxWidth: 340 }} value={songVoiceSel}
+                  disabled={!!busy} onChange={(e) => setSongVoiceSel(e.target.value)}>
+                  <option value="">The model’s own vocalist</option>
+                  {voiceOpts.map((v) => <option key={v} value={v}>{voiceLabel(v, voiceMeta)}</option>)}
+                </select>
+              </Field>
+
+              <div className="row gap-12 center row--wrap">
+                <Button variant={song.song_url ? 'ghost' : 'primary'} icon="music"
+                  disabled={!!busy || !(songDraft ?? song).lyrics?.trim()}
+                  onClick={generateSongTrack}>
+                  {busy === 'song-gen' ? 'Singing it…' : song.song_url ? 'Generate again' : '1. Generate the song'}
+                </Button>
+                {song.song_url && !!songVoiceSel && (
+                  <Button variant="ghost" icon="microphone-lines" disabled={!!busy}
+                    onClick={convertSongVoice}>
+                    {busy === 'song-convert' ? 'Re-voicing…' : `2. Sing this as ${songVoiceSel}`}
+                  </Button>
+                )}
+                {song.sung_as && <span className="muted" style={{ fontSize: 12.5 }}>♪ currently sung as <strong>{song.sung_as}</strong></span>}
+              </div>
+              {song.song_url && (
+                <audio controls src={song.song_url} style={{ width: '100%', height: 36 }} />
+              )}
+
+              {/* Accept or go back: every generation and every re-voicing is a
+                  kept version — the one marked "In use" is the film's track. */}
+              <MusicVersionStrip versions={song.versions || []} selected={song.selected}
+                busy={busy === 'song-select'} onSelect={selectSongVersion} />
+
+              {song.song_url && (
+                <div className="row center between row--wrap gap-12 mt-8">
+                  {/* Same control, same shape as Create's Scenes: blank = Auto
+                      (takes of about SONG_SCENE_SECONDS), a count overrides. */}
+                  <Field label="Scenes"
+                    hint={(() => {
+                      const dur = Number(song.duration) || 0
+                      const auto = Math.max(1, Math.round(dur / 5))
+                      const n = Number(scenesSong) || 0
+                      if (!dur) return 'How many performed scenes the song is split into — each is generated against its own stretch of the track.'
+                      return n > 0
+                        ? `The song's ${dur.toFixed(0)} s split ${n} way${n === 1 ? '' : 's'} — ~${(dur / n).toFixed(1)} s a scene. Fewer scenes are longer takes.`
+                        : `Automatic — the song's ${dur.toFixed(0)} s becomes ${auto} scene${auto === 1 ? '' : 's'} of ~${(dur / auto).toFixed(1)} s. Set a count to make the scenes longer or shorter.`
+                    })()}>
+                    <div className="row center gap-8">
+                      <input className="input" type="number" min={0} max={200} step={1}
+                        style={{ width: 110 }} placeholder="Auto"
+                        value={scenesSong || ''}
+                        onChange={(e) => setScenesSong(Math.max(0, Math.min(200, parseInt(e.target.value, 10) || 0)))} />
+                      {scenesSong > 0 && (
+                        <Button variant="ghost" onClick={() => setScenesSong(0)}>Auto</Button>
+                      )}
+                    </div>
+                  </Field>
+                  <Button variant="primary" size="lg" iconRight="wand-magic-sparkles"
+                    disabled={!!busy}
+                    onClick={draftStoryFromSong}>
+                    {busy === 'song-story' ? 'Drafting the story…' : '3. Draft the story →'}
+                  </Button>
+                </div>
+              )}
+            </div>
+          </Card>
+          <Card span={4} well className="reveal reveal-d2">
+            <span className="label-sm">The song studio</span>
+            <p className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.55 }}>
+              This film is a <strong>music video</strong> and the song leads: generate it,
+              listen, re-voice it as a library voice (an actual clone — only the vocal stem
+              is converted, the instruments stay untouched), and pick the version you want
+              from the list. Only then is the story drafted from these lyrics, and every
+              scene performs its own stretch of this exact track. It also appears under
+              Characters &amp; Artifacts, since it is an input of every singing take.
+            </p>
+          </Card>
+        </div>
       )}
 
       {/* ── Story tab (story-first scripts): the prose behind the scenes ─────── */}
@@ -1232,20 +1421,20 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 ) : (
                   <>
                     <Field label={fieldLabel('Image prompt', 'image_prompt', 'image')}
-                      hint={hasActedShape(d.mode, actedSilent)
+                      hint={hasActedShape(d.mode, actedSilent, d.singing)
                         ? 'FLUX — the frame this take opens on.'
                         : 'FLUX — static, highly detailed.'}>
                       <textarea className="textarea" rows={4} value={d.image_prompt || ''} onChange={(e) => setField('image_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
                     <Field label={fieldLabel('Video prompt', 'video_prompt', 'film')}
-                      hint={hasActedShape(d.mode, actedSilent)
+                      hint={hasActedShape(d.mode, actedSilent, d.singing)
                         ? 'Stands in as the setting while the Setting field above is empty.'
                         : 'For the video engine (LTX / MiniMax H3) — motion & camera.'}>
                       <textarea className="textarea" rows={5} value={d.video_prompt || ''} onChange={(e) => setField('video_prompt', e.target.value)} onBlur={() => persist(cur)} />
                     </Field>
                     {/* The performed silent take's own H3 prompt, assembled from
                         the fields above — the same view a dialogue scene gets. */}
-                    {hasActedShape(d.mode, actedSilent) && (
+                    {hasActedShape(d.mode, actedSilent, d.singing) && (
                       <ActedPrompt label="Acted prompt" prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
                         refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                         onSave={(text) => savePromptOverride(text)}
@@ -1257,7 +1446,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </Card>
 
             <div className="col-4 stack gap-16">
-              {hasActedShape(d.mode, actedSilent) ? (
+              {hasActedShape(d.mode, actedSilent, d.singing) ? (
                 <Card className="reveal reveal-d2">
                   <span className="label-sm">References</span>
                   <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
@@ -1281,7 +1470,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   </div>
                   <div className="muted mt-16" style={{ fontSize: 12 }}>
                     Portraits, voices, and the scenery &amp; wardrobe reference images are
-                    managed in <strong>Characters &amp; visuals</strong>.
+                    managed in <strong>Characters &amp; artifacts</strong>.
                   </div>
                 </Card>
               ) : null}

@@ -954,6 +954,29 @@ def _wire_ref_slots(workflow: dict, image_names: list[str], audio_names: list[st
         ref_node[f"ref_audios.ref_audio_{i}"] = [loader, 0]
 
 
+def _wire_track_audio(workflow: dict, track_audio: Path,
+                      comfy_url: str = COMFYUI_URL) -> None:
+    """Graft the audio-driven path onto a Ref2VA graph: upload the track and
+    insert MiniMaxH3AudioTrack between the reference node's conditioning and
+    the guider, with the clip latent and audio VAE wired in. The sampler then
+    denoises the picture against the pinned track (see the node's docstring in
+    docker/comfyui/h3_audio_track/)."""
+    ref_id = _ref_node_id(workflow)
+    guider_id = _node_id(workflow, "BasicGuider")
+    ref_inputs = workflow[ref_id]["inputs"]
+    name = _upload_audio(track_audio, comfy_url=comfy_url)
+    next_id = max((int(k) for k in workflow), default=100) + 1
+    loader, pin = str(next_id), str(next_id + 1)
+    workflow[loader] = {"class_type": "LoadAudio", "inputs": {"audio": name}}
+    workflow[pin] = {"class_type": "MiniMaxH3AudioTrack", "inputs": {
+        "conditioning": workflow[guider_id]["inputs"]["conditioning"],
+        "latent": [ref_id, 1],
+        "audio_vae": ref_inputs["audio_vae"],
+        "audio": [loader, 0],
+    }}
+    workflow[guider_id]["inputs"]["conditioning"] = [pin, 0]
+
+
 def _h3_submit(workflow: dict, output_path: Path, *, gen_w: int, gen_h: int,
                length: int, what: str, comfy_url: str) -> Path:
     """Queue an H3 graph, wait it out, and download the clip it rendered."""
@@ -1092,6 +1115,7 @@ def generate_video_h3_ref(
     steps: int | None = None,
     context_token: str | None = None,
     comfy_url: str = COMFYUI_URL,
+    track_audio: Path | None = None,
 ) -> Path:
     """MiniMax H3 Ref2VA: character portraits (and optional voice clips) → a clip
     with its own spoken dialogue. No first frame and no TTS — the model writes
@@ -1101,6 +1125,15 @@ def generate_video_h3_ref(
     in the SAME order; *ref_audios* are voice references cited as ``<Audio N>``.
     Both are capped at the model's limits. H3 requires at least one image or
     video reference — audio alone is rejected.
+
+    *track_audio* is a SOUNDTRACK, not a voice reference: the whole clip's
+    audio is pinned to this recording (MiniMaxH3AudioTrack, this repo's
+    addition to the Motion Context pack) and the model generates the PICTURE
+    to match it — a singer's mouth follows the sung words, movement follows
+    the beat. The clip's delivered audio is the model's reconstruction of the
+    track; mux the source file over it where bit-exact sound matters. The
+    track should be at least clip-length; its last clip-length seconds are
+    what gets pinned.
 
     *context_token* saves the take's motion context under that prefix, so the
     film editor can shoot MORE of this scene later (generate_video_h3_ref_continue).
@@ -1142,12 +1175,15 @@ def generate_video_h3_ref(
     })
 
     _wire_ref_slots(workflow, image_names, audio_names)
+    if track_audio is not None:
+        _wire_track_audio(workflow, track_audio, comfy_url=comfy_url)
     if context_token:
         _add_context_save(workflow, context_token, 1)
 
     logger.info(
-        "[comfy] generate_video_h3_ref %dx%d length=%d steps=%d refs=%di/%da",
+        "[comfy] generate_video_h3_ref %dx%d length=%d steps=%d refs=%di/%da%s",
         gen_w, gen_h, length, steps, len(image_names), len(audio_names),
+        " track-audio" if track_audio is not None else "",
     )
     return _h3_submit(workflow, output_path, gen_w=gen_w, gen_h=gen_h, length=length,
                       what="H3 Ref2VA", comfy_url=comfy_url)
@@ -1963,21 +1999,28 @@ def generate_music(
     seed: int | None = None,
     comfy_url: str = COMFYUI_URL,
     music_engine: str | None = None,
+    lyrics: str | None = None,
 ) -> Path:
     """Generate the background-music bed and save it to output_path.
 
     *music_engine* is a key from ``engines.MUSIC_ENGINES`` (default ACE-Step
-    1.5). Every music graph takes the same TAGS/DURATION/SEED placeholders, so
-    the engine only picks the workflow file, the duration ceiling and how long
-    to wait. A film longer than the engine's ceiling gets a shorter bed —
-    assembler.mix_background_music loops it to cover the picture.
+    1.5). Every music graph takes the same TAGS/DURATION/SEED/LYRICS
+    placeholders, so the engine only picks the workflow file, the duration
+    ceiling and how long to wait. A film longer than the engine's ceiling gets
+    a shorter bed — assembler.mix_background_music loops it to cover the
+    picture.
+
+    *lyrics* turns the instrumental bed into a SONG: both models sing whatever
+    tagged lyrics ([Verse]/[Chorus]/…) they are given. Empty keeps today's
+    lyric-free instrumental behaviour — the caption should then say
+    "instrumental" explicitly (the models are trained to write songs).
     """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
 
     if tags is None:
         tags = (
-            f"ambient documentary background music, {topic}, "
+            f"cinematic ambient background music, {topic}, "
             "cinematic, atmospheric, instrumental, orchestral, peaceful"
         )
 
@@ -1990,6 +2033,7 @@ def generate_music(
         "TAGS":     tags,
         "DURATION": duration,
         "SEED":     seed,
+        "LYRICS":   (lyrics or "").strip(),
     })
 
     client_id = str(uuid.uuid4())

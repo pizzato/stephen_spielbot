@@ -76,7 +76,7 @@ const CHAIN_JOIN_SECS = 22 / 24          // cadence.CHAIN_JOIN_SECS
 export function sceneBounds(eff, format = 'narration') {
   const chain = (v) => v * CHAIN_CLIPS - CHAIN_JOIN_SECS * (CHAIN_CLIPS - 1)
   const h3 = String(eff?.video_engine || '').startsWith('minimax-h3')
-  const acted = format === 'dialogue' || format === 'silent'
+  const acted = format === 'dialogue' || format === 'silent' || format === 'song'
   const chained = !!eff?.h3_chain_scenes && (h3 || acted)
   if (acted) {
     return { secs: chained ? chain(ACTED_SCENE_SECS) : ACTED_SCENE_SECS,
@@ -164,9 +164,11 @@ export const isActedMode = (m) => ACTED_MODES.includes(m || '')
 // Does this scene get the ACTED setup on screen? A dialogue scene always; a
 // silent one when the style performs its silent beats on H3 (h3_silent_scenes)
 // — the take is then built from the very same fields, so the editor is the same
-// minus the dialogue. Mirrors performance.renders_acted on the backend.
-export const hasActedShape = (mode, actedSilent) =>
-  isActedMode(mode) || (mode === 'silent' && !!actedSilent)
+// minus the dialogue. A SINGING scene (a music-video film's beat) is acted by
+// its own metadata, whatever the style says. Mirrors performance.renders_acted
+// on the backend.
+export const hasActedShape = (mode, actedSilent, singing = false) =>
+  isActedMode(mode) || (mode === 'silent' && (!!actedSilent || !!singing))
 
 function BeatRows({ beats, seconds, onChange, onCommit }) {
   const set = (i, k, v) => onChange(beats.map((b, j) => (i === j ? { ...b, [k]: v } : b)))
@@ -201,14 +203,16 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
   // pass commit=false and persist on blur via onCommit(). Passing the computed
   // patch (rather than a deferred callback) avoids a stale-closure save.
   const mode = scene.mode || 'narration'
-  const lines = scene.lines || []
-  const cast = scene.cast || []
-  const beats = scene.beats || []
+  const lines = Array.isArray(scene.lines) ? scene.lines : []
+  const cast = Array.isArray(scene.cast) ? scene.cast : []
+  // Older scripts can carry beats as one prose string — never crash on it.
+  const beats = Array.isArray(scene.beats) ? scene.beats
+    : scene.beats ? [{ action: String(scene.beats) }] : []
   // A dialogue scene's length is counted from its words; a silent one's is
   // authored, and lives in `duration` — the beats have to sit inside whichever
   // of the two this scene actually runs for.
   const silent = mode === 'silent'
-  const actedShape = hasActedShape(mode, actedSilent)
+  const actedShape = hasActedShape(mode, actedSilent, scene.singing)
   const seconds = Math.round((silent ? scene.duration || scene.seconds || 5
     : scene.seconds) || 10)
   const commit = () => onCommit && onCommit()
@@ -245,13 +249,21 @@ export function SceneTypeControls({ scene = {}, castOpts = [], actedSilent = fal
           ? 'Switching converts the scene — same theme and feel, the other shape — and keeps the version you leave: switch back and it is restored, not redone.'
           : 'Narration = voice-over over a still that moves. Dialogue = the characters act and speak on camera, in one take. Silent = visuals only, no voice.'}>
         <div className="row gap-8 center">
-          {[['narration', 'Narration'], ['dialogue', 'Dialogue'], ['silent', 'Silent']].map(([m, lbl]) => (
+          {/* A singing scene IS silent under the hood (no lines, take muted),
+              but it should say what it is: a music-video beat. */}
+          {[['narration', 'Narration'], ['dialogue', 'Dialogue'],
+            ['silent', scene.singing ? '♪ Music video' : 'Silent']].map(([m, lbl]) => (
             <Button key={m} variant={(m === 'dialogue' ? isActedMode(mode) : mode === m) ? 'primary' : 'ghost'}
               disabled={converting} onClick={() => setMode(m)}>{lbl}</Button>
           ))}
           {converting && <span className="muted" style={{ fontSize: 12.5 }}><Icon name="spinner" spin /> Converting…</span>}
         </div>
       </Field>
+      {silent && scene.singing && (
+        <Banner tone="info">♪ A music-video beat — the cast performs the film's song on
+          camera (visibly singing, take shipped muted); the sung track is the film's
+          audio. Edit the words in the Song tab.</Banner>
+      )}
 
       {actedShape && (
         <>

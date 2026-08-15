@@ -283,7 +283,10 @@ MiniMax Music 3 notes:
 - The film's **music description** becomes the model's *caption*. It reads best
   as a structured brief — genre and tempo, then mood, then instrumentation — and
   should say *instrumental* explicitly, since the model is trained to write songs
-  with vocals. The bed is always generated with empty lyrics.
+  with vocals. A background bed is generated with empty lyrics; a **Music-video
+  film** is the exception — its `song.json` lyrics are passed through and the
+  model SINGS them (see
+  [singing films](performance_films.md#singing-films-the-music-video-format)).
 - It stops at **6 minutes** (the model is trained to ~5). A longer film gets a
   shorter bed, and the final mix loops it rather than leaving the tail silent —
   the same safety net covers a song the model chooses to end early.

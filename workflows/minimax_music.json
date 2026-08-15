@@ -24,7 +24,7 @@
     "inputs": {
       "clip": ["1", 0],
       "caption": "{{TAGS}}",
-      "lyrics": "",
+      "lyrics": "{{LYRICS}}",
       "seed": "{{SEED}}",
       "max_duration": "{{DURATION}}",
       "cfg_scale": 1.7,

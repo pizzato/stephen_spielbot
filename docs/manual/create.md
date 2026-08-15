@@ -74,12 +74,15 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 | **Silent** | Told in pictures: no narrator, and a spoken line only where a beat truly needs one |
+| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the lead character performs it on camera in silent acted takes |
 
-See [acted scenes](../performance_films.md) for what the modes actually render.
+See [acted scenes](../performance_films.md) for what the modes actually render, and
+[singing films](../performance_films.md#singing-films-the-music-video-format) for the
+Music-video format in detail.
 
-A dialogue or silent film is measured in clips rather than words: every scene is one take
-of about ten seconds, so the length you ask for becomes a scene count at that rate — unless
-you set **Scenes** yourself, which stretches or shortens the takes instead.
+A dialogue, silent or music-video film is measured in clips rather than words: every scene
+is one take of about ten seconds, so the length you ask for becomes a scene count at that
+rate — unless you set **Scenes** yourself, which stretches or shortens the takes instead.
 
 **The direction box outranks the format's balance.** Whatever you pick, an instruction about
 staging — "mostly silent, one exchange near the end", "no narrator" — is followed rather
@@ -100,7 +103,8 @@ sense alone.
 **Score this film with background music** — on by default, following the style. Music is
 mixed in at the very end, never baked into a scene, so switching it off simply leaves the
 film with its voices and room tone. An all-dialogue film has no score at all: the acted
-takes already carry their own sound.
+takes already carry their own sound. A **music-video** film is the opposite extreme — it
+*is* its song, so the toggle is locked on and the track plays at full volume.
 
 ## Auto-approve
 

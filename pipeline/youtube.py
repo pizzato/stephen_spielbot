@@ -393,8 +393,8 @@ def thread_anchor(comment: dict) -> dict:
 # ── LLM evaluation ────────────────────────────────────────────────────────────
 
 _EVAL_PROMPT = """\
-You are evaluating a YouTube comment for an educational/documentary channel that produces \
-high-quality AI-generated documentary videos on history, science, culture, and biography.
+You are evaluating a YouTube comment for a channel that produces \
+high-quality AI-generated videos — documentaries, short films, and music videos.
 
 Comment from "{commenter}":
 {comment_text}
@@ -404,20 +404,20 @@ Respond with a JSON object with EXACTLY these fields:
 - "suggested_title": string — if is_request is true, a clear YouTube video title (e.g. "The Rise and Fall of the Ottoman Empire"); otherwise ""
 - "confidence": number 0.0–1.0 — how confident you are this is a genuine video request
 - "interestingness": number 0.0–1.0 — if is_request is true, how interesting and suitable this topic is \
-for an educational documentary channel (consider: educational value, broad audience appeal, \
-documentary potential, topic depth, likely view count, uniqueness vs over-done topics); otherwise 0.0
+for this channel (consider: broad audience appeal, fit with the channel's style, \
+topic depth, likely view count, uniqueness vs over-done topics); otherwise 0.0
 - "reason": string — one sentence explanation covering both the request classification and interestingness rating
 - "suggested_scene_count": integer 6–50 — estimate how many scenes (each ~30–60 seconds) \
 would be needed to properly cover this topic; otherwise 20. Use three tiers: \
 SHORT (6–11 scenes) for simple or very focused topics; \
-MEDIUM (12–39 scenes) for standard documentary topics; \
+MEDIUM (12–39 scenes) for standard topics; \
 LARGE (40–50 scenes) for epic, sweeping, or deeply multi-faceted topics \
 (e.g. entire civilisations, long historical arcs, complex science subjects).
 
 Classify as is_request=true ONLY if the comment explicitly asks for a video about a named topic.
 Vague compliments, questions about the channel, spam, or off-topic messages are NOT requests.
-For interestingness: 0.9–1.0 = outstanding topic with broad appeal; 0.7–0.9 = solid documentary topic; \
-0.5–0.7 = decent but niche; below 0.5 = poor fit for documentary format.
+For interestingness: 0.9–1.0 = outstanding topic with broad appeal; 0.7–0.9 = solid topic; \
+0.5–0.7 = decent but niche; below 0.5 = poor fit for the channel.
 
 Output ONLY the JSON object, no other text."""
 

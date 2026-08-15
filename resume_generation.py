@@ -43,9 +43,9 @@ from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
-    concat_audio, concatenate_scenes, extract_last_frame,
-    ensure_video_resolution, mix_background_music,
-    write_silence_wav as _write_silence_wav,
+    concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
+    extract_last_frame, ensure_video_resolution, mix_background_music,
+    trim_video, write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
 from pipeline import scene_context as _scene_context
@@ -645,6 +645,20 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
     return final
 
 
+def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
+    """Cut [t0, t1] seconds out of an audio file (re-encoded PCM, sample-exact)."""
+    import subprocess
+    from pipeline.assembler import _resolve_media_tool
+    if t1 <= t0:
+        raise ValueError(f"empty audio segment [{t0}, {t1}]")
+    subprocess.run(
+        [_resolve_media_tool("ffmpeg"), "-y", "-v", "error",
+         "-i", str(src), "-ss", f"{t0:.3f}", "-to", f"{t1:.3f}",
+         "-c:a", "pcm_s16le", str(out)],
+        check=True, capture_output=True)
+    return out
+
+
 def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_url,
                              vid_width, vid_height, style_name,
                              extra_pictures: list[dict] | None = None,
@@ -676,12 +690,43 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
             "first frame instead, but it needs an image prompt to make one)")
 
     engine = _engines.resolve_reference(cfg, cfg.get("reference_engine"))
+
+    # A singing scene of a song film performs ITS OWN stretch of the track:
+    # the segment its song_window covers is cut from the approved song and
+    # PINNED into the generation (audio-driven H3, MiniMaxH3AudioTrack), so
+    # the mouth and movement follow the actual music under that stretch of
+    # the film. The take still ships muted — the full original track is the
+    # film's soundtrack — the pinned audio's job is the PICTURE.
+    track_audio = None
+    window = meta.get("song_window") if meta.get("singing") else None
+    song_track = work_dir / "background_music.wav"
+    if window and song_track.exists():
+        try:
+            t0, t1 = float(window[0]), float(window[1])
+            seg = work_dir / f"scene_{scene.id:02d}_track.wav"
+            _cut_audio_segment(song_track, seg, t0, t1)
+            track_audio = seg
+            logger.info("Scene %d: pinning song segment %.1f–%.1fs into the take",
+                        scene.id, t0, t1)
+        except Exception:
+            logger.warning("Scene %d: could not cut song segment %s — rendering "
+                           "without the pinned track", scene.id, window, exc_info=True)
+    if track_audio is None:
+        # A SOUNDTRACK artifact (Characters & artifacts → audio) that applies
+        # to this scene: pinned the same way, for any acted take in any film.
+        from app import scene_track_audio
+        art = scene_track_audio(work_dir, scene.id)
+        if art is not None:
+            track_audio = art
+            logger.info("Scene %d: pinning soundtrack artifact %s", scene.id, art.name)
+
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
     # split. Reference engines are always MiniMax, so the toggle alone decides
     # — but a scene that already fits one clip renders single-clip either way
-    # rather than paying the join's ~22% overhead for nothing.
-    chained = chain_scenes_flag(cfg, style_name)
+    # rather than paying the join's ~22% overhead for nothing. A pinned track
+    # spans exactly ONE clip, so an audio-driven take never chains.
+    chained = chain_scenes_flag(cfg, style_name) and track_audio is None
     if chained and _performance.content_seconds(
             meta, chained=True) > _performance.acted_limits(False)[1]:
         # Dialogue divides at speaker turns; a SILENT scene has no lines to
@@ -737,6 +782,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 duration_seconds=durations[0],
                 context_token=token,
                 comfy_url=comfy_url,
+                track_audio=track_audio,
             )
         index = len(prompts) if chained else 1
         last_ctx.update(token=token, latent=context_latent_name(token, index),
@@ -752,7 +798,14 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # model into a consistent one. Soft dependency: without
     # faster-whisper the gate stands down. Silent shots have nothing to verify.
     expected = _performance.spoken_text(meta)
-    verify_on = shot_gate.available() and bool(cfg.get("performance_verify", True))
+    # A singing take (song film) is MEANT to carry a voice: the silent-shot
+    # gate below would hear the singing and retake it forever. No gate — its
+    # own audio is discarded outright (muted after the gates), because the
+    # film's real song covers the whole picture. The same stand-down applies
+    # to any take with a PINNED soundtrack: the audio was provided, so there
+    # is nothing to verify against the script.
+    verify_on = (shot_gate.available() and bool(cfg.get("performance_verify", True))
+                 and not meta.get("singing") and track_audio is None)
 
     # A shot with NO lines must be silent — and the model does babble into
     # them against instructions ("and seal it in a thween", heard in a real
@@ -829,6 +882,31 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 candidate.unlink(missing_ok=True)
         logger.info("[gate] scene %d %s: score %.2f%s", scene.id, clip.name, best,
                     " (best of retakes)" if _miss(best, transcript) else "")
+
+    if meta.get("singing"):
+        # Ship the singing take MUTED: the film's generated song is the only
+        # audio a music video carries, and H3's own a-cappella take under the
+        # real track would double the vocals.
+        silence = clip.with_suffix(".silence.wav")
+        _write_silence_wav(silence, _get_duration(clip))
+        muted = clip.with_suffix(".muted.mp4")
+        mux_video_audio(clip, silence, muted)
+        muted.replace(clip)
+        silence.unlink(missing_ok=True)
+        # The film must run EXACTLY the song's length: H3 renders on a frame
+        # grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that excess
+        # compounds scene by scene into audible drift against the overlaid
+        # track. Trim each take to its own window — the pinned segment covers
+        # [0, window] of the clip, so what's cut is only the unpinned tail.
+        if window:
+            want = float(window[1]) - float(window[0])
+            have = _get_duration(clip)
+            if want > 0 and have > want + 0.03:
+                trimmed = clip.with_suffix(".trimmed.mp4")
+                trim_video(clip, trimmed, want)
+                trimmed.replace(clip)
+                logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
+                            "song's timeline", scene.id, have, want)
 
     # The kept take's continuation point, on the worker that shot it. Written
     # after the gate so it belongs to the clip that survived, not to a reject.
@@ -924,6 +1002,58 @@ def main(work_dir: Path) -> None:
     # Self-heal: any scene with empty narration would produce a 0-byte audio clip
     # and a silent video. Fill missing fields from the LLM before audio generation.
     _heal_empty_scenes(scenes, title, cfg, work_dir)
+
+    # ── Song film (the "Music video" format) ─────────────────────────────────
+    # Scenes stamped "singing" perform the film's song on camera; the song
+    # itself (tagged lyrics + caption, written at divide time) lives in
+    # song.json. The track IS the soundtrack, so music is forced on at full
+    # volume, and the caption gains a description of the cast singer's library
+    # voice — the closest the music model gets to singing AS that character.
+    # The same keys are stamped back into job_config.json so the film editor's
+    # re-mix and the Remix screen's music re-generation stay consistent.
+    singing_film = any(_performance.is_singing(s) for s in scenes)
+    if singing_film:
+        song = {}
+        try:
+            song = json.loads((work_dir / "song.json").read_text())
+        except Exception:
+            logger.warning("Song film without a readable song.json — the track "
+                           "will be sung from the music description alone")
+        singer_names: list[str] = []
+        for s in scenes:
+            if _performance.is_singing(s):
+                for name in (_performance.scene_meta(s).get("cast") or []):
+                    if name not in singer_names:
+                        singer_names.append(name)
+        from app import vocalist_note, voice_descriptor
+        # The song-first flow picked an explicit SINGING voice; a cast
+        # member's voice is the fallback for films that skipped that step.
+        note = ""
+        if (song.get("voice") or "").strip():
+            voices = {v.get("name"): v for v in (cfg.get("voices") or [])
+                      if v.get("name")}
+            note = voice_descriptor(voices.get(song["voice"].strip()))
+        if not note:
+            note = vocalist_note(cfg, cfg.get("style_name") or "", work_dir,
+                                 singer_names)
+        caption = (song.get("caption") or cfg.get("music_desc") or "").strip()
+        cfg["music_desc"] = ", ".join(x for x in (caption, note) if x)
+        cfg["music_lyrics"] = (song.get("lyrics") or "").strip()
+        cfg["music_enabled"] = True
+        cfg["music_vol"] = 100
+        logger.info("Song film: %d singing scene(s), lyrics %s, vocalist %r",
+                    sum(1 for s in scenes if _performance.is_singing(s)),
+                    "present" if cfg["music_lyrics"] else "MISSING", note)
+        try:
+            jc_path = work_dir / "job_config.json"
+            jc = json.loads(jc_path.read_text()) if jc_path.exists() else {}
+            jc.update({"music_enabled": True, "music_vol": 100,
+                       "music_desc": cfg["music_desc"],
+                       "music_lyrics": cfg["music_lyrics"]})
+            jc_path.write_text(json.dumps(jc, indent=2))
+        except Exception:
+            logger.warning("Could not stamp song keys into job_config.json",
+                           exc_info=True)
 
     store = DurableStore.default()
     durable_job_id = job_id_from_work_dir(work_dir)
@@ -1248,6 +1378,7 @@ def main(work_dir: Path) -> None:
                 "duration_seconds": music_dur,
                 "output_path": str(music_path),
                 "music_desc": cfg.get("music_desc") or "",
+                "music_lyrics": cfg.get("music_lyrics") or "",
                 "music_engine": music_engine["key"],
             },
         )
@@ -1270,7 +1401,8 @@ def main(work_dir: Path) -> None:
                     start_message=f"music on {music_url}",
                 ) as run:
                     generate_music(title, music_dur, music_path, cfg.get("music_desc") or None,
-                                   comfy_url=music_url, music_engine=music_engine["key"])
+                                   comfy_url=music_url, music_engine=music_engine["key"],
+                                   lyrics=cfg.get("music_lyrics") or None)
                     actual_music_dur = _get_duration(music_path)
                     store.record_artifact(
                         durable_job_id,
@@ -1618,7 +1750,15 @@ def main(work_dir: Path) -> None:
         lease_seconds=900,
         start_message="assembling final video",
     ) as final_run:
-        concatenate_scenes(scene_finals, combined)
+        if singing_film:
+            # A music video cuts HARD on the beat: crossfades both blur the
+            # audio-driven sync and shorten the timeline by their overlap,
+            # drifting every later scene against the song. The takes are
+            # trimmed to their exact windows, so back-to-back they run
+            # precisely the track's length.
+            concatenate_scenes_hard_cut(scene_finals, combined)
+        else:
+            concatenate_scenes(scene_finals, combined)
 
         if music_on and music_path.exists():
             write_progress(status_file, 95,

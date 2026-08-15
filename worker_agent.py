@@ -129,6 +129,7 @@ def _execute_music(store: DurableStore, task: TaskRecord, endpoint: str) -> None
         p.get("music_desc") or None,
         comfy_url=endpoint,
         music_engine=p.get("music_engine"),
+        lyrics=p.get("music_lyrics") or None,
     )
     actual_duration = _get_duration(output)
     store.record_artifact(task.job_id, task.id, "music", output, duration_seconds=actual_duration)

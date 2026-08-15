@@ -598,6 +598,164 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
     )
 
 
+# ── Song films (music videos) ────────────────────────────────────────────────
+
+def write_song(story: dict | None, target_seconds: float,
+               language: str | None = None, *,
+               topic: str = "", video_title: str = "",
+               source_text: str = "", music_hint: str = "") -> dict:
+    """The film's SONG, written from the approved story draft.
+
+    A song film ("song" format) is a music video: the music engine sings the
+    whole soundtrack while the cast performs it on camera. This is where the
+    soundtrack is authored — returns ``{"caption": ..., "lyrics": ...}``:
+    tagged lyrics ([Verse]/[Chorus]/…) both music engines take verbatim, and a
+    structured caption (genre, tempo, mood, arrangement) that replaces the
+    instrumental ``music`` description. The caption deliberately leaves the
+    vocalist out — the render appends a description of the cast singer's
+    library voice (gender/age/tone), so the sung voice fits the character
+    the film shows singing.
+
+    The lyric budget comes from *target_seconds*: sung delivery runs well
+    under two words a second, and over-length lyrics are what make the model
+    rush or cut the song off mid-phrase.
+    """
+    cfg = _load_cfg()
+    call = _call_fn(cfg)
+    if story is not None:
+        # Song written from an approved story (the divide-time fallback).
+        source_text = "\n\n".join(
+            f'Chapter {c.get("chapter")} — "{c.get("title", "")}":\n{c.get("text", "")}'
+            for c in (story.get("chapters") or []) if isinstance(c, dict))
+        topic = str(story.get("topic") or "")
+        video_title = str(story.get("video_title") or "")
+        music_hint = str(story.get("music") or "")
+    # Song-FIRST (the interactive Music-video flow): only the brief exists,
+    # so the song is written straight from it and the story follows the
+    # lyrics afterwards.
+    seconds = max(15, int(target_seconds or 0) or 180)
+    # ~1 sung word per second: singing is SLOW — intros, held notes and the
+    # music breathing eat most of the clock. The old 1.7 w/s with a 40-word
+    # floor overfilled every short song (a 15 s track was asked to carry 40
+    # words and came out either rushed or cut off mid-line).
+    word_budget = max(10, int(seconds * 1.2))
+    lang_name = narration_language_name(language)
+    language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
+                     f"section tags and the caption stay in English."
+                     if lang_name else "")
+    raw = call(
+        _prompts.system("song_write"),
+        _prompts.user("song_write",
+                      title_line=_title_line(topic, video_title or None),
+                      story_text=source_text or topic,
+                      duration_seconds=seconds,
+                      word_budget=word_budget,
+                      music_hint=music_hint,
+                      language_note=language_note),
+        word_budget * 3 + 500, "song write", retries=2,
+    )
+    data = _parse_claude_response(raw, "song write")
+    lyrics = str(data.get("lyrics") or "").strip()
+    if not lyrics:
+        raise RuntimeError("Song writing returned no lyrics")
+    caption = str(data.get("caption") or music_hint or "").strip()
+    return {"caption": caption, "lyrics": lyrics}
+
+
+def lyric_lines(lyrics: str) -> list[str]:
+    """The sung lines of a tagged lyric sheet, in order — section tags
+    ([Verse], [Chorus], …) and blank lines dropped."""
+    out = []
+    for line in (lyrics or "").splitlines():
+        line = line.strip()
+        if line and not (line.startswith("[") and line.endswith("]")):
+            out.append(line)
+    return out
+
+
+def assign_song_slices(scenes: list[Scene], lyrics: str,
+                       total_seconds: float | None = None) -> list[Scene]:
+    """Give each singing scene its WINDOW of the song and the words sung in it.
+
+    The song plays once across the whole film, so each singing scene covers the
+    stretch of it that its screen time occupies: ``song_window`` is [start, end]
+    seconds into the track, and ``sings`` is the lyric lines that fall inside
+    (distributed by time share — sung delivery is loose enough that proportional
+    beats word-level alignment's failure modes on sung vocals). Both ride the
+    scene metadata: the window is the interface a future audio-conditioned H3
+    render plugs into (pass that slice of the track in, get a take that
+    performs it), and ``sings`` is what today's prompt directs the cast to
+    mouth. Non-singing scenes are left alone but still advance the clock —
+    the song keeps playing under them."""
+    from pipeline.performance import MIN_SCENE_SECONDS, SCENE_SECONDS
+    singing = [s for s in scenes
+               if (getattr(s, "metadata_extra", None) or {}).get("singing")]
+    if not singing or not (lyrics or "").strip():
+        return scenes
+    def secs(s):
+        try:
+            return float(getattr(s, "duration", 0) or 0) or SCENE_SECONDS
+        except (TypeError, ValueError):
+            return SCENE_SECONDS
+    lines = lyric_lines(lyrics)
+    all_singing = len(singing) == len(scenes)
+    if all_singing and total_seconds:
+        # The whole film sings (the Music-video contract): the track divides
+        # EVENLY — n clips of track/n seconds, windows meeting exactly — so
+        # the concatenated takes run precisely the track's length and the
+        # overlaid song never drifts against the pictures. The takes' minimum
+        # length is respected by the clip-count planner upstream.
+        total = float(total_seconds)
+        per = total / len(scenes)
+        for i, s in enumerate(scenes):
+            extra = dict(getattr(s, "metadata_extra", None) or {})
+            extra["song_window"] = [round(i * per, 2), round((i + 1) * per, 2)]
+            lo = int(round(len(lines) * i / len(scenes)))
+            hi = int(round(len(lines) * (i + 1) / len(scenes)))
+            extra["sings"] = "\n".join(lines[lo:hi]).strip()
+            s.metadata_extra = extra
+            s.duration = round(per, 2)
+        return scenes
+    # Mixed film: the song plays across singing and non-singing scenes alike,
+    # so windows follow each scene's authored screen time, scaled onto the
+    # track. Singing scenes are resized to their windows (floored at the
+    # acted minimum) so the film tracks the song as closely as its mix allows.
+    film_len = sum(secs(s) for s in scenes)
+    scale = (float(total_seconds) / film_len
+             if total_seconds and film_len > 0 else 1.0)
+    clock = 0.0
+    for s in scenes:
+        start, end = clock, clock + secs(s)
+        clock = end
+        extra = dict(getattr(s, "metadata_extra", None) or {})
+        if not extra.get("singing"):
+            continue
+        lo = int(round(len(lines) * (start / film_len))) if film_len else 0
+        hi = int(round(len(lines) * (end / film_len))) if film_len else 0
+        extra["song_window"] = [round(start * scale, 1), round(end * scale, 1)]
+        extra["sings"] = "\n".join(lines[lo:hi]).strip()
+        s.metadata_extra = extra
+        s.duration = max(MIN_SCENE_SECONDS,
+                         round(extra["song_window"][1] - extra["song_window"][0], 1))
+    return scenes
+
+
+def mark_singing(scenes: list[Scene]) -> list[Scene]:
+    """Stamp a song film's performance flag onto its silent scenes, in place.
+
+    The flag rides each scene's metadata sidecar (never a style toggle), so it
+    survives script.json → editor → every re-render, and renders_acted routes
+    the scene onto H3 with the singing prompt whatever the style's
+    ``h3_silent_scenes`` says. Narrated/dialogue scenes are left alone — a song
+    film's stray spoken beat still behaves as authored."""
+    for s in scenes:
+        if str(getattr(s, "mode", "") or "").strip().lower() == "silent":
+            extra = dict(getattr(s, "metadata_extra", None) or {})
+            extra["singing"] = True
+            s.metadata_extra = extra
+    return scenes
+
+
 # ── Script critic (post-generation QC over the assembled scene list) ─────────
 
 def near_duplicate_pairs(scenes: list[dict], threshold: float = 0.8,

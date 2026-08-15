@@ -123,6 +123,28 @@ export const api = {
       if (s.status === 'error') throw new Error(s.error || 'Story generation failed.')
     }
   },
+  // Music-video flow: write the song first, then generate its audio (polls
+  // the shared script-task status until the track is rendered).
+  songDraft: (body) => req('POST', '/song/draft', body),
+  songGenerate: async (body) => {
+    const { task_id } = await req('POST', '/song/generate', body)
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 2000))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Song generation failed.')
+    }
+  },
+  // "Sing this as [voice]": re-voice the generated song with seed-vc.
+  songConvert: async (workDir, voice) => {
+    const { task_id } = await req('POST', '/song/convert', { work_dir: workDir, voice })
+    for (;;) {
+      await new Promise((r) => setTimeout(r, 3000))
+      const s = await req('GET', `/script/generate/status?task_id=${encodeURIComponent(task_id)}`)
+      if (s.status === 'done') return s
+      if (s.status === 'error') throw new Error(s.error || 'Voice conversion failed.')
+    }
+  },
   divideStory: async (body) => {
     const { task_id } = await req('POST', '/script/story/divide', body)
     for (;;) {
@@ -146,6 +168,11 @@ export const api = {
     }
   },
   getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
+  // A song film's song — the caption and tagged lyrics the music model sings.
+  getSong: (jobId) => req('GET', `/jobs/${jobId}/song`),
+  saveSong: (jobId, caption, lyrics) => req('PUT', `/jobs/${jobId}/song`, { caption, lyrics }),
+  // The accept/revert step: put a kept version back as the film's track.
+  songSelectVersion: (jobId, versionId) => req('POST', `/jobs/${jobId}/song/select`, { version_id: versionId }),
   // Persist edited chapter texts so a story review can be resumed later.
   saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),
   // Script critic: post-generation QC that can rewrite, delete, and reorder

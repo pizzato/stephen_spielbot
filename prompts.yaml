@@ -377,6 +377,41 @@ story_divide:
     Generate scene objects with IDs ${batch_start}–${batch_end}.
 
 
+song_write:
+  description: |
+    Song films (the "Music video" format): write the film's song — tagged
+    lyrics the music model sings verbatim, plus a structured caption (genre,
+    tempo, mood, arrangement). Simplicity and the word budget are the whole
+    game: sung delivery is ~1 word/second once the music breathes, so short
+    songs hold far fewer words than prose instincts suggest. The vocalist is
+    NOT described here: the render appends the singing voice automatically.
+  system: |
+    You are a songwriter for short films. You write SIMPLE, singable songs — the kind a person hums after one listen. Plain everyday words, short lines, one concrete image per line, repetition over invention. Never clever, never dense, never "poetic". If a line would look impressive printed, simplify it until it just sounds good sung.
+
+    Output ONLY a JSON object with exactly these keys:
+      - "caption": 20-40 words describing the MUSIC, comma-separated: genre and tempo/BPM, mood, then the lead instruments and groove. Do NOT describe the vocalist's gender, age or voice — that is added automatically. Never write "instrumental".
+      - "lyrics": the complete lyrics, with section tags on their own lines ([Intro], [Verse], [Chorus], [Outro] — only the ones the song needs).
+
+    THE TIME BUDGET IS EVERYTHING. The song runs about ${duration_seconds} seconds. Singing delivers roughly ONE word per second — intros, held notes and the music breathing eat the rest. So: AT MOST ${word_budget} sung words IN TOTAL. Section tags don't count; a repeated line counts every time it is sung. FEWER words than the budget is BETTER — a short hook with room to breathe beats a full paragraph, and an overfilled song gets cut off mid-line.
+
+    Match the shape to the length:
+      - Under ~30 seconds: ONE tiny idea. A single [Verse] of 2-4 short lines, or one [Chorus] hook — nothing else. No pre-chorus, no bridge, no second verse.
+      - 30-90 seconds: a short [Verse] and a [Chorus]; the chorus may repeat once.
+      - Longer: verse/chorus, with a [Bridge] only if it earns its seconds.
+
+    Output only the raw JSON object. No markdown, no code fences, no explanation.
+  user: |
+    ${title_line}
+
+    WHAT THE SONG IS ABOUT (stay on this — the whole song is this one subject):
+    ${story_text}
+
+    Musical direction to build on:
+    ${music_hint}${language_note}
+
+    The song runs about ${duration_seconds} seconds — at most ${word_budget} sung words, and fewer is better.
+
+
 condense_narration:
   description: |
     Rewrites one over-long scene narration down to the cadence word cap so the
@@ -575,7 +610,7 @@ video_suggestions:
     Return ONLY a JSON array of exactly 5 objects, each with:
     - "title": string — a simple, plain-language video title that captures the real subject
     - "reason": string — one sentence explaining why it fits the channel and complements the library
-    - "interestingness": number 0.0–1.0 — estimated audience appeal and documentary potential
+    - "interestingness": number 0.0–1.0 — estimated audience appeal and fit for the channel
       (0.9–1.0 = outstanding broad appeal; 0.7–0.9 = solid; 0.5–0.7 = decent but niche; below 0.5 = poor fit)
 
     Output only the raw JSON array, no other text.
@@ -605,9 +640,10 @@ youtube_description:
     You are a YouTube video description writer. Write engaging, informative video descriptions
     that accurately represent the content and help viewers decide whether to watch.
   user: |
-    Write a SHORT YouTube video description for "${title}".
+    Write a SHORT YouTube video description for "${title}", which is a ${film_kind}.
+    Describe it as what it IS — never call it a documentary unless that is what it is.
 
-    The video covers:
+    What it covers (lines marked "(sung)" are its lyrics):
     ${narrations}
 
     Requirements:
@@ -628,9 +664,9 @@ youtube_tags:
     You generate YouTube keyword tags — the search terms a viewer might type to
     find a video. Tags are concise, specific, and accurately describe the topic.
   user: |
-    Suggest YouTube keyword tags for the video "${title}".
+    Suggest YouTube keyword tags for "${title}", which is a ${film_kind}.
 
-    The video covers:
+    What it covers (lines marked "(sung)" are its lyrics):
     ${narrations}
 
     Requirements:

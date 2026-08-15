@@ -6,7 +6,7 @@ The review gate. Everything the render will do is decided here, and nothing has 
 GPU yet except the scene preview images you ask for.
 
 Views along the top: **Scripts**, **Story**, **Cover**, **Characters** (which becomes
-**Characters & visuals** when the film has acted scenes), **Scenes** — and, for films with
+**Characters & Artifacts** when the film has acted scenes), **Scenes** — and, for films with
 acted scenes, **Acted scenes**.
 
 ## Scripts
@@ -51,7 +51,7 @@ Everything that isn't a scene:
 The page header carries **Save**, **Re-draft** (back to [Create](create.md) with this
 film's brief restored), and **Delete**.
 
-## Characters & visuals
+## Characters & Artifacts
 
 Every reference the film renders from, on one wall, with **one bar to add them all**:
 character, location, wardrobe, free-form **image** (any other thing the model should
@@ -124,7 +124,7 @@ from a still. Leave it empty and nothing changes.
 When the style *does* perform them, the silent scene is written through the **acted
 fields below** instead — on screen, setting, duration, action, camera, sound — because
 that is what the take is built from. It is the dialogue editor minus the dialogue, and
-the film gets the **Characters & visuals** wall like any other performance film. The
+the film gets the **Characters & Artifacts** wall like any other performance film. The
 image and video prompts stay: the image still paints the frame the take opens on, and
 the video prompt stands in as the setting while that field is empty.
 

@@ -222,6 +222,26 @@ RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
     else \
         echo "H3 Motion Context not installed (H3_MOTION_CONTEXT_REF empty)"; \
     fi
+# Audio-driven H3 (this repo's addition, proven 2026-08-14): pin a whole audio
+# track across a clip so the video is generated to match it. Appended into the
+# Motion Context pack because it reuses its layout/payload patches and encode
+# path — a standalone package can't import a hyphenated sibling reliably.
+COPY docker/comfyui/h3_audio_track/append_to_motion_context.py /tmp/h3_audio_track.py
+RUN if [ -d custom_nodes/ComfyUI-H3-Motion-Context ]; then \
+        cat /tmp/h3_audio_track.py >> custom_nodes/ComfyUI-H3-Motion-Context/nodes.py; \
+    fi
+
+# seed-vc (GPL-3.0, see THIRD_PARTY_NOTICES.md): singing-voice conversion for
+# the song panel's "Sing this as [voice]" step, run on this worker's CUDA when
+# the controller names it (`svc_worker`). The venv reuses the image's CUDA
+# torch; only the pure-python deps are added. Weights download on first use.
+RUN apt-get update && apt-get install -y --no-install-recommends python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth 1 https://github.com/Plachtaa/seed-vc.git /opt/seed-vc \
+    && python3 -m venv --system-site-packages /opt/seed-vc/.venv \
+    && grep -vE "^torch|^--extra-index-url|^torchvision|^torchaudio" \
+        /opt/seed-vc/requirements.txt > /tmp/svc-reqs.txt \
+    && /opt/seed-vc/.venv/bin/pip install --no-cache-dir -r /tmp/svc-reqs.txt torchcodec
 
 EXPOSE 8188
 
