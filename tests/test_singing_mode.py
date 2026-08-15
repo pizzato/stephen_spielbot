@@ -120,6 +120,19 @@ class LtxSingingTests(unittest.TestCase):
                 "setting": "ignored"}
         self.assertEqual(perf.build_ltx_singing_prompt(meta), "exactly this")
 
+    def test_render_stamps_the_singing_engine_into_job_config(self):
+        # resume_generation reads the merged job config FLAT. Every other
+        # per-style render key is stamped at render start; an unstamped
+        # song_video_engine would leave the choice to a styles-list lookup
+        # that a renamed style silently misses.
+        import re
+        src = (Path(__file__).resolve().parent.parent
+               / "webapp" / "backend" / "main.py").read_text()
+        start = src.find("job_cfg = gapp._job_config_snapshot(cfg)")
+        self.assertGreater(start, 0, "render config stamping block not found")
+        stamped = re.findall(r'^\s{8}"([a-z0-9_]+)":', src[start:start + 4200], re.M)
+        self.assertIn("song_video_engine", stamped)
+
     def test_song_track_engine_is_opt_in(self):
         import resume_generation as rg
         # Default and the explicit "h3" both stay on the reference engine.

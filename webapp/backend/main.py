@@ -5575,6 +5575,12 @@ def start_generation(body: GenerateBody) -> dict:
         # rather than animating them from a first frame. Stamped for the same
         # reason as the flag above — the render reads the job config flat.
         "h3_silent_scenes": gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
+        # Where a song film's singing takes render ("h3" | an LTX engine with a
+        # pinned-track workflow). Stamped for the same reason as the two flags
+        # above: resume_generation reads the merged job config flat, and an
+        # unstamped key leaves the choice to a styles-list lookup that a
+        # renamed style would silently miss.
+        "song_video_engine": gapp._norm_song_video_engine(ss.get("song_video_engine")),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).

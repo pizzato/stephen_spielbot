@@ -100,6 +100,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   // shares; a loaded script keeps the visual-style TEXT in `style`.)
   const actedSilent = !!resolveStyle(castStyles.styles,
     job?.style_name || job?.style || castStyles.defaultStyle)?.h3_silent_scenes
+  // Where this style shoots a SINGING take: the reference engine (H3) or an LTX
+  // engine with the song pinned into it. A singing scene is staged the same way
+  // either way — the difference is which model performs it, so the scene cards
+  // must say which rather than always claiming H3.
+  const songEngine = String(resolveStyle(castStyles.styles,
+    job?.style_name || job?.style || castStyles.defaultStyle)?.song_video_engine || 'h3')
+  const singingOnLtx = songEngine !== '' && songEngine !== 'h3'
   const someActed = (job?.scenes || []).some(acted)
   // Every scene that renders as an H3 take — the acted ones plus, when the
   // style performs them, the silent ones. Those takes are conditioned on
@@ -1435,7 +1442,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                     {/* The performed silent take's own H3 prompt, assembled from
                         the fields above — the same view a dialogue scene gets. */}
                     {hasActedShape(d.mode, actedSilent, d.singing) && (
-                      <ActedPrompt label="Acted prompt" prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
+                      <ActedPrompt label={(d.singing && singingOnLtx)
+                        ? 'Acted prompt (H3 phrasing — LTX writes its own from these fields; an edit here still wins)'
+                        : 'Acted prompt'} prompt={d.acted_prompt || ''} edited={!!d.prompt_edited}
                         refs={(d.cast || []).map((n, i) => ({ slot: i + 1, name: n }))}
                         onSave={(text) => savePromptOverride(text)}
                         onRebuild={() => savePromptOverride('')} />
@@ -1452,7 +1461,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   <div className="muted mt-8" style={{ fontSize: 12.5, lineHeight: 1.5 }}>
                     {isActedMode(d.mode)
                       ? 'An acted scene renders from these references.'
-                      : 'This silent beat is performed on H3 — it renders from these references and its first frame.'}
+                      : (d.singing && singingOnLtx)
+                        ? `This singing take renders on ${songEngine === 'ltx25' ? 'LTX 2.5' : songEngine} — from its first frame, with this scene's stretch of the song pinned into the generation. The portraits below are not sent to LTX.`
+                        : 'This silent beat is performed on H3 — it renders from these references and its first frame.'}
                   </div>
                   <div className="row gap-10 row--wrap mt-16">
                     {(d.cast || []).map((n, i) => {
