@@ -600,6 +600,18 @@ def _scene_from_item(scene_id: int, item: dict, title: str,
 
 # ── Song films (music videos) ────────────────────────────────────────────────
 
+def _song_seconds(target_seconds: float) -> int:
+    return max(15, int(target_seconds or 0) or 180)
+
+
+def _song_word_budget(seconds: int) -> int:
+    """~1 sung word per second: singing is SLOW — intros, held notes and the
+    music breathing eat most of the clock. The old 1.7 w/s with a 40-word floor
+    overfilled every short song (a 15 s track was asked to carry 40 words and
+    came out either rushed or cut off mid-line)."""
+    return max(10, int(seconds * 1.2))
+
+
 def write_song(story: dict | None, target_seconds: float,
                language: str | None = None, *,
                topic: str = "", video_title: str = "",
@@ -638,12 +650,8 @@ def write_song(story: dict | None, target_seconds: float,
     # Song-FIRST (the interactive Music-video flow): only the brief exists,
     # so the song is written straight from it and the story follows the
     # lyrics afterwards.
-    seconds = max(15, int(target_seconds or 0) or 180)
-    # ~1 sung word per second: singing is SLOW — intros, held notes and the
-    # music breathing eat most of the clock. The old 1.7 w/s with a 40-word
-    # floor overfilled every short song (a 15 s track was asked to carry 40
-    # words and came out either rushed or cut off mid-line).
-    word_budget = max(10, int(seconds * 1.2))
+    seconds = _song_seconds(target_seconds)
+    word_budget = _song_word_budget(seconds)
     lang_name = narration_language_name(language)
     language_note = (f"\nSONG LANGUAGE — write the lyrics in {lang_name}; the "
                      f"section tags and the caption stay in English."
@@ -668,6 +676,45 @@ def write_song(story: dict | None, target_seconds: float,
         raise RuntimeError("Song writing returned no lyrics")
     caption = str(data.get("caption") or music_hint or "").strip()
     return {"caption": caption, "lyrics": lyrics}
+
+
+def critique_song(song: dict, target_seconds: float, *,
+                  topic: str = "", video_title: str = "",
+                  source_text: str = "") -> str:
+    """Judge a written song and return a REWRITE INSTRUCTION for it — the empty
+    string when it is good enough to render as it stands.
+
+    Automation's song QC (``youtube_auto_song_critic_passes``): a song is
+    expensive to change once its track has been rendered on a worker, so the
+    lyrics are judged first — length against the clock above all, then
+    singability, hook, subject and structure. The instruction feeds straight
+    back into :func:`write_song` as its *instruction*, so the songwriter prompt
+    stays the one place lyrics are written.
+
+    Best-effort like every other judge here: any failure returns "" and the
+    song is kept as drafted rather than blocking the film."""
+    cfg = _load_cfg()
+    call = _call_fn(cfg)
+    seconds = _song_seconds(target_seconds)
+    try:
+        raw = call(
+            _prompts.system("song_critique"),
+            _prompts.user("song_critique",
+                          title_line=_title_line(topic, video_title or None),
+                          story_text=source_text or topic,
+                          duration_seconds=seconds,
+                          word_budget=_song_word_budget(seconds),
+                          caption=str(song.get("caption") or ""),
+                          lyrics=str(song.get("lyrics") or "")),
+            600, "song critique", retries=2,
+        )
+        data = _parse_claude_response(raw, "song critique")
+    except Exception as exc:  # noqa: BLE001 — best-effort judge
+        logger.warning("Song critique failed (%s) — keeping the song as-is", exc)
+        return ""
+    if data.get("verdict") != "revise":
+        return ""
+    return str(data.get("issues") or "").strip()
 
 
 def lyric_lines(lyrics: str) -> list[str]:

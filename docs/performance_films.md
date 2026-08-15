@@ -160,6 +160,19 @@ longer film loops the song, restart audible, so keep song films short.
     music video is the honest shape of a "singing character": the film's real vocals come
     from the music engine, and the takes perform them.
 
+**Unattended.** [Settings → Automation](manual/settings.md#what-automation-makes) has a
+**Format** picker — what automation writes when there is no Create screen to ask — and,
+for `Music video`, the song steps: write and generate the song, QC the lyrics, re-voice
+the track, and a gate that parks the song for you to hear before anything is built on it.
+All of it is set globally or [per style](manual/settings.md#scope-global-then-per-style),
+so one channel can be a music-video channel while the rest stay narrated.
+
+The order is the reason those exist rather than one blanket toggle. A music video's scene
+windows are timed against the **real** track and each take has its stretch of it pinned
+in, so the song has to be finished *before* the story is divided — exactly what the Song
+tab enforces by hand. Left to the render, the music task runs alongside the video tasks:
+the takes are shot with nothing to sing to and the windows are timed against an estimate.
+
 ## What you need first
 
 **Characters with portraits.** The portraits *are* the conditioning: each cast member's
