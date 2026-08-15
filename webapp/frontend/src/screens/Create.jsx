@@ -191,6 +191,9 @@ export default function Create({ seed, meta, onGenerated }) {
         video_title: videoTitle.trim(),
         topic: direction.trim() || videoTitle.trim(),
         minutes: Number(minutes) || 0,
+        // Carries into the Song tab's Scenes control (0 = Auto) so a count
+        // chosen here isn't asked for twice.
+        n_scenes: Number(sceneCount) || 0,
         style_name: profile ? (profile.name || '') : NO_STYLE,
         voice: songVoice,
       })
@@ -289,12 +292,12 @@ export default function Create({ seed, meta, onGenerated }) {
               </div>
             </div>
 
-            {/* A music video's scene count is chosen in the Song tab, once the
-                song exists and its real length is known — an input here would
-                be ignored, which is exactly what made this confusing. */}
-            {!songFmt && (
             <Field label="Scenes"
-              hint={sceneCount > 0
+              hint={songFmt
+                ? (sceneCount > 0
+                  ? `The song split ${sceneCount} ways — ~${(Math.max(0.25, Number(minutes) || 0) * 60 / sceneCount).toFixed(1)} s a scene. Fewer scenes are longer takes. You can change this in the Song tab once you hear it.`
+                  : `Automatic — the song becomes ${Math.max(1, Math.round(Math.max(0.25, Number(minutes) || 0) * 60 / 5))} scene${Math.round(Math.max(0.25, Number(minutes) || 0) * 60 / 5) === 1 ? '' : 's'} of ~5 s. Set a count to make the scenes longer or shorter.`)
+                : sceneCount > 0
                 ? (lengthGaveWay
                   ? `${sceneCount} scenes of ~${Math.round(est.sceneSecs)} s — as far as this style’s video model stretches a single take, so the film runs ${fmtDuration(est.minutes)} rather than ${fmtDuration(minutes)}.`
                   : `${fmtDuration(minutes)} split ${sceneCount} ways — ~${Math.round(est.sceneSecs)} s a scene. Fewer scenes are longer ones.`)
@@ -308,7 +311,6 @@ export default function Create({ seed, meta, onGenerated }) {
                 )}
               </div>
             </Field>
-            )}
 
             <Field label="Visual style"
               hint={locked ? 'Set by the style — pick “No style” to experiment.' : "Applied to every scene's image prompt."}>

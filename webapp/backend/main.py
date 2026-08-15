@@ -2688,6 +2688,7 @@ class SongDraftBody(BaseModel):
     minutes: float = 0
     style_name: str = ""
     voice: str = ""          # the SINGING voice (library name); "" = model's pick
+    n_scenes: int = 0        # how many scenes to split the song into; 0 = Auto
 
 
 @api.post("/api/song/draft")
@@ -2725,7 +2726,10 @@ def song_draft(body: SongDraftBody) -> dict:
     # can load it and carry the flow from there.
     create_brief = {
         "video_title": (body.video_title or "").strip(), "topic": topic,
-        "minutes": minutes, "n_scenes": 0, "visual_style": "",
+        "minutes": minutes,
+        # The scene count asked for at Create (0 = Auto) — the Song tab's
+        # Scenes control opens on it rather than asking again.
+        "n_scenes": max(0, int(body.n_scenes or 0)), "visual_style": "",
         "voice": (body.voice or "").strip(), "resolution": ss.get("resolution") or "",
         "style_name": ss["name"], "auto_approve": False,
         "format": "song", "music": True,

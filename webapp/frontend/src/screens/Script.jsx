@@ -151,6 +151,10 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       songStudioOpened.current = true
       setView('song')
       if (song.voice && !songVoiceSel) setSongVoiceSel(song.voice)
+      // Open on the count asked for at Create (0 = Auto), so the same choice
+      // isn't made twice.
+      const asked = Number(job?.create_brief?.n_scenes) || 0
+      if (asked > 0 && !scenesSong) setScenesSong(asked)
     }
   }, [song])
   const saveSong = async () => {
