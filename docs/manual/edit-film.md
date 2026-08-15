@@ -133,11 +133,14 @@ which is why it takes a couple of minutes and not ten.
 
 ## Characters & Artifacts
 
-The same reference wall as the [Script screen](script.md#characters--visuals): one bar
-adds **character · location · wardrobe · image · video**, the film's own entries are
-editable cards, and the catalogue members the film uses appear read-only with their
-portraits and voice clips. Visual cards take generated images, uploads, pasted images, or
-a URL. **Save to catalogue** copies a film character into
+The same reference wall as the [Script screen](script.md#characters-artifacts): one bar
+adds **character · location · wardrobe · image · video · soundtrack**, the film's own
+entries are editable cards, and the catalogue members the film uses appear read-only with
+their portraits and voice clips. Visual cards take generated images, uploads, pasted
+images, or a URL; a
+[soundtrack artifact](../performance_films.md#editing-an-acted-scene) is an uploaded
+audio file that the takes it applies to are generated *against*. **Save to catalogue**
+copies a film character into
 [Settings → Characters](settings.md#characters) under the film's style.
 
 See [Characters](../characters.md) for how consistency actually works.

@@ -5,9 +5,10 @@
 The review gate. Everything the render will do is decided here, and nothing has touched a
 GPU yet except the scene preview images you ask for.
 
-Views along the top: **Scripts**, **Song** (music videos only), **Story**, **Cover**,
-**Characters** (which becomes **Characters & Artifacts** when the film has acted scenes),
-**Scenes** — and, for films with acted scenes, **Acted scenes**.
+Views along the top, in the order the work happens: **Scripts**, **Song** (music videos
+only), **Story**, **Characters** (which becomes **Characters & Artifacts** when the film
+has acted scenes), **Scenes**, **Acted scenes** (only when the film has any) — and
+**Cover**, which belongs to publishing, last.
 
 ## Scripts
 
@@ -32,8 +33,13 @@ the format does to the render.
 - Both boxes have a **Re-generate** button with a *tell it how* caret: re-writing the
   lyrics keeps the sound you have (and writes to it), re-writing the sound describes the
   music for the lyrics you have. Either way both halves are saved, unsaved edits included.
-- **Save edits** keeps your typing; **Generate the song** renders the track on a worker,
-  and **Sing this as [voice]** re-voices it with seed-vc — always converting the sung
+- **Singing voice** — the library voice the song is sung in. At generation it only
+  *describes* the vocalist to the music model (gender, age, tone — the engines cannot be
+  handed a voice); left on *the model's own vocalist* the song decides. It is also the
+  target of the re-voicing below, which is an actual clone.
+- **Save edits** keeps your typing (**Discard edits** throws it away); **Generate the
+  song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
+  seed-vc — always converting the sung
   original, never a previous re-voicing. Every generation and re-voicing is kept as a
   version — the one marked *In use* is the film's track, and they travel with the film
   so either side of a re-voicing can be
@@ -74,29 +80,21 @@ script — the existing scenes stay untouched.
 The **AI editor verdict** card shows the critique the drafter ran on itself: *pass*,
 *revise* (issues were flagged and fixed before division), or *skipped*, plus the notes.
 
-## Cover
-
-Everything that isn't a scene:
-
-- **Title** — max 100 characters, with a regenerate button and *Shorter / Punchier /
-  More literal* style chips
-- **Resolution** — changing it here re-targets the render
-- **Regenerate all scene images** — repaint every first frame
-- **YouTube description** — written automatically when the script was generated;
-  **Generate** rewrites it
-- **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint
-
-The page header carries **Save**, **Re-draft** (back to [Create](create.md) with this
-film's brief restored), and **Delete**.
-
 ## Characters & Artifacts
 
 Every reference the film renders from, on one wall, with **one bar to add them all**:
 character, location, wardrobe, free-form **image** (any other thing the model should
-match — its description tells the model what it is), and **video** (a clip whose
-extracted frame feeds the slot). Each visual card takes a generated image, an upload,
-a **pasted** image, or a **URL** — a direct file link or a page whose `og:image` /
-`og:video` points at one.
+match — its description tells the model what it is), **video** (a clip whose
+extracted frame feeds the slot), and **soundtrack** (an uploaded audio file). Each visual
+card takes a generated image, an upload, a **pasted** image, or a **URL** — a direct file
+link or a page whose `og:image` / `og:video` points at one.
+
+A **soundtrack** artifact is not a picture slot: the track is pinned into the generation
+of every acted take it applies to, so the performance follows the sound and the take keeps
+it as its audio — the mechanism behind
+[singing films](../performance_films.md#singing-films-the-music-video-format). Scope it
+with the same *Used in* scene list as any other artifact; a music video's own song is
+listed here too, since it is an input of every singing take.
 
 Catalogue members the film uses — characters with their portraits *and voice clips*,
 [assets](settings.md#assets) that feed its slots — appear at the same level, marked
@@ -143,7 +141,9 @@ rewrites the content into the other shape with the same theme and feel (a narrat
 becomes lines the characters speak, and vice versa). The version you leave is kept —
 switch back and it is restored exactly as it was, no rework. This works on the Script
 screen and on a film's edit screen alike. An empty scene — one just added — has nothing
-to convert, so it simply changes type and waits for you to write it.
+to convert, so it simply changes type and waits for you to write it. In a music video the
+silent option reads **♪ Music video** — same routing, honest label: those scenes perform
+the song.
 
 A **narrated or silent** scene has:
 
@@ -235,6 +235,22 @@ Automation can run the critic on every auto-written script — see
 
 Every critic pass and restore point is a snapshot, listed with its label, timestamp, and
 scene count. Pick one and **Restore** to roll back.
+
+## Cover
+
+The last view, because it is about publishing rather than the film — everything that
+isn't a scene:
+
+- **Title** — max 100 characters, with a regenerate button and *Shorter / Punchier /
+  More literal* style chips
+- **Resolution** — changing it here re-targets the render
+- **Regenerate all scene images** — repaint every first frame
+- **YouTube description** — written automatically when the script was generated;
+  **Generate** rewrites it
+- **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint
+
+The page header carries **Save**, **Re-draft** (back to [Create](create.md) with this
+film's brief restored), and **Delete**.
 
 ## Approving
 

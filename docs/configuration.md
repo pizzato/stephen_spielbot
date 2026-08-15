@@ -42,6 +42,23 @@ Two rules matter:
 - **Child styles are stored sparse.** A style with a `parent` only stores what it
   overrides; the rest resolves through the chain at read time.
 
+A style can also automate itself differently from the rest of the studio. Its
+[automation](manual/settings.md#scope-global-then-per-style) overrides live in a sparse
+`automation` block on the style — only the flags it changes — over the global baseline in
+the flat `youtube_auto_*` keys:
+
+```yaml
+styles:
+  - name: Music Channel
+    automation:
+      auto_format: song      # this style makes music videos…
+      auto_song: true        # …song first, before the story
+```
+
+Everything absent keeps following Global (and, for a child, its parent's overrides on
+top). Only the flags that resolve against a single film are scoped this way; comment
+fetching, AI-idea top-ups and publishing stay global.
+
 !!! warning "Restart after pulling changes"
     The backend keeps styles in memory. If a merge changes the style schema and the
     service wasn't restarted, sparse children can lose their `parent` on the next save.
