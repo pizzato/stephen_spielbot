@@ -1,21 +1,41 @@
 #!/usr/bin/env bash
-# Install seed-vc INSIDE a worker's ComfyUI container, so the "Sing this as
+# Install seed-vc INSIDE the workers' ComfyUI containers, so the "Sing this as
 # [voice]" diffusion runs on CUDA instead of the controller's Apple GPU
 # (~12x real time on the Mac; near real time on a GB10).
 #
-# The venv reuses the container's own CUDA torch (--system-site-packages);
+# The venv reuses each container's own CUDA torch (--system-site-packages);
 # only seed-vc's pure-python deps are added. Container-local — lost on an
-# image rebuild — but docker/comfyui/Dockerfile carries the same install for
-# rebuilt images. Point the controller at it with `svc_worker: <host>` in
-# ~/.config/video-generator/config.yaml (and `svc_diffusion_steps` to taste:
-# 25 fast, 30 default, 50 polish).
+# image rebuild — but docker/comfyui/Dockerfile carries the same install, so
+# this script is only for containers built before that landed. Any worker can
+# take a re-voicing, so install it on all of them: with no host given, every
+# worker in config.yaml (comfy_workers) gets it.
 #
-# Usage: bash scripts/install_svc_worker.sh s2
+# Usage: bash scripts/install_svc_worker.sh          # whole fleet
+#        bash scripts/install_svc_worker.sh s2       # one host
 set -euo pipefail
-HOST="${1:?usage: install_svc_worker.sh <host>}"
-CONTAINER="${SVC_CONTAINER:-spielbot-worker-comfyui-1}"
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=scripts/_config.sh
+source "$REPO_ROOT/scripts/_config.sh"
 
-ssh "$HOST" docker exec -i -u root "$CONTAINER" bash -s <<'INSIDE'
+CONTAINER="${SVC_CONTAINER:-spielbot-worker-comfyui-1}"
+HOSTS=("$@")
+if [ ${#HOSTS[@]} -eq 0 ]; then
+    # shellcheck disable=SC2207
+    HOSTS=($(remote_hosts))
+    [ ${#HOSTS[@]} -gt 0 ] || {
+        echo "ERROR: no comfy_workers in $CONFIG_YAML — pass a host explicitly"
+        exit 1
+    }
+fi
+
+for HOST in "${HOSTS[@]}"; do
+    echo "=== $HOST ==="
+    if is_local_host "$HOST"; then
+        DOCKER=(docker)
+    else
+        DOCKER=(ssh -- "$HOST" docker)
+    fi
+    "${DOCKER[@]}" exec -i -u root "$CONTAINER" bash -s <<'INSIDE'
 set -euo pipefail
 if [ ! -d /opt/seed-vc ]; then
     git clone --depth 1 https://github.com/Plachtaa/seed-vc.git /opt/seed-vc
@@ -43,8 +63,9 @@ grep -vE "^torch|^--extra-index-url|^torchvision|^torchaudio" requirements.txt \
 .venv/bin/python - <<'PYEOF'
 import torch
 assert torch.cuda.is_available(), "no CUDA visible in the container"
-print("seed-vc worker ready on", torch.cuda.get_device_name(0))
+print("seed-vc ready on", torch.cuda.get_device_name(0))
 PYEOF
 INSIDE
-echo "done: seed-vc installed in $CONTAINER on $HOST"
-echo "(model weights download from Hugging Face on the first conversion)"
+    echo "done: seed-vc installed in $CONTAINER on $HOST"
+done
+echo "(model weights download from Hugging Face on each worker's first conversion)"

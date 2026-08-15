@@ -121,7 +121,9 @@ screen's [Song tab](script.md#song) *before* rendering and the per-scene stretch
 into the takes sing in that voice too.)
 
 Re-voicing needs seed-vc on the controller (`scripts/install_svc.sh`); without it the
-button is disabled and says so.
+button is disabled and says so. The conversion itself runs on whichever
+[GPU worker is free](../cluster.md#song-re-voicing-rides-along-in-the-comfyui-container),
+which is why it takes a couple of minutes and not ten.
 
 ---
 

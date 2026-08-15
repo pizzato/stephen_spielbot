@@ -58,6 +58,14 @@ tts_workers:
   - http://s1:8189
 ```
 
+Song [re-voicing](performance_films.md#singing-films-the-music-video-format) runs on the
+ComfyUI workers too, and has two YAML-only keys (no Settings control):
+
+```yaml
+svc_diffusion_steps: 30   # 25 fast · 30 default · 50 polish
+svc_worker: s2            # pin it to one host; unset = whichever worker is free
+```
+
 ## The highlights
 
 The Settings screen covers everything; this is the short list of what people change first.

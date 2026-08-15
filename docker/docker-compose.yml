@@ -56,6 +56,12 @@ services:
       # to ComfyUI, avoiding request-size limits on /upload/image.
       - ${COMFYUI_INPUT_DIR:-./input}:/opt/ComfyUI/input
       - comfyui-output:/opt/ComfyUI/output
+      # seed-vc (song re-voicing) plus the ~1 GB of weights it downloads on
+      # first use, kept across container recreation — `make start` recreates by
+      # design. Docker seeds the volume from the image on first create; on a
+      # worker whose image predates seed-vc, `make svc-install` fills it once
+      # and the install then survives restarts like any other worker state.
+      - seed-vc:/opt/seed-vc
     # Let autoheal restart this container if its GPU-aware healthcheck fails
     # (silent CPU fallback after a host daemon-reload — see the autoheal service).
     labels:
@@ -117,3 +123,4 @@ services:
 volumes:
   comfyui-output:
   hf-cache:
+  seed-vc:
