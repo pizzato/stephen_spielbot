@@ -40,7 +40,8 @@ from pipeline import engines as _engines
 from pipeline import performance as _performance
 from pipeline import shot_gate
 from pipeline import prompts as _prompts
-from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
+from pipeline.comfyui import (generate_music, generate_with_engine, grid_seconds_covering,
+                              ltx_dimensions, StuckJobError)
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
@@ -674,6 +675,20 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
     return final
 
 
+def _pad_video_tail(src: Path, out: Path, extra: float) -> Path:
+    """Hold the last frame (and pad the audio with silence) for *extra* seconds."""
+    import subprocess
+    from pipeline.assembler import _resolve_media_tool
+    subprocess.run(
+        [_resolve_media_tool("ffmpeg"), "-y", "-v", "error", "-i", str(src),
+         "-vf", f"tpad=stop_mode=clone:stop_duration={extra:.3f}",
+         "-af", f"apad=pad_dur={extra:.3f}",
+         "-c:v", "libx264", "-preset", "veryfast", "-crf", "18",
+         "-c:a", "aac", str(out)],
+        check=True, capture_output=True)
+    return out
+
+
 def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
     """Cut [t0, t1] seconds out of an audio file (re-encoded PCM, sample-exact)."""
     import subprocess
@@ -688,17 +703,25 @@ def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
     return out
 
 
+# A singing take may miss its window by up to this much before the correction
+# is worth logging as a warning rather than a routine frame-grid rounding.
+_SONG_WINDOW_TOLERANCE = 0.03
+
+
 def _finish_singing_take(clip: Path, window, scene_id: int) -> None:
-    """Mute and trim a singing take, whichever engine shot it.
+    """Mute a singing take and make it EXACTLY its window long, whichever
+    engine shot it.
 
     Muted: the film's generated song is the only audio a music video carries,
     and the take's own vocals under the real track would double them.
 
-    Trimmed: the film must run EXACTLY the song's length. Video engines render
-    on a frame grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that
-    excess compounds scene by scene into audible drift against the overlaid
-    track. Trim each take to its own window — the pinned segment covers
-    [0, window] of the clip, so what's cut is only the unpinned tail.
+    Exact: a music video's picture is laid against one continuous song, so a
+    take that misses its slot shifts every scene after it. Video engines render
+    on a frame grid and land either side of the ask — H3's 17k+5 overshoots a
+    7.5 s slot, LTX 2.5's 8k+1 undershoots it by 0.125 s — so correct in BOTH
+    directions: trim a long take, freeze-pad a short one. Left uncorrected, an
+    undershoot compounded to 0.87 s of drift by the eighth scene of a one-minute
+    film, which is what made the LTX takes look out of time.
     """
     silence = clip.with_suffix(".silence.wav")
     _write_silence_wav(silence, _get_duration(clip))
@@ -706,21 +729,35 @@ def _finish_singing_take(clip: Path, window, scene_id: int) -> None:
     mux_video_audio(clip, silence, muted)
     muted.replace(clip)
     silence.unlink(missing_ok=True)
-    if window:
-        want = float(window[1]) - float(window[0])
-        have = _get_duration(clip)
-        if want > 0 and have > want + 0.03:
-            trimmed = clip.with_suffix(".trimmed.mp4")
-            trim_video(clip, trimmed, want)
-            trimmed.replace(clip)
-            logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
-                        "song's timeline", scene_id, have, want)
+    if not window:
+        return
+    want = float(window[1]) - float(window[0])
+    have = _get_duration(clip)
+    if want <= 0:
+        return
+    if have > want + _SONG_WINDOW_TOLERANCE:
+        trimmed = clip.with_suffix(".trimmed.mp4")
+        trim_video(clip, trimmed, want)
+        trimmed.replace(clip)
+        logger.info("Scene %d: trimmed take %.3fs → %.3fs to hold the "
+                    "song's timeline", scene_id, have, want)
+    elif have < want - _SONG_WINDOW_TOLERANCE:
+        # The engine could not reach the slot: hold the last frame for the
+        # remainder. A frozen tail of a few hundredths is invisible; the drift
+        # it prevents is not.
+        padded = clip.with_suffix(".padded.mp4")
+        _pad_video_tail(clip, padded, want - have)
+        padded.replace(clip)
+        logger.warning("Scene %d: take ran %.3fs short of its %.3fs slot — "
+                       "froze the last frame to hold the song's timeline",
+                       scene_id, want - have, want)
 
 
 def _render_singing_clip_ltx(scene, meta, work_dir, cfg, clip: Path, *, engine,
                              comfy_url, vid_width, vid_height,
                              track_audio: Path, window,
-                             fallback_frame: Path | None = None) -> Path:
+                             fallback_frame: Path | None = None,
+                             song_track: Path | None = None) -> Path:
     """Shoot a singing take on LTX with the song segment PINNED.
 
     The segment's audio latent is frozen in the AV latent (the engine's
@@ -750,12 +787,33 @@ def _render_singing_clip_ltx(scene, meta, work_dir, cfg, clip: Path, *, engine,
     negative = ((scene.get("negative_prompt") if isinstance(scene, dict)
                  else getattr(scene, "negative_prompt", "")) or "")
     want = float(window[1]) - float(window[0])
+    # LTX's frame grid FLOORS, so asking for the window itself renders SHORT of
+    # it (7.5 s → 7.375 s) and the film slips a little further behind the song
+    # with every scene. Ask for the grid step that covers the window and let
+    # _finish_singing_take trim back to it — the same shape H3 already lands in.
+    render_secs = grid_seconds_covering(
+        want, int(engine.get("fps") or 24), int(engine.get("frame_multiple") or 0))
+    # The pinned track has to span the CLIP, not the window: a segment shorter
+    # than the video leaves the tail unconditioned, and one longer than it maps
+    # the song onto the wrong frames.
+    if song_track is not None and song_track.exists():
+        try:
+            t0 = float(window[0])
+            seg = work_dir / f"scene_{scene.id:02d}_track.wav"
+            _cut_audio_segment(song_track, seg, t0,
+                               min(t0 + render_secs, _get_duration(song_track)))
+            track_audio = seg
+        except Exception:
+            logger.warning("Scene %d: could not re-cut the pinned segment to the "
+                           "clip's length — using the window's cut", scene.id,
+                           exc_info=True)
     lw, lh = ltx_dimensions(vid_width, vid_height)
-    logger.info("Scene %d: singing take on %s — %.1fs pinned to the track, from %s",
-                scene.id, engine.get("key"), want, frame.name)
+    logger.info("Scene %d: singing take on %s — %.3fs pinned to the track "
+                "(trimmed to %.3fs), from %s",
+                scene.id, engine.get("key"), render_secs, want, frame.name)
     generate_video_continuation(
         prompt, negative, frame, clip,
-        width=lw, height=lh, duration_seconds=want,
+        width=lw, height=lh, duration_seconds=render_secs,
         comfy_url=comfy_url, video_engine=engine, track_audio=track_audio)
     _finish_singing_take(clip, window, scene.id)
     ensure_video_resolution(clip, vid_width, vid_height)
@@ -834,7 +892,8 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                 scene, meta, work_dir, cfg, clip, engine=ltx_eng,
                 comfy_url=comfy_url, vid_width=vid_width, vid_height=vid_height,
                 track_audio=track_audio, window=window,
-                fallback_frame=ref_images[0] if ref_images else None)
+                fallback_frame=ref_images[0] if ref_images else None,
+                song_track=song_track if song_track.exists() else None)
 
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being

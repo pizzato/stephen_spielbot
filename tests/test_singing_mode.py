@@ -109,8 +109,13 @@ class LtxSingingTests(unittest.TestCase):
         prompt = perf.build_ltx_singing_prompt(meta, style_note="neon noir")
         self.assertIn("rain-washed rooftop", prompt)
         self.assertIn("neon noir", prompt)
-        self.assertIn("visibly singing", prompt)
+        self.assertIn("singing along whenever there are vocals", prompt)
         self.assertIn("city lights below / we are not done", prompt)
+        # A song has instrumental stretches. Telling the take to sing for the
+        # whole shot is what put a mouthed lyric over an intro nobody sings.
+        self.assertNotIn("whole shot", prompt)
+        self.assertNotIn("never closed", prompt)
+        self.assertIn("not singing when the music is instrumental", prompt)
         # No H3 reference-slot language — LTX has no reference slots.
         self.assertNotIn("<Picture", prompt)
         self.assertNotIn("[REFERENCE USE]", prompt)
@@ -119,6 +124,29 @@ class LtxSingingTests(unittest.TestCase):
         meta = {"singing": True, "prompt_override": "exactly this",
                 "setting": "ignored"}
         self.assertEqual(perf.build_ltx_singing_prompt(meta), "exactly this")
+
+    def test_a_singing_take_is_asked_for_a_clip_that_covers_its_window(self):
+        # The bug this guards: _frame_count FLOORS onto the engine's grid, so a
+        # 7.5 s window rendered 177 frames = 7.375 s on LTX 2.5 and every scene
+        # slipped 0.125 s further behind the song — 0.87 s by scene 8.
+        from pipeline.comfyui import _frame_count, grid_seconds_covering
+        for want in (7.5, 7.49, 5.0, 9.75):
+            secs = grid_seconds_covering(want, 24, 8)
+            frames = _frame_count(0, secs, fps=24, multiple=8)
+            self.assertEqual(frames % 8, 1, f"{want}s → {frames} off the 8k+1 grid")
+            self.assertGreaterEqual(frames / 24 + 1e-9, want,
+                                    f"{want}s window rendered short ({frames} frames)")
+            # ...and no more than one grid step of overshoot to trim back off.
+            self.assertLess(frames / 24 - want, 8 / 24)
+
+    def test_a_short_take_is_padded_not_left_adrift(self):
+        # Fault-proofing for EVERY engine: H3 overshoots its slot and gets
+        # trimmed, but nothing caught a take that lands UNDER it.
+        import inspect
+        import resume_generation as rg
+        src = inspect.getsource(rg._finish_singing_take)
+        self.assertIn("_pad_video_tail", src)
+        self.assertIn("trim_video", src)
 
     def test_render_stamps_the_singing_engine_into_job_config(self):
         # resume_generation reads the merged job config FLAT. Every other

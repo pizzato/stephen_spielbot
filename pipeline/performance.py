@@ -610,14 +610,18 @@ def build_ltx_singing_prompt(scene_meta: dict, *, style_note: str = "") -> str:
     look = " ".join(x for x in (setting, _clean(style_note)) if x)
     if look:
         parts.append(_unterminated(look) + ".")
-    parts.append(f"{who} {verb} performing a song on camera for the whole shot: "
-                 "visibly singing along with the soundtrack, mouth opening and "
-                 "moving with the sung words, expressive face, swaying and "
-                 "moving with the beat. The mouth is never closed and still.")
+    # Follow the clip's own audio rather than singing unconditionally: a song
+    # has instrumental stretches, and a take told to sing "for the whole shot"
+    # mouths words over an intro where nobody is singing yet.
+    parts.append(f"{who} {verb} performing to the music playing in this clip: "
+                 "singing along whenever there are vocals — mouth opening and "
+                 "moving with the sung words — and not singing when the music "
+                 "is instrumental, moving with the beat instead. Expressive "
+                 "face, motion that follows the music.")
     sings = _clean(str(scene_meta.get("sings") or "").replace("\n", " / "))
     if sings:
-        parts.append(f"{who} sing{'' if len(cast) > 1 else 's'} exactly these "
-                     f"words, in time with the music: \"{sings}\"")
+        parts.append(f"When the vocals come in, the words being sung are: "
+                     f"\"{sings}\"")
     camera = _unterminated(scene_meta.get("camera")) or \
         "locked off at chest height, slight handheld drift, no push, no zoom"
     parts.append(f"Camera: {camera}.")

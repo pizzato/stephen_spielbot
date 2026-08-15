@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 import random
 import re
 import shutil
@@ -57,6 +58,23 @@ def _frame_count(length: int, duration_seconds: float | None,
     if multiple > 0:
         length = max(multiple + 1, (length - 1) // multiple * multiple + 1)
     return length
+
+
+def grid_seconds_covering(duration_seconds: float, fps: int, multiple: int = 0) -> float:
+    """The shortest clip length the engine's frame grid can render that still
+    COVERS *duration_seconds*.
+
+    ``_frame_count`` floors onto the grid, so asking for exactly N seconds
+    returns a clip slightly SHORTER than N (7.5 s → 177 frames → 7.375 s on LTX
+    2.5's 8k+1 grid). For a take that has to fill an exact slot — a song film's
+    scene, which is trimmed back to its window — short is unfixable drift while
+    long is a trim. Round up instead."""
+    fps = int(fps) or 1
+    frames = max(1, math.ceil(float(duration_seconds) * fps))
+    if multiple > 0:
+        k = math.ceil(max(0, frames - 1) / multiple)
+        frames = multiple * k + 1
+    return min(frames, LTX_MAX_FRAMES) / fps
 
 
 def ltx_dimensions(width: int, height: int) -> tuple[int, int]:
