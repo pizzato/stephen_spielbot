@@ -16,3 +16,12 @@ exclude = [
 
 [lint]
 select = ["F", "E9"]
+
+[lint.per-file-ignores]
+# Not a module: this file is CAT-APPENDED onto the end of the H3 Motion
+# Context pack's nodes.py (see docker/comfyui/Dockerfile), so it runs with
+# that file's imports, constants and node registries already in scope —
+# _LOG, node_helpers, AUDIO_HZ, NODE_CLASS_MAPPINGS and friends are defined
+# above it, not missing. Read standalone every one of them looks undefined,
+# which is exactly what F821 reports. Syntax errors (E9) still apply.
+"docker/comfyui/h3_audio_track/*.py" = ["F821"]
