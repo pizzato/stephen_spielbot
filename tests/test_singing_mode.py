@@ -240,6 +240,7 @@ class SvcTests(unittest.TestCase):
 
         with unittest.mock.patch.object(svc, "available", return_value=True), \
              unittest.mock.patch.object(svc, "_normalize_loudness"), \
+             unittest.mock.patch.object(svc, "_separate_stems", return_value=None), \
              unittest.mock.patch.object(svc.subprocess, "run", fake_run), \
              tempfile.TemporaryDirectory() as td:
             out = Path(td) / "converted.wav"

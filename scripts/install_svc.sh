@@ -31,6 +31,9 @@ fi
 # torch first (arm64 wheels), then the repo's mac requirements minus its
 # nightly-CPU torch pins — the stable wheels are fine and cache better.
 "$DEST/.venv/bin/pip" install -q torch torchaudio torchcodec
+# demucs (MIT): vocal-stem separation — the converter runs on the VOCAL stem
+# only, so the instruments come through untouched.
+"$DEST/.venv/bin/pip" install -q demucs
 grep -v -E "^torch|^--extra-index-url|^torchvision|^torchaudio" \
     "$DEST/requirements-mac.txt" > "$DEST/.reqs.txt"
 "$DEST/.venv/bin/pip" install -q -r "$DEST/.reqs.txt"
