@@ -133,8 +133,12 @@ generation time the chosen singing voice only *describes* the vocalist (below). 
 song panel's **"Sing this as [voice]"** step is an actual clone: seed-vc re-voices the
 generated track with any library voice's timbre — melody, timing and words kept — from
 its ~10 s reference clip, zero-shot. Install it once with `scripts/install_svc.sh`
-(controller-local; GPL-3.0, see THIRD_PARTY_NOTICES). It converts the whole mix, so
-captions that keep the vocals up front clone best. The converted track replaces
+(GPL-3.0, see THIRD_PARTY_NOTICES) — that install separates the vocal stem from the
+backing and does the re-mix; the diffusion itself goes to whichever
+[GPU worker is free](cluster.md#song-re-voicing-rides-along-in-the-comfyui-container),
+falling back to the controller (minutes rather than seconds) when none is. The vocals
+are converted alone and laid back over the untouched instruments, so the arrangement
+survives. The converted track replaces
 `background_music.wav` — the film, and every pinned per-scene segment, then sings in
 that voice.
 

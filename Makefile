@@ -4,7 +4,7 @@ SCRIPTS := scripts
 # containers. Examples:  make stop W=s2   make restart W=s3   make status W=s1
 W ?=
 
-.PHONY: install uninstall download-models download-voices download-flux download-flux-cluster \
+.PHONY: install uninstall download-models download-voices download-flux download-flux-cluster svc-install \
         start stop restart restart-server status logs worker-agent ui-worker help \
         web-install web-build web web-dev tailscale channels \
         docs docs-serve ensure-mkdocs \
@@ -52,6 +52,12 @@ download-models:
 ## gender/age/accent metadata, used to auto-cast story characters). Idempotent.
 download-voices:
 	@.venv/bin/python $(SCRIPTS)/download_voices.py
+
+## Install seed-vc ("Sing this as [voice]") in every worker's ComfyUI container,
+## so any worker can take a re-voicing. Only needed for containers built before
+## the image carried it. Add W=<host> for one host.
+svc-install:
+	@bash $(SCRIPTS)/install_svc_worker.sh $(W)
 
 ## Download the legacy FLUX.1-schnell models locally (~13 GB).
 download-flux:
@@ -218,6 +224,7 @@ help:
 	@echo "  download-models Download the defaults: LTX 2.3 + ACE-Step + FLUX.2 Klein (skips existing)"
 	@echo "  download-flux          Download the legacy FLUX.1-schnell models locally (~13 GB)"
 	@echo "  download-flux-cluster  Download FLUX models to first cluster node, rsync to all workers"
+	@echo "  svc-install     Install seed-vc (song re-voicing) in every worker's ComfyUI container"
 	@echo ""
 	@echo "  start           Start every worker's containers + the web app + UI worker(s)"
 	@echo "  stop            Stop the web app, UI worker(s), and every worker's containers"

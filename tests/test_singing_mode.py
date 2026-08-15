@@ -259,6 +259,82 @@ class SvcTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "install_svc"):
                 svc.convert_song(Path("/x"), Path("/y"), Path("/z"))
 
+    def test_any_worker_can_take_it_least_busy_first(self):
+        from pipeline import svc
+        cfg = {"comfy_workers": ["http://s1:8188", "http://s2:8188",
+                                 "http://s3:8188"]}
+        with unittest.mock.patch("pipeline.worker_pool.idle_workers",
+                                 return_value=["http://s3:8188", "http://s1:8188"]):
+            self.assertEqual(svc.candidate_workers(cfg), ["s3", "s1"])
+
+    def test_a_pinned_worker_wins_and_a_dead_fleet_still_lists_hosts(self):
+        from pipeline import svc
+        cfg = {"comfy_workers": ["http://s1:8188", "http://s2:8188"]}
+        self.assertEqual(svc.candidate_workers({**cfg, "svc_worker": "s2"}), ["s2"])
+        # Nothing reachable: idle_workers raises, the configured order stands.
+        with unittest.mock.patch("pipeline.worker_pool.idle_workers",
+                                 side_effect=RuntimeError("no workers")):
+            self.assertEqual(svc.candidate_workers(cfg), ["s1", "s2"])
+        # A host ssh would read as an option is not a host.
+        self.assertEqual(svc.candidate_workers({"svc_worker": "-oProxyCommand=x"}), [])
+
+    def test_a_failed_worker_falls_through_to_the_next_then_the_controller(self):
+        from pipeline import svc
+        tried = []
+
+        def fake_remote(host, *a, **kw):
+            tried.append(host)
+            raise RuntimeError("boom")
+
+        with unittest.mock.patch.object(svc, "_convert_remote", fake_remote), \
+             unittest.mock.patch.object(svc, "_convert") as local:
+            svc._convert_anywhere(Path("/x/src.wav"), Path("/x/ref.wav"),
+                                  Path("/x/out.wav"), 30, 60, ["s1", "s2"])
+
+        self.assertEqual(tried, ["s1", "s2"])
+        self.assertTrue(local.called)
+
+    def test_the_worker_runs_the_diffusion_in_its_comfyui_container(self):
+        from pipeline import svc
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+
+            class P:
+                returncode, stderr, stdout = 0, "", ""
+            return P()
+
+        with unittest.mock.patch.object(svc.subprocess, "run", fake_run):
+            svc._convert_remote("s2", Path("/x/src.wav"), Path("/x/ref.wav"),
+                                Path("/tmp/out.wav"), 30, 60)
+
+        joined = " ".join(" ".join(c) for c in cmds)
+        self.assertIn("docker exec spielbot-worker-comfyui-1", joined)
+        self.assertIn("/opt/seed-vc/.venv/bin/python", joined)
+        self.assertIn("--f0-condition", joined)
+        self.assertTrue(all(c[0] in ("ssh", "scp") for c in cmds), cmds)
+
+    def test_a_single_machine_setup_skips_ssh(self):
+        from pipeline import svc
+        cmds = []
+
+        def fake_run(cmd, **kw):
+            cmds.append(cmd)
+
+            class P:
+                returncode, stderr, stdout = 0, "", ""
+            return P()
+
+        with unittest.mock.patch.object(svc.subprocess, "run", fake_run):
+            svc._convert_remote("localhost", Path("/x/src.wav"), Path("/x/ref.wav"),
+                                Path("/tmp/out.wav"), 30, 60)
+
+        self.assertTrue(cmds)
+        self.assertFalse(any(c[0] in ("ssh", "scp") for c in cmds), cmds)
+        self.assertIn("docker exec spielbot-worker-comfyui-1",
+                      " ".join(" ".join(c) for c in cmds))
+
 
 class FilmKindTests(unittest.TestCase):
     def test_a_music_video_is_never_called_a_documentary(self):

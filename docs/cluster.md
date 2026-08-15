@@ -49,6 +49,30 @@ the TTS container's Hugging Face cache, pre-warmed by `make install`.
 
 Full detail: [`docker/README.md`](https://github.com/pizzato/stephen_spielbot/blob/main/docker/README.md).
 
+### Song re-voicing rides along in the ComfyUI container
+
+The [singing films](performance_films.md#singing-films-the-music-video-format)
+feature's **"Sing this as [voice]"** step (seed-vc) is the one job that does not go
+through ComfyUI's API: the controller copies the vocal stem in and runs the diffusion
+with `docker exec` inside `spielbot-worker-comfyui-1`, reusing that container's CUDA
+PyTorch. **Any worker can take it** — the backend picks the idle one (the same
+least-busy-first ordering covers use), tries the next if that host is down, and converts
+on the controller's own GPU only when no worker will.
+
+The image carries seed-vc, so a worker deployed with `make install` is ready. Containers
+built before it landed need it added once — they keep running while it installs:
+
+```bash
+make svc-install          # every worker; add W=s2 for one host
+```
+
+seed-vc and the ~1 GB of weights it downloads live in the `seed-vc` volume, so they
+survive the container recreation `make start` does. The volume is seeded from the image
+the first time the container is created, which means the order on an older fleet is:
+redeploy the stack (`make install`), then `make svc-install` once. A worker without it
+is not a failure — the backend just moves to the next worker, or converts on the
+controller.
+
 ## Deploying
 
 Deploy or re-deploy every worker:
@@ -130,7 +154,9 @@ the UI has been idle for `ui_idle_timeout_seconds` (default 5 minutes, set in
 **Settings → Infrastructure**).
 
 With a single worker this means an interactive session briefly competes with the render;
-with three or more it is invisible.
+with three or more it is invisible. Song re-voicing marks the UI active the same way, so
+a conversion started mid-render lands on the held-idle worker rather than on the GPU
+that is rendering.
 
 ## Worker agents (optional)
 
