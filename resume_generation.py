@@ -695,8 +695,10 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # the segment its song_window covers is cut from the approved song and
     # PINNED into the generation (audio-driven H3, MiniMaxH3AudioTrack), so
     # the mouth and movement follow the actual music under that stretch of
-    # the film. The take still ships muted — the full original track is the
-    # film's soundtrack — the pinned audio's job is the PICTURE.
+    # the film. The pinned audio's job is the PICTURE — the same segment is
+    # laid back under the finished take below, so the clip can be watched
+    # against its own music, and the full original track is what the film
+    # itself is mixed with.
     track_audio = None
     window = meta.get("song_window") if meta.get("singing") else None
     song_track = work_dir / "background_music.wav"
@@ -884,29 +886,49 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
                     " (best of retakes)" if _miss(best, transcript) else "")
 
     if meta.get("singing"):
-        # Ship the singing take MUTED: the film's generated song is the only
-        # audio a music video carries, and H3's own a-cappella take under the
-        # real track would double the vocals.
-        silence = clip.with_suffix(".silence.wav")
-        _write_silence_wav(silence, _get_duration(clip))
-        muted = clip.with_suffix(".muted.mp4")
-        mux_video_audio(clip, silence, muted)
-        muted.replace(clip)
-        silence.unlink(missing_ok=True)
-        # The film must run EXACTLY the song's length: H3 renders on a frame
-        # grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that excess
-        # compounds scene by scene into audible drift against the overlaid
-        # track. Trim each take to its own window — the pinned segment covers
-        # [0, window] of the clip, so what's cut is only the unpinned tail.
-        if window:
-            want = float(window[1]) - float(window[0])
-            have = _get_duration(clip)
-            if want > 0 and have > want + 0.03:
-                trimmed = clip.with_suffix(".trimmed.mp4")
-                trim_video(clip, trimmed, want)
-                trimmed.replace(clip)
-                logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
-                            "song's timeline", scene.id, have, want)
+        # Lay this scene's stretch of the SONG under the take. The take used to
+        # ship muted — a music video mixes to music only, so its own a-cappella
+        # vocal is never heard in the final — but that left every scene clip
+        # silent in the editor and on the wall, with no way to watch a
+        # performance against the music it is supposed to follow. What goes in
+        # is the exact source segment rather than the take's own audio: H3
+        # delivers only its reconstruction of the track it was handed, and the
+        # question being asked of the clip is whether the mouth lands on the
+        # REAL words. The film's mix still ignores this audio (voice/ambient
+        # pinned to zero for a music video), so nothing doubles.
+        #
+        # The film must also run EXACTLY the song's length: H3 renders on a
+        # frame grid (a 5.0 s ask comes back as 124 frames = 5.17 s) and that
+        # excess compounds scene by scene into audible drift against the
+        # overlaid track. The segment is cut to the take's own window and the
+        # mux trims the picture to it, so what's lost is only the unpinned tail.
+        have = _get_duration(clip)
+        want = (float(window[1]) - float(window[0])) if window else 0.0
+        secs = min(have, want) if want > 0 else have
+        under: Path | None = None
+        if window and secs > 0 and song_track.exists():
+            try:
+                under = _cut_audio_segment(song_track, clip.with_suffix(".song.wav"),
+                                           float(window[0]), float(window[0]) + secs)
+            except Exception:
+                logger.warning("Scene %d: could not cut the song under the take — "
+                               "keeping the take's own audio", scene.id, exc_info=True)
+        if under is not None:
+            sounded = clip.with_suffix(".sounded.mp4")
+            mux_video_audio(clip, under, sounded)
+            sounded.replace(clip)
+            under.unlink(missing_ok=True)
+            logger.info("Scene %d: laid song %.2f–%.2fs under the take (%.2fs → %.2fs)",
+                        scene.id, float(window[0]), float(window[0]) + secs, have, secs)
+        elif want > 0 and have > want + 0.03:
+            # No segment to lay under it (no track on disk yet, or the cut
+            # failed) — the take keeps its own voice, but still has to hold the
+            # song's timeline.
+            trimmed = clip.with_suffix(".trimmed.mp4")
+            trim_video(clip, trimmed, want)
+            trimmed.replace(clip)
+            logger.info("Scene %d: trimmed take %.2fs → %.2fs to hold the "
+                        "song's timeline", scene.id, have, want)
 
     # The kept take's continuation point, on the worker that shot it. Written
     # after the gate so it belongs to the clip that survived, not to a reject.

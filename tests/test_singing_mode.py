@@ -2,9 +2,10 @@
 
 The contract: a "song" film's silent scenes are stamped ``singing`` at divide
 time and PERFORM the film's song on camera — acted takes whatever the style's
-h3_silent_scenes says, prompted to visibly sing, shipped muted — while the real
-vocals come from the music engine singing the film's tagged lyrics
-(song.json), captioned to match the cast singer's library voice.
+h3_silent_scenes says, prompted to visibly sing, shipped carrying their own
+slice of the track — while the real vocals come from the music engine singing
+the film's tagged lyrics (song.json), captioned to match the cast singer's
+library voice.
 """
 import json
 import math
@@ -871,6 +872,88 @@ class SingingPromptTests(unittest.TestCase):
         self.assertIn("[SONG]", prompt)
         self.assertIn("A clear live singing voice", prompt)
         self.assertNotIn("Outside that", prompt)
+
+
+class SoundedTakeTests(unittest.TestCase):
+    """A singing take ships with ITS stretch of the song under the picture.
+
+    It used to ship muted — the film's mix is music-only, so the take's audio is
+    never heard in the final — which left every scene clip silent in the editor
+    and on the render wall, with nothing to check the performance against."""
+
+    def _render(self, clip_secs=5.17, window=(4.0, 9.0), track=True):
+        import resume_generation as rg
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        wd = Path(tmp.name)
+        (wd / "scene_02_preview.png").write_bytes(b"png")
+        if track:
+            (wd / "background_music.wav").write_bytes(b"wav")
+        scene = _singing()
+        scene.metadata_extra = {**scene.metadata_extra, "song_window": list(window),
+                                "seconds": window[1] - window[0]}
+        cuts, muxes, trims = [], [], []
+
+        def fake_cut(src, out, t0, t1):
+            cuts.append((Path(src).name, Path(out).name, round(t0, 2), round(t1, 2)))
+            Path(out).write_bytes(b"wav")
+            return Path(out)
+
+        def fake_refs(m, cfg, work_dir, style_name="", scene_id=0):
+            return {"pictures": [{"slot": 1, "name": "Ada", "kind": "character",
+                                  "path": str(wd / "scene_02_preview.png")}],
+                    "audios": []}
+
+        def fake_gen(engine, prompt, ref_images, out, **kw):
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        def fake_mux(video, audio, out, extra_tail_secs=0.0):
+            muxes.append((Path(video).name, Path(audio).name))
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        def fake_trim(src, out, secs):
+            trims.append(round(secs, 2))
+            Path(out).write_bytes(b"mp4")
+            return Path(out)
+
+        with unittest.mock.patch("pipeline.comfyui.generate_video_h3_ref", side_effect=fake_gen), \
+             unittest.mock.patch("app.resolve_performance_references", side_effect=fake_refs), \
+             unittest.mock.patch.object(rg, "_cut_audio_segment", side_effect=fake_cut), \
+             unittest.mock.patch.object(rg, "mux_video_audio", side_effect=fake_mux), \
+             unittest.mock.patch.object(rg, "trim_video", side_effect=fake_trim), \
+             unittest.mock.patch.object(rg, "_get_duration", return_value=clip_secs), \
+             unittest.mock.patch.object(rg, "ensure_video_resolution"):
+            out = rg.render_performance_scene(
+                scene, wd, {"style_name": "Song", "performance_verify": False,
+                            "h3_silent_scenes": True},
+                comfy_url="http://w:8188", vid_width=704, vid_height=1280)
+        return out, cuts, muxes, trims
+
+    def test_the_take_carries_its_slice_of_the_song(self):
+        out, cuts, muxes, trims = self._render()
+        # Two cuts of the same window: the one PINNED into the generation, then
+        # the one laid back under the finished take.
+        self.assertEqual([c[2:] for c in cuts], [(4.0, 9.0), (4.0, 9.0)])
+        self.assertEqual(muxes, [(out.name, "scene_02_final.song.wav")])
+        # The mux trims the picture to the audio, so the old trim step is gone.
+        self.assertEqual(trims, [])
+
+    def test_the_slice_never_outruns_the_take(self):
+        # H3 renders on a frame grid and a window can outrun its own clip
+        # ceiling; muxing longer audio would freeze frames onto the end.
+        _, cuts, muxes, _ = self._render(clip_secs=3.5)
+        self.assertEqual(cuts[-1][2:], (4.0, 7.5))
+        self.assertEqual(len(muxes), 1)
+
+    def test_no_song_on_disk_falls_back_to_the_old_trim(self):
+        # Nothing to lay under it: the take keeps its own voice, but still has
+        # to hold the song's timeline.
+        _, cuts, muxes, trims = self._render(track=False)
+        self.assertEqual(cuts, [])
+        self.assertEqual(muxes, [])
+        self.assertEqual(trims, [5.0])
 
 
 if __name__ == "__main__":

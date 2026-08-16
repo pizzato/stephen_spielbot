@@ -111,9 +111,14 @@ pipeline changes in three places:
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
   no style toggle needed — stamped `singing` in its metadata. Scenes with cast on screen
   are prompted for a visible performance (mouth moving with the words, moving with the
-  beat) instead of the silent film's closed mouth, and the take ships **muted**: its own
-  a-cappella audio would double the real vocals. The speech gate stands down for these
-  takes — singing is what was asked for.
+  beat) instead of the silent film's closed mouth, and the take ships carrying **its own
+  slice of the song**: the model's a-cappella audio is replaced by the exact stretch of
+  the real track the scene was generated against, so a clip played on its own — on the
+  render wall, in the film editor — shows the performance against the music it is meant
+  to follow, which is the only way to see whether the mouth lands on the words. That
+  audio is never mixed into the film (voice and ambient are pinned to 0 %, below), so
+  nothing doubles. The speech gate stands down for these takes — singing is what was
+  asked for.
 - **A shot with nobody in it stays empty.** A song film's story usually includes scenes
   written with no one in frame — an empty street, a sky, a diagram. Those are rendered as
   **scenery**: the song still plays over them, but nothing is asked to mime it. Asking for
@@ -158,7 +163,8 @@ finished film's [edit screen](manual/edit-film.md#a-song-films-song), which also
 the re-voicing and re-mixes the final with whichever version you pick. A re-voicing
 always converts the sung original rather than the last conversion, so a second voice is a
 clone of the engine's vocals and not of the first clone. After the render only the
-soundtrack changes — the takes were shot against the song and ship muted.
+soundtrack changes — the takes were shot against the original song, and the slice each
+one carries is that original too.
 
 At generation time, the fallback description: the render describes the **lead performer's cast library voice**
 (gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish

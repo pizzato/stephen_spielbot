@@ -6286,9 +6286,10 @@ def _mix_volumes(wd: Path, jc: dict | None = None,
     """(voice, music, ambient) percentages for this film's audio mix — the
     film's own saved volumes, falling back to the global config's.
 
-    A music video mixes to MUSIC ONLY: its singing takes are shipped muted and
-    the generated song is the entire soundtrack, so voice and ambience are
-    pinned to zero here as well as at render time. Anything else — a stray
+    A music video mixes to MUSIC ONLY: the generated song is the entire
+    soundtrack, so voice and ambience are pinned to zero here as well as at
+    render time. Anything else — the singing takes' own audio (each carries its
+    slice of the song, so the clip can be watched against its music), a stray
     spoken beat the writer left in, a soundscape, an older film rendered before
     the render stamped these volumes — would bleed in under the track."""
     jc = _film_job_config(wd) if jc is None else jc
@@ -12340,9 +12341,9 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
     cfg = gapp.load_config()
     resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
 
-    # A song film's takes ship muted — the track is mixed over the whole film at
-    # the very end — so a mid-render wall would play a music video in silence.
-    # Handing the song over lets each singing tile play its own pinned window.
+    # A song film's takes carry their own slice of the track, so the tiles play
+    # with music. The whole song still goes over: the wall offers each singing
+    # tile its window on its own, to check against what the take performs.
     track = wd / "background_music.wav"
     song_url = (_busted_file_url(track)
                 if track.exists() and (wd / "song.json").exists() else "")

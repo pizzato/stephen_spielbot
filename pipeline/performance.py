@@ -571,8 +571,9 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                        f"mouthing of words, no singing.")
         elif singing:
             # The cast visibly PERFORMS the film's song. The take's own audio is
-            # muted after the gate and the generated track laid over the whole
-            # film, so what matters here is the singing BODY — an open moving
+            # replaced after the gate by its slice of the real track (and the
+            # whole track laid over the film), so what matters here is the
+            # singing BODY — an open moving
             # mouth reads as singing under the real vocals, a closed one reads
             # as a still. The mouth is tied to the VOICE rather than ordered to
             # move throughout: this clip has the real track pinned into it, and
