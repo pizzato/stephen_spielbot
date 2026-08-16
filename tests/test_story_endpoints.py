@@ -359,6 +359,45 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(story["chapters"][0]["text"], "Original chapter prose.")
         self.assertEqual(story["status"], "divided")
 
+    def test_duplicate_render_queues_the_copy_at_the_new_resolution(self):
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+        target = next(r for r in backend.gapp._RESOLUTIONS
+                      if r != backend.gapp._DEFAULT_RESOLUTION)
+        with mock.patch.object(backend, "queue_from_job",
+                               return_value={"ok": True, "queue_item_id": "q1",
+                                             "started": None}) as q:
+            res = backend.duplicate_script_and_render(backend.DuplicateRenderBody(
+                work_dir=str(wd), resolution=target))
+        new_wd = Path(res["work_dir"])
+        # a fresh film, not this one — the source render stays as it is
+        self.assertNotEqual(new_wd, wd)
+        self.assertTrue((new_wd / "script.json").exists())
+        # queued approved (so it can auto-start) at the requested resolution
+        body = q.call_args.args[0]
+        self.assertEqual(body.work_dir, str(new_wd))
+        self.assertEqual(body.resolution, target)
+        self.assertTrue(body.approved)
+        self.assertEqual(res["resolution"], target)
+        # and reopening the copy in the Script editor offers the NEW size
+        self.assertEqual(backend._read_create_brief(new_wd).get("resolution"), target)
+
+    def test_duplicate_render_rejects_an_unknown_resolution(self):
+        draft = self._draft(4)
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=draft["work_dir"]))
+        before = sorted(p.name for p in self.output_dir.iterdir())
+        with self.assertRaises(HTTPException) as ctx:
+            backend.duplicate_script_and_render(backend.DuplicateRenderBody(
+                work_dir=draft["work_dir"], resolution="Gigantic (9999×9999)"))
+        self.assertEqual(ctx.exception.status_code, 400)
+        # nothing was copied on the way to the error
+        self.assertEqual(sorted(p.name for p in self.output_dir.iterdir()), before)
+
     # ── script critic ────────────────────────────────────────────────────────
 
     def _divided_job(self, n=4):

@@ -4367,6 +4367,57 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
                                  create_brief=create_brief)
 
 
+class DuplicateRenderBody(BaseModel):
+    work_dir: str
+    resolution: str
+    title: str = ""
+
+
+@api.post("/api/scripts/duplicate-render")
+def duplicate_script_and_render(body: DuplicateRenderBody) -> dict:
+    """Duplicate a script and queue the copy to render at another resolution.
+
+    One click for what "Duplicate → pick a resolution → Approve" already does by
+    hand, so both sizes survive side by side as separate films with their own
+    finals. This is a full re-render, NOT an upscale: the copied first frames
+    don't match the new dimensions, so the render regenerates them and shoots
+    fresh takes (same script, different footage). Renders straight away only
+    under the same rules as a Script approval — auto-start on, nothing else
+    rendering — otherwise the copy waits in the queue."""
+    resolution = (body.resolution or "").strip()
+    if resolution not in gapp._RESOLUTIONS:
+        raise HTTPException(400, "Choose a valid resolution.")
+    dup = duplicate_script(DuplicateScriptBody(work_dir=body.work_dir, title=body.title))
+    new_wd = Path(dup["work_dir"])
+    # The Script editor pre-fills its resolution picker from the brief, so stamp
+    # the target there too — otherwise reopening the copy shows the source's
+    # resolution and a re-approve would quietly render the old size again.
+    brief = _read_create_brief(new_wd)
+    if brief:
+        _write_create_brief(new_wd, {**brief, "resolution": resolution})
+    try:
+        minutes = float((dup.get("create_brief") or {}).get("minutes") or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    queued = queue_from_job(FromJobBody(
+        job_id=dup["job_id"], work_dir=dup["work_dir"],
+        video_title=dup.get("video_title") or dup.get("title") or "",
+        n_scenes=len(dup.get("scenes") or []),
+        minutes=minutes,
+        style=dup.get("style") or "",
+        resolution=resolution,
+        voice=dup.get("voice") or "",
+        music_desc=dup.get("music_desc") or "",
+        style_name=dup.get("style_name") or "",
+        approved=True,
+    ))
+    return {"ok": True, "job_id": dup["job_id"], "work_dir": dup["work_dir"],
+            "title": dup.get("video_title") or dup.get("title") or "",
+            "resolution": resolution,
+            "queue_item_id": queued.get("queue_item_id"),
+            "started": queued.get("started")}
+
+
 @api.get("/api/jobs/{job_id}/scenes")
 def job_scenes(job_id: str) -> dict:
     store = DurableStore.default()
@@ -6205,6 +6256,9 @@ def list_jobs() -> dict:
             meta = {}
         finished.append({"label": l, "work_dir": d, "cover_url": _cover_url(d),
                          "seen": bool(meta.get("viewed_at")),
+                         # Rendering one script at a second resolution leaves two
+                         # films with the SAME label, so the card names the size.
+                         "resolution": (_film_job_config(Path(d)).get("resolution") or "").strip(),
                          **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d,
                 # story drafted but not yet divided into scenes — the Script

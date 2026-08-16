@@ -220,6 +220,10 @@ export const api = {
   // Copy an existing script into a fresh work dir to render again, leaving the
   // original render intact. Returns the same payload as loadScript.
   duplicateScript: (workDir, title) => req('POST', '/scripts/duplicate', { work_dir: workDir, title: title || '' }),
+  // Same duplicate, then straight into the queue at another resolution — a full
+  // re-render of the same script, kept as its own film.
+  duplicateAndRender: (workDir, resolution) =>
+    req('POST', '/scripts/duplicate-render', { work_dir: workDir, resolution }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
   // Scene structure (issue #193). Scene ids are renumbered to 1..N on every

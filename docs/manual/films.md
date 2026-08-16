@@ -31,7 +31,9 @@ approval filters.
 ## The cards
 
 Each film shows its cover, its title, and a state chip — **Published**, **Needs
-approval**, **Approved**, or **New** for a film you haven't opened yet.
+approval**, **Approved**, or **New** for a film you haven't opened yet. Its resolution sits
+in the opposite corner, which is how two renders of the same script
+([Render at another size](edit-film.md#render-at-another-size)) tell themselves apart.
 
 Published films list their destinations as chips (YouTube, X, with the channel name) that
 link straight to the live post.
