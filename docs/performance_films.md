@@ -211,8 +211,9 @@ tell a loud instrumental solo from a sung line, since both are simply loud.
 **The scenes cut between sentences.** The same lyric timeline decides *where* one take
 ends and the next begins. Rather than dividing the track into mathematically equal
 windows — which lands cuts mid-line as often as not — each seam snaps to the nearest gap
-between lyric lines (or the middle of an instrumental break, where nothing can be
-clipped), so every take carries whole sung lines. The takes bend around the planned
+between lyric lines, so every take carries whole sung lines. The middle of a measured
+instrumental break is preferred even over a somewhat nearer line gap: cutting silence is
+exact, while the line gaps are estimates. The takes bend around the planned
 length to do it, within bounds: no take shrinks below the 5-second acted minimum or
 grows past the 12-second single-clip cap, and a seam with no line boundary in reach
 falls back to the even grid — takes planned right at the 5-second floor have no slack

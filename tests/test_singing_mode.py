@@ -817,6 +817,25 @@ class SnapCutTests(unittest.TestCase):
             self.assertLessEqual(w, 12.0 + 0.01)
         self.assertEqual(cuts[1], 7.0)
 
+    def test_a_measured_break_outranks_a_nearby_estimated_seam(self):
+        from pipeline import song_timing
+        # Observed on a real render: the estimated seam at 9.6 sat right on
+        # the even cut, but the singing actually ran to 10.0 — the cut grazed
+        # the line's last word. A real instrumental break (10.0–12.5) was
+        # 1.65s away; cutting its middle is exact, so it must win. Note the
+        # 4th line's ESTIMATED span straddles the break — line seams alone
+        # never offer the gap as a candidate.
+        spans = [(0.0, 3.2), (3.2, 6.4), (6.4, 9.6), (9.6, 13.9),
+                 (13.9, 16.9), (16.9, 20.0)]
+        regions = [(0.0, 10.0), (12.5, 20.0)]
+        cuts = song_timing.snap_cuts(2, 20.0, spans, regions,
+                                     min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 11.25, 20.0])
+        # Without the measured regions the nearer estimated seam wins.
+        cuts = song_timing.snap_cuts(2, 20.0, spans,
+                                     min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 9.6, 20.0])
+
     def test_nothing_to_snap_to_reports_nothing(self):
         from pipeline import song_timing
         self.assertEqual(song_timing.snap_cuts(2, 20.0, [],

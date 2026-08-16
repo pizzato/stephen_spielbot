@@ -788,7 +788,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         # upstream and by the snap bounds alike.
         total = float(total_seconds)
         per = total / len(scenes)
-        cuts = (_song_timing.snap_cuts(len(scenes), total, spans,
+        cuts = (_song_timing.snap_cuts(len(scenes), total, spans, regions,
                                        min_secs=MIN_SCENE_SECONDS,
                                        max_secs=MAX_SCENE_SECONDS)
                 or [round(i * per, 2) for i in range(len(scenes) + 1)])

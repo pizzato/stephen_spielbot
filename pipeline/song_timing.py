@@ -162,34 +162,54 @@ def cut_candidates(spans: list[tuple[float, float]]) -> list[float]:
     return cands
 
 
+# How much farther from the even-grid target a MEASURED instrumental gap may
+# sit and still beat an estimated line seam. A cut in a gap is exact — the
+# audio there is silence — while a seam cut trusts the even-pacing estimate,
+# which was observed to graze a sung word by ~0.4s while a clean break sat
+# 1.65s away. Trading up to this much evenness for a guaranteed-clean cut.
+GAP_PREFER_SECS = 2.0
+
+
 def snap_cuts(n_scenes: int, total: float,
-              spans: list[tuple[float, float]], *,
+              spans: list[tuple[float, float]],
+              regions: list[tuple[float, float]] | None = None, *,
               min_secs: float, max_secs: float) -> list[float]:
     """Cut points tiling [0, *total*] into *n_scenes* windows whose seams sit
     between lyric lines instead of through them.
 
-    Each seam snaps to the nearest candidate (cut_candidates) that keeps every
-    window near the planner's even length — within ±40 % of it, held inside
-    [*min_secs*, *max_secs*] — while leaving room for the windows still to
-    come. A seam with no candidate in reach falls back to the even grid, so
-    the result is never worse than the plain division; takes at the
-    *min_secs* floor have no slack at all and keep the grid exactly. Empty
-    when there is nothing to snap to or only one scene."""
+    Each seam snaps to the nearest candidate that keeps every window near the
+    planner's even length — within ±40 % of it, held inside [*min_secs*,
+    *max_secs*] — while leaving room for the windows still to come. Candidates
+    are the estimated line seams (cut_candidates) plus, when *regions* is
+    given, the middle of every MEASURED gap between vocal regions; a gap is
+    preferred over a seam up to GAP_PREFER_SECS farther from the even grid,
+    because cutting silence is exact while the seams are estimates. A seam
+    with no candidate in reach falls back to the even grid, so the result is
+    never worse than the plain division; takes at the *min_secs* floor have
+    no slack at all and keep the grid exactly. Empty when there is nothing to
+    snap to or only one scene."""
     if n_scenes < 2 or total <= 0 or not spans:
         return []
     per = total / n_scenes
     lo = min(per, max(min_secs, 0.6 * per))
     hi = max(per, min(max_secs, 1.4 * per))
-    cands = cut_candidates(spans)
+    cands = [(c, 0.0) for c in cut_candidates(spans)]
+    for (_, a_end), (b_start, _) in zip(regions or [], (regions or [])[1:]):
+        if b_start - a_end > 0.2:
+            cands.append(((a_end + b_start) / 2, GAP_PREFER_SECS))
+    cands.sort()
     cuts = [0.0]
     for i in range(1, n_scenes):
         target = i * per
         left = n_scenes - i  # windows still to place after this seam
         earliest = max(cuts[-1] + lo, total - left * hi)
         latest = min(cuts[-1] + hi, total - left * lo)
-        near = [c for c in cands if earliest - 0.01 <= c <= latest + 0.01]
-        best = (min(near, key=lambda c: abs(c - target)) if near
-                else min(max(target, earliest), latest))
+        near = [(c, bonus) for c, bonus in cands
+                if earliest - 0.01 <= c <= latest + 0.01]
+        if near:
+            best = min(near, key=lambda cb: abs(cb[0] - target) - cb[1])[0]
+        else:
+            best = min(max(target, earliest), latest)
         cuts.append(round(best, 2))
     cuts.append(round(total, 2))
     return cuts
