@@ -681,6 +681,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
   const [upscaleMode, setUpscaleMode] = useState('fast')
+  // Re-render the same script at another resolution (a separate film, not a
+  // version of this one) — see the "Render at another size" card.
+  const [reRenderResolution, setReRenderResolution] = useState('')
+  const [reRenderBusy, setReRenderBusy] = useState(false)
+  const [reRenderDone, setReRenderDone] = useState(null)
   const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [ffSeconds, setFfSeconds] = useState(1)
   const [error, setError] = useState('')
@@ -778,6 +783,16 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       setUpscaleResolution(upscaleOptions[0])
     }
   }, [upscaleOptions.join('|')])
+
+  // A re-render can be any size, smaller or in the other orientation — it goes
+  // through the whole pipeline again, so nothing is being resampled.
+  const reRenderOptions = (meta?.resolutions || []).filter((r) => r !== currentResolution)
+
+  useEffect(() => {
+    if (!reRenderOptions.includes(reRenderResolution)) {
+      setReRenderResolution(reRenderOptions[0] || '')
+    }
+  }, [reRenderOptions.join('|')])
 
   const regenTitle = async () => {
     setYtBusy('title'); setError(''); setMetaMsg('')
@@ -980,6 +995,14 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setUpscaleBusy(false) }
   }
 
+  const reRenderAtResolution = async () => {
+    setReRenderBusy(true); setError(''); setStatus(''); setReRenderDone(null)
+    try {
+      const r = await api.duplicateAndRender(data.work_dir || workDir, reRenderResolution)
+      setReRenderDone(r)
+    } catch (e) { setError(e.message) } finally { setReRenderBusy(false) }
+  }
+
   const burnFirstFrameCover = async () => {
     setFfCoverBusy(true); setError(''); setStatus('')
     try {
@@ -1161,7 +1184,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || localizeBusy || locSaveBusy || !!locAudioBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1506,6 +1529,50 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               {upscaleBusy ? 'Upscaling…' : 'Upscale film'}
             </Button>
           </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="clapperboard" style={{ color: 'var(--ink-3)', width: 16 }} /> Render at another size</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Shoot this same script again at a different resolution — the images and
+            the takes are generated afresh, so it is a new film rather than a
+            resampled copy of this one, and it takes a full render. This one stays
+            exactly as it is; the new size lands in the Library as its own film.
+          </p>
+          <div className="mt-24">
+            <Field label="Resolution" hint={currentResolution ? `This film is ${currentResolution}.` : ''}>
+              <select className="select" value={reRenderResolution} disabled={anyBusy || !reRenderOptions.length}
+                onChange={(e) => { setReRenderResolution(e.target.value); setReRenderDone(null) }}>
+                {reRenderOptions.length === 0
+                  ? <option value="">No other resolution</option>
+                  : reRenderOptions.map((r) => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </Field>
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="clapperboard"
+              disabled={anyBusy || !reRenderResolution}
+              onClick={reRenderAtResolution}>
+              {reRenderBusy ? 'Queueing…' : 'Render at this size'}
+            </Button>
+          </div>
+          {reRenderDone && (
+            <div className="mt-16">
+              <p className="muted" style={{ fontSize: 13 }}>
+                {reRenderDone.started
+                  ? `Rendering “${reRenderDone.title}” at ${reRenderDone.resolution}.`
+                  : `Queued “${reRenderDone.title}” at ${reRenderDone.resolution} — it renders when the queue reaches it.`}
+              </p>
+              <div className="mt-16">
+                <Button variant="ghost" block icon="arrow-right"
+                  onClick={() => (reRenderDone.started
+                    ? go('progress', { workDir: reRenderDone.work_dir })
+                    : go('queue'))}>
+                  {reRenderDone.started ? 'Follow the render' : 'Open the queue'}
+                </Button>
+              </div>
+            </div>
+          )}
         </Card>
 
         <Card span={8} padLg className="reveal reveal-d2">
