@@ -95,6 +95,24 @@ Upscale the finished film and keep the result as a selectable final version.
 Pick a **target resolution** — only larger ones are offered — then a mode. The original
 stays available.
 
+### Render at another size
+
+Shoots the *same script* again at a different resolution. Unlike upscaling, nothing is
+resampled: the copy goes through the whole pipeline — the cached first frames no longer
+match the new dimensions, so the images are regenerated and fresh takes are shot. Expect a
+full render, and expect the footage to differ.
+
+Pick any resolution other than this film's — a smaller one and the other orientation both
+count, so a landscape film can be re-shot portrait for Shorts — and click **Render at this
+size**. The copy is duplicated exactly as [Duplicate](script.md) would (scenes, cast,
+cover, brief, and a music video's song all travel with it) and goes into the
+[queue](queue.md) approved, so it starts immediately if auto-start is on and nothing else
+is rendering.
+
+The result is a **separate film**, not a version of this one: its own folder, its own
+final video, its own publishing. This film is left exactly as it is. Both appear in
+[Films](films.md) under the same title, each card showing its resolution.
+
 ### Background music
 
 Edit the music prompt and **Regenerate music**. This re-runs the film's
