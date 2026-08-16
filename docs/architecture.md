@@ -39,7 +39,7 @@ at the top is the documented key set.
 | Module | Responsibility |
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
-| `story.py` | Script generation — draft the story, critique it, then divide it into scenes; a music video's divide also writes the song and places its lyrics on the track's timeline |
+| `story.py` | Script generation — draft the story, critique it, then divide it into scenes; for a music video it also writes and critiques the song, and the divide places the lyrics on the track's timeline |
 | `engines.py` | The engine registries — image (FLUX.2 Klein, FLUX.1 schnell), video (LTX 2.5, the MiniMax H3 family), and music (ACE-Step, MiniMax Music 3) |
 | `comfyui.py`, `scene_video.py` | ComfyUI workflow submission, per-scene video rendering, and music generation |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |

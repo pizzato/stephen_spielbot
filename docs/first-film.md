@@ -39,8 +39,10 @@ you into **Create** with the topic already filled in.
 - **Scenes** — leave it on *Auto* for a first run. It divides that length into a scene
   count you choose, so fewer scenes are longer ones.
 - **Resolution** — orientation first, then quality. Portrait makes a Short.
-- **Format** — leave it on **Narration** for a first run. Dialogue needs characters with
-  portraits and voices.
+- **Format** — leave it on **Narration** for a first run. Dialogue, Mixed and Silent need
+  characters with portraits and voices, and **Music video** inverts the whole flow — the
+  song is written and rendered *before* the story — see
+  [singing films](performance_films.md#singing-films-the-music-video-format).
 
 Leave *auto-approve* unchecked so you get to read the script, and press
 **1. Generate script**.
@@ -79,8 +81,9 @@ When you're happy, press **2. Approve → queue**.
 
 ## 4. Render it
 
-The film is now in the [Queue](manual/queue.md). Press **Render now** on it (or
-**Start next render** at the top) and the studio gets to work.
+The film is now in the [Queue](manual/queue.md). Press **Render now** on it and the
+studio gets to work. (**Start next render** at the top follows the automation gates, so
+it only fires once the item's style has auto-start enabled.)
 
 [Render](manual/render.md) shows the live picture: a progress bar, the durable task list —
 one row per image, narration, scene video, mux, and final assembly, with attempt counts —
@@ -118,8 +121,10 @@ Every re-render is kept as a **take**, so you can compare and switch back. The f
 re-muxed atomically once you pick.
 
 The **Film** tab handles whole-film changes: re-mix the audio levels, regenerate the music
-from a new prompt, upscale the final cut, or add a translated
-[localization](manual/edit-film.md#localizations).
+from a new prompt, upscale the final cut, render the same script
+[at another size](manual/edit-film.md#render-at-another-size), or add a translated
+[localization](manual/edit-film.md#localizations) — and a music video's
+[song panel](manual/edit-film.md#a-song-films-song) lives here too.
 
 ## 7. Publish it
 

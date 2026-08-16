@@ -54,7 +54,19 @@ Resemble AI, selectable in Settings as the `chatterbox-multilingual` engine:
   environment variable can point at a mirror or pinned fork but should remain an
   MIT-licensed repository.
 
+## Singing-voice conversion (seed-vc)
+
+The [Music-video format](performance_films.md#singing-films-the-music-video-format)'s
+"Sing this as *voice*" step is the one true voice-clone in the app: **seed-vc**
+re-voices a generated song with a library voice's timbre. It is **GPL-3.0** — installed
+by `scripts/install_svc.sh` into its own virtualenv and always invoked as a separate
+process, never imported, so the app's Apache-2.0 licensing is unaffected. Its helpers
+demucs (MIT) and faster-whisper (MIT) ride in the same install. See
+[`THIRD_PARTY_NOTICES.md`](https://github.com/pizzato/stephen_spielbot/blob/main/THIRD_PARTY_NOTICES.md)
+for the full terms.
+
 ## Scope
 
-This note covers only the TTS narration weights. The reference voice clip used for
-voice cloning is a separate provenance question and is **not** addressed here.
+This note covers only the TTS narration weights and the singing-voice conversion above.
+The reference voice clip used for voice cloning is a separate provenance question and is
+**not** addressed here.

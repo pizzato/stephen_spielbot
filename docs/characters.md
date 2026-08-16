@@ -121,7 +121,7 @@ story invents its own cast, which becomes [per-script characters](#per-script-ch
 
 This matters most for [performance films](performance_films.md), where the cast doubles
 as the speaker roster: handing over the whole library put library characters into every
-acted or silent script.
+acted, silent or music-video script.
 
 ## Per-script characters
 

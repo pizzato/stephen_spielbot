@@ -53,7 +53,7 @@ arguments and it prompts once. An existing `config.yaml` is never overwritten.
 
 1. Creates `.venv` and installs the Python requirements
 2. Seeds `~/.config/video-generator/config.yaml` with your worker list (first run only)
-3. Downloads the [models](models.md) (~49 GB) and the 10-voice LibriVox character voice library
+3. Downloads the [models](models.md) (~90 GB) and the 10-voice LibriVox character voice library
 4. Builds and deploys the [worker containers](cluster.md) over SSH, and points the config at them
 5. Installs the web backend deps and builds the React frontend
 

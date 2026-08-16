@@ -35,7 +35,9 @@ The manual upload form.
 
 ### What happens automatically
 
-- **Captions** — the script's SRT is attached on upload, in the film's language
+- **Captions** — the script's SRT is attached on upload, in the film's language.
+  Narrated scenes only: a [music video](../performance_films.md#singing-films-the-music-video-format)
+  or an all-dialogue film has no narration to caption, so no SRT is attached
 - **Tags** — the LLM's topic tags become YouTube tags and X hashtags
 - **Playlist** — the style's playlist, if it has one (`__auto__` finds or creates one named
   after the style)
@@ -49,8 +51,8 @@ heatmap suggests when to post, with the best slot called out. It's **advisory** 
 still post immediately, and the times are UTC.
 
 !!! warning "X can't take long video"
-    The X API cannot post video longer than 2 minutes 20 seconds. Longer films fall back to
-    posting the YouTube link; there is no other path.
+    The X API cannot post video longer than 2 minutes 20 seconds, or larger than 512 MB.
+    Films over either limit fall back to posting the YouTube link; there is no other path.
 
 ---
 
@@ -80,8 +82,9 @@ The last two are mutually exclusive.
 The queue in release order — top first, as each cadence allows.
 
 - The arrows reorder it, in **Manual order** sort. The other sorts — newest, oldest,
-  interestingness, predicted views — are view-only, and the arrows disable while one is
-  active
+  interestingness, predicted views — are saved and become the real release order (the
+  scheduler publishes each channel's top waiting item first); only the arrows disable
+  while one is active
 - **Publish now** releases an entry immediately, ignoring the cadence
 - **Remove** drops it from the queue
 
@@ -105,7 +108,9 @@ off in Settings if you'd rather they queue like everything else.
 ### Approval gate
 
 With *Require approval before publishing* on, finished films are held until you approve
-them in [Films](films.md) — the scheduler won't release an unapproved film. Comment-
+them — in [Films](films.md), or right on this Schedule tab, where a held entry shows an
+**Awaiting approval** chip with an inline **Approve** button — the scheduler won't
+release an unapproved film. Comment-
 requested videos still post automatically.
 
 There's a deliberate escape hatch: *…but let automation publish them without waiting for

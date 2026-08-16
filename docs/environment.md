@@ -59,3 +59,5 @@ These are read by `make install` and the worker deploy scripts rather than by th
 | `GPU_MODE` | `legacy` (default) or `cdi` — how containers get the GPU. See [Cluster & workers](cluster.md#gpu-injection-mode) |
 | `INSTALL_SERVICE` | `1` installs the macOS LaunchAgent without prompting |
 | `INSTALL_FLUX1` | `1` also downloads the legacy FLUX.1 schnell models |
+| `SVC_PYTHON` | Python interpreter for the controller-side seed-vc install (`scripts/install_svc.sh`) — [song re-voicing](performance_films.md#singing-films-the-music-video-format) |
+| `SVC_CONTAINER` | Target ComfyUI container name for `make svc-install` (`scripts/install_svc_worker.sh`) |
