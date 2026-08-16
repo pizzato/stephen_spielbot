@@ -2678,9 +2678,12 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
                 track_secs = _get_duration(track) or None
             except Exception:
                 track_secs = None
-        story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
-                                      total_seconds=track_secs or secs,
-                                      track=track if track.exists() else None)
+        # Tracked: the first divide against a track separates its vocal stem
+        # (demucs, on the controller) — a minute worth showing in Activity.
+        with _track_op("Timing the song's lyrics", display_topic):
+            story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
+                                          total_seconds=track_secs or secs,
+                                          track=track if track.exists() else None)
         # The caption is the film's music description from here on — Remix
         # shows and edits it, and the render appends the singer's voice.
         music_desc = song.get("caption") or music_desc

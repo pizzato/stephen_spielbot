@@ -763,7 +763,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         except (TypeError, ValueError):
             return SCENE_SECONDS
     lines = lyric_lines(lyrics)
-    regions = _song_timing.vocal_regions(track) if track else []
+    regions = _song_timing.measure_regions(track) if track else []
     spans = _song_timing.line_times(regions, len(lines)) if regions else []
 
     def stamp(extra: dict, t0: float, t1: float, lo: int, hi: int) -> None:

@@ -197,15 +197,20 @@ tab enforces by hand. Left to the render, the music task runs alongside the vide
 the takes are shot with nothing to sing to and the windows are timed against an estimate.
 
 **The lyrics are placed where the singing is.** Once the track exists, the divide step
-*measures* it: a sung vocal sits on top of the instrumental bed, so the level profile
-shows where the intro, any instrumental breaks and the outro fall. The lyric lines are
+*measures* it — on the separated **vocal stem** when demucs is installed (it comes with
+the re-voicing install, `scripts/install_svc.sh`, and the
+first divide against a track separates and caches the stem): on a stem, an intro, a solo
+and an outro are real silence, so the measurement stays exact however loud the
+arrangement is — a distorted-guitar intro used to read as singing on the mix-level
+measurement, and the lead mouthed a verse over it. The lyric lines are
 then paced through the **singing** rather than through the running time, and each scene
 is told two things — the words its own slice actually contains, and when inside its clip
 a voice is heard. That second part is what keeps a mouth shut over an intro: a song
 opening with a 7.5-second instrumental used to have the lead mouthing a verse to silence
 while the whole film ran a scene ahead of its own song. A track with no bare-instrumental
 stretch is treated as sung end to end, and if the measurement cannot be made the older
-proportional split is used unchanged. The measurement is deliberately coarse — it cannot
+proportional split is used unchanged. Without demucs, the coarser mix-level split stands:
+it finds intros and breaks on tracks whose bed is quieter than the voice, but cannot
 tell a loud instrumental solo from a sung line, since both are simply loud.
 
 **The scenes cut between sentences.** The same lyric timeline decides *where* one take

@@ -844,11 +844,126 @@ class SnapCutTests(unittest.TestCase):
                                                min_secs=5.0, max_secs=12.0), [])
 
 
+class StemTimingTests(unittest.TestCase):
+    """Vocal timing on the separated stem: the fix for tracks whose
+    instruments are as loud as the voice (a distorted-guitar intro read as
+    sung end to end on the mix, and the lead mouthed a verse over it)."""
+
+    def test_a_quiet_stem_is_nobody_singing(self):
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            # Nothing but low-level bleed: percentile dynamics would still
+            # split it, the absolute floor knows better.
+            stem = _write_song(Path(tmp) / "stem.wav", [(6.0, 0.001), (6.0, 0.004)])
+            self.assertEqual(song_timing.vocal_regions(stem, min_level_db=-45.0), [])
+
+    def test_the_floor_ignores_bleed_below_it(self):
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            # Silence, then bleed at ~-47 dB, then a voice: true silence drags
+            # the midpoint threshold under the bleed (~-49 dB), so without the
+            # absolute floor the bleed would count as singing from 6s.
+            stem = _write_song(Path(tmp) / "stem.wav",
+                               [(6.0, 0.0), (6.0, 0.006), (8.0, 0.5)])
+            self.assertAlmostEqual(
+                song_timing.vocal_regions(stem)[0][0], 6.0, delta=0.5)
+            regions = song_timing.vocal_regions(stem, min_level_db=-45.0)
+        self.assertEqual(len(regions), 1)
+        self.assertAlmostEqual(regions[0][0], 12.0, delta=0.5)
+
+    def test_measure_regions_prefers_the_stem(self):
+        # A hard-rock mix: loud wall to wall, so the mix split calls it sung
+        # end to end. The stem knows the first 8 seconds are instrumental.
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            mix = _write_song(Path(tmp) / "song.wav", [(20.0, 0.5)])
+            stem = _write_song(Path(tmp) / "stem.wav", [(8.0, 0.0), (12.0, 0.5)])
+            # What the mix alone would say: sung end to end.
+            (m0, m1), = song_timing.vocal_regions(mix)
+            self.assertEqual(m0, 0.0)
+            self.assertAlmostEqual(m1, 20.0, delta=0.5)
+            with unittest.mock.patch.object(song_timing, "vocal_stem",
+                                            return_value=stem):
+                regions = song_timing.measure_regions(mix)
+        self.assertEqual(len(regions), 1)
+        self.assertAlmostEqual(regions[0][0], 8.0, delta=0.5)
+
+    def test_no_stem_falls_back_to_the_mix(self):
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            mix = _write_song(Path(tmp) / "song.wav", [(4.0, 0.08), (8.0, 0.5)])
+            with unittest.mock.patch.object(song_timing, "vocal_stem",
+                                            return_value=None):
+                regions = song_timing.measure_regions(mix)
+        self.assertEqual(len(regions), 1)
+        self.assertAlmostEqual(regions[0][0], 4.0, delta=0.5)
+
+    def test_the_stem_is_cached_beside_the_track_until_it_changes(self):
+        import os
+        from pipeline import song_timing
+        calls = []
+
+        def fake_separate(source, output):
+            calls.append(source)
+            _write_song(output, [(2.0, 0.0), (2.0, 0.5)])
+            return output
+
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "background_music.wav", [(4.0, 0.5)])
+            with unittest.mock.patch("pipeline.svc.separate_vocals",
+                                     side_effect=fake_separate):
+                first = song_timing.vocal_stem(track)
+                again = song_timing.vocal_stem(track)
+                self.assertEqual(first, again)
+                self.assertEqual(len(calls), 1)
+                # A new track under the same name (another version picked, or
+                # uploaded) invalidates the cache.
+                os.utime(track, (track.stat().st_atime,
+                                 track.stat().st_mtime + 10))
+                song_timing.vocal_stem(track)
+                self.assertEqual(len(calls), 2)
+        self.assertEqual(first.name, "background_music_vocals.wav")
+
+    def test_a_loud_intro_no_longer_sings(self):
+        # The end-to-end shape of the user's bug: guitar as loud as the voice,
+        # vocals entering at 8s. With the stem measured, scene 1 sings nothing
+        # and its prompt can hold the mouth shut.
+        scenes = [Scene(id=i, title="t", image_prompt="i", video_prompt="v",
+                        narration="", mode="silent", duration=10.0,
+                        metadata_extra={"mode": "silent", "singing": True,
+                                        "cast": ["Ada"]})
+                  for i in (1, 2)]
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            mix = _write_song(Path(tmp) / "song.wav", [(20.0, 0.5)])
+            stem = _write_song(Path(tmp) / "stem.wav", [(8.0, 0.0), (12.0, 0.5)])
+            with unittest.mock.patch.object(song_timing, "vocal_stem",
+                                            return_value=stem):
+                story.assign_song_slices(scenes, "[Verse]\none\ntwo",
+                                         total_seconds=20.0, track=mix)
+        first, second = scenes[0].metadata, scenes[1].metadata
+        # The seam snaps to the vocal onset: the intro stands as its own take.
+        self.assertAlmostEqual(first["song_window"][1], 8.0, delta=0.6)
+        self.assertEqual(first["sings"], "")
+        self.assertEqual(first["vocal_ranges"], [])
+        self.assertIn("one", second["sings"])
+        self.assertAlmostEqual(second["vocal_ranges"][0][0], 0.0, delta=0.6)
+
+
 class SongSliceTimingTests(unittest.TestCase):
     """assign_song_slices against a real track: the words a scene is told to
-    mouth must be the words its own pinned slice contains."""
+    mouth must be the words its own pinned slice contains.
+
+    Pinned to the MIX measurement — vocal_stem is mocked away so no test ever
+    invokes a real demucs install; the stem path has its own tests below."""
 
     LYRICS = "[Verse]\none\ntwo\n\n[Chorus]\nthree\nfour"
+
+    def setUp(self):
+        patcher = unittest.mock.patch("pipeline.song_timing.vocal_stem",
+                                      return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def _scenes(self):
         return [Scene(id=i, title="t", image_prompt="i", video_prompt="v",
