@@ -612,7 +612,7 @@ class VisualsTests(TempConfigCase):
         img = self.wd / "visuals" / f"{saved['id']}.png"
         img.write_bytes(b"png")
         backend.gapp.update_script_visual(self.wd, saved["id"], **{
-            k: v[k] for k in ("scenes",) if k in v})
+            k: v[k] for k in ("scenes", "usage") if k in v})
         visuals = backend.gapp.read_script_visuals(self.wd)
         for x in visuals:
             if x["id"] == saved["id"]:
@@ -665,6 +665,47 @@ class VisualsTests(TempConfigCase):
         backend.gapp.add_script_visual(self.wd, "Imagined place", "location", "somewhere")
         _, refs = self._refs()
         self.assertEqual([p["kind"] for p in refs["pictures"]], ["character"])
+
+    def test_reference_usage_becomes_the_prompt_line(self):
+        # "How it's used" replaces the default match-it-exactly contract.
+        self._visual(name="Dance clip", kind="video", description="a dance routine",
+                     usage="the characters copy this dance's movements.")
+        meta, refs = self._refs()
+        prompt = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
+        self.assertIn("<Picture 2> shows a dance routine — the characters copy "
+                      "this dance's movements.", prompt)
+        self.assertNotIn("match it exactly", prompt)
+
+    def test_soundtrack_usage_reaches_prompt_and_sound_sections(self):
+        backend.gapp.add_script_visual(self.wd, "Beat", "audio",
+                                       usage="The characters dance to this track.")
+        vid = backend.gapp.read_script_visuals(self.wd)[-1]["id"]
+        backend.gapp.set_script_visual_media(self.wd, vid, b"RIFFxxxxWAVE",
+                                             filename="beat.wav")
+        meta, refs = self._refs()
+        self.assertEqual(refs["track"]["usage"], "The characters dance to this track.")
+        prompt = performance.build_h3_prompt(
+            {**meta, "track_usage": refs["track"]["usage"]},
+            picture_names=refs["pictures"])
+        self.assertIn("[SOUNDTRACK]\nThe clip's own soundtrack is a provided music "
+                      "track. The characters dance to this track.", prompt)
+        self.assertIn("no music beyond the clip's own soundtrack", prompt)
+        # Without a pinned track nothing changes.
+        plain = performance.build_h3_prompt(meta, picture_names=refs["pictures"])
+        self.assertNotIn("[SOUNDTRACK]", plain)
+
+    def test_a_singing_scene_pins_its_song_not_the_artifact(self):
+        backend.gapp.add_script_visual(self.wd, "Beat", "audio",
+                                       usage="dance to this")
+        vid = backend.gapp.read_script_visuals(self.wd)[-1]["id"]
+        backend.gapp.set_script_visual_media(self.wd, vid, b"RIFFxxxxWAVE",
+                                             filename="beat.wav")
+        meta = {"mode": "performance", "cast": ["JOE"], "seconds": 10,
+                "singing": True, "song_window": [0.0, 8.0], "lines": []}
+        cfg = {**backend.gapp.load_config(), "style_name": "Acted"}
+        refs = backend.gapp.resolve_performance_references(
+            meta, cfg, self.wd, "Acted", scene_id=1)
+        self.assertIsNone(refs["track"])
 
 
 class AssetCatalogueTests(TempConfigCase):
