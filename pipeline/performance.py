@@ -402,6 +402,32 @@ def _sides(scene_cast: list, speaker: str) -> tuple[str, str]:
     return ("left", "right") if idx == 0 else ("right", "left")
 
 
+def sung_windows(scene_meta: dict) -> list[list[float]] | None:
+    """When a voice is heard inside this clip, in the clip's OWN seconds.
+
+    ``None`` means nobody measured it (a script written before the song was
+    analysed, or detection that stood down) — the caller keeps the old
+    assumption that the whole clip is sung. ``[]`` means measured and
+    instrumental: the song is playing, but no one is singing over this shot."""
+    raw = scene_meta.get("vocal_ranges")
+    if raw is None:
+        return None
+    out = []
+    for item in raw or []:
+        try:
+            start, end = float(item[0]), float(item[1])
+        except (TypeError, ValueError, IndexError, KeyError):
+            continue
+        if end > start:
+            out.append([start, end])
+    return out
+
+
+def _phrase_windows(windows: list[list[float]]) -> str:
+    """The sung stretches as prompt text: "1.5s to 4s and 7s to 10s"."""
+    return " and ".join(f"{a:g}s to {b:g}s" for a, b in windows)
+
+
 def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                     picture_names: list | None = None,
                     audio_names: list[str] | None = None) -> str:
@@ -436,6 +462,13 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     wardrobe_owners = frozenset(
         str(p.get("character") or "").strip().lower()
         for p in pics if isinstance(p, dict) and p.get("kind") == "wardrobe")
+    # A song film's shots. *sung* is when a voice is actually heard inside this
+    # clip (measured off the track by assign_song_slices); *performs* is
+    # whether anybody mimes it here at all — which needs both somebody on
+    # screen to do it and a voice for them to follow.
+    singing = bool(scene_meta.get("singing")) and not lines
+    sung = sung_windows(scene_meta) if singing else None
+    performs = singing and bool(people_names) and sung != []
     sections: list[str] = []
 
     # [REFERENCE USE] — every asset's authority, bounded.
@@ -514,19 +547,52 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                    f"{', '.join(placed)}, in a wide shot. Nobody speaks: every "
                    f"mouth stays completely closed for the whole shot.")
     elif not lines:
-        if scene_meta.get("singing"):
-            # A song film: the cast visibly PERFORMS the film's song. The take's
-            # own audio is muted after the gate and the generated track laid
-            # over the whole film, so what matters here is the singing BODY —
-            # an open moving mouth reads as singing under the real vocals,
-            # a closed one reads as a still.
-            who = " and ".join(people_names) if people_names else "The performer"
+        if singing and not people_names:
+            # A song film's B-ROLL. The scene was authored with nobody in it
+            # ("no people in frame"), so its only reference is the empty place
+            # — and asking for a performer anyway made the model invent one:
+            # a different stranger in every such scene, and where the
+            # reference was a diagram rather than a place, it abandoned the
+            # art style entirely to fit a singer in. The song still plays over
+            # the shot; nobody mimes it.
+            geo.append("This is a scenery shot with NO people in it: nobody "
+                       "appears, nobody sings, and no face is shown anywhere "
+                       "in the frame. Do not add a person, a singer or a "
+                       "performer. The shot holds on the place itself.")
+        elif singing and sung == []:
+            # Measured and instrumental — an intro, a break or the outro fills
+            # this whole clip. The cast is present but nobody is singing yet.
+            who = " and ".join(people_names)
             verb = "are" if len(people_names) > 1 else "is"
-            geo.append(f"{who} {verb} performing a song on camera for the whole "
-                       f"shot: visibly singing along with the clip's own "
-                       f"soundtrack, mouth opening and moving with the sung "
-                       f"words, expressive face, swaying and moving with the "
-                       f"beat. The mouth is never closed and still.")
+            geo.append(f"No voice sings anywhere in this shot: {who} "
+                       f"{verb} listening and moving with the music — swaying, "
+                       f"looking around, breathing — with the mouth closed and "
+                       f"completely still the whole time. No miming, no "
+                       f"mouthing of words, no singing.")
+        elif singing:
+            # The cast visibly PERFORMS the film's song. The take's own audio is
+            # muted after the gate and the generated track laid over the whole
+            # film, so what matters here is the singing BODY — an open moving
+            # mouth reads as singing under the real vocals, a closed one reads
+            # as a still. The mouth is tied to the VOICE rather than ordered to
+            # move throughout: this clip has the real track pinned into it, and
+            # an absolute "never closed" overrode that audio and had the lead
+            # mouthing a verse through a 7.5 s instrumental intro.
+            who = " and ".join(people_names)
+            verb = "are" if len(people_names) > 1 else "is"
+            geo.append(f"{who} {verb} performing a song on camera: visibly "
+                       f"singing along with the clip's own soundtrack, mouth "
+                       f"opening and moving with the sung words, expressive "
+                       f"face, swaying and moving with the beat. The mouth "
+                       f"follows the voice on that soundtrack — it moves only "
+                       f"while a voice is singing, and closes the instant the "
+                       f"singing stops.")
+            if sung:
+                # Where in THIS clip the voice comes in, so the shot can open
+                # on a closed mouth when the music is still playing alone.
+                geo.append(f"A voice sings only from {_phrase_windows(sung)} of "
+                           f"this shot. Outside that, {who} {verb} not singing: "
+                           f"mouth closed and still, moving with the music only.")
             # This scene's own slice of the song (assign_song_slices): when the
             # render pins that stretch of the real track into the take
             # (audio-driven H3), the model hears exactly these words — and on
@@ -558,11 +624,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
 
     # [PRODUCTION SOUND] — diegetic only; performance films carry no score.
     soundscape = _unterminated(scene_meta.get("soundscape")) or "quiet room tone throughout"
-    if scene_meta.get("singing") and not lines:
+    if performs:
         # Ask for the singing VOICE (mouth movement follows the audio the model
         # writes for itself) but keep instruments out — this audio is replaced
         # by the film's real track, and "no music of any kind" would fight the
-        # singing itself.
+        # singing itself. A song-film shot where nobody performs (scenery, or a
+        # clip that falls inside an instrumental stretch) wants the ordinary
+        # no-voices sound instead: asking for a voice there is what put a
+        # singer into an empty street.
         sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
                         f"A clear live singing voice — unaccompanied: no "
                         f"instruments, no backing track, no other music.")
@@ -576,8 +645,7 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     extra = _clean(scene_meta.get("refusals"))
     # A singing scene ASKS for a voice raised in song; the blanket "no music"
     # would fight it, so only the instruments are refused there.
-    no_music = ("no instrumental music" if scene_meta.get("singing") and not lines
-                else "no music")
+    no_music = "no instrumental music" if performs else "no music"
     sections.append(("[NEGATIVES]\n"
                      "Preserve every reference exactly as assigned; do not modify "
                      "anything else. No extra people, no face drift, no wardrobe "

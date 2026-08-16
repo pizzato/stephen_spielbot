@@ -22,6 +22,7 @@ import logging
 import math
 import re
 import time
+from pathlib import Path
 
 from pipeline import prompts as _prompts
 from pipeline.llm import (
@@ -729,19 +730,27 @@ def lyric_lines(lyrics: str) -> list[str]:
 
 
 def assign_song_slices(scenes: list[Scene], lyrics: str,
-                       total_seconds: float | None = None) -> list[Scene]:
+                       total_seconds: float | None = None,
+                       track: Path | str | None = None) -> list[Scene]:
     """Give each singing scene its WINDOW of the song and the words sung in it.
 
     The song plays once across the whole film, so each singing scene covers the
     stretch of it that its screen time occupies: ``song_window`` is [start, end]
-    seconds into the track, and ``sings`` is the lyric lines that fall inside
-    (distributed by time share — sung delivery is loose enough that proportional
-    beats word-level alignment's failure modes on sung vocals). Both ride the
-    scene metadata: the window is the interface a future audio-conditioned H3
-    render plugs into (pass that slice of the track in, get a take that
-    performs it), and ``sings`` is what today's prompt directs the cast to
-    mouth. Non-singing scenes are left alone but still advance the clock —
-    the song keeps playing under them."""
+    seconds into the track. Both ride the scene metadata: the window is what the
+    audio-conditioned H3 render pins in (that slice of the track goes in, a take
+    that performs it comes out), and ``sings`` is what the prompt directs the
+    cast to mouth. Non-singing scenes are left alone but still advance the clock
+    — the song keeps playing under them.
+
+    When the generated *track* is on disk its singing is MEASURED
+    (pipeline.song_timing) and the lyrics are placed on the vocal timeline, so
+    a scene is told only the words its own slice actually contains and carries
+    ``vocal_ranges`` — when inside the clip a voice is heard, relative to the
+    clip's own start. Without that, an instrumental intro drags every line out
+    of position: a 7.5 s intro had scene 1 mouthing a verse to silence while
+    the whole film ran a scene ahead of its own song. Detection failing falls
+    back to the old proportional split rather than guessing."""
+    from pipeline import song_timing as _song_timing
     from pipeline.performance import MIN_SCENE_SECONDS, SCENE_SECONDS
     singing = [s for s in scenes
                if (getattr(s, "metadata_extra", None) or {}).get("singing")]
@@ -753,6 +762,19 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         except (TypeError, ValueError):
             return SCENE_SECONDS
     lines = lyric_lines(lyrics)
+    regions = _song_timing.vocal_regions(track) if track else []
+    spans = _song_timing.line_times(regions, len(lines)) if regions else []
+
+    def stamp(extra: dict, t0: float, t1: float, lo: int, hi: int) -> None:
+        """What is sung in [t0, t1) — measured off the track when we can,
+        and the proportional guess (*lo*:*hi*) when we cannot."""
+        if spans:
+            extra["sings"] = "\n".join(
+                _song_timing.lines_in_window(lines, spans, t0, t1)).strip()
+            extra["vocal_ranges"] = _song_timing.window_vocals(regions, t0, t1)
+        else:
+            extra["sings"] = "\n".join(lines[lo:hi]).strip()
+
     all_singing = len(singing) == len(scenes)
     if all_singing and total_seconds:
         # The whole film sings (the Music-video contract): the track divides
@@ -765,9 +787,9 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         for i, s in enumerate(scenes):
             extra = dict(getattr(s, "metadata_extra", None) or {})
             extra["song_window"] = [round(i * per, 2), round((i + 1) * per, 2)]
-            lo = int(round(len(lines) * i / len(scenes)))
-            hi = int(round(len(lines) * (i + 1) / len(scenes)))
-            extra["sings"] = "\n".join(lines[lo:hi]).strip()
+            stamp(extra, i * per, (i + 1) * per,
+                  int(round(len(lines) * i / len(scenes))),
+                  int(round(len(lines) * (i + 1) / len(scenes))))
             s.metadata_extra = extra
             s.duration = round(per, 2)
         return scenes
@@ -788,7 +810,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         lo = int(round(len(lines) * (start / film_len))) if film_len else 0
         hi = int(round(len(lines) * (end / film_len))) if film_len else 0
         extra["song_window"] = [round(start * scale, 1), round(end * scale, 1)]
-        extra["sings"] = "\n".join(lines[lo:hi]).strip()
+        stamp(extra, extra["song_window"][0], extra["song_window"][1], lo, hi)
         s.metadata_extra = extra
         s.duration = max(MIN_SCENE_SECONDS,
                          round(extra["song_window"][1] - extra["song_window"][0], 1))
