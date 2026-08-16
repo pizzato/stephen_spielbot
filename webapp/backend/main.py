@@ -248,6 +248,10 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # A song film's performance beat: acted whatever the style toggle says,
         # so the editor must show the acted setup off the SCENE, not the style.
         "singing": bool(meta.get("singing")),
+        # The stretch of the film's song this beat performs — the take ships
+        # muted, so a screen showing the clip needs the window to play the
+        # music that belongs under it.
+        "song_window": meta.get("song_window") or None,
         "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
@@ -12311,8 +12315,16 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
     cfg = gapp.load_config()
     resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
 
+    # A song film's takes ship muted — the track is mixed over the whole film at
+    # the very end — so a mid-render wall would play a music video in silence.
+    # Handing the song over lets each singing tile play its own pinned window.
+    track = wd / "background_music.wav"
+    song_url = (_busted_file_url(track)
+                if track.exists() and (wd / "song.json").exists() else "")
+
     return {
         "scenes": result,
+        "song_url": song_url,
         "job_id": job_id,
         "work_dir": str(wd),
         "title": title,

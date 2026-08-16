@@ -26,13 +26,47 @@ const sceneStage = (s) =>
 // One read-only scene on the wall: the clip as soon as it exists, else the
 // first frame, else a placeholder — so a running render can be checked without
 // opening the work folder (or risking the film editor's mutating actions).
-function SceneTile({ scene, index, aspect }) {
+function SceneTile({ scene, index, aspect, songUrl }) {
   const [tone, label] = sceneStage(scene)
+  const videoRef = useRef(null)
+  const audioRef = useRef(null)
+  const w0 = scene.song_window ? Number(scene.song_window[0]) : 0
+  const w1 = scene.song_window ? Number(scene.song_window[1]) : 0
+  // A song film's take is generated against its slice of the track but ships
+  // MUTED (the song is mixed over the whole film at the very end), so the tile
+  // carries the slice itself — otherwise a music video is watched in silence
+  // until the last assembly step.
+  const hasSlice = !!(songUrl && scene.song_window && w1 > w0)
+
+  // Play the slice under the clip: hitting play on the take starts the song
+  // where the take sits in it, which is the whole point of watching a music
+  // video mid-render. The player stays visible so it also works on its own.
+  useEffect(() => {
+    const v = videoRef.current
+    const a = audioRef.current
+    if (!hasSlice || !v || !a) return
+    const seek = () => { try { a.currentTime = Math.min(w1, w0 + (v.currentTime || 0)) } catch { /* not loaded yet */ } }
+    const onPlay = () => { seek(); a.play().catch(() => { /* blocked — the player is there */ }) }
+    const onPause = () => a.pause()
+    const onSeeked = () => { if (!v.paused) seek() }
+    v.addEventListener('play', onPlay)
+    v.addEventListener('pause', onPause)
+    v.addEventListener('ended', onPause)
+    v.addEventListener('seeked', onSeeked)
+    return () => {
+      v.removeEventListener('play', onPlay)
+      v.removeEventListener('pause', onPause)
+      v.removeEventListener('ended', onPause)
+      v.removeEventListener('seeked', onSeeked)
+      a.pause()
+    }
+  }, [hasSlice, w0, w1, scene.video_url])
+
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--paper-2)' }}>
       <div style={{ position: 'relative', aspectRatio: aspect, background: '#000' }}>
         {scene.video_url
-          ? <video src={scene.video_url} poster={scene.preview_url || undefined} preload="none" controls
+          ? <video ref={videoRef} src={scene.video_url} poster={scene.preview_url || undefined} preload="none" controls
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
           : scene.preview_url
             ? <img src={scene.preview_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -51,6 +85,15 @@ function SceneTile({ scene, index, aspect }) {
         </div>
         {!scene.video_url && scene.has_narration && (
           <audio src={scene.narration_url} controls preload="none" style={{ width: '100%', height: 30, marginTop: 6 }} />
+        )}
+        {hasSlice && (
+          <>
+            <div className="muted mono mt-8" style={{ fontSize: 11 }}>
+              ♪ song {w0.toFixed(1)}s–{w1.toFixed(1)}s
+            </div>
+            <audio ref={audioRef} src={`${songUrl}#t=${w0},${w1}`} controls preload="metadata"
+              style={{ width: '100%', height: 30, marginTop: 4 }} />
+          </>
         )}
       </div>
     </div>
@@ -250,8 +293,18 @@ export default function Progress({ workDir, job, go, onOpenScript }) {
                 <span className="label-sm">Scenes</span>
                 <span className="muted mono" style={{ fontSize: 11 }}>{rendered}/{wall.scenes.length} rendered</span>
               </div>
+              {/* The film's song, whole — the soundtrack exists from the very
+                  start of a music video's render, long before any take does. */}
+              {wall.song_url && (
+                <div className="mt-16">
+                  <span className="label-sm">Soundtrack</span>
+                  <audio src={wall.song_url} controls preload="none" style={{ width: '100%', height: 32, marginTop: 6 }} />
+                </div>
+              )}
               <div className="mt-16" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(230px, 1fr))', gap: 14 }}>
-                {wall.scenes.map((s, i) => <SceneTile key={s.id} scene={s} index={i} aspect={aspect} />)}
+                {wall.scenes.map((s, i) => (
+                  <SceneTile key={s.id} scene={s} index={i} aspect={aspect} songUrl={wall.song_url || ''} />
+                ))}
               </div>
             </Card>
           )
