@@ -28,45 +28,19 @@ const sceneStage = (s) =>
 // opening the work folder (or risking the film editor's mutating actions).
 function SceneTile({ scene, index, aspect, songUrl }) {
   const [tone, label] = sceneStage(scene)
-  const videoRef = useRef(null)
-  const audioRef = useRef(null)
   const w0 = scene.song_window ? Number(scene.song_window[0]) : 0
   const w1 = scene.song_window ? Number(scene.song_window[1]) : 0
-  // A song film's take is generated against its slice of the track but ships
-  // MUTED (the song is mixed over the whole film at the very end), so the tile
-  // carries the slice itself — otherwise a music video is watched in silence
-  // until the last assembly step.
+  // A song film's take carries its own slice of the track, so the clip plays
+  // with its music — the player below is the slice on its own, for checking the
+  // window against what the take actually performs. It is NOT synced to the
+  // clip: two copies of the same music a few milliseconds apart comb-filter.
   const hasSlice = !!(songUrl && scene.song_window && w1 > w0)
-
-  // Play the slice under the clip: hitting play on the take starts the song
-  // where the take sits in it, which is the whole point of watching a music
-  // video mid-render. The player stays visible so it also works on its own.
-  useEffect(() => {
-    const v = videoRef.current
-    const a = audioRef.current
-    if (!hasSlice || !v || !a) return
-    const seek = () => { try { a.currentTime = Math.min(w1, w0 + (v.currentTime || 0)) } catch { /* not loaded yet */ } }
-    const onPlay = () => { seek(); a.play().catch(() => { /* blocked — the player is there */ }) }
-    const onPause = () => a.pause()
-    const onSeeked = () => { if (!v.paused) seek() }
-    v.addEventListener('play', onPlay)
-    v.addEventListener('pause', onPause)
-    v.addEventListener('ended', onPause)
-    v.addEventListener('seeked', onSeeked)
-    return () => {
-      v.removeEventListener('play', onPlay)
-      v.removeEventListener('pause', onPause)
-      v.removeEventListener('ended', onPause)
-      v.removeEventListener('seeked', onSeeked)
-      a.pause()
-    }
-  }, [hasSlice, w0, w1, scene.video_url])
 
   return (
     <div style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', overflow: 'hidden', background: 'var(--paper-2)' }}>
       <div style={{ position: 'relative', aspectRatio: aspect, background: '#000' }}>
         {scene.video_url
-          ? <video ref={videoRef} src={scene.video_url} poster={scene.preview_url || undefined} preload="none" controls
+          ? <video src={scene.video_url} poster={scene.preview_url || undefined} preload="none" controls
               style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }} />
           : scene.preview_url
             ? <img src={scene.preview_url} alt="" style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain' }} />
@@ -91,7 +65,7 @@ function SceneTile({ scene, index, aspect, songUrl }) {
             <div className="muted mono mt-8" style={{ fontSize: 11 }}>
               ♪ song {w0.toFixed(1)}s–{w1.toFixed(1)}s
             </div>
-            <audio ref={audioRef} src={`${songUrl}#t=${w0},${w1}`} controls preload="metadata"
+            <audio src={`${songUrl}#t=${w0},${w1}`} controls preload="metadata"
               style={{ width: '100%', height: 30, marginTop: 4 }} />
           </>
         )}

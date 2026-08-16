@@ -238,7 +238,10 @@ The scene's still, generated on demand:
 - **Regenerate image** — repaint it, optionally with an instruction
 - **Edit image** — mask a region and describe the fix (masked img2img inpaint)
 - The **version strip** keeps every take; click one to make it the frame that renders
-- Click the image for a full-size lightbox
+- Click the image for a full-size lightbox. **←** / **→** step between scenes and take the
+  editor with them — close on a frame you dislike and you are already on its scene, no
+  hunting through the filmstrip. **↑** / **↓** flip through that scene's kept versions
+  (browsing only; the version strip still chooses which one renders)
 
 ### All scenes
 

@@ -57,8 +57,9 @@ Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix
 balances the levels and re-muxes without re-rendering any video.
 
 A [music video](../performance_films.md#singing-films-the-music-video-format) gets the **Music**
-slider alone: its takes ship muted and the song is the entire soundtrack, so voice and
-ambience stay at 0% however the film is re-mixed.
+slider alone: the song is the entire soundtrack, so voice and ambience stay at 0% however
+the film is re-mixed — including the slice of the song each take carries for checking it
+on its own.
 
 ### Narrator
 
@@ -95,6 +96,24 @@ Upscale the finished film and keep the result as a selectable final version.
 Pick a **target resolution** — only larger ones are offered — then a mode. The original
 stays available.
 
+### Render at another size
+
+Shoots the *same script* again at a different resolution. Unlike upscaling, nothing is
+resampled: the copy goes through the whole pipeline — the cached first frames no longer
+match the new dimensions, so the images are regenerated and fresh takes are shot. Expect a
+full render, and expect the footage to differ.
+
+Pick any resolution other than this film's — a smaller one and the other orientation both
+count, so a landscape film can be re-shot portrait for Shorts — and click **Render at this
+size**. The copy is duplicated exactly as [Duplicate](script.md) would (scenes, cast,
+cover, brief, and a music video's song all travel with it) and goes into the
+[queue](queue.md) approved, so it starts immediately if auto-start is on and nothing else
+is rendering.
+
+The result is a **separate film**, not a version of this one: its own folder, its own
+final video, its own publishing. This film is left exactly as it is. Both appear in
+[Films](films.md) under the same title, each card showing its resolution.
+
 ### Background music
 
 Edit the music prompt and **Regenerate music**. This re-runs the film's
@@ -119,8 +138,9 @@ so the finished cut plays the new vocals. Two things make it safe to try:
 - **It always converts the original vocals**, never the previous re-voicing, so trying a
   second voice doesn't clone a clone.
 
-The picture doesn't change: the takes were shot against the song and ship muted, so
-re-voicing after the render swaps the soundtrack alone. (Re-voice from the Script
+The picture doesn't change: the takes were shot against the original song, so re-voicing
+after the render swaps the soundtrack alone (the slice each take carries stays the
+original vocals — it is a check track, never part of the mix). (Re-voice from the Script
 screen's [Song tab](script.md#song) *before* rendering and the per-scene stretches pinned
 into the takes sing in that voice too.)
 

@@ -11,6 +11,13 @@ const statusOf = (f) =>
   : f.approved ? 'approved'
   : 'unpublished'
 
+// "Landscape FHD (1920×1080)" → "1920×1080": rendering one script at a second
+// resolution leaves two films sharing a label, so the card wears its size.
+const resBadge = (r) => {
+  const m = /\((\d+)[×x](\d+)\)/.exec(r || '')
+  return m ? `${m[1]}×${m[2]}` : (r || '')
+}
+
 export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }) {
   const [jobs, setJobs] = useState({ finished: [], scripts: [], resumable: [] })
   const [error, setError] = useState('')
@@ -135,6 +142,11 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
                       ? <Chip tone="info" dot>Approved</Chip>
                       : !f.seen && <Chip tone="info" dot>New</Chip>}
               </div>
+              {f.resolution && (
+                <div style={{ position: 'absolute', top: 12, right: 12 }}>
+                  <Chip>{resBadge(f.resolution)}</Chip>
+                </div>
+              )}
               <div className="player__play" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%,-50%)' }}><Icon name="play" /></div>
             </div>
             <div style={{ padding: '14px 18px 16px' }}>
