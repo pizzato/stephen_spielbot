@@ -118,9 +118,14 @@ export default function App() {
       description: payload?.description ?? '',
       minutes: payload?.minutes ?? null,
       scenes: payload?.scenes ?? null,
+      // The explicit scene count (0 = Auto), distinct from `scenes` above —
+      // that one is a legacy count the form reads as a length.
+      sceneCount: payload?.sceneCount ?? null,
       resolution: payload?.resolution ?? '',
       styleName: payload?.styleName ?? '',
       voice: payload?.voice ?? '',
+      songVoice: payload?.songVoice ?? '',
+      format: payload?.format ?? '',
       visualStyle: payload?.visualStyle ?? '',
       autoApprove: payload?.autoApprove,
       queueItemId: payload?.queueItemId ?? null,

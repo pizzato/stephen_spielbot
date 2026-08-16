@@ -143,5 +143,7 @@ For a **music video** the button reads **1. Write the song** instead, and lands 
 and the story is drafted from the finished track.
 
 If you arrived here from a queued request, a banner says so — generating fills that
-existing queue slot and keeps its position. If you arrived via **Re-draft** from an existing
-film, your previous settings are restored and generating creates a fresh work folder.
+existing queue slot and keeps its position. If you arrived via **Brief** from an existing
+film ([Script](script.md) page header, on every view), your previous settings are restored
+— including the format and, for a music video, the singing voice and scene count — and
+generating creates a fresh work folder, leaving that film untouched.

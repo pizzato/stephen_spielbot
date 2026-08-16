@@ -299,6 +299,31 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
 
+  // Back to the brief that made this film: Create, prefilled from the saved
+  // create_brief, so the prompts and settings can be read, edited and run
+  // again. Reachable from every view — a music video hands off to the Song tab
+  // before a story exists, and its brief is otherwise nowhere to be seen.
+  const editBrief = () => {
+    const b = job.create_brief || {}
+    // A music video has no narrator: its brief keeps the SINGING voice in
+    // `voice`, so it goes back into the singing picker, not the narrator one.
+    const isSong = (b.format || '') === 'song'
+    go('create', {
+      title: b.video_title || job.video_title || job.title || '',
+      description: b.topic || job.topic || '',
+      minutes: b.minutes || null,
+      sceneCount: b.n_scenes ?? null,
+      resolution: b.resolution || job.resolution || '',
+      styleName: b.style_name || job.style_name || '',
+      voice: isSong ? '' : (b.voice || job.voice || ''),
+      songVoice: isSong ? (b.voice || '') : '',
+      visualStyle: b.visual_style || '',
+      format: b.format || '',
+      autoApprove: b.auto_approve,
+      queueItemId: job.queue_item_id || null,
+    })
+  }
+
   // Script critic (post-generation QC): rewrites weak narrations, deletes
   // redundant scenes, adds bridging scenes, reorders for flow. Run 1..5 passes
   // or until the critic proposes nothing (converged, capped server-side). The
@@ -934,26 +959,15 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           {view === 'scripts' && (
             <Button variant="primary" icon="plus" onClick={() => go('create')}>New script</Button>
           )}
+          {view !== 'scripts' && job && (
+            <Button variant="ghost" icon="rotate" onClick={editBrief}
+              title="Back to Create with this film’s brief — its title, direction, length and settings — restored">Brief</Button>
+          )}
           {view === 'cover' && job && (
             <>
               <Button variant="primary" icon="floppy-disk" disabled={busy === 'savecover' || !coverTitle.trim()} onClick={saveCover}>
                 {busy === 'savecover' ? 'Saving…' : 'Save'}
               </Button>
-              <Button variant="ghost" icon="rotate" onClick={() => {
-                const b = job.create_brief || {}
-                go('create', {
-                  title: b.video_title || job.video_title || job.title || '',
-                  description: b.topic || job.topic || '',
-                  minutes: b.minutes || null,
-                  scenes: b.n_scenes || job.scenes?.length || null,
-                  resolution: b.resolution || job.resolution || '',
-                  styleName: b.style_name || job.style_name || '',
-                  voice: b.voice || job.voice || '',
-                  visualStyle: b.visual_style || '',
-                  autoApprove: b.auto_approve,
-                  queueItemId: job.queue_item_id || null,
-                })
-              }}>Re-draft</Button>
               {confirmDelScript ? (
                 <>
                   <Button variant="danger" icon="trash-can" disabled={busy === 'delete'} onClick={deleteCurrent}>
@@ -1269,7 +1283,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <div className="row center between">
                 <span style={{ fontWeight: 700 }}>{s.label}</span>
                 <span className="row center gap-8">
-                  {s.story_draft && <Chip dot>Story draft</Chip>}
+                  {s.story_draft && <Chip dot>{s.song_draft ? 'Song draft' : 'Story draft'}</Chip>}
                   {job?.work_dir === s.work_dir && <Chip tone="ok" dot>Loaded</Chip>}
                 </span>
               </div>

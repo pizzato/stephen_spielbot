@@ -65,7 +65,7 @@ export default function Create({ seed, meta, onGenerated }) {
   // How many scenes that length is divided into — 0 = as many as the scene
   // contract implies. Pinning a count makes the scenes longer or shorter
   // (length ÷ count), which is why the style owns a default for it.
-  const [sceneCount, setSceneCount] = useState(profile?.video_scenes || 0)
+  const [sceneCount, setSceneCount] = useState(seed?.sceneCount ?? (profile?.video_scenes || 0))
   const [voice, setVoice] = useState(profile?.voice || voiceChoices[0] || 'Default (F5-TTS)')
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
@@ -84,7 +84,7 @@ export default function Create({ seed, meta, onGenerated }) {
   // Music-video flow: the SONG comes first — "Write the song" drafts it and
   // hands off to the Script screen's SONG TAB (the song studio: generate,
   // listen, re-voice, accept a version, then draft the story from it).
-  const [songVoice, setSongVoice] = useState('')     // '' = the model's own vocalist
+  const [songVoice, setSongVoice] = useState(seed?.songVoice || '')  // '' = the model's own vocalist
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -108,8 +108,11 @@ export default function Create({ seed, meta, onGenerated }) {
     setDirection(seed.description || '')
     if (seed.minutes) setMinutes(seed.minutes)
     else if (seed.scenes) setMinutes(legacyMinutes(seed.scenes))
+    if (seed.sceneCount != null) setSceneCount(seed.sceneCount)
     if (seed.resolution) setResolution(seed.resolution)
     if (seed.styleName) setStyleName(seed.styleName)
+    if (seed.format) setFormat(seed.format)
+    if (seed.songVoice) setSongVoice(seed.songVoice)
     // No-style free fields (locked styles re-sync voice/visuals from the profile).
     if (seed.voice) setVoice(seed.voice)
     if (seed.visualStyle) setStyle(seed.visualStyle)
@@ -129,8 +132,9 @@ export default function Create({ seed, meta, onGenerated }) {
   }, [profile, profile?.video_minutes, profile?.n_scenes, seed?.minutes, seed?.scenes])
 
   useEffect(() => {
+    if (seed?.sceneCount != null) return   // a restored brief owns its count
     if (profile) setSceneCount(profile.video_scenes || 0)
-  }, [profile, profile?.video_scenes])
+  }, [profile, profile?.video_scenes, seed?.sceneCount])
 
   useEffect(() => {
     if (seed?.resolution || !profile) return
@@ -249,7 +253,7 @@ export default function Create({ seed, meta, onGenerated }) {
       <Banner tone="danger">{error}</Banner>
       {seed?.queueItemId && <Banner tone="info">Editing a queued request — generating a script here will fill its existing queue slot (it keeps its position) and make it render faster.</Banner>}
       {!seed?.queueItemId && (seed?.title || seed?.description) && (
-        <Banner tone="info">Previous Create settings restored. Adjust anything, then generate a fresh script (new work folder).</Banner>
+        <Banner tone="info">Previous Create settings restored. Adjust anything, then {songFmt ? 'write the song again' : 'generate a fresh script'} — it starts a new work folder, leaving the existing one untouched.</Banner>
       )}
 
       <div className="bento">
