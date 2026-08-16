@@ -646,23 +646,36 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const imgUrl = (s) => (s && s.preview_path) ? fileUrl(s.preview_path) + (s.cb ? `&t=${s.cb}` : '') : ''
 
   // ── Lightbox (enlarged scene image) ──────────────────────────────────────────
-  // `lightbox` is { scene, ver }: which scene index and which of that scene's
-  // generated image versions are shown enlarged. Left/right step between scenes;
-  // up/down step between the versions made for a scene; arrow keys do the same.
+  // The enlarged image always shows the CURRENT scene — stepping left/right moves
+  // the page's scene too (same as clicking a thumb), so closing the lightbox on a
+  // bad image leaves you on that scene's editor. `lightbox` is { ver }: which of
+  // the scene's generated image versions is enlarged; up/down step between those.
   const selVerIdx = (s) => {
     const vs = s?.history?.versions || []
     const i = vs.findIndex((v) => v.id === s?.history?.selected)
     return i < 0 ? 0 : i
   }
-  const openLightbox = () => setLightbox({ scene: cur, ver: selVerIdx(d) })
-  const lbMove = (delta) => setLightbox((lb) => {
-    if (!lb) return lb
-    const ns = Math.min(total - 1, Math.max(0, lb.scene + delta))
-    return ns === lb.scene ? lb : { scene: ns, ver: selVerIdx(scenes[ns]) }
-  })
+  const openLightbox = () => setLightbox({ ver: selVerIdx(d) })
+  // A held arrow key fires faster than React re-renders, so stepping reads the
+  // scene it is on from a ref — reading `cur` would make every repeat start from
+  // the same index and collapse the whole burst into one step.
+  const lbCur = useRef(cur)
+  useEffect(() => { lbCur.current = cur }, [cur])
+  const lbMove = (delta) => {
+    const from = lbCur.current
+    const ns = Math.min(total - 1, Math.max(0, from + delta))
+    if (ns === from) return
+    lbCur.current = ns
+    setLightbox({ ver: selVerIdx(scenes[ns]) })
+    // Save the scene being left and move the page with the image, exactly like
+    // `move` — but without awaiting the save, so the next press isn't held up.
+    persist(from)
+    setConfirmDelScene(false)
+    setCur(ns)
+  }
   const lbVerMove = (delta) => setLightbox((lb) => {
     if (!lb) return lb
-    const vs = scenes[lb.scene]?.history?.versions || []
+    const vs = d?.history?.versions || []
     const nv = Math.min(vs.length - 1, Math.max(0, lb.ver + delta))
     return nv === lb.ver ? lb : { ...lb, ver: nv }
   })
@@ -687,12 +700,12 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [lightbox, scenes, total])
+  }, [lightbox, scenes, total, cur])
 
-  const lbVersions = lightbox ? (scenes[lightbox.scene]?.history?.versions || []) : []
+  const lbVersions = lightbox ? (d.history?.versions || []) : []
   const lbMulti = lbVersions.length > 1
   const lbSrc = lightbox
-    ? (lbMulti && lbVersions[lightbox.ver] ? fileUrl(lbVersions[lightbox.ver].path) : imgUrl(scenes[lightbox.scene] || {}))
+    ? (lbMulti && lbVersions[lightbox.ver] ? fileUrl(lbVersions[lightbox.ver].path) : imgUrl(d))
     : ''
 
   const regenField = async (field, instruction = '') => {
@@ -1630,7 +1643,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               {/* Scene / image counters */}
               <div onClick={(e) => e.stopPropagation()}
                 style={{ position: 'absolute', top: 18, left: 22, color: 'rgba(255,255,255,.92)', fontSize: 13, fontWeight: 600, display: 'flex', gap: 10, cursor: 'default' }}>
-                <span>Scene {lightbox.scene + 1} / {total}</span>
+                <span>Scene {cur + 1} / {total}</span>
                 {lbMulti && <span style={{ opacity: 0.65 }}>· Image {lightbox.ver + 1} / {lbVersions.length}</span>}
               </div>
 
@@ -1641,9 +1654,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               </button>
 
               {/* Previous / next scene */}
-              {total > 1 && lbArrow('chevron-left', 'Previous scene (←)', lightbox.scene <= 0,
+              {total > 1 && lbArrow('chevron-left', 'Previous scene (←)', cur <= 0,
                 () => lbMove(-1), { left: 18, top: '50%', transform: 'translateY(-50%)' })}
-              {total > 1 && lbArrow('chevron-right', 'Next scene (→)', lightbox.scene >= total - 1,
+              {total > 1 && lbArrow('chevron-right', 'Next scene (→)', cur >= total - 1,
                 () => lbMove(1), { right: 18, top: '50%', transform: 'translateY(-50%)' })}
 
               {/* Other images generated for this scene */}
