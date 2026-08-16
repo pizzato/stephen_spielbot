@@ -21,7 +21,9 @@ from is left exactly as it was.
 Every saved script, as cards. **Load** opens one, **Duplicate** clones it into a fresh work
 folder, **Delete** removes it. A *Story draft* chip marks scripts that are still prose with
 no scenes yet, a *Song draft* chip a music video whose song is written but whose story is
-not; the loaded one is marked too.
+not; the loaded one is marked too. Duplicating a [Music video](create.md#format) brings its
+song along — the track in use, its lyrics and every kept version — so the copy re-renders
+against the same song rather than singing a new one.
 
 **New script** goes to [Create](create.md).
 

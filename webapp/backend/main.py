@@ -2556,6 +2556,24 @@ def _do_story_generate(body: GenerateScriptBody) -> dict:
             "scenes": [], "characters": []}
 
 
+def _copy_song_artifacts(src: Path, dst: Path) -> None:
+    """Carry a song film's approved song from *src* into the fork *dst*.
+
+    A music video IS its song: the lyrics and caption in song.json, the track
+    every singing take pins its own window of, and the kept versions the Song
+    tab picks between. A fork that leaves them behind is no longer recognised
+    as a music video (see _is_music_video) and its re-render writes a brand-new
+    instrumental — with no lyrics — over scenes timed to the old track."""
+    import shutil
+    dst.mkdir(parents=True, exist_ok=True)
+    for name in ("song.json", "background_music.wav", "music_history.json"):
+        if (src / name).exists():
+            shutil.copy2(src / name, dst / name)
+    if (src / "music_history").is_dir():
+        shutil.copytree(src / "music_history", dst / "music_history",
+                        dirs_exist_ok=True)
+
+
 def _do_story_divide(body: DivideStoryBody) -> dict:
     """Story-mode phase 2: divide the (possibly user-edited) story into scenes
     and persist the script through the exact classic path, into the same work
@@ -2586,13 +2604,7 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         # A song film's approved song travels with the fork — it IS the film —
         # and so do its kept versions, so the fork can still put the original
         # generation back after a re-voicing.
-        import shutil
-        for name in ("song.json", "background_music.wav", "music_history.json"):
-            if (src / name).exists():
-                shutil.copy2(src / name, wd / name)
-        if (src / "music_history").is_dir():
-            shutil.copytree(src / "music_history", wd / "music_history",
-                            dirs_exist_ok=True)
+        _copy_song_artifacts(src, wd)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -4296,8 +4308,10 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
     (~/videos/<new-folder>.mp4) — the source film's scenes and output stay intact.
     Cached scene first-frames, the description and cover are copied across too, so
     the editor is pre-filled and the re-render reuses the images (a new LTX pass
-    still yields a different take). Returns the same payload as /scripts/load, so
-    the duplicate opens straight in the Script editor for review."""
+    still yields a different take). A music video's song travels with it too, so
+    the copy re-renders against the SAME track its scenes are timed to. Returns
+    the same payload as /scripts/load, so the duplicate opens straight in the
+    Script editor for review."""
     import shutil
     src = Path(body.work_dir)
     if not _safe_under(src, gapp.OUTPUT_DIR):
@@ -4338,6 +4352,10 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
         if title and title != src_title:
             brief_copy["video_title"] = title
         _write_create_brief(new_wd, brief_copy)
+    # A music video's song comes with it: without song.json + the track the
+    # copy stops being a song film and its render sings a fresh, lyric-less
+    # ACE-Step track over scenes still timed to the original.
+    _copy_song_artifacts(src, new_wd)
     # Carry the per-script character look images so the duplicate keeps the same
     # cast (characters.json copied above references these by basename).
     src_chars = gapp._script_characters_dir(src)
