@@ -1,7 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Card, Field, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimate, lengthEstimateLabel, sceneBounds, fmtDuration, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimate, lengthEstimateLabel, sceneBounds, fmtDuration, LEGACY_SCENE_SECS, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX } from '../components.jsx'
 import { api } from '../api.js'
 import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
+
+// Read a picked file into a base64 data-URL for upload.
+const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(r.result)
+  r.onerror = () => reject(new Error('Could not read that file.'))
+  r.readAsDataURL(file)
+})
 
 function fmtNum(n) {
   if (n == null) return '—'
@@ -85,6 +93,10 @@ export default function Create({ seed, meta, onGenerated }) {
   // hands off to the Script screen's SONG TAB (the song studio: generate,
   // listen, re-voice, accept a version, then draft the story from it).
   const [songVoice, setSongVoice] = useState(seed?.songVoice || '')  // '' = the model's own vocalist
+  // …unless the song already exists as a file. Then nothing is written or
+  // generated: the upload IS the film's track, and the story is drafted from it.
+  const [songSource, setSongSource] = useState('write')   // 'write' | 'file'
+  const [songFile, setSongFile] = useState(null)
   const [reach, setReach] = useState(null)   // predicted 3-day views (issue #50); null until a model exists
 
   // An active style keeps narrator + visuals synced to it (the inputs are
@@ -212,6 +224,28 @@ export default function Create({ seed, meta, onGenerated }) {
     } catch (e) { setError(e.message); setBusy(false) }
   }
 
+  // The same hand-off, for a song that already exists: the file is uploaded as
+  // the film's track and the Song tab opens on it — no LLM, no music model.
+  const importSong = async () => {
+    if (!songFile) return
+    if (songFile.size > SONG_UPLOAD_MAX) {
+      setError('That file is over 80 MB — upload an mp3, or a shorter track.'); return
+    }
+    setBusy(true); setError('')
+    try {
+      const r = await api.songImport({
+        video_title: videoTitle.trim(),
+        topic: direction.trim() || videoTitle.trim(),
+        n_scenes: Number(sceneCount) || 0,
+        style_name: profile ? (profile.name || '') : NO_STYLE,
+        voice: songVoice,
+        filename: songFile.name,
+        data: await fileToDataUrl(songFile),
+      })
+      onGenerated(r, { voice, resolution, autoApprove: false, queueItemId: seed?.queueItemId || '', styleName: r.style_name || profile?.name || '' })
+    } catch (e) { setError(e.message); setBusy(false) }
+  }
+
   const generate = async () => {
     setBusy(true); setError('')
     try {
@@ -287,7 +321,9 @@ export default function Create({ seed, meta, onGenerated }) {
             <div className="row gap-22 row--wrap">
               <div className="grow">
                 <Field label={`Length — ${fmtDuration(minutes)}`}
-                  hint={songFmt
+                  hint={songFmt && songSource === 'file'
+                    ? 'Ignored for a song you upload — the film runs exactly as long as your file, and you split that into scenes in the Song tab.'
+                    : songFmt
                     ? 'How long the SONG runs. The film runs exactly as long as the song, and you split it into scenes in the Song tab.'
                     : acted
                     ? `${est.nScenes} scene${est.nScenes === 1 ? '' : 's'} of ~${Math.round(est.sceneSecs)} s — no narration to budget.`
@@ -303,7 +339,11 @@ export default function Create({ seed, meta, onGenerated }) {
             </div>
 
             <Field label="Scenes"
-              hint={songFmt
+              hint={songFmt && songSource === 'file'
+                ? (sceneCount > 0
+                  ? `Your song split ${sceneCount} ways. Fewer scenes are longer takes — the Song tab shows what that works out to once your file is uploaded.`
+                  : 'Automatic — your song is split into takes of about 5 s. Set a count to make the scenes longer or shorter.')
+                : songFmt
                 ? (sceneCount > 0
                   ? `The song split ${sceneCount} ways — ~${(Math.max(0.25, Number(minutes) || 0) * 60 / sceneCount).toFixed(1)} s a scene. Fewer scenes are longer takes. You can change this in the Song tab once you hear it.`
                   : `Automatic — the song becomes ${Math.max(1, Math.round(Math.max(0.25, Number(minutes) || 0) * 60 / 5))} scene${Math.round(Math.max(0.25, Number(minutes) || 0) * 60 / 5) === 1 ? '' : 's'} of ~5 s. Set a count to make the scenes longer or shorter.`)
@@ -357,8 +397,30 @@ export default function Create({ seed, meta, onGenerated }) {
             )}
 
             {songFmt && (
+              <Field label="The song"
+                hint={songSource === 'file'
+                  ? 'Your file becomes the film’s soundtrack as it is — nothing is written or generated. Its length is the film’s length. Write its lyrics in the Song tab next, so the story and the scenes follow the words.'
+                  : 'The AI writes the song from the brief above, and the music model sings it. You audition it in the Song tab before anything else is built.'}>
+                <Segmented value={songSource} onChange={setSongSource} options={[
+                  { value: 'write', label: 'Write it for me' },
+                  { value: 'file', label: 'I have the song' },
+                ]} />
+              </Field>
+            )}
+
+            {songFmt && songSource === 'file' && (
+              <Field label="Song file"
+                hint="A song you already have — your own recording, or one this app generated for another film and you kept. WAV, mp3, m4a, flac, ogg or opus, up to 80 MB.">
+                <input className="input" type="file" accept={SONG_FILE_ACCEPT}
+                  onChange={(e) => setSongFile(e.target.files?.[0] || null)} />
+              </Field>
+            )}
+
+            {songFmt && (
               <Field label="Singing voice"
-                hint="Who sings the film. The vocalist is described to the music model from this voice’s gender, age and tone (matched by description, not cloned). Leave it on the model’s own vocalist to let the song decide.">
+                hint={songSource === 'file'
+                  ? 'Only the target for re-voicing your file in the Song tab (seed-vc clones it onto the vocal). Nothing is described to a music model — your song is already sung.'
+                  : 'Who sings the film. The vocalist is described to the music model from this voice’s gender, age and tone (matched by description, not cloned). Leave it on the model’s own vocalist to let the song decide.'}>
                 <select className="select" value={songVoice} onChange={(e) => setSongVoice(e.target.value)}>
                   <option value="">The model’s own vocalist</option>
                   {voiceChoices.filter((v) => v !== 'Default (F5-TTS)').map((v) => (
@@ -372,16 +434,24 @@ export default function Create({ seed, meta, onGenerated }) {
               <div className="stack gap-4">
                 <span className="muted" style={{ fontSize: 12.5 }}>
                   {songFmt
-                    ? 'The song comes first: it opens in the Song tab, where you generate it, re-voice it, pick the version you like — and draft the story from it.'
+                    ? (songSource === 'file'
+                      ? 'The song comes first: your file opens in the Song tab, where you write in its lyrics, re-voice it if you want — and draft the story from it.'
+                      : 'The song comes first: it opens in the Song tab, where you generate it, re-voice it, pick the version you like — and draft the story from it.')
                     : "You'll review the story next, then divide it into scenes."}
                   {format === 'dialogue' && ` Each scene becomes one acted clip of about ${Math.round(est.sceneSecs)} seconds.`}
                   {format === 'silent' && ` Each scene becomes one clip of about ${Math.round(est.sceneSecs)} seconds, with no voice-over.`}
-                  {format === 'song' && ` Each scene becomes one performed clip of about ${Math.round(est.sceneSecs)} seconds.`}
+                  {format === 'song' && songSource !== 'file' && ` Each scene becomes one performed clip of about ${Math.round(est.sceneSecs)} seconds.`}
                 </span>
                 <Check checked={autoApprove} onChange={setAutoApprove}
                   label="Auto-approve the scenes → straight to the queue after dividing" />
               </div>
-              {songFmt ? (
+              {songFmt && songSource === 'file' ? (
+                <Button variant="primary" size="lg" iconRight="music"
+                  disabled={!videoTitle.trim() || !songFile || busy}
+                  onClick={importSong}>
+                  {busy ? 'Uploading the song…' : '1. Use this song →'}
+                </Button>
+              ) : songFmt ? (
                 <Button variant="primary" size="lg" iconRight="music"
                   disabled={!videoTitle.trim() || busy}
                   onClick={draftSong}>

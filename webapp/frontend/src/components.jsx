@@ -923,10 +923,18 @@ export function VideoVersionStrip({ versions, selected, onSelect, onDelete, aspe
   )
 }
 
+// A song the user supplies rather than generates: what the file picker offers,
+// and the size the backend refuses past (a five-minute stereo WAV is ~50 MB).
+export const SONG_FILE_ACCEPT = '.wav,.mp3,.m4a,.flac,.ogg,.aac,.opus,audio/*'
+export const SONG_UPLOAD_MAX = 80 * 1024 * 1024
+
 // Music is film-level audio, so its versions are a vertical list of players (not
 // thumbnails): listen to each kept track, see the prompt that made it, and click
 // "Use" to make it the selected soundtrack. `onSelect(versionId)` re-muxes the film.
-export function MusicVersionStrip({ versions, selected, onSelect, busy }) {
+// `onDelete(versionId)` (optional) adds a confirm-armed Delete to the ones not in
+// use — landing a song takes many takes, and the list only ever grows.
+export function MusicVersionStrip({ versions, selected, onSelect, onDelete, busy }) {
+  const [confirmDel, setConfirmDel] = useState(null)
   if (!versions || versions.length < 2) return null
   return (
     <div className="mt-16">
@@ -934,12 +942,15 @@ export function MusicVersionStrip({ versions, selected, onSelect, busy }) {
       <div className="stack gap-8 mt-8">
         {versions.map((v) => {
           const isSel = v.id === selected
+          const armed = confirmDel === v.id
           return (
-            <div key={v.id} className="row center gap-10" style={{
-              padding: '8px 10px', borderRadius: 'var(--r-sm)', background: 'var(--paper-2)',
-              border: `2px solid ${isSel ? 'var(--accent)' : 'var(--line)'}`,
-              opacity: busy && !isSel ? 0.5 : 1,
-            }}>
+            <div key={v.id} className="row center gap-10"
+              onMouseLeave={() => armed && setConfirmDel(null)}
+              style={{
+                padding: '8px 10px', borderRadius: 'var(--r-sm)', background: 'var(--paper-2)',
+                border: `2px solid ${isSel ? 'var(--accent)' : armed ? 'var(--danger)' : 'var(--line)'}`,
+                opacity: busy && !isSel ? 0.5 : 1,
+              }}>
               <audio src={fileUrl(v.path)} controls preload="none" style={{ height: 34, flex: '0 0 auto', maxWidth: '60%' }} />
               {/* A song film's versions come from two acts — the engine's own
                   singer, and a seed-vc re-voicing of it — so the voice is
@@ -952,6 +963,14 @@ export function MusicVersionStrip({ versions, selected, onSelect, busy }) {
               {isSel
                 ? <Chip tone="ok" dot>In use</Chip>
                 : <Button variant="ghost" icon="check" disabled={busy} onClick={() => onSelect && onSelect(v.id)}>Use</Button>}
+              {onDelete && !isSel && (
+                <Button variant={armed ? 'danger' : 'quiet'} icon={armed ? 'trash-can' : 'xmark'}
+                  disabled={busy}
+                  title={armed ? 'Click again to delete' : 'Delete this version'}
+                  onClick={() => (armed ? (setConfirmDel(null), onDelete(v.id)) : setConfirmDel(v.id))}>
+                  {armed ? 'Delete' : ''}
+                </Button>
+              )}
             </div>
           )
         })}

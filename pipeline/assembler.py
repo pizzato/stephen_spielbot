@@ -119,6 +119,24 @@ def write_silence_wav(path: Path, seconds: float, rate: int = 24000) -> Path:
     return path
 
 
+def transcode_to_wav(input_path: Path, output_path: Path) -> Path:
+    """Re-encode any audio file the user hands us into the 16-bit WAV every
+    downstream step reads (mux, pinned per-scene slices, seed-vc).
+
+    Used for an uploaded song: what arrives may be an mp3, an m4a or a WAV at
+    some other bit depth, and the pipeline only ever opens one kind of file.
+    """
+    logger.info("[ffmpeg] transcode_to_wav: %s", input_path.name)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-vn",
+        "-c:a", "pcm_s16le",
+        str(output_path),
+    ])
+    return output_path
+
+
 def extend_audio_tail(input_path: Path, output_path: Path, extra_seconds: float,
                       fade: float = 2.0) -> Path:
     """Give a track a softer, longer ending: fade its last *fade* seconds out and
