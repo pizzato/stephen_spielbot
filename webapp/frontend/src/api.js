@@ -126,6 +126,12 @@ export const api = {
   // Music-video flow: write the song first, then generate its audio (polls
   // the shared script-task status until the track is rendered).
   songDraft: (body) => req('POST', '/song/draft', body),
+  // The other way in: the song is a file the user already has. Nothing is
+  // written or generated — the upload becomes the film's track.
+  songImport: (body) => req('POST', '/song/import', body),
+  // Replace an existing film's song with a file from the user's machine.
+  songUpload: (workDir, filename, data) =>
+    req('POST', '/song/upload', { work_dir: workDir, filename, data }),
   songGenerate: async (body) => {
     const { task_id } = await req('POST', '/song/generate', body)
     for (;;) {
@@ -180,6 +186,9 @@ export const api = {
     req('POST', `/jobs/${jobId}/song/regenerate`, { field, caption, lyrics, instruction }),
   // The accept/revert step: put a kept version back as the film's track.
   songSelectVersion: (jobId, versionId) => req('POST', `/jobs/${jobId}/song/select`, { version_id: versionId }),
+  // Throw a take away. Deleting the one in use promotes the newest one left.
+  songDeleteVersion: (jobId, versionId) =>
+    req('POST', `/jobs/${jobId}/song/version/delete`, { version_id: versionId }),
   // Persist edited chapter texts so a story review can be resumed later.
   saveStory: (jobId, chapters) => req('PUT', `/jobs/${jobId}/story`, { chapters }),
   // Script critic: post-generation QC that can rewrite, delete, and reorder

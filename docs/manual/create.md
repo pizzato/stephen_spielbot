@@ -78,7 +78,7 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 | **Dialogue** | The characters act and speak on screen. Needs characters with a portrait (a voice keeps them consistent) |
 | **Mixed** | The AI blends narration, dialogue, and silent scenes |
 | **Silent** | Told in pictures: no narrator, and a spoken line only where a beat truly needs one |
-| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the lead character performs it on camera in silent acted takes |
+| **Music video** | The story becomes a **song**: the AI writes tagged lyrics from the approved draft, the music model sings them over the whole film, and the lead character performs it on camera in silent acted takes. Or [bring your own song](#the-song) and the film is built around that |
 
 See [acted scenes](../performance_films.md) for what the modes actually render, and
 [singing films](../performance_films.md#singing-films-the-music-video-format) for the
@@ -112,13 +112,29 @@ takes already carry their own sound, so the toggle is disabled. A **music-video*
 the opposite extreme — it *is* its song, played at full volume, so the toggle disappears
 and a **Singing voice** picker takes its place.
 
+## The song
+
+Music videos only. Where the film's song comes from:
+
+- **Write it for me** — the default. The AI writes the song from the brief above and the
+  music model sings it; you audition it in the [Song tab](script.md#song) before anything
+  else is built.
+- **I have the song** — a **Song file** picker appears, and the song you upload becomes
+  the film's soundtrack exactly as it is. Nothing is written and nothing is generated: no
+  LLM, no music model. Use it for your own recording, or for a track this app generated
+  for another film and you kept. WAV, mp3, m4a, flac, ogg or opus, up to 80 MB. The
+  **Length** above is ignored — an uploaded song *is* the film's length, and it is what
+  the scenes are divided out of. Write its lyrics into the [Song tab](script.md#song)
+  next, so the story and the performed scenes follow the words.
+
 ## Singing voice
 
 Music videos only. Who sings the film: the vocalist is described to the music model from
 this voice's gender, age and tone — matched by description, never cloned, because the music
 engines cannot be handed a voice. Left on *the model's own vocalist*, the song decides. You
 can change it, and actually re-voice the finished track, in the
-[Song tab](script.md#song).
+[Song tab](script.md#song). With **I have the song** nothing is described to a music model
+— your song is already sung — so it is only the target for re-voicing it there.
 
 ## Auto-approve
 
@@ -140,7 +156,8 @@ review it and divide it into scenes.
 
 For a **music video** the button reads **1. Write the song** instead, and lands you on the
 [Song tab](script.md#song): the song is written first, you generate and audition it there,
-and the story is drafted from the finished track.
+and the story is drafted from the finished track. With [I have the song](#the-song) it
+reads **1. Use this song** and uploads your file into that same tab.
 
 If you arrived here from a queued request, a banner says so — generating fills that
 existing queue slot and keeps its position. If you arrived via **Brief** from an existing

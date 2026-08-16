@@ -18,9 +18,11 @@ re-voicing — and ``source_id``, the version a re-voicing was converted from.
 That is what keeps the before/after pair of a re-voicing legible (and lets the
 next re-voicing start from the *sung* original rather than stacking clones).
 
-All versions are kept (no pruning) — the user explicitly wants to compare every
-generation. A module-level lock guards the read-modify-write, and ``_save`` writes
-atomically so readers never see a half-written manifest.
+Nothing is pruned automatically — the user wants to compare every generation —
+but a version can be deleted by hand (``delete``), because a song film often
+takes a dozen tries to land one. A module-level lock guards the
+read-modify-write, and ``_save`` writes atomically so readers never see a
+half-written manifest.
 """
 from __future__ import annotations
 
@@ -128,6 +130,40 @@ def select(work_dir: Path, version_id: int) -> Path:
         data["selected"] = version_id
         _save(work_dir, data)
         return canonical
+
+
+def delete(work_dir: Path, version_id: int) -> dict:
+    """Drop a kept version and its file. Returns the remaining ``history``.
+
+    Deleting the version in use hands the film the newest one left (copied onto
+    the canonical track), so ``background_music.wav`` is always a version the
+    user can point at. The last remaining version can't be deleted — it *is*
+    the film's soundtrack.
+
+    Raises ValueError if the version is unknown or is the only one left."""
+    work_dir = Path(work_dir)
+    version_id = int(version_id)
+    with _LOCK:
+        data = _load(work_dir)
+        versions = data.get("versions", [])
+        match = next((v for v in versions if int(v["id"]) == version_id), None)
+        if match is None:
+            raise ValueError(f"No music version {version_id}")
+        if len(versions) < 2:
+            raise ValueError("This is the film's only song — generate another before deleting it.")
+        data["versions"] = [v for v in versions if int(v["id"]) != version_id]
+        (_hist_dir(work_dir) / match["file"]).unlink(missing_ok=True)
+        if data.get("selected") == version_id:
+            # Promote the newest survivor rather than leaving the film pointing
+            # at a track nothing lists. Inlined instead of calling select():
+            # the lock is not reentrant.
+            fallback = data["versions"][-1]
+            src = _hist_dir(work_dir) / fallback["file"]
+            if src.exists():
+                shutil.copy2(src, _canonical(work_dir))
+            data["selected"] = int(fallback["id"])
+        _save(work_dir, data)
+    return history(work_dir)
 
 
 def history(work_dir: Path) -> dict:

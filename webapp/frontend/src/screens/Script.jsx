@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
@@ -224,6 +224,27 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setBusy('song-select'); setError('')
     try { await api.songSelectVersion(job.job_id, versionId); await refreshSong() }
     catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  // Landing a song takes many takes and every one is kept — this is how the
+  // ones nobody wants leave the list.
+  const deleteSongVersion = async (versionId) => {
+    setBusy('song-select'); setError(''); setSongMsg('')
+    try { await api.songDeleteVersion(job.job_id, versionId); await refreshSong() }
+    catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+  // A song from the user's own files takes the place of the generated one — an
+  // upload is a version like any other, so the take it replaces can be put back.
+  const uploadSongFile = async (file) => {
+    if (!file) return
+    if (file.size > SONG_UPLOAD_MAX) {
+      setError('That file is over 80 MB — upload an mp3, or a shorter track.'); return
+    }
+    setBusy('song-upload'); setError(''); setSongMsg('')
+    try {
+      await api.songUpload(job.work_dir, file.name, await fileToDataUrl(file))
+      setSongDraft(null); await refreshSong()
+      setSongMsg(`“${file.name}” is now the film’s song — write its lyrics above so the scenes follow the words, then draft the story.`)
+    } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   const draftStoryFromSong = async () => {
     setBusy('song-story'); setError(''); setSongMsg('')
@@ -1133,10 +1154,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 </Field>
               )}
 
+              {/* The song needn't be generated at all: a file the user already
+                  has becomes the film's track, and a version like any other. */}
+              <Field label="Use a song from a file"
+                hint="Uploads a song you already have — your own recording, or a track generated earlier and saved — and makes it this film's soundtrack. Whatever is playing now stays in the list below. The lyrics box above isn't filled in from the file, so write the words in yourself: the story is drafted from them and each scene performs its own stretch of them.">
+                <div className="row center gap-8 row--wrap">
+                  <input className="input" type="file" accept={SONG_FILE_ACCEPT}
+                    style={{ maxWidth: 340 }} disabled={!!busy}
+                    onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; uploadSongFile(f) }} />
+                  {busy === 'song-upload' && <span className="muted" style={{ fontSize: 12.5 }}>Uploading…</span>}
+                </div>
+              </Field>
+
               {/* Accept or go back: every generation and every re-voicing is a
                   kept version — the one marked "In use" is the film's track. */}
               <MusicVersionStrip versions={song.versions || []} selected={song.selected}
-                busy={busy === 'song-select'} onSelect={selectSongVersion} />
+                busy={busy === 'song-select'} onSelect={selectSongVersion}
+                onDelete={deleteSongVersion} />
 
               {song.song_url && (
                 <div className="row center between row--wrap gap-12 mt-8">

@@ -6,6 +6,7 @@ h3_silent_scenes says, prompted to visibly sing, shipped muted — while the rea
 vocals come from the music engine singing the film's tagged lyrics
 (song.json), captioned to match the cast singer's library voice.
 """
+import base64
 import json
 import math
 import sys
@@ -553,6 +554,142 @@ class SongVersionTests(_SongFilmCase):
         # Re-mixed from the freshly converted track, at the song film's volume.
         self.assertEqual(mix.call_args[0][1], str(self.wd / "background_music.wav"))
         self.assertEqual(len(backend._film_tasks[task]["music_history"]["versions"]), 2)
+
+
+class SongVersionDeleteTests(_SongFilmCase):
+    """Landing a song takes many takes and every one is kept — the ones nobody
+    wants have to be able to leave the list."""
+
+    def _record(self, blob: bytes, desc: str) -> int:
+        (self.wd / "background_music.wav").write_bytes(blob)
+        h = backend.music_history.record(self.wd, self.wd / "background_music.wav", desc)
+        return h["versions"][-1]["id"]
+
+    def setUp(self):
+        super().setUp()
+        backend.music_history.seed_if_empty(self.wd, self.wd / "background_music.wav",
+                                            "slow piano ballad")
+
+    def test_deleting_a_take_drops_it_from_the_list(self):
+        second = self._record(b"take-two", "another")
+        res = backend.delete_song_version(self.job_id, {"version_id": second})
+
+        self.assertEqual(len(res["versions"]), 1)
+        self.assertEqual(Path(res["versions"][0]["path"]).read_bytes(), b"as-generated")
+
+    def test_deleting_the_take_in_use_puts_the_newest_one_left_back(self):
+        self._record(b"take-two", "another")
+        in_use = backend.music_history.history(self.wd)["selected"]
+
+        res = backend.delete_song_version(self.job_id, {"version_id": in_use})
+
+        self.assertEqual(res["selected"], res["versions"][-1]["id"])
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(), b"as-generated")
+        # …and stops claiming a re-voicing the surviving take never had.
+        self.assertEqual(res["sung_as"], "")
+
+    def test_the_only_take_cannot_be_deleted(self):
+        only = backend.music_history.history(self.wd)["versions"][0]["id"]
+        with self.assertRaises(HTTPException) as ctx:
+            backend.delete_song_version(self.job_id, {"version_id": only})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertEqual(len(backend.music_history.history(self.wd)["versions"]), 1)
+
+
+def _audio_payload(blob: bytes = b"my-own-song") -> str:
+    return "data:audio/mpeg;base64," + base64.b64encode(blob).decode()
+
+
+class SongUploadTests(_SongFilmCase):
+    """A song the user already has — their own recording, or one generated for
+    another film — takes the place of the generated one."""
+
+    def setUp(self):
+        super().setUp()
+        def fake_transcode(src, out):
+            Path(out).write_bytes(b"wav:" + Path(src).read_bytes())
+            return out
+        t = unittest.mock.patch("pipeline.assembler.transcode_to_wav", fake_transcode)
+        t.start()
+        self.addCleanup(t.stop)
+
+    def test_the_upload_becomes_the_films_song(self):
+        res = backend.song_upload(backend.SongUploadBody(
+            work_dir=str(self.wd), filename="rooftop.mp3", data=_audio_payload()))
+
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(), b"wav:my-own-song")
+        self.assertEqual(res["duration"], 45.0)
+        # The song's real length is the film's — it is what the scenes divide.
+        song = json.loads((self.wd / "song.json").read_text())
+        self.assertEqual(song["duration"], 45.0)
+        self.assertEqual(song["seconds"], 45.0)
+        # Nothing of the upload is left lying around beside the track.
+        self.assertFalse((self.wd / "uploaded_song.mp3").exists())
+
+    def test_the_take_it_replaces_is_kept_and_can_be_put_back(self):
+        backend.song_upload(backend.SongUploadBody(
+            work_dir=str(self.wd), filename="rooftop.mp3", data=_audio_payload()))
+
+        h = backend.music_history.history(self.wd)
+        self.assertEqual(len(h["versions"]), 2)
+        self.assertEqual(Path(h["versions"][0]["path"]).read_bytes(), b"as-generated")
+        self.assertIn("rooftop.mp3", h["versions"][1]["desc"])
+
+        backend.select_song_version(self.job_id, {"version_id": h["versions"][0]["id"]})
+        self.assertEqual((self.wd / "background_music.wav").read_bytes(), b"as-generated")
+
+    def test_an_upload_is_nobodys_revoicing(self):
+        """A stale "sung as X" would label the uploaded file with a conversion
+        it never had."""
+        (self.wd / "song.json").write_text(json.dumps(
+            {"caption": "slow piano ballad", "lyrics": "[Verse]\nwords",
+             "seconds": 45, "sung_as": "Nora"}))
+
+        backend.song_upload(backend.SongUploadBody(
+            work_dir=str(self.wd), filename="rooftop.mp3", data=_audio_payload()))
+
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["sung_as"], "")
+
+    def test_an_oversized_file_is_refused(self):
+        big = base64.b64encode(b"x" * (backend._MAX_SONG_UPLOAD_BYTES + 1)).decode()
+        with self.assertRaises(HTTPException) as ctx:
+            backend.song_upload(backend.SongUploadBody(
+                work_dir=str(self.wd), filename="huge.wav", data=big))
+        self.assertEqual(ctx.exception.status_code, 413)
+
+    def test_a_film_without_a_song_refuses_the_upload(self):
+        (self.wd / "song.json").unlink()
+        with self.assertRaises(HTTPException) as ctx:
+            backend.song_upload(backend.SongUploadBody(
+                work_dir=str(self.wd), filename="rooftop.mp3", data=_audio_payload()))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+    def test_importing_a_file_opens_a_song_film_with_no_model_involved(self):
+        """The other way into the flow: no LLM writes the song and no music
+        model sings it — the file IS the film's track, and the job that lands
+        is the same song-first job a drafted song makes."""
+        res = backend.song_import(backend.SongImportBody(
+            video_title="Rooftop Rain", style_name="Hero", n_scenes=4,
+            filename="rooftop.wav", data=_audio_payload(b"finished-song")))
+
+        wd = Path(res["work_dir"])
+        self.assertEqual((wd / "background_music.wav").read_bytes(), b"wav:finished-song")
+        self.assertEqual(res["create_brief"]["format"], "song")
+        self.assertEqual(res["create_brief"]["n_scenes"], 4)
+        # The film's length comes from the song, not from the style's default.
+        self.assertAlmostEqual(res["create_brief"]["minutes"], 0.75)
+        # Nothing was written for it: the lyrics are the user's to fill in.
+        self.assertEqual(res["lyrics"], "")
+        self.assertEqual(len(backend.music_history.history(wd)["versions"]), 1)
+
+    def test_an_imported_song_is_a_job_the_song_tab_can_load(self):
+        res = backend.song_import(backend.SongImportBody(
+            video_title="Rooftop Rain", style_name="Hero",
+            filename="rooftop.wav", data=_audio_payload(b"finished-song")))
+
+        song = backend.get_job_song(res["job_id"])
+        self.assertTrue(song["song_url"])
+        self.assertEqual(song["duration"], 45.0)
 
 
 class SongEndingTests(_SongFilmCase):

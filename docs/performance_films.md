@@ -158,7 +158,20 @@ finished film's [edit screen](manual/edit-film.md#a-song-films-song), which also
 the re-voicing and re-mixes the final with whichever version you pick. A re-voicing
 always converts the sung original rather than the last conversion, so a second voice is a
 clone of the engine's vocals and not of the first clone. After the render only the
-soundtrack changes — the takes were shot against the song and ship muted.
+soundtrack changes — the takes were shot against the song and ship muted. Nothing is
+pruned, but a version you aren't using can be **deleted** from the Song tab — the list is
+otherwise every take it took to land the song. The one in use can't be (put another back
+first), and neither can the last one left: it *is* the film's song.
+
+**The song needn't be generated at all.** Create's [I have the song](manual/create.md#the-song)
+starts a music video from an audio file instead — your own recording, or a track this app
+sang for another film — and the Song tab's **Use a song from a file** swaps one into an
+existing film. The upload is re-encoded to `background_music.wav` and kept as a music
+version like any generation, so the take it replaced can be put back, and it can be
+re-voiced from there just the same. Everything downstream is unchanged: the uploaded
+track's real length is what the scenes are divided out of, and each take gets its stretch
+of it pinned in. The lyrics are the one thing nothing can supply — type them into the Song
+tab, because the story is drafted from them and the scenes perform them.
 
 At generation time, the fallback description: the render describes the **lead performer's cast library voice**
 (gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
