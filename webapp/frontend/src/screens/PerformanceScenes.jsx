@@ -264,7 +264,8 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
             src={`${songUrl}#t=${scene.song_window[0]},${scene.song_window[1]}`} />
           <span className="muted" style={{ fontSize: 12 }}>
             Pinned into this take — the performance is generated to match this exact
-            slice, and it plays under the scene in the final film.
+            slice. The take above carries it too, so it can be watched against its
+            own music, and it plays under the scene in the final film.
           </span>
         </div>
       )}

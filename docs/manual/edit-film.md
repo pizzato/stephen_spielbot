@@ -57,8 +57,9 @@ Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix
 balances the levels and re-muxes without re-rendering any video.
 
 A [music video](../performance_films.md#singing-films-the-music-video-format) gets the **Music**
-slider alone: its takes ship muted and the song is the entire soundtrack, so voice and
-ambience stay at 0% however the film is re-mixed.
+slider alone: the song is the entire soundtrack, so voice and ambience stay at 0% however
+the film is re-mixed — including the slice of the song each take carries for checking it
+on its own.
 
 ### Narrator
 
@@ -137,8 +138,9 @@ so the finished cut plays the new vocals. Two things make it safe to try:
 - **It always converts the original vocals**, never the previous re-voicing, so trying a
   second voice doesn't clone a clone.
 
-The picture doesn't change: the takes were shot against the song and ship muted, so
-re-voicing after the render swaps the soundtrack alone. (Re-voice from the Script
+The picture doesn't change: the takes were shot against the original song, so re-voicing
+after the render swaps the soundtrack alone (the slice each take carries stays the
+original vocals — it is a check track, never part of the mix). (Re-voice from the Script
 screen's [Song tab](script.md#song) *before* rendering and the per-scene stretches pinned
 into the takes sing in that voice too.)
 
