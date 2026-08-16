@@ -766,6 +766,65 @@ class VocalDetectionTests(unittest.TestCase):
         self.assertEqual(song_timing.window_vocals([(7.5, 30.0)], 40.0, 50.0), [])
 
 
+class SnapCutTests(unittest.TestCase):
+    """Scene seams land between lyric lines, never through one — within the
+    take-length bounds, and never worse than the even grid."""
+
+    def test_a_seam_snaps_to_the_boundary_between_lines(self):
+        from pipeline import song_timing
+        # Lines at 4–8–12–16–20: the even cut at 10 sits mid-line, the
+        # boundaries at 8 and 12 are equally near — the earlier one wins.
+        spans = [(4.0, 8.0), (8.0, 12.0), (12.0, 16.0), (16.0, 20.0)]
+        cuts = song_timing.snap_cuts(2, 20.0, spans, min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 8.0, 20.0])
+
+    def test_an_instrumental_break_cuts_at_its_middle(self):
+        from pipeline import song_timing
+        # A 4s break between lines 2 and 3 (10s–14s): the cut falls in the
+        # middle of the silence, where nothing can be clipped.
+        spans = [(0.0, 5.0), (5.0, 10.0), (14.0, 19.0), (19.0, 24.0)]
+        cuts = song_timing.snap_cuts(2, 24.0, spans, min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 12.0, 24.0])
+
+    def test_takes_at_the_floor_keep_the_grid_even(self):
+        from pipeline import song_timing
+        # 4 scenes over 20s is 5s each — the minimum. There is no slack to
+        # snap with, so the even grid stands whatever the lines say.
+        spans = [(0.0, 3.0), (3.0, 7.0), (7.0, 13.0), (13.0, 20.0)]
+        cuts = song_timing.snap_cuts(4, 20.0, spans, min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 5.0, 10.0, 15.0, 20.0])
+
+    def test_a_seam_with_no_line_in_reach_falls_back_to_the_grid(self):
+        from pipeline import song_timing
+        # One 20s line: its only boundaries are its ends, far outside the
+        # allowed window around the even cut — the grid is kept.
+        cuts = song_timing.snap_cuts(2, 20.0, [(0.0, 20.0)],
+                                     min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts, [0.0, 10.0, 20.0])
+
+    def test_every_window_stays_inside_the_bounds(self):
+        from pipeline import song_timing
+        # Boundaries at 7 and 13 pull the first seam early; the second seam
+        # then has no candidate inside its window and falls back, clamped so
+        # the last window still fits.
+        spans = [(0.0, 7.0), (7.0, 13.0), (13.0, 22.0), (22.0, 30.0)]
+        cuts = song_timing.snap_cuts(3, 30.0, spans, min_secs=5.0, max_secs=12.0)
+        self.assertEqual(cuts[0], 0.0)
+        self.assertEqual(cuts[-1], 30.0)
+        widths = [b - a for a, b in zip(cuts, cuts[1:])]
+        for w in widths:
+            self.assertGreaterEqual(w, 6.0 - 0.01)
+            self.assertLessEqual(w, 12.0 + 0.01)
+        self.assertEqual(cuts[1], 7.0)
+
+    def test_nothing_to_snap_to_reports_nothing(self):
+        from pipeline import song_timing
+        self.assertEqual(song_timing.snap_cuts(2, 20.0, [],
+                                               min_secs=5.0, max_secs=12.0), [])
+        self.assertEqual(song_timing.snap_cuts(1, 20.0, [(0.0, 20.0)],
+                                               min_secs=5.0, max_secs=12.0), [])
+
+
 class SongSliceTimingTests(unittest.TestCase):
     """assign_song_slices against a real track: the words a scene is told to
     mouth must be the words its own pinned slice contains."""
@@ -788,16 +847,36 @@ class SongSliceTimingTests(unittest.TestCase):
                                      track=track)
         first, second = scenes[0].metadata, scenes[1].metadata
         # The voice enters at 4s, so scene 1 opens on 4 seconds of nothing.
-        self.assertEqual(first["song_window"], [0.0, 10.0])
+        self.assertEqual(first["song_window"][0], 0.0)
         self.assertAlmostEqual(first["vocal_ranges"][0][0], 4.0, delta=0.5)
-        self.assertAlmostEqual(first["vocal_ranges"][0][1], 10.0, delta=0.5)
+        # The singing runs to the end of the scene's own window.
+        self.assertAlmostEqual(first["vocal_ranges"][0][1],
+                               first["song_window"][1], delta=0.3)
         # Scene 2 is sung throughout.
         self.assertAlmostEqual(second["vocal_ranges"][0][0], 0.0, delta=0.3)
-        # Four lines over 16s of singing = 4s each, so scene 1 holds the first
-        # two and never the last — the bug put "three"/"four" under it.
+        # Four lines over 16s of singing = 4s each, so scene 1 opens the song
+        # and never holds the last line — the bug put "three"/"four" under it.
         self.assertIn("one", first["sings"])
         self.assertNotIn("four", first["sings"])
         self.assertIn("four", second["sings"])
+
+    def test_the_seam_lands_between_lines_not_through_one(self):
+        # Four lines at ~4s each over singing that starts at 4s: the line
+        # boundaries sit near 8s and 12s, and the even cut at 10s would land
+        # mid-line. The seam must snap to one of the boundaries.
+        scenes = self._scenes()
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "song.wav",
+                                [(4.0, 0.08), (16.0, 0.5)])
+            story.assign_song_slices(scenes, self.LYRICS, total_seconds=20.0,
+                                     track=track)
+        seam = scenes[0].metadata["song_window"][1]
+        self.assertTrue(min(abs(seam - 8.0), abs(seam - 12.0)) < 0.6,
+                        f"seam {seam} is not a line boundary")
+        # Whole lines only: no line is sung in both scenes.
+        first = set(scenes[0].metadata["sings"].splitlines())
+        second = set(scenes[1].metadata["sings"].splitlines())
+        self.assertFalse(first & second)
 
     def test_without_a_track_the_old_proportional_split_stands(self):
         # No measurement available — fall back rather than guess, and leave no
@@ -809,17 +888,21 @@ class SongSliceTimingTests(unittest.TestCase):
         self.assertNotIn("vocal_ranges", scenes[0].metadata)
 
     def test_windows_still_tile_the_whole_track(self):
-        # The concat length must stay equal to the track length; measuring the
-        # vocals must not move a window.
+        # The concat length must stay equal to the track length: snapped or
+        # not, the windows meet exactly and cover [0, total].
         scenes = self._scenes()
         with tempfile.TemporaryDirectory() as tmp:
             track = _write_song(Path(tmp) / "song.wav",
                                 [(4.0, 0.08), (16.0, 0.5)])
             story.assign_song_slices(scenes, self.LYRICS, total_seconds=20.0,
                                      track=track)
-        self.assertEqual(scenes[0].metadata["song_window"], [0.0, 10.0])
-        self.assertEqual(scenes[1].metadata["song_window"], [10.0, 20.0])
-        self.assertEqual([s.duration for s in scenes], [10.0, 10.0])
+        first, second = scenes[0].metadata, scenes[1].metadata
+        self.assertEqual(first["song_window"][0], 0.0)
+        self.assertEqual(first["song_window"][1], second["song_window"][0])
+        self.assertEqual(second["song_window"][1], 20.0)
+        for s in scenes:
+            window = s.metadata["song_window"]
+            self.assertAlmostEqual(s.duration, window[1] - window[0], places=2)
 
 
 class SingingPromptTests(unittest.TestCase):

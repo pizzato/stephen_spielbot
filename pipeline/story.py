@@ -751,7 +751,8 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     the whole film ran a scene ahead of its own song. Detection failing falls
     back to the old proportional split rather than guessing."""
     from pipeline import song_timing as _song_timing
-    from pipeline.performance import MIN_SCENE_SECONDS, SCENE_SECONDS
+    from pipeline.performance import (MAX_SCENE_SECONDS, MIN_SCENE_SECONDS,
+                                      SCENE_SECONDS)
     singing = [s for s in scenes
                if (getattr(s, "metadata_extra", None) or {}).get("singing")]
     if not singing or not (lyrics or "").strip():
@@ -778,20 +779,28 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     all_singing = len(singing) == len(scenes)
     if all_singing and total_seconds:
         # The whole film sings (the Music-video contract): the track divides
-        # EVENLY — n clips of track/n seconds, windows meeting exactly — so
-        # the concatenated takes run precisely the track's length and the
-        # overlaid song never drifts against the pictures. The takes' minimum
-        # length is respected by the clip-count planner upstream.
+        # into n windows meeting exactly — so the concatenated takes run
+        # precisely the track's length and the overlaid song never drifts
+        # against the pictures. With the lyrics on the vocal timeline the
+        # seams SNAP to the gaps between lines (song_timing.snap_cuts), so no
+        # take starts or ends mid-sentence; unmeasured, the split stays even.
+        # The takes' minimum length is respected by the clip-count planner
+        # upstream and by the snap bounds alike.
         total = float(total_seconds)
         per = total / len(scenes)
+        cuts = (_song_timing.snap_cuts(len(scenes), total, spans,
+                                       min_secs=MIN_SCENE_SECONDS,
+                                       max_secs=MAX_SCENE_SECONDS)
+                or [round(i * per, 2) for i in range(len(scenes) + 1)])
         for i, s in enumerate(scenes):
+            t0, t1 = cuts[i], cuts[i + 1]
             extra = dict(getattr(s, "metadata_extra", None) or {})
-            extra["song_window"] = [round(i * per, 2), round((i + 1) * per, 2)]
-            stamp(extra, i * per, (i + 1) * per,
+            extra["song_window"] = [t0, t1]
+            stamp(extra, t0, t1,
                   int(round(len(lines) * i / len(scenes))),
                   int(round(len(lines) * (i + 1) / len(scenes))))
             s.metadata_extra = extra
-            s.duration = round(per, 2)
+            s.duration = round(t1 - t0, 2)
         return scenes
     # Mixed film: the song plays across singing and non-singing scenes alike,
     # so windows follow each scene's authored screen time, scaled onto the

@@ -146,6 +146,55 @@ def line_times(regions: list[tuple[float, float]],
             for i in range(n_lines)]
 
 
+def cut_candidates(spans: list[tuple[float, float]]) -> list[float]:
+    """Where the track can be cut without splitting a sung line.
+
+    One candidate per seam between consecutive lines — their shared boundary
+    when they run back to back, the middle of the instrumental break when one
+    sits between them — plus the vocal onset and the end of the last line, so
+    a long intro or outro may stand as a scene of its own."""
+    if not spans:
+        return []
+    cands = [spans[0][0]]
+    for (_, prev_end), (start, _) in zip(spans, spans[1:]):
+        cands.append((prev_end + start) / 2 if start - prev_end > 0.1 else start)
+    cands.append(spans[-1][1])
+    return cands
+
+
+def snap_cuts(n_scenes: int, total: float,
+              spans: list[tuple[float, float]], *,
+              min_secs: float, max_secs: float) -> list[float]:
+    """Cut points tiling [0, *total*] into *n_scenes* windows whose seams sit
+    between lyric lines instead of through them.
+
+    Each seam snaps to the nearest candidate (cut_candidates) that keeps every
+    window near the planner's even length — within ±40 % of it, held inside
+    [*min_secs*, *max_secs*] — while leaving room for the windows still to
+    come. A seam with no candidate in reach falls back to the even grid, so
+    the result is never worse than the plain division; takes at the
+    *min_secs* floor have no slack at all and keep the grid exactly. Empty
+    when there is nothing to snap to or only one scene."""
+    if n_scenes < 2 or total <= 0 or not spans:
+        return []
+    per = total / n_scenes
+    lo = min(per, max(min_secs, 0.6 * per))
+    hi = max(per, min(max_secs, 1.4 * per))
+    cands = cut_candidates(spans)
+    cuts = [0.0]
+    for i in range(1, n_scenes):
+        target = i * per
+        left = n_scenes - i  # windows still to place after this seam
+        earliest = max(cuts[-1] + lo, total - left * hi)
+        latest = min(cuts[-1] + hi, total - left * lo)
+        near = [c for c in cands if earliest - 0.01 <= c <= latest + 0.01]
+        best = (min(near, key=lambda c: abs(c - target)) if near
+                else min(max(target, earliest), latest))
+        cuts.append(round(best, 2))
+    cuts.append(round(total, 2))
+    return cuts
+
+
 def window_vocals(regions: list[tuple[float, float]], t0: float,
                   t1: float) -> list[list[float]]:
     """The singing inside the window [*t0*, *t1*), as offsets RELATIVE to t0.

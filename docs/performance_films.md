@@ -208,6 +208,18 @@ stretch is treated as sung end to end, and if the measurement cannot be made the
 proportional split is used unchanged. The measurement is deliberately coarse — it cannot
 tell a loud instrumental solo from a sung line, since both are simply loud.
 
+**The scenes cut between sentences.** The same lyric timeline decides *where* one take
+ends and the next begins. Rather than dividing the track into mathematically equal
+windows — which lands cuts mid-line as often as not — each seam snaps to the nearest gap
+between lyric lines (or the middle of an instrumental break, where nothing can be
+clipped), so every take carries whole sung lines. The takes bend around the planned
+length to do it, within bounds: no take shrinks below the 5-second acted minimum or
+grows past the 12-second single-clip cap, and a seam with no line boundary in reach
+falls back to the even grid — takes planned right at the 5-second floor have no slack
+and keep the grid exactly. Because the line times are estimated (evenly paced through
+the measured singing) rather than transcribed, a cut can still graze a word when the
+delivery is very uneven; cuts that land in instrumental breaks are exact.
+
 ## What you need first
 
 **Characters with portraits.** The portraits *are* the conditioning: each cast member's
