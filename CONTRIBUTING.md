@@ -59,6 +59,11 @@ cd webapp/frontend && npm run build   # frontend must build
 CI runs the test suite on Python 3.11 and 3.12, plus ruff and the frontend
 build, with no secrets — so it works the same on pull requests from forks.
 
+`tests/conftest.py` repoints `HOME` at a scratch directory before any test module
+is imported, so a local run never reads or writes your own
+`~/.config/video-generator/config.yaml` — app resolves that path from
+`Path.home()` at import time.
+
 ## Coding guidelines
 
 - **Keep changes surgical.** Touch only what the change needs; match the
