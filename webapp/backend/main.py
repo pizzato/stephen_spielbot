@@ -2663,7 +2663,8 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
             except Exception:
                 track_secs = None
         story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
-                                      total_seconds=track_secs or secs)
+                                      total_seconds=track_secs or secs,
+                                      track=track if track.exists() else None)
         # The caption is the film's music description from here on — Remix
         # shows and edits it, and the render appends the singer's voice.
         music_desc = song.get("caption") or music_desc

@@ -7,9 +7,13 @@ vocals come from the music engine singing the film's tagged lyrics
 (song.json), captioned to match the cast singer's library voice.
 """
 import json
+import math
 import sys
+import tempfile
 import unittest
 import unittest.mock
+import wave
+from array import array
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -683,6 +687,190 @@ class SongInstructionTests(unittest.TestCase):
             story.write_song(None, 45, topic="t", instruction="simpler words")
         self.assertNotIn("Additional instruction", calls[0])
         self.assertIn("simpler words", calls[1])
+
+
+def _write_song(path, plan, rate=22050):
+    """A stand-in song: *plan* is [(seconds, amplitude), …]. A bare
+    instrumental bed is quiet; a bed with a voice over it is loud."""
+    samples = array("h")
+    for secs, amp in plan:
+        for i in range(int(rate * secs)):
+            samples.append(int(amp * 32000 * math.sin(2 * math.pi * 220 * i / rate)))
+    with wave.open(str(path), "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(samples.tobytes())
+    return path
+
+
+class VocalDetectionTests(unittest.TestCase):
+    """Where the singing actually is — the measurement the prompt depends on."""
+
+    def test_finds_the_intro_and_the_instrumental_break(self):
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "song.wav", [
+                (4.0, 0.08),    # intro, bed alone
+                (10.0, 0.5),    # verse
+                (4.0, 0.08),    # instrumental break
+                (6.0, 0.5),     # chorus
+            ])
+            regions = song_timing.vocal_regions(track)
+        self.assertEqual(len(regions), 2, regions)
+        self.assertAlmostEqual(regions[0][0], 4.0, delta=0.5)
+        self.assertAlmostEqual(regions[0][1], 14.0, delta=0.5)
+        self.assertAlmostEqual(regions[1][0], 18.0, delta=0.5)
+
+    def test_a_track_that_never_drops_is_sung_end_to_end(self):
+        # No bare-instrumental stretch to find. Inventing a split here would
+        # silence a mouth that should be moving, so the whole track is sung.
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "song.wav", [(12.0, 0.5)])
+            regions = song_timing.vocal_regions(track)
+        self.assertEqual(len(regions), 1)
+        self.assertAlmostEqual(regions[0][0], 0.0, delta=0.3)
+        self.assertAlmostEqual(regions[0][1], 12.0, delta=0.3)
+
+    def test_unreadable_track_reports_nothing_rather_than_guessing(self):
+        from pipeline import song_timing
+        with tempfile.TemporaryDirectory() as tmp:
+            bad = Path(tmp) / "not-a-song.wav"
+            bad.write_text("nope")
+            self.assertEqual(song_timing.vocal_regions(bad), [])
+            self.assertEqual(song_timing.vocal_regions(Path(tmp) / "missing.wav"), [])
+
+    def test_lines_are_paced_through_the_singing_not_the_clock(self):
+        # Four lines over a track whose first 4s are instrumental: the first
+        # line starts when the voice does, not at zero.
+        from pipeline import song_timing
+        spans = song_timing.line_times([(4.0, 20.0)], 4)
+        self.assertEqual(spans[0], (4.0, 8.0))
+        self.assertEqual(spans[-1], (16.0, 20.0))
+
+    def test_line_pacing_steps_over_an_instrumental_break(self):
+        from pipeline import song_timing
+        spans = song_timing.line_times([(0.0, 10.0), (20.0, 30.0)], 4)
+        # Five seconds of singing each: the third line resumes after the gap.
+        self.assertEqual(spans[0], (0.0, 5.0))
+        self.assertEqual(spans[2], (20.0, 25.0))
+
+    def test_window_vocals_are_relative_to_the_clip(self):
+        from pipeline import song_timing
+        self.assertEqual(song_timing.window_vocals([(7.5, 30.0)], 0.0, 10.0),
+                         [[7.5, 10.0]])
+        self.assertEqual(song_timing.window_vocals([(7.5, 30.0)], 10.0, 20.0),
+                         [[0.0, 10.0]])
+        self.assertEqual(song_timing.window_vocals([(7.5, 30.0)], 40.0, 50.0), [])
+
+
+class SongSliceTimingTests(unittest.TestCase):
+    """assign_song_slices against a real track: the words a scene is told to
+    mouth must be the words its own pinned slice contains."""
+
+    LYRICS = "[Verse]\none\ntwo\n\n[Chorus]\nthree\nfour"
+
+    def _scenes(self):
+        return [Scene(id=i, title="t", image_prompt="i", video_prompt="v",
+                      narration="", mode="silent", duration=10.0,
+                      metadata_extra={"mode": "silent", "singing": True,
+                                      "cast": ["Ada"]})
+                for i in (1, 2)]
+
+    def test_an_intro_is_not_filled_with_lyrics(self):
+        scenes = self._scenes()
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "song.wav",
+                                [(4.0, 0.08), (16.0, 0.5)])
+            story.assign_song_slices(scenes, self.LYRICS, total_seconds=20.0,
+                                     track=track)
+        first, second = scenes[0].metadata, scenes[1].metadata
+        # The voice enters at 4s, so scene 1 opens on 4 seconds of nothing.
+        self.assertEqual(first["song_window"], [0.0, 10.0])
+        self.assertAlmostEqual(first["vocal_ranges"][0][0], 4.0, delta=0.5)
+        self.assertAlmostEqual(first["vocal_ranges"][0][1], 10.0, delta=0.5)
+        # Scene 2 is sung throughout.
+        self.assertAlmostEqual(second["vocal_ranges"][0][0], 0.0, delta=0.3)
+        # Four lines over 16s of singing = 4s each, so scene 1 holds the first
+        # two and never the last — the bug put "three"/"four" under it.
+        self.assertIn("one", first["sings"])
+        self.assertNotIn("four", first["sings"])
+        self.assertIn("four", second["sings"])
+
+    def test_without_a_track_the_old_proportional_split_stands(self):
+        # No measurement available — fall back rather than guess, and leave no
+        # vocal_ranges behind so the prompt keeps its old assumption.
+        scenes = self._scenes()
+        story.assign_song_slices(scenes, self.LYRICS, total_seconds=20.0)
+        self.assertEqual(scenes[0].metadata["sings"], "one\ntwo")
+        self.assertEqual(scenes[1].metadata["sings"], "three\nfour")
+        self.assertNotIn("vocal_ranges", scenes[0].metadata)
+
+    def test_windows_still_tile_the_whole_track(self):
+        # The concat length must stay equal to the track length; measuring the
+        # vocals must not move a window.
+        scenes = self._scenes()
+        with tempfile.TemporaryDirectory() as tmp:
+            track = _write_song(Path(tmp) / "song.wav",
+                                [(4.0, 0.08), (16.0, 0.5)])
+            story.assign_song_slices(scenes, self.LYRICS, total_seconds=20.0,
+                                     track=track)
+        self.assertEqual(scenes[0].metadata["song_window"], [0.0, 10.0])
+        self.assertEqual(scenes[1].metadata["song_window"], [10.0, 20.0])
+        self.assertEqual([s.duration for s in scenes], [10.0, 10.0])
+
+
+class SingingPromptTests(unittest.TestCase):
+    """What the model is actually told to do with its mouth, and whether a
+    shot with nobody in it gets handed a singer."""
+
+    def _prompt(self, meta, pictures=("Ada",)):
+        return perf.build_h3_prompt(
+            {"mode": "silent", "singing": True, "seconds": 10.0, **meta},
+            picture_names=list(pictures))
+
+    def test_a_shot_with_no_cast_gets_no_performer(self):
+        # The scene was authored with nobody in it; asking for a performer
+        # anyway made H3 invent a different stranger in every such scene.
+        prompt = self._prompt({"sings": "one\ntwo", "cast": []}, pictures=[])
+        self.assertIn("NO people in it", prompt)
+        self.assertIn("Do not add a person", prompt)
+        self.assertNotIn("[SONG]", prompt)
+        self.assertNotIn("performing a song", prompt)
+        # And no voice is asked for in the take's own audio.
+        self.assertIn("No speech and no voices at all", prompt)
+
+    def test_an_instrumental_window_keeps_the_mouth_shut(self):
+        prompt = self._prompt({"sings": "", "vocal_ranges": []})
+        self.assertIn("No voice sings anywhere in this shot", prompt)
+        self.assertIn("mouth closed and completely still", prompt)
+        self.assertNotIn("[SONG]", prompt)
+
+    def test_a_partly_sung_window_says_when_the_voice_comes_in(self):
+        prompt = self._prompt({"sings": "one", "vocal_ranges": [[7.75, 10.0]]})
+        self.assertIn("7.75s to 10s", prompt)
+        self.assertIn("Outside that, Ada is not singing", prompt)
+        self.assertIn("[SONG]", prompt)
+
+    def test_the_mouth_is_never_ordered_to_move_throughout(self):
+        # The absolute instruction overrode the pinned audio and had the lead
+        # mouthing a verse through an instrumental intro.
+        for meta in ({"sings": "one"},
+                     {"sings": "one", "vocal_ranges": [[0.0, 10.0]]},
+                     {"sings": "one", "vocal_ranges": [[2.0, 8.0]]}):
+            prompt = self._prompt(meta)
+            self.assertNotIn("The mouth is never closed and still", prompt)
+            self.assertIn("closes the instant the singing stops", prompt)
+
+    def test_an_unmeasured_scene_still_performs(self):
+        # Scripts written before the song was analysed carry no vocal_ranges;
+        # they must keep behaving exactly as they did.
+        prompt = self._prompt({"sings": "one\ntwo"})
+        self.assertIn("performing a song on camera", prompt)
+        self.assertIn("[SONG]", prompt)
+        self.assertIn("A clear live singing voice", prompt)
+        self.assertNotIn("Outside that", prompt)
 
 
 if __name__ == "__main__":

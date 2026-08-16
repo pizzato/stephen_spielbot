@@ -109,11 +109,17 @@ pipeline changes in three places:
   and for song films it must *not* say "instrumental".
 - **The cast performs it.** Every scene is staged as a **performed silent take** —
   the same H3 Ref2VA path as [silent scenes, performed](#silent-scenes-performed),
-  no style toggle needed — stamped `singing` in its metadata. The prompt asks for a
-  visible performance (mouth moving with the words, moving with the beat) instead of the
-  silent film's closed mouth, and the take ships **muted**: its own a-cappella audio would
-  double the real vocals. The speech gate stands down for these takes — singing is what
-  was asked for.
+  no style toggle needed — stamped `singing` in its metadata. Scenes with cast on screen
+  are prompted for a visible performance (mouth moving with the words, moving with the
+  beat) instead of the silent film's closed mouth, and the take ships **muted**: its own
+  a-cappella audio would double the real vocals. The speech gate stands down for these
+  takes — singing is what was asked for.
+- **A shot with nobody in it stays empty.** A song film's story usually includes scenes
+  written with no one in frame — an empty street, a sky, a diagram. Those are rendered as
+  **scenery**: the song still plays over them, but nothing is asked to mime it. Asking for
+  a performer in a shot with no cast and only a landscape reference made the model invent
+  one, differently in each such scene, and where the reference was a diagram rather than a
+  place it abandoned the art style to fit a singer in.
 - **The song is the soundtrack.** Music is forced on and mixed at **full volume** over the
   whole film (a song film with the 18 % bed gain would be a near-silent music video), and
   it is the *whole* mix: voice and ambient levels are pinned to **0 %**, at render and at
@@ -183,6 +189,18 @@ windows are timed against the **real** track and each take has its stretch of it
 in, so the song has to be finished *before* the story is divided — exactly what the Song
 tab enforces by hand. Left to the render, the music task runs alongside the video tasks:
 the takes are shot with nothing to sing to and the windows are timed against an estimate.
+
+**The lyrics are placed where the singing is.** Once the track exists, the divide step
+*measures* it: a sung vocal sits on top of the instrumental bed, so the level profile
+shows where the intro, any instrumental breaks and the outro fall. The lyric lines are
+then paced through the **singing** rather than through the running time, and each scene
+is told two things — the words its own slice actually contains, and when inside its clip
+a voice is heard. That second part is what keeps a mouth shut over an intro: a song
+opening with a 7.5-second instrumental used to have the lead mouthing a verse to silence
+while the whole film ran a scene ahead of its own song. A track with no bare-instrumental
+stretch is treated as sung end to end, and if the measurement cannot be made the older
+proportional split is used unchanged. The measurement is deliberately coarse — it cannot
+tell a loud instrumental solo from a sung line, since both are simply loud.
 
 ## What you need first
 
