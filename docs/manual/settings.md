@@ -190,6 +190,13 @@ end, never baked into a scene — off leaves a film with only its voices and roo
 minutes per film, caps at 6 minutes, and carries its own community licence. Download
 either under **Infrastructure → Music models**.
 
+**Lyric timing** — *Align lyrics to the sung track* (on by default) applies to
+[music videos](../performance_films.md#singing-films-the-music-video-format) only: at
+divide time the lyric sheet is whisper-aligned against the song's separated vocal stem,
+so every scene names and cuts on the words actually sung under it. It needs the
+re-voicing install (`scripts/install_svc.sh`); without it — or when the alignment can't
+be trusted — the energy measurement is used instead, so it is safe to leave on.
+
 **Cadence** replaces the old voice-speed multiplier: it is the narrator's speaking pace in
 **words per minute**. Each voice has a measured *natural* cadence (see the Voices tab);
 setting a target cadence speeds the voice up or slows it down (target ÷ natural becomes

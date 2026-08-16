@@ -134,6 +134,24 @@ def convert_song(source: Path, voice_ref: Path, output: Path,
     return output
 
 
+def separate_vocals(source: Path, output: Path) -> Path | None:
+    """Just the vocal stem of *source*, written to *output*.
+
+    The same demucs pass a re-voicing opens with, exposed on its own so vocal
+    TIMING can be measured on the stem — on a separated stem silence is real
+    silence, where the full mix cannot tell a loud instrument from a voice.
+    Runs on the controller like every separation here (it is the cheap part).
+    Returns None when demucs is not installed (scripts/install_svc.sh lays it
+    down beside seed-vc)."""
+    with tempfile.TemporaryDirectory() as td:
+        stems = _separate_stems(source, Path(td))
+        if stems is None:
+            return None
+        output.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(stems[0], output)
+    return output
+
+
 def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
                       diffusion_steps: int, timeout: int,
                       workers: Sequence[str]) -> None:

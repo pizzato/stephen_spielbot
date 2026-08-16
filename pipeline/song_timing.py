@@ -10,10 +10,17 @@ The measurement here is deliberately coarse. A sung vocal sits ON TOP of the
 instrumental bed, so the track carries two levels — bed alone, and bed plus
 voice — and splitting on the midpoint between them finds the intro, the
 instrumental breaks and the outro reliably, with nothing beyond the standard
-library. What it cannot do is tell a loud instrumental solo from a sung line,
-because both are simply loud. That distinction needs the lyric sheet
-force-aligned against a separated vocal stem (demucs + whisper), which is the
-planned upgrade on top of this rather than a correction of it.
+library. What the mix-level split cannot do is tell a loud instrumental solo
+from a sung line, because both are simply loud — a distorted-guitar intro
+read as sung end to end, and the lead mouthed a verse over it.
+
+That is why ``measure_regions`` separates the VOCAL STEM first (demucs — the
+same pass every re-voicing opens with) and measures THAT: on a stem, an
+intro, a solo and an outro are real silence, and the level split becomes
+near-exact. The mix-level split stays as the fallback when demucs is not
+installed. Force-aligning the lyric sheet against the stem (whisper) remains
+the upgrade beyond this — it would date each LINE by transcription instead
+of even pacing.
 """
 from __future__ import annotations
 
@@ -66,11 +73,17 @@ def _frame_levels(track: Path, frame_secs: float) -> tuple[list[float], float]:
 
 def vocal_regions(track: Path | str, *, frame_secs: float = 0.25,
                   min_gap: float = 1.5, min_region: float = 1.0,
-                  min_dynamic_db: float = 4.0) -> list[tuple[float, float]]:
+                  min_dynamic_db: float = 4.0,
+                  min_level_db: float | None = None) -> list[tuple[float, float]]:
     """The stretches of *track* where someone is singing, as [(start, end), …].
 
     An empty list means "could not tell" — callers fall back to their previous
-    behaviour rather than acting on a guess."""
+    behaviour rather than acting on a guess.
+
+    *min_level_db* is the separated-stem mode: on a vocal stem the scale IS
+    absolute (silence is silence), so frames quieter than this are never a
+    voice however the percentiles fall — they are separation bleed. On the
+    full mix no absolute floor makes sense; leave it None there."""
     try:
         levels, step = _frame_levels(Path(track), frame_secs)
     except Exception:  # noqa: BLE001 — a bad WAV must not fail the divide
@@ -81,12 +94,17 @@ def vocal_regions(track: Path | str, *, frame_secs: float = 0.25,
     ordered = sorted(levels)
     quiet = ordered[int(len(ordered) * 0.10)]
     loud = ordered[int(len(ordered) * 0.90)]
+    if min_level_db is not None and loud < min_level_db:
+        # A stem that never reaches voice level: nothing on it is singing.
+        return []
     if loud - quiet < min_dynamic_db:
         # One level throughout: the track never drops to a bare instrumental,
         # so it is sung end to end. Inventing a split here would silence a
         # mouth that should be moving.
         return [(0.0, round(len(levels) * step, 2))]
     threshold = quiet + (loud - quiet) / 2.0
+    if min_level_db is not None:
+        threshold = max(threshold, min_level_db)
 
     runs: list[list[float]] = []
     start: int | None = None
@@ -107,6 +125,52 @@ def vocal_regions(track: Path | str, *, frame_secs: float = 0.25,
         else:
             merged.append(run)
     return [(round(a, 2), round(b, 2)) for a, b in merged if b - a >= min_region]
+
+
+# Quieter than this on a separated vocal stem is bleed, not a voice.
+_STEM_FLOOR_DB = -45.0
+
+
+def vocal_stem(track: Path) -> Path | None:
+    """A separated vocal stem for *track*, cached beside it as
+    ``<name>_vocals.wav``.
+
+    demucs (from the seed-vc install every re-voicing already uses) when it is
+    present; None when it is not, or separation fails — callers measure the
+    mix instead. The cache is keyed on the track's mtime, so picking or
+    uploading another song version re-separates."""
+    stem = track.with_name(f"{track.stem}_vocals.wav")
+    try:
+        if stem.exists() and stem.stat().st_mtime >= track.stat().st_mtime:
+            return stem
+    except OSError:
+        return None
+    try:
+        from pipeline import svc
+        logger.info("Separating the vocal stem of %s for lyric timing…", track.name)
+        out = svc.separate_vocals(track, stem)
+        if out is None:
+            logger.info("demucs is not installed — vocal timing will be "
+                        "measured on the mix (scripts/install_svc.sh adds it)")
+        return out
+    except Exception:  # noqa: BLE001 — a failed separation must not fail the divide
+        logger.warning("Vocal stem separation failed for %s — measuring the mix",
+                       track, exc_info=True)
+        return None
+
+
+def measure_regions(track: Path | str) -> list[tuple[float, float]]:
+    """Where the singing is, measured as directly as the install allows.
+
+    With demucs present the level split runs on the separated VOCAL stem,
+    where silence is real silence — a distorted-guitar intro no longer reads
+    as a voice (on the mix it did, and the lead mouthed a verse over it).
+    Without demucs, the mix-level split stands unchanged."""
+    track = Path(track)
+    stem = vocal_stem(track)
+    if stem is not None:
+        return vocal_regions(stem, min_level_db=_STEM_FLOOR_DB)
+    return vocal_regions(track)
 
 
 def _absolute(regions: list[tuple[float, float]], offset: float, *,
@@ -144,6 +208,75 @@ def line_times(regions: list[tuple[float, float]],
     return [(_absolute(regions, i * per),
              _absolute(regions, (i + 1) * per, ends=True))
             for i in range(n_lines)]
+
+
+def cut_candidates(spans: list[tuple[float, float]]) -> list[float]:
+    """Where the track can be cut without splitting a sung line.
+
+    One candidate per seam between consecutive lines — their shared boundary
+    when they run back to back, the middle of the instrumental break when one
+    sits between them — plus the vocal onset and the end of the last line, so
+    a long intro or outro may stand as a scene of its own."""
+    if not spans:
+        return []
+    cands = [spans[0][0]]
+    for (_, prev_end), (start, _) in zip(spans, spans[1:]):
+        cands.append((prev_end + start) / 2 if start - prev_end > 0.1 else start)
+    cands.append(spans[-1][1])
+    return cands
+
+
+# How much farther from the even-grid target a MEASURED instrumental gap may
+# sit and still beat an estimated line seam. A cut in a gap is exact — the
+# audio there is silence — while a seam cut trusts the even-pacing estimate,
+# which was observed to graze a sung word by ~0.4s while a clean break sat
+# 1.65s away. Trading up to this much evenness for a guaranteed-clean cut.
+GAP_PREFER_SECS = 2.0
+
+
+def snap_cuts(n_scenes: int, total: float,
+              spans: list[tuple[float, float]],
+              regions: list[tuple[float, float]] | None = None, *,
+              min_secs: float, max_secs: float) -> list[float]:
+    """Cut points tiling [0, *total*] into *n_scenes* windows whose seams sit
+    between lyric lines instead of through them.
+
+    Each seam snaps to the nearest candidate that keeps every window near the
+    planner's even length — within ±40 % of it, held inside [*min_secs*,
+    *max_secs*] — while leaving room for the windows still to come. Candidates
+    are the estimated line seams (cut_candidates) plus, when *regions* is
+    given, the middle of every MEASURED gap between vocal regions; a gap is
+    preferred over a seam up to GAP_PREFER_SECS farther from the even grid,
+    because cutting silence is exact while the seams are estimates. A seam
+    with no candidate in reach falls back to the even grid, so the result is
+    never worse than the plain division; takes at the *min_secs* floor have
+    no slack at all and keep the grid exactly. Empty when there is nothing to
+    snap to or only one scene."""
+    if n_scenes < 2 or total <= 0 or not spans:
+        return []
+    per = total / n_scenes
+    lo = min(per, max(min_secs, 0.6 * per))
+    hi = max(per, min(max_secs, 1.4 * per))
+    cands = [(c, 0.0) for c in cut_candidates(spans)]
+    for (_, a_end), (b_start, _) in zip(regions or [], (regions or [])[1:]):
+        if b_start - a_end > 0.2:
+            cands.append(((a_end + b_start) / 2, GAP_PREFER_SECS))
+    cands.sort()
+    cuts = [0.0]
+    for i in range(1, n_scenes):
+        target = i * per
+        left = n_scenes - i  # windows still to place after this seam
+        earliest = max(cuts[-1] + lo, total - left * hi)
+        latest = min(cuts[-1] + hi, total - left * lo)
+        near = [(c, bonus) for c, bonus in cands
+                if earliest - 0.01 <= c <= latest + 0.01]
+        if near:
+            best = min(near, key=lambda cb: abs(cb[0] - target) - cb[1])[0]
+        else:
+            best = min(max(target, earliest), latest)
+        cuts.append(round(best, 2))
+    cuts.append(round(total, 2))
+    return cuts
 
 
 def window_vocals(regions: list[tuple[float, float]], t0: float,
