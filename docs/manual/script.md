@@ -23,7 +23,10 @@ folder, **Delete** removes it. A *Story draft* chip marks scripts that are still
 no scenes yet, a *Song draft* chip a music video whose song is written but whose story is
 not; the loaded one is marked too. Duplicating a [Music video](create.md#format) brings its
 song along — the track in use, its lyrics and every kept version — so the copy re-renders
-against the same song rather than singing a new one.
+against the same song rather than singing a new one. The copy also keeps the whole
+[Characters & Artifacts](#characters-artifacts) wall — the per-script cast with its look
+images, locations, wardrobe and uploaded references, scene scoping included — so it
+renders with the same anchors as the original.
 
 **New script** goes to [Create](create.md).
 
@@ -98,7 +101,12 @@ editable box per chapter, each labelled with how many scenes it will become.
   the current draft is replaced.
 
 If the script already has scenes, dividing again **forks** the edited story into a new
-script — the existing scenes stay untouched.
+script — the existing scenes stay untouched. The fork carries the film's anchors with it:
+a music video's song, the per-script cast (looks, portraits and voices — the re-divide
+only *adds* newly identified characters, it never overwrites what you approved), and the
+[Characters & Artifacts](#characters-artifacts) wall. Because the fork renumbers scenes,
+any visual that was scoped to specific scenes widens to *every* scene — re-scope it on
+the wall if it should stay narrow.
 
 The **AI editor verdict** card shows the critique the drafter ran on itself: *pass*,
 *revise* (issues were flagged and fixed before division), or *skipped*, plus the notes.
