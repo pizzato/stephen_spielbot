@@ -2828,6 +2828,42 @@ class SongDraftBody(BaseModel):
     queue_item_id: str = ""
 
 
+def _register_song_job(wd: Path, *, title: str, video_title: str, topic: str,
+                       minutes: float, n_scenes: int, voice: str, ss: dict,
+                       caption: str, queue_item_id: str) -> tuple[str, dict]:
+    """Register a song-FIRST job — one that exists BEFORE any story or scenes —
+    so the Script screen's Song tab (the song studio) can load it and carry the
+    flow from there. Returns ``(job_id, create_brief)``.
+
+    Shared by both ways in: the model writing the song (/api/song/draft) and the
+    user supplying one (/api/song/import). Whichever wrote it, what lands is the
+    same kind of job."""
+    create_brief = {
+        "video_title": video_title, "topic": topic, "minutes": minutes,
+        # The scene count asked for at Create (0 = Auto) — the Song tab's
+        # Scenes control opens on it rather than asking again.
+        "n_scenes": max(0, int(n_scenes or 0)), "visual_style": "",
+        "voice": voice, "resolution": ss.get("resolution") or "",
+        "style_name": ss["name"], "auto_approve": False,
+        "format": "song", "music": True,
+        "queue_item_id": (queue_item_id or "").strip(),
+    }
+    _write_create_brief(wd, create_brief)
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        store.create_or_update_job(
+            job_id, wd, title,
+            config={"title": title, "video_title": video_title,
+                    "topic": topic, "phase": "song_review", "style_name": ss["name"],
+                    "create_brief": create_brief},
+            metadata={"scene_count": 0, "music_desc": caption,
+                      "music_enabled": True})
+    finally:
+        store.close()
+    return job_id, create_brief
+
+
 @api.post("/api/song/draft")
 def song_draft(body: SongDraftBody) -> dict:
     """Song-FIRST step of the Music-video flow: write the film's song from the
@@ -2858,33 +2894,10 @@ def song_draft(body: SongDraftBody) -> dict:
                  "title": title, "style_name": ss["name"],
                  "created_at": time.time()})
     (wd / "song.json").write_text(json.dumps(song, indent=2))
-    # A song-first job exists BEFORE any story or scenes: register it so the
-    # Script screen's Song tab (the song studio — generate, re-voice, accept)
-    # can load it and carry the flow from there.
-    create_brief = {
-        "video_title": (body.video_title or "").strip(), "topic": topic,
-        "minutes": minutes,
-        # The scene count asked for at Create (0 = Auto) — the Song tab's
-        # Scenes control opens on it rather than asking again.
-        "n_scenes": max(0, int(body.n_scenes or 0)), "visual_style": "",
-        "voice": (body.voice or "").strip(), "resolution": ss.get("resolution") or "",
-        "style_name": ss["name"], "auto_approve": False,
-        "format": "song", "music": True,
-        "queue_item_id": (body.queue_item_id or "").strip(),
-    }
-    _write_create_brief(wd, create_brief)
-    job_id = job_id_from_work_dir(wd)
-    store = DurableStore.default()
-    try:
-        store.create_or_update_job(
-            job_id, wd, title,
-            config={"title": title, "video_title": (body.video_title or "").strip(),
-                    "topic": topic, "phase": "song_review", "style_name": ss["name"],
-                    "create_brief": create_brief},
-            metadata={"scene_count": 0, "music_desc": song["caption"],
-                      "music_enabled": True})
-    finally:
-        store.close()
+    job_id, create_brief = _register_song_job(
+        wd, title=title, video_title=(body.video_title or "").strip(), topic=topic,
+        minutes=minutes, n_scenes=body.n_scenes, voice=(body.voice or "").strip(),
+        ss=ss, caption=song["caption"], queue_item_id=body.queue_item_id)
     return {"work_dir": str(wd), "job_id": job_id, "title": title,
             "video_title": (body.video_title or "").strip(), "topic": topic,
             "style": "", "style_name": ss["name"], "music_desc": song["caption"],
@@ -2893,6 +2906,129 @@ def song_draft(body: SongDraftBody) -> dict:
             "create_brief": create_brief, "scenes": [],
             "caption": song["caption"], "lyrics": song["lyrics"],
             "song_voice": song["voice"], "seconds": secs}
+
+
+# Most an uploaded song may weigh. A five-minute stereo WAV is around 50 MB, so
+# this is roomy for a real song while still refusing, say, a video dropped in by
+# mistake.
+_MAX_SONG_UPLOAD_BYTES = 80 * 1024 * 1024
+
+
+def _import_song_file(wd: Path, data: str, filename: str) -> dict:
+    """Make an audio file the user supplied the film's song.
+
+    The file is re-encoded into ``background_music.wav`` — the one track the
+    whole music-video pipeline hangs off — and kept as a version like any
+    generation. Anything already there is captured first, so uploading over a
+    generated take doesn't lose it and either can be put back from the list.
+
+    The song's real duration replaces the asked-for length: an uploaded song
+    IS the film's length, and it is what the scenes are divided out of."""
+    from pipeline.assembler import _get_duration, transcode_to_wav
+
+    raw, ext = _decode_audio(data, filename)
+    if len(raw) > _MAX_SONG_UPLOAD_BYTES:
+        raise HTTPException(413, f"That file is over {_MAX_SONG_UPLOAD_BYTES // (1024 * 1024)} MB — "
+                                 "upload an mp3 or a shorter track.")
+    try:
+        song = json.loads((wd / "song.json").read_text())
+    except Exception:
+        song = {}
+    track = wd / "background_music.wav"
+    try:
+        music_history.seed_if_empty(wd, track, song.get("caption") or "")
+    except Exception:
+        gapp.logger.warning("Could not seed the song into history", exc_info=True)
+    upload = wd / f"uploaded_song{ext}"
+    upload.write_bytes(raw)
+    staged = wd / "background_music.staging.wav"
+    try:
+        transcode_to_wav(upload, staged)
+    except Exception as e:
+        raise HTTPException(400, f"That file could not be read as audio: {str(e).splitlines()[0][:200]}")
+    finally:
+        upload.unlink(missing_ok=True)
+    staged.replace(track)
+    dur = _get_duration(track)
+    name = Path(filename or "").name or "a file"
+    try:
+        music_history.record(wd, track, f"uploaded — {name}")
+    except Exception:
+        gapp.logger.warning("Could not record the uploaded song", exc_info=True)
+    # An uploaded track is nobody's re-voicing: a stale "sung as X" would label
+    # this file with a conversion it never had.
+    song.update({"duration": dur, "seconds": round(dur, 1), "sung_as": "",
+                 "uploaded_from": name, "updated_at": time.time()})
+    (wd / "song.json").write_text(json.dumps(song, indent=2))
+    return {"ok": True, "duration": dur,
+            "song_url": f"/api/file?path={track}&t={int(time.time())}",
+            **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
+
+
+class SongUploadBody(BaseModel):
+    work_dir: str
+    filename: str = ""
+    data: str          # base64 (optionally a data URL)
+
+
+@api.post("/api/song/upload")
+def song_upload(body: SongUploadBody) -> dict:
+    """Replace this film's song with an audio file from the user's machine."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    if not (wd / "song.json").exists():
+        raise HTTPException(404, "This film has no song.")
+    return _import_song_file(wd, body.data, body.filename)
+
+
+class SongImportBody(BaseModel):
+    video_title: str = ""
+    topic: str = ""
+    style_name: str = ""
+    n_scenes: int = 0
+    voice: str = ""
+    lyrics: str = ""     # what the file sings, if the user has the words
+    caption: str = ""
+    filename: str = ""
+    data: str
+    queue_item_id: str = ""
+
+
+@api.post("/api/song/import")
+def song_import(body: SongImportBody) -> dict:
+    """The other way into the Music-video flow: the song already exists as a
+    file, so nothing is written or generated — the upload becomes the film's
+    track, and the story is drafted from it (and from whatever lyrics the user
+    pastes in the Song tab) exactly as a generated song would be."""
+    title = (body.video_title or "").strip() or (body.topic or "").strip() \
+        or Path(body.filename or "").stem.strip()
+    if not title:
+        raise HTTPException(400, "Enter a video title for the film.")
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, body.style_name)
+    wd = gapp._script_work_dir(title)
+    topic = (body.topic or "").strip() or title
+    (wd / "song.json").write_text(json.dumps(
+        {"caption": (body.caption or "").strip(), "lyrics": (body.lyrics or "").strip(),
+         "voice": (body.voice or "").strip(), "title": title,
+         "style_name": ss["name"], "created_at": time.time()}, indent=2))
+    result = _import_song_file(wd, body.data, body.filename)
+    song = json.loads((wd / "song.json").read_text())
+    job_id, create_brief = _register_song_job(
+        wd, title=title, video_title=(body.video_title or "").strip(), topic=topic,
+        minutes=round(float(result["duration"]) / 60.0, 3), n_scenes=body.n_scenes,
+        voice=(body.voice or "").strip(), ss=ss, caption=song.get("caption") or "",
+        queue_item_id=body.queue_item_id)
+    return {"work_dir": str(wd), "job_id": job_id, "title": title,
+            "video_title": (body.video_title or "").strip(), "topic": topic,
+            "style": "", "style_name": ss["name"],
+            "music_desc": song.get("caption") or "",
+            "voice": (body.voice or "").strip() or ss.get("voice", ""),
+            "resolution": ss.get("resolution") or "", "n_scenes": 0,
+            "create_brief": create_brief, "scenes": [],
+            "caption": song.get("caption") or "", "lyrics": song.get("lyrics") or "",
+            "song_voice": song.get("voice") or "", "seconds": result["duration"]}
 
 
 class SongGenerateBody(BaseModel):
@@ -3239,6 +3375,30 @@ def select_song_version(job_id: str, body: dict) -> dict:
     return {"ok": True, "sung_as": sung_as,
             "song_url": f"/api/file?path={track}&t={int(time.time())}",
             **{k: music_history.history(wd).get(k) for k in ("versions", "selected")}}
+
+
+@api.post("/api/jobs/{job_id}/song/version/delete")
+def delete_song_version(job_id: str, body: dict) -> dict:
+    """Throw a take away. Landing a song takes many generations and the list
+    only grows — this is how the ones nobody wants leave it.
+
+    Deleting the version in use puts the newest remaining one back as the film's
+    track (the song file always has to be one of the listed versions)."""
+    wd = _job_wd_or_404(job_id)
+    try:
+        vid = int(body.get("version_id"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "version_id required")
+    try:
+        hist = music_history.delete(wd, vid)
+    except Exception as e:
+        raise HTTPException(400, str(e)[:200])
+    sung_as = _stamp_song_voice(wd, hist["selected"]) if hist.get("selected") else ""
+    track = wd / "background_music.wav"
+    return {"ok": True, "sung_as": sung_as,
+            "song_url": (f"/api/file?path={track}&t={int(time.time())}"
+                         if track.exists() else ""),
+            **{k: hist.get(k) for k in ("versions", "selected")}}
 
 
 class SongUpdateBody(BaseModel):
@@ -4066,6 +4226,7 @@ class VisualCreate(BaseModel):
     kind: str = "location"
     description: str = ""
     character: str = ""
+    usage: str = ""
 
 
 class VisualUpdate(BaseModel):
@@ -4073,6 +4234,7 @@ class VisualUpdate(BaseModel):
     kind: str | None = None
     description: str | None = None
     character: str | None = None
+    usage: str | None = None
     scenes: list[int] | None = None
     enabled: bool | None = None
 
@@ -4159,7 +4321,8 @@ def list_script_visuals(job_id: str) -> dict:
 @api.post("/api/jobs/{job_id}/visuals")
 def create_script_visual(job_id: str, body: VisualCreate) -> dict:
     wd = _job_wd_or_404(job_id)
-    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character)
+    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character,
+                           body.usage)
     return _visuals_ok(wd)
 
 
@@ -4326,9 +4489,12 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "beats": performance_mode.norm_beats(
                 meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
             "lines": lines,
-            # The exact text the model receives, rebuilt from the resolved slots.
+            # The exact text the model receives, rebuilt from the resolved
+            # slots — including the pinned soundtrack artifact's usage note.
             "prompt": performance_mode.build_h3_prompt(
-                {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
+                {**meta, "lines": lines,
+                 "track_usage": (refs.get("track") or {}).get("usage", "")},
+                style_note=(row.get("style") or ss.get("visual_style") or ""),
                 picture_names=refs["pictures"],
                 audio_names=[a["name"] for a in refs["audios"]]),
             "pictures": [{**p, "image_url": (f"/api/file?path={p['path']}"

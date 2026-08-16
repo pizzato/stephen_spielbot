@@ -91,6 +91,16 @@ function VisualCard({ v, jobId, sceneIds, castNames, onChanged, onError }) {
           onBlur={(e) => e.target.value !== v.description && patch({ description: e.target.value })} />
       </Field>
 
+      {(v.kind === 'image' || v.kind === 'video' || v.kind === 'audio') && (
+        <Field label="How it's used"
+          hint={v.kind === 'audio'
+            ? 'Optional — what the performers do with this track, e.g. "the characters dance to this music". Goes into the take’s prompt.'
+            : 'Optional — what the model should DO with it, e.g. "the characters copy this dance’s movements". Replaces the default "match it exactly".'}>
+          <textarea className="textarea" rows={2} defaultValue={v.usage} disabled={!!busy}
+            onBlur={(e) => e.target.value !== v.usage && patch({ usage: e.target.value })} />
+        </Field>
+      )}
+
       {v.kind === 'wardrobe' && (
         <Field label="Worn by">
           <select className="select" value={v.character || ''} disabled={!!busy}

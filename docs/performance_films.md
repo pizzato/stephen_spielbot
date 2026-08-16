@@ -164,7 +164,20 @@ the re-voicing and re-mixes the final with whichever version you pick. A re-voic
 always converts the sung original rather than the last conversion, so a second voice is a
 clone of the engine's vocals and not of the first clone. After the render only the
 soundtrack changes — the takes were shot against the original song, and the slice each
-one carries is that original too.
+one carries is that original too. Nothing is
+pruned, but a version you aren't using can be **deleted** from the Song tab — the list is
+otherwise every take it took to land the song. The one in use can't be (put another back
+first), and neither can the last one left: it *is* the film's song.
+
+**The song needn't be generated at all.** Create's [I have the song](manual/create.md#the-song)
+starts a music video from an audio file instead — your own recording, or a track this app
+sang for another film — and the Song tab's **Use a song from a file** swaps one into an
+existing film. The upload is re-encoded to `background_music.wav` and kept as a music
+version like any generation, so the take it replaced can be put back, and it can be
+re-voiced from there just the same. Everything downstream is unchanged: the uploaded
+track's real length is what the scenes are divided out of, and each take gets its stretch
+of it pinned in. The lyrics are the one thing nothing can supply — type them into the Song
+tab, because the story is drafted from them and the scenes perform them.
 
 At generation time, the fallback description: the render describes the **lead performer's cast library voice**
 (gender, age, tone, accent — e.g. *"mature female vocalist, warm smoky voice, Irish
@@ -304,13 +317,20 @@ portraits — live with the characters, under **Characters & Artifacts**, on bot
 screen and the film's edit screen. One bar adds them all: **character, location, wardrobe,
 image** (any other thing the model should match — a prop, a vehicle, a logo; the
 description tells the model what it is), **video** (a clip whose extracted frame feeds
-the slot), and **soundtrack** (an audio file — see below).
+the slot), and **soundtrack** (an audio file — see below). The free-form kinds — image,
+video and soundtrack — take an optional **How it's used** note that rides into the take's
+prompt in the user's own words (*"the characters copy this dance's movements"*): for an
+image or video it replaces the default *match it exactly* authority line, so a reference
+can direct the performance instead of just appearing in it.
 
 **Soundtrack artifacts.** An **audio** artifact is not a reference picture: the whole
 track is **pinned into the H3 generation** of every acted take it applies to
 (audio-driven generation, the same mechanism that powers
 [singing films](#singing-films-the-music-video-format)), so the performance follows the
-sound and the take keeps it as its audio. Scope it with the same *Used in* scene list as
+sound and the take keeps it as its audio. Its *How it's used* note becomes a
+`[SOUNDTRACK]` prompt section telling the performance what to do with the music it hears
+(*"the characters dance to this track"*), and the prompt's music refusals stand down to
+"no music beyond the clip's own soundtrack". Scope it with the same *Used in* scene list as
 any other artifact. The speech gate stands down for those takes — the audio was provided,
 not scripted — and a song film's own per-scene segments outrank artifacts. Every card takes an upload, a **pasted** image, or a **URL** — a direct file
 link or a page, whose `og:image` / `og:video` is fetched. Everything the film renders from appears there at the same level:

@@ -59,6 +59,17 @@ the format does to the render.
   version — the one marked *In use* is the film's track, and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
+- **Deleting a version** — landing a song takes takes, and the list only grows. The **×**
+  beside a version you aren't using deletes it (click it again to confirm); the file goes
+  with it. The version *in use* has no × — put another one back first — and the last
+  remaining version can't be deleted, because it *is* the film's song.
+- **Use a song from a file** uploads a song you already have — your own recording, or a
+  track this app generated for another film and you kept — and makes it the film's
+  soundtrack, as it is. Whatever was playing stays in the version list, so an upload can
+  be undone by putting the earlier take back. The lyrics box is *not* filled in from the
+  file: write the words in yourself, since the story is drafted from them and each scene
+  performs its own stretch of them. A film can also *start* from a file — see
+  [The song](create.md#the-song) in Create.
 - **Ending** fixes a song that stops dead, by however many seconds you type:
     - **Extend the ending** keeps the take you have — its last couple of seconds are faded
       out and that many seconds of silence padded after them. It runs on the controller,
@@ -109,10 +120,18 @@ extracted frame feeds the slot), and **soundtrack** (an uploaded audio file). Ea
 card takes a generated image, an upload, a **pasted** image, or a **URL** — a direct file
 link or a page whose `og:image` / `og:video` points at one.
 
+The free-form kinds — image, video and soundtrack — also carry an optional **How it's
+used** note that goes into the take's prompt in your own words: *"the characters copy
+this dance's movements"*, *"the characters dance to this music"*. For an image or video
+reference it replaces the default *match it exactly* instruction; without one, the model
+is simply told to match the reference where it appears.
+
 A **soundtrack** artifact is not a picture slot: the track is pinned into the generation
 of every acted take it applies to, so the performance follows the sound and the take keeps
 it as its audio — the mechanism behind
-[singing films](../performance_films.md#singing-films-the-music-video-format). Scope it
+[singing films](../performance_films.md#singing-films-the-music-video-format). Its *How
+it's used* note becomes a `[SOUNDTRACK]` section of those takes' prompts, telling the
+performance what to do with the music it hears. Scope it
 with the same *Used in* scene list as any other artifact; a music video's own song is
 listed here too, since it is an input of every singing take.
 
