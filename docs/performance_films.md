@@ -210,16 +210,50 @@ tab enforces by hand. Left to the render, the music task runs alongside the vide
 the takes are shot with nothing to sing to and the windows are timed against an estimate.
 
 **The lyrics are placed where the singing is.** Once the track exists, the divide step
-*measures* it: a sung vocal sits on top of the instrumental bed, so the level profile
-shows where the intro, any instrumental breaks and the outro fall. The lyric lines are
+*measures* it — on the separated **vocal stem** when demucs is installed (it comes with
+the re-voicing install, `scripts/install_svc.sh`, and the
+first divide against a track separates and caches the stem): on a stem, an intro, a solo
+and an outro are real silence, so the measurement stays exact however loud the
+arrangement is — a distorted-guitar intro used to read as singing on the mix-level
+measurement, and the lead mouthed a verse over it. The lyric lines are
 then paced through the **singing** rather than through the running time, and each scene
 is told two things — the words its own slice actually contains, and when inside its clip
 a voice is heard. That second part is what keeps a mouth shut over an intro: a song
 opening with a 7.5-second instrumental used to have the lead mouthing a verse to silence
 while the whole film ran a scene ahead of its own song. A track with no bare-instrumental
 stretch is treated as sung end to end, and if the measurement cannot be made the older
-proportional split is used unchanged. The measurement is deliberately coarse — it cannot
+proportional split is used unchanged. Without demucs, the coarser mix-level split stands:
+it finds intros and breaks on tracks whose bed is quieter than the voice, but cannot
 tell a loud instrumental solo from a sung line, since both are simply loud.
+
+**Each line's time can be measured, not estimated** — the *Align lyrics to the sung
+track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
+default). Level measurement knows *where* singing is but never *which* line is being
+sung, so line times are otherwise estimated by pacing the lines evenly through the
+singing — close, but a line can smear across a phrase gap into the neighbouring scene.
+With the option on, the divide transcribes the vocal stem with word timestamps
+(faster-whisper, installed by the same `scripts/install_svc.sh` beside demucs) and
+matches the transcript against the lyric sheet it already knows — alignment, not
+transcription, so the fixed line order disambiguates a chorus sung four times, a garbled
+word interpolates from its neighbours, and words "heard" outside the measured singing
+are discarded as hallucinations. Scenes then name and cut on the words actually sung
+under them. When fewer than half the lyric words match — or whisper is not installed —
+the paced estimate is used instead, so the option never makes timing worse. The model
+(whisper *small*, multilingual) downloads on the first alignment; the divide's "Timing
+the song's lyrics" step covers it in Activity.
+
+**The scenes cut between sentences.** The same lyric timeline decides *where* one take
+ends and the next begins. Rather than dividing the track into mathematically equal
+windows — which lands cuts mid-line as often as not — each seam snaps to the nearest gap
+between lyric lines, so every take carries whole sung lines. The middle of a measured
+instrumental break is preferred even over a somewhat nearer line gap: cutting silence is
+exact, while the line gaps are estimates. The takes bend around the planned
+length to do it, within bounds: no take shrinks below the 5-second acted minimum or
+grows past the 12-second single-clip cap, and a seam with no line boundary in reach
+falls back to the even grid — takes planned right at the 5-second floor have no slack
+and keep the grid exactly. Because the line times are estimated (evenly paced through
+the measured singing) rather than transcribed, a cut can still graze a word when the
+delivery is very uneven; cuts that land in instrumental breaks are exact.
 
 ## What you need first
 

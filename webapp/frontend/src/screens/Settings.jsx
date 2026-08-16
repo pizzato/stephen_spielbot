@@ -2520,6 +2520,13 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   })()}
                 </Field>
               )}
+              <Field label="Lyric timing"
+                hint="Music videos only. Whisper-aligns the lyric sheet to the song's separated vocal stem at divide time, so every scene names and cuts on the words actually sung under it. Needs the re-voicing install (scripts/install_svc.sh); without it — or when the alignment can't be trusted — the energy measurement is used instead, so this is safe to leave on.">
+                <Check checked={eff.song_align_lyrics !== false}
+                  onChange={(v) => setStyleField('song_align_lyrics', v)}
+                  label="Align lyrics to the sung track" />
+                <ParentVal k="song_align_lyrics" />
+              </Field>
               {[['voice_vol', 'Voice volume', 150], ['music_vol', 'Music volume', 100], ['ambient_vol', 'Ambient volume', 100]].map(([k, label, max]) => (
                 <Field key={k} label={`${label} — ${eff[k] ?? 0}%`}>
                   <input className="slider" type="range" min={0} max={max} value={eff[k] ?? 0} onChange={(e) => setStyleField(k, +e.target.value)} />

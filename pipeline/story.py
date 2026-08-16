@@ -731,7 +731,9 @@ def lyric_lines(lyrics: str) -> list[str]:
 
 def assign_song_slices(scenes: list[Scene], lyrics: str,
                        total_seconds: float | None = None,
-                       track: Path | str | None = None) -> list[Scene]:
+                       track: Path | str | None = None,
+                       align_lyrics: bool = False,
+                       language: str = "") -> list[Scene]:
     """Give each singing scene its WINDOW of the song and the words sung in it.
 
     The song plays once across the whole film, so each singing scene covers the
@@ -749,9 +751,15 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     clip's own start. Without that, an instrumental intro drags every line out
     of position: a 7.5 s intro had scene 1 mouthing a verse to silence while
     the whole film ran a scene ahead of its own song. Detection failing falls
-    back to the old proportional split rather than guessing."""
+    back to the old proportional split rather than guessing.
+
+    *align_lyrics* (the song_align_lyrics option) upgrades the line times from
+    even pacing to MEASUREMENT: the lyric sheet is whisper-aligned against the
+    track's vocal stem (pipeline.lyric_align, *language* hints the model), and
+    any alignment failure keeps the paced estimate."""
     from pipeline import song_timing as _song_timing
-    from pipeline.performance import MIN_SCENE_SECONDS, SCENE_SECONDS
+    from pipeline.performance import (MAX_SCENE_SECONDS, MIN_SCENE_SECONDS,
+                                      SCENE_SECONDS)
     singing = [s for s in scenes
                if (getattr(s, "metadata_extra", None) or {}).get("singing")]
     if not singing or not (lyrics or "").strip():
@@ -762,8 +770,19 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         except (TypeError, ValueError):
             return SCENE_SECONDS
     lines = lyric_lines(lyrics)
-    regions = _song_timing.vocal_regions(track) if track else []
-    spans = _song_timing.line_times(regions, len(lines)) if regions else []
+    regions = _song_timing.measure_regions(track) if track else []
+    spans: list[tuple[float, float]] = []
+    if regions and align_lyrics:
+        # The option (song_align_lyrics): whisper-align the KNOWN lyric sheet
+        # against the cached vocal stem so each line's time is measured, not
+        # paced. Any failure keeps the estimate below — never worse than off.
+        from pipeline import lyric_align
+        stem = _song_timing.vocal_stem(Path(track))
+        if stem is not None:
+            spans = lyric_align.align_lines(stem, lines, language=language,
+                                            regions=regions) or []
+    if not spans:
+        spans = _song_timing.line_times(regions, len(lines)) if regions else []
 
     def stamp(extra: dict, t0: float, t1: float, lo: int, hi: int) -> None:
         """What is sung in [t0, t1) — measured off the track when we can,
@@ -778,20 +797,28 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     all_singing = len(singing) == len(scenes)
     if all_singing and total_seconds:
         # The whole film sings (the Music-video contract): the track divides
-        # EVENLY — n clips of track/n seconds, windows meeting exactly — so
-        # the concatenated takes run precisely the track's length and the
-        # overlaid song never drifts against the pictures. The takes' minimum
-        # length is respected by the clip-count planner upstream.
+        # into n windows meeting exactly — so the concatenated takes run
+        # precisely the track's length and the overlaid song never drifts
+        # against the pictures. With the lyrics on the vocal timeline the
+        # seams SNAP to the gaps between lines (song_timing.snap_cuts), so no
+        # take starts or ends mid-sentence; unmeasured, the split stays even.
+        # The takes' minimum length is respected by the clip-count planner
+        # upstream and by the snap bounds alike.
         total = float(total_seconds)
         per = total / len(scenes)
+        cuts = (_song_timing.snap_cuts(len(scenes), total, spans, regions,
+                                       min_secs=MIN_SCENE_SECONDS,
+                                       max_secs=MAX_SCENE_SECONDS)
+                or [round(i * per, 2) for i in range(len(scenes) + 1)])
         for i, s in enumerate(scenes):
+            t0, t1 = cuts[i], cuts[i + 1]
             extra = dict(getattr(s, "metadata_extra", None) or {})
-            extra["song_window"] = [round(i * per, 2), round((i + 1) * per, 2)]
-            stamp(extra, i * per, (i + 1) * per,
+            extra["song_window"] = [t0, t1]
+            stamp(extra, t0, t1,
                   int(round(len(lines) * i / len(scenes))),
                   int(round(len(lines) * (i + 1) / len(scenes))))
             s.metadata_extra = extra
-            s.duration = round(per, 2)
+            s.duration = round(t1 - t0, 2)
         return scenes
     # Mixed film: the song plays across singing and non-singing scenes alike,
     # so windows follow each scene's authored screen time, scaled onto the

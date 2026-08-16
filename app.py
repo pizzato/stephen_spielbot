@@ -197,6 +197,13 @@ DEFAULT_CFG = {
     # Music engine per style (see pipeline/engines.py MUSIC_ENGINES): which model
     # writes the background bed. Default = ACE-Step 1.5.
     "default_music_engine": "ace-step",
+    # Music videos: force-align the lyric sheet against the song's separated
+    # vocal stem (faster-whisper in the seed-vc venv) so every lyric line gets
+    # a MEASURED time instead of an even-paced estimate — scenes then name and
+    # cut on the words actually under them. Needs scripts/install_svc.sh;
+    # without the install (or when alignment can't be trusted) the energy
+    # measurement stands, so the toggle is safe to leave on.
+    "default_song_align_lyrics": True,
     # Sampling steps for single-pass video engines (MiniMax H3 / H3 Turbo);
     # 0 = the engine's own default. LTX ignores it (two-pass knobs instead).
     "default_video_steps":  0,
@@ -498,6 +505,8 @@ STYLE_FIELD_TO_FLAT = {
     "music_enabled":        "music_enabled",
     # Music engine selection (background bed) — see pipeline/engines.py MUSIC_ENGINES
     "music_engine":         "default_music_engine",
+    # Music videos: whisper-align lyric lines to the sung track at divide time
+    "song_align_lyrics":    "default_song_align_lyrics",
     "music_vol":            "music_vol",
     "voice_vol":            "voice_vol",
     "ambient_vol":          "ambient_vol",
@@ -935,6 +944,11 @@ def _norm_h3_silent_scenes(value) -> bool:
     return _norm_h3_chain_scenes(value)
 
 
+def _norm_song_align_lyrics(value) -> bool:
+    """Coerce the lyric-alignment toggle to a plain bool (YAML/JSON/form)."""
+    return _norm_h3_chain_scenes(value)
+
+
 def _norm_first_frame_cover(value) -> str:
     """Coerce a first-frame cover mode to "none" | "image" | "text"."""
     from pipeline.cover import norm_first_frame_cover
@@ -1096,6 +1110,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "music_engine", _norm_music_engine)
+        _coerce(row, "song_align_lyrics", _norm_song_align_lyrics)
         _coerce(row, "tts_engine", _norm_tts_engine)
         _coerce(row, "tts_language", _norm_tts_language)
         _coerce(row, "tts_sentence_pause", _norm_tts_sentence_pause)

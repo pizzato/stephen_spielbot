@@ -68,9 +68,16 @@ a convenience summary, **not** legal advice — always check the linked model ca
   self-hosted use; consider the GPL terms before redistributing an installation
   that includes it.
 - **demucs** (vocal-stem separation, so a re-voicing converts the voice and not
-  the arrangement) — MIT, its `htdemucs` weights released under the same
+  the arrangement, and so a music video's vocal timing is measured on the stem)
+  — MIT, its `htdemucs` weights released under the same
   license. Installed into the same seed-vc virtualenv and run as a separate
   process; when it is missing, the conversion falls back to the whole mix.
+- **faster-whisper** (word-timestamp transcription of the vocal stem, used to
+  align a music video's lyric sheet to the sung track — `song_align_lyrics`) —
+  MIT, built on CTranslate2 (MIT); the `Systran/faster-whisper-small` weights
+  (MIT, converted from OpenAI Whisper) download from Hugging Face on the first
+  alignment. Installed into the same seed-vc virtualenv and run as a separate
+  process; when it is missing, the energy-based timing measurement is used.
 
 ## Code installed into the worker containers
 

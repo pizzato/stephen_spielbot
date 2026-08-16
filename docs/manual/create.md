@@ -88,6 +88,9 @@ take their format from [Settings → Automation](settings.md#what-automation-mak
 A dialogue, silent or music-video film is measured in clips rather than words: every scene
 is one take of about ten seconds, so the length you ask for becomes a scene count at that
 rate — unless you set **Scenes** yourself, which stretches or shortens the takes instead.
+For a music video the takes then bend a little around that length so each one starts and
+ends **between sung lines** rather than mid-sentence — see
+[where the scenes cut](../performance_films.md#singing-films-the-music-video-format).
 
 **The direction box outranks the format's balance.** Whatever you pick, an instruction about
 staging — "mostly silent, one exchange near the end", "no narrator" — is followed rather
