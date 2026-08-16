@@ -344,6 +344,62 @@ class StoryEndpointTests(TempConfigCase):
         self.assertEqual(fork_story["status"], "divided")
         self.assertNotEqual(second["job_id"], first["job_id"])
 
+    def test_fork_carries_cast_and_visual_references(self):
+        # A music-video fork was seen losing its location + wardrobe refs and
+        # per-script cast (kinho-song-20260816): the fork copied only the song
+        # artifacts. The anchors must travel — and the re-divide's own character
+        # identification must MERGE with the copied cast, not clobber it.
+        draft = self._draft(4)
+        wd = Path(draft["work_dir"])
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", [])):
+            backend._do_story_divide(backend.DivideStoryBody(work_dir=str(wd)))
+        # The finished film gained a cast look, a film-wide location and a
+        # scene-scoped wardrobe before being re-divided.
+        (wd / "characters.json").write_text(json.dumps([
+            {"id": "char_aa", "name": "Kinho", "description": "a man",
+             "ref_image": "char_aa.png", "voice": "Alto"}]))
+        (wd / "characters").mkdir()
+        (wd / "characters" / "char_aa.png").write_bytes(b"look")
+        (wd / "visuals.json").write_text(json.dumps([
+            {"id": "vis_loc", "name": "Studio", "kind": "location",
+             "ref_image": "vis_loc.png", "scenes": []},
+            {"id": "vis_war", "name": "White shirt", "kind": "wardrobe",
+             "character": "Kinho", "ref_image": "vis_war.png", "scenes": [2, 3]}]))
+        (wd / "visuals").mkdir()
+        (wd / "visuals" / "vis_loc.png").write_bytes(b"studio")
+        (wd / "visuals" / "vis_war.png").write_bytes(b"shirt")
+        # The re-divide re-identifies Kinho (a fresh look-less entry) and finds
+        # a genuinely new face.
+        identified = [{"name": "Kinho", "description": "a different look"},
+                      {"name": "Novo", "description": "a newcomer"}]
+        with mock.patch.object(backend.story_mode, "divide_story",
+                               return_value=(_fake_scenes(4), "m", "st", identified)), \
+             mock.patch.object(backend, "_portraits_in_background"):
+            second = backend._do_story_divide(backend.DivideStoryBody(
+                work_dir=str(wd),
+                chapters=[backend.StoryChapterEdit(chapter=1, text="FORKED prose.")]))
+        fork = Path(second["work_dir"])
+        # The copied cast keeps its approved look, portrait and voice; only the
+        # genuinely new face is added.
+        chars = {c["name"]: c for c in json.loads((fork / "characters.json").read_text())}
+        self.assertEqual(set(chars), {"Kinho", "Novo"})
+        self.assertEqual(chars["Kinho"]["description"], "a man")
+        self.assertEqual(chars["Kinho"]["ref_image"], "char_aa.png")
+        self.assertEqual(chars["Kinho"]["voice"], "Alto")
+        self.assertEqual((fork / "characters" / "char_aa.png").read_bytes(), b"look")
+        # The visuals wall travels with its files; the wardrobe's scene scoping
+        # is widened to every scene — the fork renumbers scenes, so the old ids
+        # no longer name the same beats.
+        vis = {v["id"]: v for v in json.loads((fork / "visuals.json").read_text())}
+        self.assertEqual(set(vis), {"vis_loc", "vis_war"})
+        self.assertEqual(vis["vis_war"]["scenes"], [])
+        self.assertEqual((fork / "visuals" / "vis_loc.png").read_bytes(), b"studio")
+        self.assertEqual((fork / "visuals" / "vis_war.png").read_bytes(), b"shirt")
+        # The source keeps its own scoping untouched.
+        src_vis = {v["id"]: v for v in json.loads((wd / "visuals.json").read_text())}
+        self.assertEqual(src_vis["vis_war"]["scenes"], [2, 3])
+
     def test_duplicate_carries_story_draft_across(self):
         draft = self._draft(4)
         wd = Path(draft["work_dir"])

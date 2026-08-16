@@ -2210,16 +2210,32 @@ def _persist_generated_script(body: GenerateScriptBody, cfg: dict, ss: dict,
     # Render look images in the background for the new ones; best-effort when
     # no worker is up (editor offers a manual "Generate look").
     new_characters = gapp._filter_identified_against_style(characters, cfg, ss["name"])
+    # A story-divide fork copied the source's cast (its edited looks and
+    # painted portraits) into this dir before the divide — keep those and add
+    # only genuinely new names, so re-dividing never clobbers approved looks.
+    existing_characters = gapp._read_script_characters(work_dir)
+    if existing_characters:
+        new_characters = [
+            c for c in new_characters
+            if not any(gapp._characters_refer_to_same(c, e)
+                       for e in existing_characters)]
     # Cast voices: each new character gets a fitting library voice (gender/age
     # matched, the style narrator's voice excluded) so dialogue doesn't come out
-    # with the narrator speaking every part.
-    new_characters = gapp._auto_assign_character_voices(
-        new_characters, cfg, exclude=(ss.get("voice") or "").strip())
-    saved_characters = gapp._write_script_characters(work_dir, new_characters)
-    if saved_characters:
+    # with the narrator speaking every part. Assigned over the WHOLE cast so
+    # the spread avoids voices a fork's copied characters already speak with
+    # (already-voiced entries are untouched).
+    saved_characters = gapp._write_script_characters(
+        work_dir, gapp._auto_assign_character_voices(
+            existing_characters + new_characters, cfg,
+            exclude=(ss.get("voice") or "").strip()))
+    # Paint looks only for the cast that still lacks one (a fork's copied
+    # portraits are kept as-is; generate_all skips them anyway).
+    to_paint = [c for c in saved_characters
+                if c.get("description") and not c.get("ref_image")]
+    if to_paint:
         threading.Thread(
             target=_portraits_in_background,
-            args=(str(work_dir), ss["name"], len(saved_characters)),
+            args=(str(work_dir), ss["name"], len(to_paint)),
             daemon=True,
         ).start()
 
@@ -2574,6 +2590,41 @@ def _copy_song_artifacts(src: Path, dst: Path) -> None:
                         dirs_exist_ok=True)
 
 
+def _copy_script_reference_files(src: Path, dst: Path, *,
+                                 keep_scene_scope: bool) -> None:
+    """Carry a script's reference anchors into a copy: the per-script cast
+    (characters.json + its look images) and the visuals wall — locations,
+    wardrobe, image/video/audio references — with their files. Without them
+    the copy's re-render shoots H3 takes with no location, wardrobe or cast
+    anchors (a music-video fork was seen losing its studio and wardrobe refs).
+
+    keep_scene_scope: a duplicate copies the scenes verbatim, so a visual's
+    scene scoping still names the same beats and is kept. A story-divide fork
+    RE-DIVIDES the story — its new scene ids need not line up with the old —
+    so scene-scoped visuals are widened to every scene (empty scenes list):
+    the reference stays alive film-wide for the user to re-scope, instead of
+    silently pinning to whatever scenes now wear the old ids. (Wardrobe stays
+    safe widened: it only rides scenes that cast its owner.)"""
+    import shutil
+    dst.mkdir(parents=True, exist_ok=True)
+    if (src / "characters.json").exists():
+        shutil.copy2(src / "characters.json", dst / "characters.json")
+    src_chars = gapp._script_characters_dir(src)
+    if src_chars.is_dir():
+        shutil.copytree(src_chars, gapp._script_characters_dir(dst),
+                        dirs_exist_ok=True)
+    visuals = gapp.read_script_visuals(src)
+    if visuals:
+        if not keep_scene_scope:
+            for v in visuals:
+                v["scenes"] = []
+        gapp.write_script_visuals(dst, visuals)
+    src_vis = gapp._script_visuals_dir(src)
+    if src_vis.is_dir():
+        shutil.copytree(src_vis, gapp._script_visuals_dir(dst),
+                        dirs_exist_ok=True)
+
+
 def _do_story_divide(body: DivideStoryBody) -> dict:
     """Story-mode phase 2: divide the (possibly user-edited) story into scenes
     and persist the script through the exact classic path, into the same work
@@ -2605,6 +2656,10 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
         # and so do its kept versions, so the fork can still put the original
         # generation back after a re-voicing.
         _copy_song_artifacts(src, wd)
+        # So do the script's reference anchors (cast looks, locations,
+        # wardrobe, uploaded references) — scene scoping is widened because
+        # the re-divide renumbers scenes.
+        _copy_script_reference_files(src, wd, keep_scene_scope=False)
     style_hint = brief.get("visual_style") or ss.get("visual_style", "") or None
     video_style_hint = ss.get("video_style", "") or None
     avoid_hint = (ss.get("script_avoid") or "").strip() or None
@@ -4350,7 +4405,7 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
     # story.json keeps a story-mode source's prose draft, so the duplicate still
     # shows the Story tab and can redraft/re-divide.
     for extra in ("description.txt", "cover.png", "cover_bg.png", "cover_phrase.txt",
-                  "characters.json", "create_brief.json", "story.json"):
+                  "create_brief.json", "story.json"):
         sp = src / extra
         if sp.exists():
             shutil.copy2(sp, new_wd / extra)
@@ -4364,11 +4419,10 @@ def duplicate_script(body: DuplicateScriptBody) -> dict:
     # copy stops being a song film and its render sings a fresh, lyric-less
     # ACE-Step track over scenes still timed to the original.
     _copy_song_artifacts(src, new_wd)
-    # Carry the per-script character look images so the duplicate keeps the same
-    # cast (characters.json copied above references these by basename).
-    src_chars = gapp._script_characters_dir(src)
-    if src_chars.is_dir():
-        shutil.copytree(src_chars, gapp._script_characters_dir(new_wd), dirs_exist_ok=True)
+    # And the script's reference anchors: the per-script cast with its look
+    # images, plus the visuals wall (locations, wardrobe, uploaded refs). The
+    # scenes are copied verbatim, so scene-scoped visuals keep their scoping.
+    _copy_script_reference_files(src, new_wd, keep_scene_scope=True)
 
     return _register_script_into(new_wd, scenes_list, video_title=title,
                                  style=style, music_desc=music_desc, style_name=style_name,

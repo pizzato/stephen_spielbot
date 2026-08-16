@@ -96,6 +96,32 @@ class DuplicateScriptTests(unittest.TestCase):
         # The copy is still recognised as a music video by the film editor.
         self.assertTrue(backend._is_music_video(wd))
 
+    def test_duplicate_keeps_cast_and_visual_references(self):
+        # The per-script cast (with look images) and the visuals wall anchor
+        # the copy's H3 takes; without them the re-render drifts off-location
+        # and out of wardrobe.
+        (self.src / "characters.json").write_text(json.dumps(
+            [{"id": "char_aa", "name": "Kinho", "description": "a man",
+              "ref_image": "char_aa.png"}]))
+        (self.src / "characters").mkdir()
+        (self.src / "characters" / "char_aa.png").write_bytes(b"look")
+        (self.src / "visuals.json").write_text(json.dumps(
+            [{"id": "vis_war", "name": "White shirt", "kind": "wardrobe",
+              "character": "Kinho", "ref_image": "vis_war.png", "scenes": [2]}]))
+        (self.src / "visuals").mkdir()
+        (self.src / "visuals" / "vis_war.png").write_bytes(b"shirt")
+
+        result = backend.duplicate_script(backend.DuplicateScriptBody(work_dir=str(self.src)))
+        wd = self._new_dir(result)
+        chars = json.loads((wd / "characters.json").read_text())
+        self.assertEqual(chars[0]["name"], "Kinho")
+        self.assertEqual((wd / "characters" / "char_aa.png").read_bytes(), b"look")
+        # Scenes are copied verbatim, so the wardrobe keeps its scene scoping.
+        vis = json.loads((wd / "visuals.json").read_text())
+        self.assertEqual(vis[0]["scenes"], [2])
+        self.assertEqual(vis[0]["character"], "Kinho")
+        self.assertEqual((wd / "visuals" / "vis_war.png").read_bytes(), b"shirt")
+
     def test_duplicate_without_a_song_copies_nothing_extra(self):
         result = backend.duplicate_script(backend.DuplicateScriptBody(work_dir=str(self.src)))
         wd = self._new_dir(result)
