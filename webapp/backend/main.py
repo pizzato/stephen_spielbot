@@ -3876,8 +3876,10 @@ def load_script(work_dir: str = Query("")) -> dict:
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Script path is outside the output folder.")
     # A story-first draft has no script.json yet — load with zero scenes so the
-    # Script screen opens the Story view for review/division.
-    if not (wd / "script.json").exists() and _read_story(wd):
+    # Script screen opens the Story view for review/division. A music video is
+    # earlier still: its song is written before any story exists, so a song on
+    # its own is enough to open (on the Song tab).
+    if not (wd / "script.json").exists() and (_read_story(wd) or (wd / "song.json").exists()):
         scenes_list = []
     else:
         scenes_list = _read_script_scenes(wd)
@@ -6189,7 +6191,12 @@ def list_jobs() -> dict:
     scripts = [{"label": l, "work_dir": d,
                 # story drafted but not yet divided into scenes — the Script
                 # screen opens these straight into the Story view
-                "story_draft": not (Path(d) / "script.json").exists()}
+                "story_draft": not (Path(d) / "script.json").exists(),
+                # a music video whose song is written but whose story is not —
+                # it opens on the Song tab instead
+                "song_draft": (not (Path(d) / "script.json").exists()
+                               and not (Path(d) / "story.json").exists()
+                               and (Path(d) / "song.json").exists())}
                for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
