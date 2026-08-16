@@ -251,9 +251,10 @@ exact, while the line gaps are estimates. The takes bend around the planned
 length to do it, within bounds: no take shrinks below the 5-second acted minimum or
 grows past the 12-second single-clip cap, and a seam with no line boundary in reach
 falls back to the even grid — takes planned right at the 5-second floor have no slack
-and keep the grid exactly. Because the line times are estimated (evenly paced through
-the measured singing) rather than transcribed, a cut can still graze a word when the
-delivery is very uneven; cuts that land in instrumental breaks are exact.
+and keep the grid exactly. When the lyric lines were whisper-aligned (above), the seams
+cut between *measured* lines; when the alignment is off or fell back to the paced
+estimate, a cut can still graze a word if the delivery is very uneven. Cuts that land in
+instrumental breaks are exact either way.
 
 ## What you need first
 
