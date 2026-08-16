@@ -3831,7 +3831,10 @@ def _list_script_jobs() -> list[tuple[str, str]]:
         for d in dirs:
             # story.json without script.json = a story-first draft awaiting
             # scene division — listed so it can be reopened and divided later.
-            if (d / "script.json").exists() or (d / "story.json").exists():
+            # song.json alone is a music video one step earlier still: its song
+            # is written before the story, and it has to be reopenable too.
+            if ((d / "script.json").exists() or (d / "story.json").exists()
+                    or (d / "song.json").exists()):
                 results.append((_job_folder_label(d), str(d)))
     except Exception:
         pass

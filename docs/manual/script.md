@@ -10,20 +10,30 @@ only), **Story**, **Characters** (which becomes **Characters & Artifacts** when 
 has acted scenes), **Scenes**, **Acted scenes** (only when the film has any) — and
 **Cover**, which belongs to publishing, last.
 
+Whichever view you are on, the page header carries **Brief**: it takes you back to
+[Create](create.md) with everything this film was asked for — title, direction, length,
+scene count, resolution, style, format and singing voice — filled back in, so you can
+read what you set, change it, and run it again into a fresh work folder. The film you came
+from is left exactly as it was.
+
 ## Scripts
 
 Every saved script, as cards. **Load** opens one, **Duplicate** clones it into a fresh work
 folder, **Delete** removes it. A *Story draft* chip marks scripts that are still prose with
-no scenes yet; the loaded one is marked too. Duplicating a [Music video](create.md#format)
-brings its song along — the track in use, its lyrics and every kept version — so the copy
-re-renders against the same song rather than singing a new one.
+no scenes yet, a *Song draft* chip a music video whose song is written but whose story is
+not; the loaded one is marked too. Duplicating a [Music video](create.md#format) brings its
+song along — the track in use, its lyrics and every kept version — so the copy re-renders
+against the same song rather than singing a new one.
 
 **New script** goes to [Create](create.md).
 
 ## Song
 
 Only for [Music video](create.md#format) films, and the first stop for them: the song
-leads and the story is drafted from it afterwards. See
+leads and the story is drafted from it afterwards. Because you land here straight from
+[Create](create.md), **Brief** in the page header is how you get back to what you asked
+for. A song you leave half-finished is kept — it is listed under **Scripts** with a *Song
+draft* chip, and reopening it comes back to this tab. See
 [Singing films](../performance_films.md#singing-films-the-music-video-format) for what
 the format does to the render.
 
@@ -251,8 +261,8 @@ isn't a scene:
   **Generate** rewrites it
 - **Cover image** — the thumbnail, with **Edit cover** for a masked inpaint
 
-The page header carries **Save**, **Re-draft** (back to [Create](create.md) with this
-film's brief restored), and **Delete**.
+The page header carries **Save** and **Delete** here, alongside the **Brief** button that
+is on every view.
 
 ## Approving
 

@@ -47,6 +47,13 @@ Each scene tile shows the furthest thing that exists on disk so far: the finishe
 The wall appears as soon as the script has been divided into scenes and refreshes on its
 own every few seconds.
 
+On a [music video](../performance_films.md), the takes are shot muted — the song is mixed
+over the whole film in the last step — so the wall carries the audio itself: the **whole
+song** above the tiles (it exists before the first take does), and on each singing tile the
+slice of the track that take performs (`♪ song 12.0s–22.0s`). Playing a take starts its
+slice at the same moment, so the performance can be checked against the music while the
+render is still going.
+
 ### Time estimate
 
 The remaining time, the full-render estimate, and the worker mix behind it

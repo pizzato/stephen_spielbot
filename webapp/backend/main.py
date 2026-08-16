@@ -248,6 +248,10 @@ def _scene_to_json(row: dict, wd: Path | None = None) -> dict:
         # A song film's performance beat: acted whatever the style toggle says,
         # so the editor must show the acted setup off the SCENE, not the style.
         "singing": bool(meta.get("singing")),
+        # The stretch of the film's song this beat performs — the take ships
+        # muted, so a screen showing the clip needs the window to play the
+        # music that belongs under it.
+        "song_window": meta.get("song_window") or None,
         "prompt_edited": bool(meta.get("prompt_override")),
         "preview_path": preview if has_preview else "",
         "has_preview": has_preview,
@@ -3884,8 +3888,10 @@ def load_script(work_dir: str = Query("")) -> dict:
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Script path is outside the output folder.")
     # A story-first draft has no script.json yet — load with zero scenes so the
-    # Script screen opens the Story view for review/division.
-    if not (wd / "script.json").exists() and _read_story(wd):
+    # Script screen opens the Story view for review/division. A music video is
+    # earlier still: its song is written before any story exists, so a song on
+    # its own is enough to open (on the Song tab).
+    if not (wd / "script.json").exists() and (_read_story(wd) or (wd / "song.json").exists()):
         scenes_list = []
     else:
         scenes_list = _read_script_scenes(wd)
@@ -6203,7 +6209,12 @@ def list_jobs() -> dict:
     scripts = [{"label": l, "work_dir": d,
                 # story drafted but not yet divided into scenes — the Script
                 # screen opens these straight into the Story view
-                "story_draft": not (Path(d) / "script.json").exists()}
+                "story_draft": not (Path(d) / "script.json").exists(),
+                # a music video whose song is written but whose story is not —
+                # it opens on the Song tab instead
+                "song_draft": (not (Path(d) / "script.json").exists()
+                               and not (Path(d) / "story.json").exists()
+                               and (Path(d) / "song.json").exists())}
                for l, d in gapp._list_script_jobs()]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
@@ -12329,8 +12340,16 @@ def film_scenes(work_dir: str = Query(...)) -> dict:
     cfg = gapp.load_config()
     resolution = jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION)
 
+    # A song film's takes ship muted — the track is mixed over the whole film at
+    # the very end — so a mid-render wall would play a music video in silence.
+    # Handing the song over lets each singing tile play its own pinned window.
+    track = wd / "background_music.wav"
+    song_url = (_busted_file_url(track)
+                if track.exists() and (wd / "song.json").exists() else "")
+
     return {
         "scenes": result,
+        "song_url": song_url,
         "job_id": job_id,
         "work_dir": str(wd),
         "title": title,
