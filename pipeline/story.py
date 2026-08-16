@@ -731,7 +731,9 @@ def lyric_lines(lyrics: str) -> list[str]:
 
 def assign_song_slices(scenes: list[Scene], lyrics: str,
                        total_seconds: float | None = None,
-                       track: Path | str | None = None) -> list[Scene]:
+                       track: Path | str | None = None,
+                       align_lyrics: bool = False,
+                       language: str = "") -> list[Scene]:
     """Give each singing scene its WINDOW of the song and the words sung in it.
 
     The song plays once across the whole film, so each singing scene covers the
@@ -749,7 +751,12 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     clip's own start. Without that, an instrumental intro drags every line out
     of position: a 7.5 s intro had scene 1 mouthing a verse to silence while
     the whole film ran a scene ahead of its own song. Detection failing falls
-    back to the old proportional split rather than guessing."""
+    back to the old proportional split rather than guessing.
+
+    *align_lyrics* (the song_align_lyrics option) upgrades the line times from
+    even pacing to MEASUREMENT: the lyric sheet is whisper-aligned against the
+    track's vocal stem (pipeline.lyric_align, *language* hints the model), and
+    any alignment failure keeps the paced estimate."""
     from pipeline import song_timing as _song_timing
     from pipeline.performance import (MAX_SCENE_SECONDS, MIN_SCENE_SECONDS,
                                       SCENE_SECONDS)
@@ -764,7 +771,18 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
             return SCENE_SECONDS
     lines = lyric_lines(lyrics)
     regions = _song_timing.measure_regions(track) if track else []
-    spans = _song_timing.line_times(regions, len(lines)) if regions else []
+    spans: list[tuple[float, float]] = []
+    if regions and align_lyrics:
+        # The option (song_align_lyrics): whisper-align the KNOWN lyric sheet
+        # against the cached vocal stem so each line's time is measured, not
+        # paced. Any failure keeps the estimate below — never worse than off.
+        from pipeline import lyric_align
+        stem = _song_timing.vocal_stem(Path(track))
+        if stem is not None:
+            spans = lyric_align.align_lines(stem, lines, language=language,
+                                            regions=regions) or []
+    if not spans:
+        spans = _song_timing.line_times(regions, len(lines)) if regions else []
 
     def stamp(extra: dict, t0: float, t1: float, lo: int, hi: int) -> None:
         """What is sung in [t0, t1) — measured off the track when we can,

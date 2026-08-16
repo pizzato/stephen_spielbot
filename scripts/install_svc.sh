@@ -34,6 +34,10 @@ fi
 # demucs (MIT): vocal-stem separation — the converter runs on the VOCAL stem
 # only, so the instruments come through untouched.
 "$DEST/.venv/bin/pip" install -q demucs
+# faster-whisper (MIT): word-timestamp transcription of the vocal stem, used
+# by the music-video divide to align the lyric sheet to the sung track
+# (song_align_lyrics). Weights download on the first alignment.
+"$DEST/.venv/bin/pip" install -q faster-whisper
 grep -v -E "^torch|^--extra-index-url|^torchvision|^torchaudio" \
     "$DEST/requirements-mac.txt" > "$DEST/.reqs.txt"
 "$DEST/.venv/bin/pip" install -q -r "$DEST/.reqs.txt"

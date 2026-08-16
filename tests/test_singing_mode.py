@@ -950,6 +950,96 @@ class StemTimingTests(unittest.TestCase):
         self.assertAlmostEqual(second["vocal_ranges"][0][0], 0.0, delta=0.6)
 
 
+class LyricAlignTests(unittest.TestCase):
+    """Whisper-aligned lyric lines (the song_align_lyrics option): each line's
+    time is MEASURED off the stem's transcript; every failure path falls back
+    to the energy-paced estimate."""
+
+    LINES = ["one two three", "four five six", "seven eight nine"]
+
+    def _words(self):
+        # A perfect transcript: nine words a second apart, entering at 4s.
+        return [(w, 4.0 + i, 4.0 + i + 0.8) for i, w in enumerate(
+            "one two three four five six seven eight nine".split())]
+
+    def test_matched_words_become_line_spans(self):
+        from pipeline import lyric_align
+        with unittest.mock.patch.object(lyric_align, "word_times",
+                                        return_value=self._words()):
+            spans = lyric_align.align_lines(Path("stem.wav"), self.LINES)
+        self.assertEqual(spans, [(4.0, 6.8), (7.0, 9.8), (10.0, 12.8)])
+
+    def test_a_garbled_line_is_interpolated_between_neighbours(self):
+        from pipeline import lyric_align
+        words = [w for w in self._words()
+                 if w[0] not in ("four", "five", "six")]
+        with unittest.mock.patch.object(lyric_align, "word_times",
+                                        return_value=words):
+            spans = lyric_align.align_lines(Path("stem.wav"), self.LINES)
+        # 6/9 words matched clears the bar; line 2 takes the gap between its
+        # matched neighbours and the result stays monotonic.
+        self.assertEqual(spans[0], (4.0, 6.8))
+        self.assertEqual(spans[2], (10.0, 12.8))
+        self.assertTrue(spans[0][1] <= spans[1][0] < spans[1][1] <= spans[2][0])
+
+    def test_too_weak_a_match_falls_back(self):
+        from pipeline import lyric_align
+        with unittest.mock.patch.object(
+                lyric_align, "word_times",
+                return_value=[("la", 1.0, 1.4), ("laa", 2.0, 2.4)]):
+            self.assertIsNone(
+                lyric_align.align_lines(Path("stem.wav"), self.LINES))
+
+    def test_no_whisper_install_falls_back(self):
+        from pipeline import lyric_align
+        with unittest.mock.patch.object(lyric_align, "word_times",
+                                        return_value=None):
+            self.assertIsNone(
+                lyric_align.align_lines(Path("stem.wav"), self.LINES))
+
+    def test_hallucinations_outside_the_singing_are_dropped(self):
+        from pipeline import lyric_align
+        # The chorus "hallucinated" again at 50s, past the measured singing:
+        # region gating discards it before matching, so no line is dragged out.
+        words = self._words() + [("seven", 50.0, 50.4), ("eight", 50.6, 51.0),
+                                 ("nine", 51.2, 51.6)]
+        with unittest.mock.patch.object(lyric_align, "word_times",
+                                        return_value=words):
+            spans = lyric_align.align_lines(Path("stem.wav"), self.LINES,
+                                            regions=[(4.0, 13.0)])
+        self.assertEqual(spans[2], (10.0, 12.8))
+
+    def test_slices_use_aligned_spans_when_the_option_is_on(self):
+        # All four lines measured inside the first 8s of a 20s track: with
+        # alignment on, scene 1 carries every word and scene 2 stays silent;
+        # off, even pacing spreads them across both.
+        lyrics = "[Verse]\none\ntwo\nthree\nfour"
+        aligned = [(0.0, 2.0), (2.0, 4.0), (4.0, 6.0), (6.0, 8.0)]
+
+        def scenes():
+            return [Scene(id=i, title="t", image_prompt="i", video_prompt="v",
+                          narration="", mode="silent", duration=10.0,
+                          metadata_extra={"mode": "silent", "singing": True,
+                                          "cast": ["Ada"]})
+                    for i in (1, 2)]
+
+        with unittest.mock.patch("pipeline.song_timing.measure_regions",
+                                 return_value=[(0.0, 20.0)]), \
+             unittest.mock.patch("pipeline.song_timing.vocal_stem",
+                                 return_value=Path("stem.wav")), \
+             unittest.mock.patch("pipeline.lyric_align.align_lines",
+                                 return_value=aligned):
+            on = scenes()
+            story.assign_song_slices(on, lyrics, total_seconds=20.0,
+                                     track=Path("song.wav"), align_lyrics=True)
+            off = scenes()
+            story.assign_song_slices(off, lyrics, total_seconds=20.0,
+                                     track=Path("song.wav"))
+        self.assertIn("four", on[0].metadata["sings"])
+        self.assertEqual(on[1].metadata["sings"], "")
+        self.assertIn("four", off[1].metadata["sings"])
+
+
 class SongSliceTimingTests(unittest.TestCase):
     """assign_song_slices against a real track: the words a scene is told to
     mouth must be the words its own pinned slice contains.

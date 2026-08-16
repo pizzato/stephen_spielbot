@@ -213,6 +213,22 @@ proportional split is used unchanged. Without demucs, the coarser mix-level spli
 it finds intros and breaks on tracks whose bed is quieter than the voice, but cannot
 tell a loud instrumental solo from a sung line, since both are simply loud.
 
+**Each line's time can be measured, not estimated** — the *Align lyrics to the sung
+track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
+default). Level measurement knows *where* singing is but never *which* line is being
+sung, so line times are otherwise estimated by pacing the lines evenly through the
+singing — close, but a line can smear across a phrase gap into the neighbouring scene.
+With the option on, the divide transcribes the vocal stem with word timestamps
+(faster-whisper, installed by the same `scripts/install_svc.sh` beside demucs) and
+matches the transcript against the lyric sheet it already knows — alignment, not
+transcription, so the fixed line order disambiguates a chorus sung four times, a garbled
+word interpolates from its neighbours, and words "heard" outside the measured singing
+are discarded as hallucinations. Scenes then name and cut on the words actually sung
+under them. When fewer than half the lyric words match — or whisper is not installed —
+the paced estimate is used instead, so the option never makes timing worse. The model
+(whisper *small*, multilingual) downloads on the first alignment; the divide's "Timing
+the song's lyrics" step covers it in Activity.
+
 **The scenes cut between sentences.** The same lyric timeline decides *where* one take
 ends and the next begins. Rather than dividing the track into mathematically equal
 windows — which lands cuts mid-line as often as not — each seam snaps to the nearest gap

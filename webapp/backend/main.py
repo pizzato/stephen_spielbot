@@ -2679,11 +2679,16 @@ def _do_story_divide(body: DivideStoryBody) -> dict:
             except Exception:
                 track_secs = None
         # Tracked: the first divide against a track separates its vocal stem
-        # (demucs, on the controller) — a minute worth showing in Activity.
+        # (demucs) and, with the option on, whisper-aligns the lyric lines to
+        # it — a couple of minutes worth showing in Activity.
         with _track_op("Timing the song's lyrics", display_topic):
-            story_mode.assign_song_slices(scenes, song.get("lyrics") or "",
-                                          total_seconds=track_secs or secs,
-                                          track=track if track.exists() else None)
+            story_mode.assign_song_slices(
+                scenes, song.get("lyrics") or "",
+                total_seconds=track_secs or secs,
+                track=track if track.exists() else None,
+                align_lyrics=gapp._norm_song_align_lyrics(
+                    ss.get("song_align_lyrics")),
+                language=language)
         # The caption is the film's music description from here on — Remix
         # shows and edits it, and the render appends the singer's voice.
         music_desc = song.get("caption") or music_desc
