@@ -317,13 +317,20 @@ portraits — live with the characters, under **Characters & Artifacts**, on bot
 screen and the film's edit screen. One bar adds them all: **character, location, wardrobe,
 image** (any other thing the model should match — a prop, a vehicle, a logo; the
 description tells the model what it is), **video** (a clip whose extracted frame feeds
-the slot), and **soundtrack** (an audio file — see below).
+the slot), and **soundtrack** (an audio file — see below). The free-form kinds — image,
+video and soundtrack — take an optional **How it's used** note that rides into the take's
+prompt in the user's own words (*"the characters copy this dance's movements"*): for an
+image or video it replaces the default *match it exactly* authority line, so a reference
+can direct the performance instead of just appearing in it.
 
 **Soundtrack artifacts.** An **audio** artifact is not a reference picture: the whole
 track is **pinned into the H3 generation** of every acted take it applies to
 (audio-driven generation, the same mechanism that powers
 [singing films](#singing-films-the-music-video-format)), so the performance follows the
-sound and the take keeps it as its audio. Scope it with the same *Used in* scene list as
+sound and the take keeps it as its audio. Its *How it's used* note becomes a
+`[SOUNDTRACK]` prompt section telling the performance what to do with the music it hears
+(*"the characters dance to this track"*), and the prompt's music refusals stand down to
+"no music beyond the clip's own soundtrack". Scope it with the same *Used in* scene list as
 any other artifact. The speech gate stands down for those takes — the audio was provided,
 not scripted — and a song film's own per-scene segments outrank artifacts. Every card takes an upload, a **pasted** image, or a **URL** — a direct file
 link or a page, whose `og:image` / `og:video` is fetched. Everything the film renders from appears there at the same level:

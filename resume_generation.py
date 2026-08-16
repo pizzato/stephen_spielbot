@@ -700,6 +700,7 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     # against its own music, and the full original track is what the film
     # itself is mixed with.
     track_audio = None
+    track_usage = ""
     window = meta.get("song_window") if meta.get("singing") else None
     song_track = work_dir / "background_music.wav"
     if window and song_track.exists():
@@ -716,11 +717,14 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     if track_audio is None:
         # A SOUNDTRACK artifact (Characters & artifacts → audio) that applies
         # to this scene: pinned the same way, for any acted take in any film.
-        from app import scene_track_audio
-        art = scene_track_audio(work_dir, scene.id)
+        # Resolved with the references above, so the editor's prompt preview
+        # and the render agree — including the artifact's "how it's used" note.
+        art = refs.get("track")
         if art is not None:
-            track_audio = art
-            logger.info("Scene %d: pinning soundtrack artifact %s", scene.id, art.name)
+            track_audio = Path(art["path"])
+            track_usage = (art.get("usage") or "").strip()
+            logger.info("Scene %d: pinning soundtrack artifact %s",
+                        scene.id, track_audio.name)
 
     # Chained acted scenes (h3_chain_scenes): a scene longer than one clip is
     # shot as two Ref2VA clips joined by H3 Motion Context instead of being
@@ -741,7 +745,8 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
         chained, sub_metas = False, [meta]
     prompts = [
         _performance.build_h3_prompt(
-            m, style_note=cfg.get("style", ""),
+            {**m, "track_usage": track_usage} if track_usage else m,
+            style_note=cfg.get("style", ""),
             picture_names=picture_names, audio_names=audio_names)
         for m in sub_metas
     ]

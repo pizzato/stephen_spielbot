@@ -112,10 +112,18 @@ extracted frame feeds the slot), and **soundtrack** (an uploaded audio file). Ea
 card takes a generated image, an upload, a **pasted** image, or a **URL** — a direct file
 link or a page whose `og:image` / `og:video` points at one.
 
+The free-form kinds — image, video and soundtrack — also carry an optional **How it's
+used** note that goes into the take's prompt in your own words: *"the characters copy
+this dance's movements"*, *"the characters dance to this music"*. For an image or video
+reference it replaces the default *match it exactly* instruction; without one, the model
+is simply told to match the reference where it appears.
+
 A **soundtrack** artifact is not a picture slot: the track is pinned into the generation
 of every acted take it applies to, so the performance follows the sound and the take keeps
 it as its audio — the mechanism behind
-[singing films](../performance_films.md#singing-films-the-music-video-format). Scope it
+[singing films](../performance_films.md#singing-films-the-music-video-format). Its *How
+it's used* note becomes a `[SOUNDTRACK]` section of those takes' prompts, telling the
+performance what to do with the music it hears. Scope it
 with the same *Used in* scene list as any other artifact; a music video's own song is
 listed here too, since it is an input of every singing take.
 

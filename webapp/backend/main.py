@@ -4171,6 +4171,7 @@ class VisualCreate(BaseModel):
     kind: str = "location"
     description: str = ""
     character: str = ""
+    usage: str = ""
 
 
 class VisualUpdate(BaseModel):
@@ -4178,6 +4179,7 @@ class VisualUpdate(BaseModel):
     kind: str | None = None
     description: str | None = None
     character: str | None = None
+    usage: str | None = None
     scenes: list[int] | None = None
     enabled: bool | None = None
 
@@ -4264,7 +4266,8 @@ def list_script_visuals(job_id: str) -> dict:
 @api.post("/api/jobs/{job_id}/visuals")
 def create_script_visual(job_id: str, body: VisualCreate) -> dict:
     wd = _job_wd_or_404(job_id)
-    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character)
+    gapp.add_script_visual(wd, body.name, body.kind, body.description, body.character,
+                           body.usage)
     return _visuals_ok(wd)
 
 
@@ -4431,9 +4434,12 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             "beats": performance_mode.norm_beats(
                 meta.get("beats"), float(meta.get("seconds") or performance_mode.SCENE_SECONDS)),
             "lines": lines,
-            # The exact text the model receives, rebuilt from the resolved slots.
+            # The exact text the model receives, rebuilt from the resolved
+            # slots — including the pinned soundtrack artifact's usage note.
             "prompt": performance_mode.build_h3_prompt(
-                {**meta, "lines": lines}, style_note=(row.get("style") or ss.get("visual_style") or ""),
+                {**meta, "lines": lines,
+                 "track_usage": (refs.get("track") or {}).get("usage", "")},
+                style_note=(row.get("style") or ss.get("visual_style") or ""),
                 picture_names=refs["pictures"],
                 audio_names=[a["name"] for a in refs["audios"]]),
             "pictures": [{**p, "image_url": (f"/api/file?path={p['path']}"

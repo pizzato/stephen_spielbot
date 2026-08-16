@@ -2717,6 +2717,10 @@ def _norm_visuals(raw) -> list[dict]:
             "description": str(item.get("description") or "").strip(),
             # Wardrobe belongs to someone; a location belongs to the scene.
             "character": str(item.get("character") or "").strip(),
+            # How the reference is to be USED, in the user's words ("the
+            # characters copy this dance's movements") — free-form image/video/
+            # audio artifacts carry it into the take's prompt.
+            "usage": str(item.get("usage") or "").strip(),
             "ref_image": str(item.get("ref_image") or "").strip(),
             # An audio artifact's track file (soundtrack pinned into takes).
             "source_audio": str(item.get("source_audio") or "").strip(),
@@ -2744,7 +2748,8 @@ def write_script_visuals(work_dir, visuals) -> list[dict]:
 
 
 def add_script_visual(work_dir, name: str = "", kind: str = "location",
-                      description: str = "", character: str = "") -> list[dict]:
+                      description: str = "", character: str = "",
+                      usage: str = "") -> list[dict]:
     """Append a visual; blank name gets a placeholder so the row survives
     normalization and shows as an editable card (same rule as characters)."""
     visuals = read_script_visuals(work_dir)
@@ -2752,7 +2757,8 @@ def add_script_visual(work_dir, name: str = "", kind: str = "location",
                    "image": "New reference", "video": "New video reference",
                    "audio": "New soundtrack"}
     visuals.append({"name": name.strip() or placeholder.get(kind, "New reference"),
-                    "kind": kind, "description": description, "character": character})
+                    "kind": kind, "description": description, "character": character,
+                    "usage": usage})
     return write_script_visuals(work_dir, visuals)
 
 
@@ -2761,7 +2767,8 @@ def update_script_visual(work_dir, visual_id: str, **fields) -> list[dict]:
     vis = next((v for v in visuals if v.get("id") == visual_id), None)
     if vis is None:
         raise ValueError(f"Unknown visual {visual_id!r} for this script.")
-    for key in ("name", "kind", "description", "character", "scenes", "enabled"):
+    for key in ("name", "kind", "description", "character", "usage", "scenes",
+                "enabled"):
         if key in fields and fields[key] is not None:
             vis[key] = fields[key]
     return write_script_visuals(work_dir, visuals)
@@ -2987,8 +2994,9 @@ def scene_visuals(work_dir, scene_id: int, cast: list | None = None,
     return out
 
 
-def scene_track_audio(work_dir, scene_id) -> Path | None:
-    """The SOUNDTRACK artifact that applies to one scene, if any.
+def scene_track_visual(work_dir, scene_id) -> dict | None:
+    """The SOUNDTRACK artifact that applies to one scene, if any — the visual
+    itself, with its resolved track file under ``_audio_path``.
 
     An audio artifact (Characters & artifacts → Soundtrack) is pinned into the
     scene's H3 take — audio-driven generation, the picture made to match the
@@ -3004,8 +3012,14 @@ def scene_track_audio(work_dir, scene_id) -> Path | None:
         if v.get("source_audio"):
             p = _script_visual_image_path(work_dir, v["source_audio"])
             if p and p.exists():
-                return p
+                return {**v, "_audio_path": str(p)}
     return None
+
+
+def scene_track_audio(work_dir, scene_id) -> Path | None:
+    """The applying soundtrack artifact's track file (see scene_track_visual)."""
+    v = scene_track_visual(work_dir, scene_id)
+    return Path(v["_audio_path"]) if v else None
 
 
 def _job_characters(cfg: dict, style_name: str, work_dir: Path | None = None) -> list[dict]:
@@ -3678,6 +3692,8 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
             continue
         pictures.append({"slot": len(pictures) + 1, "name": vis["name"],
                          "kind": vis["kind"], "character": vis.get("character", ""),
+                         "description": vis.get("description", ""),
+                         "usage": vis.get("usage", ""),
                          "id": vis["id"], "path": vis["_ref_path"]})
     speakers = _perf.speakers_in(_perf.norm_lines(meta.get("lines")))
     for name in speakers[:_perf.MAX_SPEAKERS_PER_SCENE]:
@@ -3685,7 +3701,16 @@ def resolve_performance_references(meta: dict, cfg: dict, work_dir: Path,
         if path is not None:
             audios.append({"slot": len(audios) + 1, "name": name,
                            "voice": voice_name_for(name), "path": str(path)})
-    return {"pictures": pictures, "audios": audios}
+    # The soundtrack artifact this take would pin (audio-driven H3), so its
+    # "how it's used" note reaches the prompt on screen AND in the render. A
+    # singing scene pins its own stretch of the film's song instead.
+    track = None
+    if not (meta.get("singing") and meta.get("song_window")):
+        vis = scene_track_visual(work_dir, scene_id)
+        if vis is not None:
+            track = {"name": vis["name"], "usage": vis.get("usage", ""),
+                     "path": vis["_audio_path"]}
+    return {"pictures": pictures, "audios": audios, "track": track}
 
 
 def _generate_active_scene_preview(

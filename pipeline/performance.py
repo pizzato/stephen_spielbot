@@ -376,6 +376,12 @@ def picture_role(pic, has_wardrobe: frozenset = frozenset()) -> str:
                 "that exact space; do not redecorate or move to a new place")
     if kind in ("image", "video"):
         what = _clean(pic.get("description")) or name or "this reference"
+        usage = _clean(pic.get("usage")).rstrip(".")
+        if usage:
+            # The user said how the reference is to be used ("the characters
+            # copy this dance's movements") — their instruction IS the
+            # authority line, replacing the default match-it-exactly contract.
+            return f"shows {what} — {usage}"
         return (f"defines {what} only — match it exactly where it appears in "
                 f"the scene. It adds no people and controls nothing else")
     if kind == "wardrobe":
@@ -502,6 +508,15 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
     # from the take before it. Placed ahead of the dialogue it steers.
     if direction:
         sections.append(f"[DIRECTION]\n{direction}")
+
+    # [SOUNDTRACK] — a pinned soundtrack artifact whose card says how it is to
+    # be used ("the characters dance to this track"): the take is generated
+    # against that audio, and this is where the performance is told what to do
+    # with it.
+    track_usage = _clean(scene_meta.get("track_usage"))
+    if track_usage:
+        sections.append(f"[SOUNDTRACK]\nThe clip's own soundtrack is a "
+                        f"provided music track. {track_usage}")
 
     # [DIALOGUE] — each line bound to one speaker and one delivery; the
     # lips-close instruction is load-bearing (without it the mouth keeps
@@ -638,15 +653,22 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                         f"instruments, no backing track, no other music.")
     else:
         speech = "Clear dialogue" if lines else "No speech and no voices at all"
+        # With a pinned track whose card says what to do with it, "no music of
+        # any kind" would fight the very audio the take is generated against.
+        music = ("the provided soundtrack only, no other music" if track_usage
+                 else "no music of any kind")
         sections.append(f"[PRODUCTION SOUND]\nNative stereo ambience: {soundscape}. "
-                        f"{speech}, no music of any kind.")
+                        f"{speech}, {music}.")
 
     # [NEGATIVES] — a preservation contract plus named failure modes. H3 is
     # CFG-free: these are plain sentences, not a negative prompt.
     extra = _clean(scene_meta.get("refusals"))
     # A singing scene ASKS for a voice raised in song; the blanket "no music"
-    # would fight it, so only the instruments are refused there.
-    no_music = "no instrumental music" if performs else "no music"
+    # would fight it, so only the instruments are refused there. Same for a
+    # pinned track in use: refuse music BEYOND it, not the track itself.
+    no_music = ("no instrumental music" if performs
+                else "no music beyond the clip's own soundtrack" if track_usage
+                else "no music")
     sections.append(("[NEGATIVES]\n"
                      "Preserve every reference exactly as assigned; do not modify "
                      "anything else. No extra people, no face drift, no wardrobe "
