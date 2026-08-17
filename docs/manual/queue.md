@@ -15,11 +15,14 @@ publish) · **Posted** (live on YouTube).
 
 ## Manual controls
 
-Two on-demand buttons, independent of the always-on automation loop:
+Two on-demand buttons that run one tick of the automation rules on demand:
 
-- **Start next render** — starts the top eligible item. It reports when there's nothing to
-  start, e.g. a render is already running or no approved item has a ready script.
-- **Post finished** — uploads every finished, unpublished film.
+- **Start next render** — starts the top eligible item. Eligibility follows the same
+  per-style gates as the loop — the item's style must have **auto-start** enabled
+  ([Settings → Automation](settings.md#automation)) and its script must pass the approval
+  gate — so on a fresh install it reports "nothing to start"; **Render now** on the row is
+  the unconditional way to start a specific item.
+- **Post finished** — uploads every finished, approved, queue-sourced film to YouTube.
 
 Hands-free behaviour is configured in [Settings → Automation](settings.md#automation), not
 here.
@@ -62,7 +65,7 @@ the primary action.
 
 ### The inline edit panel
 
-For items with no script yet: **Title**, **Prompt / direction**, **Scenes**, **Style**, and
+For items with no script yet: **Title**, **Prompt / direction**, **Length**, **Style**, and
 **Resolution**. **Save** keeps the edits in the queue; **Create script →** carries them
 into [Create](create.md) and drafts the script now.
 
@@ -71,8 +74,9 @@ into [Create](create.md) and drafts the script now.
 The arrows on the left move an item up or down, and the next render starts from the top.
 
 Reordering only works in **Queue order** sort. The **Sort** control also offers newest,
-oldest, interestingness, predicted views, and fastest-first — those are view-only
-reorderings, and the arrows disable while one is active. Comment requests rank above ideas
+oldest, interestingness, predicted views, and fastest-first — the chosen sort is saved and
+becomes the real consumption order (automation and **Start next render** pick from its
+top); only the arrows disable while one is active. Comment requests rank above ideas
 in the default order.
 
 ## Ready to publish
@@ -81,5 +85,6 @@ Finished videos waiting for upload, each with a **Publish** button.
 
 ## History
 
-Posted, cancelled, and failed items, dimmed. Failed items auto-retry up to three times
-before landing here.
+Posted, cancelled, and failed items, dimmed. Failed items are auto-retried up to three
+times by the automation loop (when their style has auto-start on); otherwise they stay
+here until retried by hand.

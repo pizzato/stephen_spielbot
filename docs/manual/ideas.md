@@ -52,7 +52,7 @@ Split into **Not created yet** and **Acted on**, so you always know what's still
 
 Each row keeps its own size choice and offers:
 
-- **Queue** — adds it to the [render queue](queue.md) with that size's scenes and resolution
+- **Queue** — adds it to the [render queue](queue.md) with that size's length and resolution
 - **Create** — opens [Create](create.md) prefilled, for a brief you want to hand-tune
 - **Decline** — moves it to the Declined list
 - **Remove** — drops it from the list entirely (it may resurface organically later)

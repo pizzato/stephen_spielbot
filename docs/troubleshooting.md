@@ -91,8 +91,9 @@ work directory.
 
 ### Failures keep retrying
 
-Failed queue items auto-retry up to three times before giving up. The **Render** screen's
-task list shows the attempt count and the error for each task.
+Failed queue items auto-retry up to three times when their style has auto-start on — the
+retry lives in the automation loop, so with auto-start off, retry them by hand. The
+**Render** screen's task list shows the attempt count and the error for each task.
 
 ### The estimate says "rough"
 
@@ -102,8 +103,10 @@ have completed with the same worker count and resolution.
 ### A scene renders but the film doesn't update
 
 The finished film is `~/videos/<name>.mp4`. A sweep rebuilds films whose parts are newer
-than the final, but only when the studio is quiet (≥5 minutes idle) so it never competes
-with an active render. Re-render from [Edit film](manual/edit-film.md) to force it.
+than the final, once that film's parts have been quiet for ~5 minutes and nothing is
+editing or publishing it. If the published cut is a curated version — an upscale, a
+localization, or a hand-burnt cover — the sweep never touches it: press
+**Reassemble film** in [Edit film](manual/edit-film.md) to rebuild it anyway.
 
 ## Publishing
 

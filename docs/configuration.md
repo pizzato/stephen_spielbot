@@ -92,6 +92,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | ComfyUI workers | One URL per line — scenes are distributed across them in parallel |
 | TTS workers | F5-TTS/Chatterbox endpoints for parallel narration (port 8189, derived by `make install`) |
 | Music | Score films in this style (per-film override in Create); music is mixed in at the very end |
+| Music model | Per-style music engine — `ace-step` (default) or the opt-in `minimax-music3` (see [Models → Music engines](models.md#music-engines-per-style)) |
 | UI worker idle timeout | Minutes the UI must be idle before its reserved render worker rejoins the pool (default 5) |
 | LLM backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |

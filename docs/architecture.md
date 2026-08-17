@@ -39,12 +39,13 @@ at the top is the documented key set.
 | Module | Responsibility |
 |---|---|
 | `llm.py` | Script generation across the local vLLM, Claude, Grok, and OpenAI backends |
-| `story.py` | Script generation — draft the story, critique it, then divide it into scenes |
-| `performance.py` | Performance films — acted script shape and the Ref2VA prompt assembly |
-| `engines.py` | Image engine bundles (FLUX.2 Klein, FLUX.1 schnell) for generate and edit |
-| `comfyui.py`, `scene_video.py` | ComfyUI workflow submission and per-scene video rendering |
+| `story.py` | Script generation — draft the story, critique it, then divide it into scenes; for a music video it also writes and critiques the song, and the divide places the lyrics on the track's timeline |
+| `engines.py` | The engine registries — image (FLUX.2 Klein, FLUX.1 schnell), video (LTX 2.5, the MiniMax H3 family), and music (ACE-Step, MiniMax Music 3) |
+| `comfyui.py`, `scene_video.py` | ComfyUI workflow submission, per-scene video rendering, and music generation |
 | `tts_engines.py`, `openf5.py`, `chatterbox.py`, `tts_text.py` | Narration: engine choice, weights, and spoken-text handling |
-| `performance.py`, `shot_gate.py` | Acted scenes: the H3 prompt, and the speech gate |
+| `performance.py`, `shot_gate.py` | Acted scenes and performance films: the acted script shape, the H3 Ref2VA prompt, and the speech gate |
+| `song_timing.py`, `lyric_align.py` | Music videos: measure the sung track's vocal stem, whisper-align the lyric sheet, cut scenes between sung lines |
+| `svc.py` | Song re-voicing (seed-vc) on whichever GPU worker is free |
 | `assembler.py`, `captions.py`, `cover.py` | Final mux, SRT captions, cover images and first-frame burns |
 | `youtube.py`, `x.py`, `publish_queue.py` | Publishing, multi-channel tokens, the cadence scheduler |
 | `engagement.py` | Comment fetching, reply drafting, the predictive model |
@@ -74,6 +75,13 @@ ready tasks from the durable graph instead of the controller pushing work.
 
 Every stage writes a task row into the [durable graph](orchestration.md) with attempts,
 leases, and produced artifacts, which is what the **Render** screen shows.
+
+A [**music video**](performance_films.md#singing-films-the-music-video-format) bends the
+order: its song is written and rendered at *script* time, because the divide measures the
+finished track and cuts scenes between its sung lines. By the time the render starts,
+`background_music.wav` already exists (the music task completes as skipped), every scene
+renders as a singing H3 take carrying its own slice of the track, and the final mix is
+the song alone — voice and ambient pinned to zero.
 
 ## Three state stores
 

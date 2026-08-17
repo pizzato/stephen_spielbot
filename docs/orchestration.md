@@ -30,9 +30,13 @@ Task states: `queued`, `leased`, `running`, `succeeded`, `failed_retryable`,
 ## The generation plan
 
 `ensure_generation_plan` builds a job's task DAG: a pre-completed `story.ready` root;
-per scene image → narration → video → mux (an acted scene instead gets a single
-`scene.performance.generate` task); a `music.generate` unless music is off or every scene
-is acted; and a `video.finalize`.
+per scene image → narration → video → mux (an acted scene — dialogue, a singing take, or
+a silent scene the style performs — instead gets a single `scene.performance.generate`
+task); a `music.generate` unless music is off or every scene is dialogue (all-dialogue
+clips carry their own audio out of the forward pass, so there is no score to write); and
+a `video.finalize`. The music payload carries the film's music description, a song film's
+lyrics, and the per-style music engine — though a song already rendered at script time
+completes the task as skipped, with the track recorded as its artifact.
 Every task is stamped with a `resource_class` (e.g. `comfy:image`, `comfy:video`, `tts`)
 from config. Scenes are upserted as durable records; script-time previews let the plan
 skip already-satisfied image tasks via artifacts.

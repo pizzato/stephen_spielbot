@@ -46,12 +46,17 @@ link straight to the live post.
 | **Publish** | Opens [Publishing](publishing.md) for this film |
 
 !!! note "New version vs re-render"
-    **New version** duplicates into a *new* work folder. Re-rendering from
-    [Edit film](edit-film.md) overwrites in place, keeping the same job id and published
+    **New version** duplicates into a *new* work folder, and so does
+    [Render at another size](edit-film.md#render-at-another-size) — the new size lands in
+    the Library as its own film. Only *per-scene* re-renders from
+    [Edit film](edit-film.md) overwrite in place, keeping the same job id and published
     path.
 
 ## Where the files are
 
 Work directories live at `~/videos/<slug>-<timestamp>/`. The published final is
-`~/videos/<name>.mp4` — a sweep keeps it in step when a film's parts change, but only while
-the studio is quiet so it never competes with an active render.
+`~/videos/<name>.mp4` — a sweep keeps it in step when a film's parts change, once that
+film's parts have been quiet for ~5 minutes and nothing is editing or publishing it. The
+sweep never touches a film whose published cut is a curated version (an upscale, a
+localization, or a hand-burnt cover) — use **Reassemble film** in
+[Edit film](edit-film.md) for those.
