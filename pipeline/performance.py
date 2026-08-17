@@ -470,11 +470,14 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
         for p in pics if isinstance(p, dict) and p.get("kind") == "wardrobe")
     # A song film's shots. *sung* is when a voice is actually heard inside this
     # clip (measured off the track by assign_song_slices); *performs* is
-    # whether anybody mimes it here at all — which needs both somebody on
-    # screen to do it and a voice for them to follow.
+    # whether anybody mimes it here at all — which needs somebody on screen to
+    # do it, a voice for them to follow, and the scene not saying otherwise:
+    # ``performs: False`` is the AUTHORED choice ("they don't sing in this
+    # shot") a re-generate instruction stamps into the metadata.
     singing = bool(scene_meta.get("singing")) and not lines
+    mimes = scene_meta.get("performs") is not False
     sung = sung_windows(scene_meta) if singing else None
-    performs = singing and bool(people_names) and sung != []
+    performs = singing and bool(people_names) and sung != [] and mimes
     sections: list[str] = []
 
     # [REFERENCE USE] — every asset's authority, bounded.
@@ -574,6 +577,19 @@ def build_h3_prompt(scene_meta: dict, *, style_note: str = "",
                        "appears, nobody sings, and no face is shown anywhere "
                        "in the frame. Do not add a person, a singer or a "
                        "performer. The shot holds on the place itself.")
+        elif singing and not mimes:
+            # The scene SAYS nobody sings here — a re-generated beat where the
+            # user asked the cast not to perform. The song still plays over the
+            # shot (and stays pinned into the take), but on camera it is a
+            # listening body, not a miming one.
+            who = " and ".join(people_names)
+            verb = "are" if len(people_names) > 1 else "is"
+            geo.append(f"{who} {verb} NOT singing in this shot: even while a "
+                       f"voice sings on the clip's own soundtrack, {who} "
+                       f"{verb} only listening and moving with the music — "
+                       f"mouth closed and completely still the whole time. No "
+                       f"miming, no mouthing of words, no singing, no "
+                       f"performing to camera.")
         elif singing and sung == []:
             # Measured and instrumental — an intro, a break or the outro fills
             # this whole clip. The cast is present but nobody is singing yet.
