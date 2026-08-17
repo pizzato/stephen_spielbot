@@ -118,7 +118,10 @@ pipeline changes in three places:
   to follow, which is the only way to see whether the mouth lands on the words. That
   audio is never mixed into the film (voice and ambient are pinned to 0 %, below), so
   nothing doubles. The speech gate stands down for these takes — singing is what was
-  asked for.
+  asked for. A beat can also be told **not** to sing: **Re-generate scene** with the
+  "Nobody sings in this shot" chip (or any instruction to that effect) marks the scene
+  as non-performing — the song still plays over it, but the cast listens and moves with
+  the music instead of miming.
 - **A shot with nobody in it stays empty.** A song film's story usually includes scenes
   written with no one in frame — an empty street, a sky, a diagram. Those are rendered as
   **scenery**: the song still plays over them, but nothing is asked to mime it. Asking for
@@ -349,10 +352,16 @@ again.
 **Re-generate scene** rewrites the whole take with the LLM — dialogue, action, setting,
 camera, sound — keeping the film's context and cast, optionally steered by a free-text
 instruction. An acted scene is one coherent take, so it regenerates whole rather than
-field by field; a pinned prompt is superseded by the rewrite.
+field by field; a pinned prompt is superseded by the rewrite. On a music-video beat the
+rewrite also decides whether the cast **sings on camera**: the singing directives in the
+prompt come from the scene's flags rather than from the rewrite's prose, so an
+instruction like the default **"Nobody sings in this shot"** chip flips the scene to a
+listening beat — the song still plays over the shot (and stays pinned into the take),
+but nobody mimes it — and a later rewrite can flip it back.
 
 Editing a scene of a film that has already rendered keeps the existing clip — it is the
-deliverable — and offers **Shoot this scene again** to re-render just that scene. Every
+deliverable — and offers **Shoot this scene again** to re-render just that scene, right
+beside **Re-generate scene**: rewrite the take, then shoot it again to film it. Every
 re-shoot is kept as a **take** (the last ten, plus whichever is selected): a strip under
 the player flips between them, and the selected take is what Reassemble puts in the film.
 

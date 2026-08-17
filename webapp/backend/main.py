@@ -4474,6 +4474,9 @@ def load_performance_script(work_dir: str = Query("")) -> dict:
             # window is the stretch of the track pinned into this take, shown
             # as one of the take's INPUTS beside its pictures and voices.
             "singing": performance_mode.is_singing({"metadata": meta}),
+            # False when the scene says nobody sings on camera here (the song
+            # still plays over the shot); performing is the default.
+            "performs": meta.get("performs") is not False,
             "song_window": meta.get("song_window") or None,
             "sings": meta.get("sings") or "",
             # True once the prompt has been hand-edited: the screen then shows
@@ -4680,6 +4683,10 @@ class SceneUpdate(BaseModel):
     cast: list | None = None
     beats: list | None = None
     seconds: float | None = None
+    # Singing scenes only: does the cast visibly perform the song on camera?
+    # False is stored ("they don't sing in this shot"); True clears the key —
+    # performing is the default, so metadata stays sparse.
+    performs: bool | None = None
 
 
 def _scene_style_note(job_id: str) -> str:
@@ -4795,6 +4802,11 @@ def update_scene(job_id: str, scene_id: int, body: SceneUpdate) -> dict:
                 meta["seconds"] = secs
             else:
                 meta.pop("seconds", None)
+        if body.performs is not None:
+            if body.performs:
+                meta.pop("performs", None)
+            else:
+                meta["performs"] = False
         # An acted scene is written through its FIELDS: what is said becomes the
         # narration text (nothing speaks it — TTS is skipped), and the video
         # prompt is assembled from cast/setting/beats/lines rather than typed,
@@ -5860,14 +5872,30 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
               "Return ONLY a raw JSON object — no markdown, no code fences, no explanation.")
     seconds = float(meta.get("seconds") or meta.get("duration")
                     or performance_mode.SCENE_SECONDS)
+    singing = silent and bool(meta.get("singing"))
     if silent:
         task = (f"Rewrite SILENT scene {sid} — one continuous ~{round(seconds)} second take, "
                 f"performed on camera, in which NOBODY SPEAKS. Current draft:\n"
                 f'Title: {current.get("title") or ""}\n'
                 f'Setting: {meta.get("setting") or ""}\n')
+        if singing:
+            # A music-video beat: the film's song plays over this shot, and by
+            # default the cast mimes it on camera. Said outright so the model
+            # writes staging that fits — and so an instruction like "they don't
+            # sing here" has a switch it can actually flip (the singing
+            # directives in the H3 prompt come from the scene's flags, not
+            # from the text this model writes).
+            task += (f'Sings the song on camera: '
+                     f'{"no" if meta.get("performs") is False else "yes"}\n'
+                     f"This scene is one beat of a MUSIC VIDEO — the film's "
+                     f"song plays over it.\n")
         keys = ('  "lines": [] — this scene is silent, nobody says anything\n'
                 '  "beats": array of {"t0": seconds, "t1": seconds, "action": <what happens>} '
                 f"— they must fit inside {round(seconds)} seconds\n")
+        if singing:
+            keys += ('  "performs": true if the cast visibly sings the song on '
+                     'camera in this shot, false if nobody sings or mimes (they '
+                     'just move with the music)\n')
     else:
         task = (f"Rewrite ACTED scene {sid} — one continuous ~10 second take where the "
                 f"characters speak on camera. Current draft:\n"
@@ -5906,6 +5934,11 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
     lines = [] if silent else performance_mode.norm_lines(raw.get("lines"))
     if not silent and not lines:
         raise HTTPException(502, "The LLM returned a scene with no dialogue — try again.")
+    # Whether the cast sings on camera, decided by the rewrite (honouring the
+    # user's instruction); when the model stays quiet the scene keeps its
+    # current answer. Only a singing scene carries the switch.
+    performs = (bool(raw.get("performs", meta.get("performs") is not False))
+                if singing else None)
     return update_scene(job_id, sid, SceneUpdate(
         title=str(raw.get("title") or current.get("title") or ""),
         # A silent take opens on the frame its image prompt paints, so the
@@ -5920,6 +5953,7 @@ def regenerate_acted_scene(job_id: str, scene_id: int,
         camera=str(raw.get("camera") or ""),
         soundscape=str(raw.get("soundscape") or ""),
         beats=[b for b in (raw.get("beats") or []) if isinstance(b, dict)],
+        performs=performs,
         # Length follows the new words (update_scene recomputes via acted_meta);
         # a silent take keeps the length it was written for.
         duration=seconds if silent else None,

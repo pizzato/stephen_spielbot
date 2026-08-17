@@ -233,14 +233,18 @@ opening-composition reference — and **Remove first frame** drops it again.
 For films with acted scenes, a second view shows each one as a single card: the portrait
 that IS `<Picture 1>`, the voice clip that IS `<Audio 1>`, reference thumbnails, the
 editable dialogue, the assembled prompt, the rendered take with its **Takes** strip (every
-re-shoot is kept — click one to use it), **Shoot this scene again**, and **Reassemble
-film** once takes have changed.
+re-shoot is kept — click one to use it), **Shoot this scene again** with **Re-generate
+scene** beside it (rewrite the take, then shoot it again), and **Reassemble film** once
+takes have changed.
 
 The view lists **every take the film shoots on the reference engine**, so a
 [performed silent scene](../performance_films.md#silent-scenes-performed) appears here
 too — same card, marked *silent*, with no dialogue editor: it is shot the same way and
 its prompt is read the same way. **Re-generate scene** rewrites it (action, setting,
-camera) and leaves it silent.
+camera) and leaves it silent. A music-video beat's card leads its re-generate chips with
+**"Nobody sings in this shot"** — the rewrite then marks the scene non-performing, so the
+song still plays over it but the cast stops miming (see
+[singing films](../performance_films.md#singing-films-the-music-video-format)).
 
 !!! note "Spoken text"
     A scene can have narration text that differs from what the voice reads — useful for

@@ -93,6 +93,24 @@ class PromptTests(unittest.TestCase):
         self.assertNotIn("no music of any kind", prompt)
         self.assertIn("no instrumental music", prompt)
 
+    def test_a_scene_told_not_to_sing_listens_instead(self):
+        # performs=False is the authored "they don't sing in this shot" — the
+        # song still plays, but the prompt must stop ordering a performance.
+        prompt = self._prompt(performs=False, sings="Neon hearts keep burning")
+        self.assertIn("NOT singing", prompt)
+        self.assertIn("No miming", prompt)
+        self.assertNotIn("visibly singing", prompt)
+        self.assertNotIn("performing a song", prompt)
+        # No lyrics to mime, and no request for a singing voice.
+        self.assertNotIn("Neon hearts", prompt)
+        self.assertNotIn("live singing voice", prompt)
+
+    def test_performing_stays_the_default(self):
+        for extra in ({}, {"performs": True}):
+            prompt = self._prompt(**extra)
+            self.assertIn("visibly singing", prompt)
+            self.assertNotIn("NOT singing", prompt)
+
     def test_plain_silent_prompt_is_unchanged(self):
         meta = {"mode": "silent", "seconds": 8.0, "setting": "a wharf"}
         prompt = perf.build_h3_prompt(meta, picture_names=["Ada"])

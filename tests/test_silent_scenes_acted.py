@@ -537,6 +537,77 @@ class ActedViewTests(unittest.TestCase):
         self.assertEqual(scene["image_prompt"], "a shadowed bench")
         self.assertEqual(scene["duration"], 8.0)
 
+    def _make_singing(self):
+        """Turn the stored scene into a music-video beat."""
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            store.upsert_scene(
+                self.job_id, 1, title="Chorus", image_prompt="a rooftop stage",
+                video_prompt="", narration="",
+                metadata={"mode": "silent", "cast": ["Ana"], "duration": 8.0,
+                          "singing": True, "sings": "Neon hearts keep burning",
+                          "setting": "A rooftop stage at night."})
+        finally:
+            store.close()
+
+    def _scene_meta(self):
+        from pipeline.orchestrator import DurableStore
+        store = DurableStore.default()
+        try:
+            return dict((store.get_scene(self.job_id, 1) or {}).get("metadata") or {})
+        finally:
+            store.close()
+
+    def test_a_music_video_rewrite_can_stop_the_singing(self):
+        # "Ana does not sing" must actually stop the miming: the singing text in
+        # the H3 prompt comes from the scene's flags, not from the rewrite's
+        # prose, so the rewrite is given a switch and its answer is persisted.
+        self._make_singing()
+        calls = []
+        answer = json.dumps({
+            "title": "Ana listens", "cast": ["Ana"], "performs": False,
+            "setting": "The rooftop, lights low.", "lines": [],
+            "beats": [{"t0": 0, "t1": 8, "action": "Ana sways, eyes closed"}],
+            "camera": "Slow orbit", "soundscape": "night wind"})
+        def llm(system, user, cfg, max_tokens=900):
+            calls.append(user)
+            return answer
+        with unittest.mock.patch.object(self.backend, "_llm_complete", side_effect=llm):
+            self.backend.regenerate_acted_scene(
+                self.job_id, 1,
+                self.backend.ActedRegenBody(instruction="Ana does not sing"))
+        # The rewrite prompt names the music-video context and offers the switch.
+        self.assertIn("MUSIC VIDEO", calls[0])
+        self.assertIn('"performs"', calls[0])
+        self.assertIn("Ana does not sing", calls[0])
+        meta = self._scene_meta()
+        self.assertIs(meta.get("performs"), False)
+        self.assertTrue(meta.get("singing"))   # still a music-video beat
+        # …and the prompt the take renders from stops ordering a performance.
+        prompt = perf.build_h3_prompt(meta, picture_names=["Ana"])
+        self.assertIn("NOT singing", prompt)
+        self.assertNotIn("visibly singing", prompt)
+
+    def test_a_quiet_rewrite_keeps_the_scenes_answer(self):
+        # No "performs" in the reply — the scene keeps the answer it had, and a
+        # true flips it back to the sparse default (no key stored).
+        self._make_singing()
+        base = {"title": "Chorus", "cast": ["Ana"], "setting": "The stage.",
+                "lines": [], "beats": [{"t0": 0, "t1": 8, "action": "Ana sways"}],
+                "camera": "Locked", "soundscape": "wind"}
+        self.backend.update_scene(self.job_id, 1, self.backend.SceneUpdate(
+            mode="silent", performs=False))
+        with unittest.mock.patch.object(self.backend, "_llm_complete",
+                                        return_value=json.dumps(base)):
+            self.backend.regenerate_acted_scene(self.job_id, 1)
+        self.assertIs(self._scene_meta().get("performs"), False)
+        with unittest.mock.patch.object(
+                self.backend, "_llm_complete",
+                return_value=json.dumps({**base, "performs": True})):
+            self.backend.regenerate_acted_scene(self.job_id, 1)
+        self.assertNotIn("performs", self._scene_meta())
+
 
 class AssemblyTests(unittest.TestCase):
     """An acted silent film must reach its final cut.

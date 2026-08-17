@@ -110,24 +110,6 @@ function SceneEditor({ scene, jobId, onSaved }) {
   return (
     <>
       {err && <Banner tone="danger">{err}</Banner>}
-      <div>
-        <GuidedRegenButton variant="ghost" icon="rotate-right" size="sm"
-          label="Re-generate scene" busyLabel="Rewriting…"
-          busy={busy === 'regen'} disabled={!!busy || !jobId}
-          chips={scene.silent
-            ? ['Slower', 'More movement', 'Closer in', 'Different setting']
-            : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
-          onRegen={async (instr) => {
-            setBusy('regen'); setErr('')
-            try { await api.regenActedScene(jobId, scene.id, instr); await onSaved() }
-            catch (e) { setErr(e.message) } finally { setBusy('') }
-          }} />
-        <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>
-          {scene.silent
-            ? 'Rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.'
-            : 'Rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.'}
-        </span>
-      </div>
       {/* A performed SILENT take is the same shoot with nobody speaking, so it
           gets no dialogue editor: a line typed here would turn the beat into a
           conversation (and pull TTS-less speech into a wordless film). */}
@@ -136,9 +118,13 @@ function SceneEditor({ scene, jobId, onSaved }) {
           <span className="label-sm">Dialogue</span>
           <span className="muted" style={{ fontSize: 12.5 }}>
             {scene.singing
-              ? <>♪ A music-video beat — the cast performs the film's song on camera
-                  (the take ships muted; the sung track is the film's audio). The words
-                  live in the Song tab.</>
+              ? (scene.performs === false
+                  ? <>♪ A music-video beat where nobody sings — the song plays over the
+                      shot, but the cast doesn't mime it on camera. Re-generate the scene
+                      to change that.</>
+                  : <>♪ A music-video beat — the cast performs the film's song on camera
+                      (the take ships muted; the sung track is the film's audio). The words
+                      live in the Song tab.</>)
               : <>Nobody speaks — this beat is performed silent. Give it words by switching
                   the scene to <strong>Dialogue</strong> in the Scenes editor.</>}
           </span>
@@ -192,6 +178,7 @@ function SceneEditor({ scene, jobId, onSaved }) {
 function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onChanged, songUrl = '' }) {
   const [reshoot, setReshoot] = useState('')
   const [takeBusy, setTakeBusy] = useState(false)
+  const [regen, setRegen] = useState('')  // '' | 'busy' | an error message
   const rerender = async (instruction) => {
     setReshoot('busy')
     try {
@@ -199,6 +186,30 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
       setReshoot('queued')
     } catch (e) { setReshoot(e.message) }
   }
+  // The LLM rewrite of the whole scene, offered beside the re-shoot: rewrite
+  // the take, then shoot it again. Singing scenes lead with the one instruction
+  // music videos keep needing — a beat where the cast should NOT be miming the
+  // song (the rewrite flips the scene's performs flag, which is what actually
+  // removes the singing directives from the prompt).
+  const rewrite = async (instr) => {
+    setRegen('busy')
+    try { await api.regenActedScene(jobId, scene.id, instr); setRegen(''); await onChanged() }
+    catch (e) { setRegen(e.message) }
+  }
+  const regenButton = (
+    <GuidedRegenButton size="sm" variant="ghost" icon="rotate-right"
+      label="Re-generate scene" busyLabel="Rewriting…"
+      busy={regen === 'busy'} disabled={regen === 'busy' || !jobId}
+      chips={scene.singing
+        ? ['Nobody sings in this shot', 'More movement', 'Closer in', 'Different setting']
+        : scene.silent
+          ? ['Slower', 'More movement', 'Closer in', 'Different setting']
+          : ['Funnier', 'Simpler words', 'More back-and-forth', 'Different setting']}
+      onRegen={rewrite} />
+  )
+  const regenHint = scene.silent
+    ? 'Re-generate rewrites the whole take — action, setting, camera — and rebuilds the prompt. It stays silent.'
+    : 'Re-generate rewrites the whole take — dialogue, action, setting — and rebuilds the prompt.'
   // Every re-shoot is kept as a take; flipping swaps the canonical final, so
   // Reassemble picks up whichever take is selected.
   const takeOp = async (fn) => {
@@ -214,7 +225,8 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </div>
         <span className="muted" style={{ fontSize: 12.5 }}>
           {Math.round(scene.seconds || seconds)}s · one continuous shot
-          {scene.singing ? ' · ♪ singing' : scene.silent ? ' · silent' : ''}
+          {scene.singing ? (scene.performs === false ? ' · ♪ music, nobody sings' : ' · ♪ singing')
+            : scene.silent ? ' · silent' : ''}
         </span>
       </div>
 
@@ -224,18 +236,25 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
             style={{ width: '100%', maxWidth: 360, borderRadius: 10, background: '#000' }} />
           {/* The take on screen was shot from the text below — after an edit it
               is stale until the scene is shot again. */}
-          <div className="row gap-8 center">
+          <div className="row gap-8 center row--wrap">
             <GuidedRegenButton size="sm" variant="ghost" icon="clapperboard"
               label="Shoot this scene again" busyLabel="Queued…"
               busy={reshoot === 'busy'} disabled={reshoot === 'busy'}
               onRegen={rerender} />
+            {regenButton}
             {reshoot === 'queued' && (
               <span className="muted" style={{ fontSize: 12 }}>Re-rendering — watch it in Activity.</span>
             )}
             {reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
               <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
             )}
+            {regen && regen !== 'busy' && (
+              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{regen}</span>
+            )}
           </div>
+          <span className="muted" style={{ fontSize: 12 }}>
+            {regenHint} Then shoot the scene again to film the new take.
+          </span>
           <VideoVersionStrip versions={scene.video_history?.versions}
             selected={scene.video_history?.selected}
             onSelect={(vid) => takeOp(() => api.selectFilmVideo(workDir, scene.id, vid))}
@@ -245,11 +264,23 @@ function SceneCard({ scene, seconds, jobId, workDir, voiceOpts, voiceMeta, onCha
         </div>
       )}
 
-      {/* A take-op failure (e.g. removing the first frame) must be visible even
-          before the scene has a rendered take — the block above only exists
-          once there is a video. */}
-      {!scene.has_video && reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
-        <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
+      {/* No take yet: the rewrite is still offered (there is nothing to
+          re-shoot), and a take-op failure (e.g. removing the first frame)
+          must be visible even before the scene has a rendered take — the
+          block above only exists once there is a video. */}
+      {!scene.has_video && (
+        <div className="stack gap-8">
+          <div className="row gap-8 center row--wrap">
+            {regenButton}
+            {reshoot && reshoot !== 'busy' && reshoot !== 'queued' && (
+              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{reshoot}</span>
+            )}
+            {regen && regen !== 'busy' && (
+              <span style={{ fontSize: 12, color: 'var(--danger)' }}>{regen}</span>
+            )}
+          </div>
+          <span className="muted" style={{ fontSize: 12 }}>{regenHint}</span>
+        </div>
       )}
 
       {/* ── The take's SOUNDTRACK input: the stretch of the film's song this
