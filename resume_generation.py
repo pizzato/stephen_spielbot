@@ -372,7 +372,8 @@ def chain_scenes_flag(cfg: dict, style_name: str = "") -> bool:
 
 
 def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
-                         vid_width: int, vid_height: int) -> Path | None:
+                         vid_width: int, vid_height: int,
+                         style_name: str = "") -> Path | None:
     """The image a SILENT acted scene opens on, generated if it isn't there yet.
 
     Ref2VA has no literal first-frame input, but the scene's own image rides as
@@ -397,6 +398,17 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
         existing = work_dir / f"scene_{scene.id:02d}{ext}"
         if existing.exists() and existing.stat().st_size > 0:
             return existing
+    # A location reference IS the place, chosen by hand — and a frame outranks
+    # it (resolve_performance_references drops the location when a frame
+    # exists), so painting one here would silently override the reference the
+    # user set, resurrecting a frame they may have just removed. The take opens
+    # on the location instead.
+    from app import scene_visuals
+    if any(v["kind"] == "location"
+           for v in scene_visuals(work_dir, scene.id, None, cfg, style_name)):
+        logger.info("Scene %d: silent take opens on its location reference — "
+                    "no frame painted", scene.id)
+        return None
     prompt = str(getattr(scene, "image_prompt", "") or "").strip()
     if not prompt:
         logger.info("Scene %d: silent scene has no image prompt — the take opens "
@@ -430,7 +442,8 @@ def render_performance_scene(scene: Scene, work_dir: Path, cfg: dict, *,
     if direction.strip():
         scene_meta["direction"] = direction.strip()
     ensure_opening_frame(scene, work_dir, cfg, comfy_url=comfy_url,
-                         vid_width=vid_width, vid_height=vid_height)
+                         vid_width=vid_width, vid_height=vid_height,
+                         style_name=style_name)
     # One scene = ONE generation, whole conversation in a single continuous
     # clip (the user's call: shot/reverse-shot splitting kept identities safe
     # but broke scenes apart). The splitter remains available per config

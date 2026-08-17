@@ -152,6 +152,32 @@ class OpeningFrameTests(unittest.TestCase):
         self.assertIsNone(got)
         self.assertEqual(made, [])
 
+    def test_a_location_reference_stops_the_frame_paint(self):
+        # A location reference IS the place, chosen by hand — and a frame
+        # outranks it, so painting one here would silently supersede the
+        # reference (resurrecting a frame the user removed). The take opens on
+        # the location instead.
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as td:
+            wd = Path(td)
+            (wd / "visuals").mkdir()
+            (wd / "visuals" / "loc.png").write_bytes(b"png")
+            (wd / "visuals.json").write_text(json.dumps([
+                {"id": "vis_1", "name": "Bar", "kind": "location",
+                 "description": "a bar", "scenes": [3], "ref_image": "loc.png",
+                 "enabled": True}]))
+            made = []
+
+            def _fake_gen(engine, prompt, out, **kw):
+                made.append(prompt)
+
+            with unittest.mock.patch.object(rg, "generate_with_engine", _fake_gen):
+                got = rg.ensure_opening_frame(_silent(["Ana"]), wd, {},
+                                              comfy_url="http://x",
+                                              vid_width=512, vid_height=256)
+        self.assertIsNone(got)
+        self.assertEqual(made, [])
+
 
 class MetaTests(unittest.TestCase):
     def test_silent_scene_keeps_its_cast_and_authored_length(self):
