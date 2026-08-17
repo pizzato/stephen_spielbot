@@ -41,6 +41,8 @@ See [model licensing](tts_licensing.md) before pointing these at other weights.
 |---|---|---|
 | `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the film editor's temporal AI upscaler. Blank uses the packaged LTX-2.3 IC-LoRA workflow |
 | `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Timeout for the temporal AI upscaler, in seconds |
+| `TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS` | `12.0` | Seconds per chunk for the temporal AI upscaler — long clips are upscaled in chunks and crossfaded back together. Raise it on a GPU with more memory |
+| `TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP` | `0.5` | Crossfade overlap between those chunks, in seconds (capped at 45% of the chunk length) |
 
 ## Storage
 
@@ -48,6 +50,13 @@ See [model licensing](tts_licensing.md) before pointing these at other weights.
 |---|---|---|
 | `SPIELBOT_ORCHESTRATOR_DB` | `~/.local/share/video-generator/orchestrator.sqlite3` | Override path for the [durable orchestrator database](orchestration.md) |
 | `CONFIG_YAML` | `~/.config/video-generator/config.yaml` | Override the config path (respected by the `scripts/` helpers) |
+| `VOICE_CADENCE_FILE` | `~/.config/video-generator/voice_cadence.json` | Override path for the learned narrator-cadence store (measured words-per-second per voice and engine, which sizes length-based scripts) |
+
+## Running a second instance
+
+| Variable | Default | Description |
+|---|---|---|
+| `SPIELBOT_NO_BACKGROUND` | _(unset)_ | Set to `1` to run a UI/API-only instance: no automation tick, no publish scheduler, no re-render requeue. **Required** for any test or preview server started next to the real service — two automation loops over the same queue cause duplicate renders and double uploads |
 
 ## Install-time variables
 
