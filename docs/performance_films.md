@@ -59,7 +59,10 @@ What the take is built from depends on what the scene has:
   image rides as a reference that defines the opening composition — *begin the take looking
   like this picture*. So the image prompt still composes the shot, exactly as it did on the
   I2V path. The Create screen's preview is used when one exists; otherwise the frame is
-  generated at render time, on the same worker, right before the take.
+  generated at render time, on the same worker, right before the take — **unless a location
+  reference applies to the scene**: the location is the place, chosen by hand, and a frame
+  outranks it, so no frame is invented over it. Removing a scene's first frame therefore
+  sticks — the take opens on the location instead.
 - **Portraits, when anyone is on screen.** The writer names a **cast** on each silent scene
   (at most two, from the same characters), alongside the setting, camera and soundscape a
   dialogue scene gets, and those portraits join the frame as references — which is what
@@ -311,7 +314,11 @@ reference**: a `<Picture N>` whose authority is the space, light, framing and wh
 everyone stands, while faces and voices stay bound to their own references. When a scene
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
-hold; more and the weakest starts dropping.
+hold; more and the weakest starts dropping. Because of that ranking, the first frame is
+opt-in for every acted scene: nothing auto-paints one (the Script screen's
+missing-preview pass skips acted, singing and performed-silent scenes alike), and
+**Remove first frame** is permanent — the location takes over, and neither the screen nor
+the render quietly paints the frame back.
 
 **Scenery, wardrobe, and free-form references** — the `<Picture N>` slots beyond the
 portraits — live with the characters, under **Characters & Artifacts**, on both the Script

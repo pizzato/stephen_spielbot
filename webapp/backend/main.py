@@ -5094,13 +5094,19 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         store.close()
     if not rows:
         return {"scenes": [], "generated": 0, "failed": []}
-    # An acted scene has no first frame — it is conditioned on the character
-    # portraits — so a still for one is GPU spent on an image nothing ever
-    # reads. Guarded server-side too: the render path and any older client both
-    # reach this endpoint. A mixed film still gets stills for its other scenes.
+    wd = gapp._job_work_dir(job_id)
+    # An acted scene needs no first frame — it is conditioned on the character
+    # portraits — and painting one anyway SUPERSEDES the scene's location
+    # references (resolve_performance_references drops them when a frame
+    # exists), silently resurrecting a frame the user removed. Guarded with the
+    # renderer's own predicate: a singing scene and an acted-silent one carry
+    # mode "silent", which a mode-only check misses. A mixed film still gets
+    # stills for its narrated scenes.
+    acted_cfg = (_acted_scene_ctx(wd)["acted_cfg"] if wd is not None
+                 else {"h3_silent_scenes": False})
     needs_frame = [r for r in rows
-                   if not performance_mode.is_performance_mode(
-                       (r.get("metadata") or {}).get("mode"))]
+                   if not performance_mode.renders_acted(
+                       {"metadata": dict(r.get("metadata") or {})}, acted_cfg)]
     if not needs_frame:
         return {"scenes": [], "generated": 0, "failed": [],
                 "skipped": "every scene is acted — none has a first frame"}
@@ -5132,7 +5138,6 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
         finally:
             store.close()
 
-    wd = gapp._job_work_dir(job_id)
     return {"scenes": [_scene_to_json(r, wd) for r in rows],
             "generated": len(to_generate) - len(failed), "failed": failed}
 

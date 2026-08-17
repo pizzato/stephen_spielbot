@@ -458,12 +458,14 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   useEffect(() => { refreshScripts() }, [])
 
   // Generate any missing scene previews as soon as the script loads.
-  // An acted scene renders no first frame — it is conditioned on the character
-  // portraits instead — so painting a still for one is pure wasted GPU on a
-  // frame the film never looks at. A mixed film still needs its narrated ones.
+  // An acted scene needs no first frame — it is conditioned on the character
+  // portraits instead — and painting one anyway supersedes the scene's
+  // location references (and resurrects a frame the user removed). Singing and
+  // acted-silent scenes carry mode "silent", so the acted-SHAPE predicate, not
+  // acted(), decides. A mixed film still needs its narrated ones.
   useEffect(() => {
     if (!job?.job_id || allActed) return
-    if (!(job.scenes || []).some((s) => !s.has_preview && !acted(s))) return
+    if (!(job.scenes || []).some((s) => !s.has_preview && !hasActedShape(s.mode, actedSilent, s.singing))) return
     setGenAll(true)
     setGenAllMsg('Generating missing scene previews…')
     // Generate previews at the SAME resolution the render will use (what approve
