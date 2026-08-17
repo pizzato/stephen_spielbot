@@ -1061,6 +1061,24 @@ class MixedPreviewTests(unittest.TestCase):
         store = mock.MagicMock()
         store.scene_rows.return_value = [self._rows()[1]]
         with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend.gapp, "_job_work_dir", return_value=None), \
+             mock.patch.object(backend.gapp, "_generate_active_scene_preview") as gen:
+            out = backend.generate_all_previews("job")
+        gen.assert_not_called()
+        self.assertIn("skipped", out)
+
+    def test_a_singing_scene_is_never_painted(self):
+        # A song film's beat carries mode "silent" + singing — it always
+        # renders as an acted take, so painting a still would resurrect a
+        # first frame the user removed (and supersede the scene's location).
+        import webapp.backend.main as backend
+        store = mock.MagicMock()
+        store.scene_rows.return_value = [
+            {"id": 1, "title": "verse", "image_prompt": "i", "preview_path": "",
+             "metadata": {"mode": "silent", "singing": True,
+                          "song_window": [0.0, 8.0]}}]
+        with mock.patch.object(backend.DurableStore, "default", return_value=store), \
+             mock.patch.object(backend.gapp, "_job_work_dir", return_value=None), \
              mock.patch.object(backend.gapp, "_generate_active_scene_preview") as gen:
             out = backend.generate_all_previews("job")
         gen.assert_not_called()
