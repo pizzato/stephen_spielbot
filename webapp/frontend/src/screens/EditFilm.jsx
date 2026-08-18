@@ -768,7 +768,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
 
   const set = (k) => (e) => setVol((v) => ({ ...v, [k]: +e.target.value }))
   const currentResolution = data?.resolution || meta.default_resolution || ''
-  const orientation = videoDims ? (videoDims.h > videoDims.w ? 'Portrait' : 'Landscape') : String(currentResolution || '').split(' ')[0]
+  // Square is its own orientation, not a Landscape that happens to be as tall as
+  // it is wide: measuring only h > w offered a square film Landscape targets,
+  // and upscaling to one crops its top and bottom away.
+  const measuredOrientation = (d) => (d.h > d.w ? 'Portrait' : d.w > d.h ? 'Landscape' : 'Square')
+  const orientation = videoDims ? measuredOrientation(videoDims) : String(currentResolution || '').split(' ')[0]
   const currentPixels = videoDims ? videoDims.w * videoDims.h : resPixels(currentResolution)
   // Upscale reaches finishing sizes (QHD/4K) that nothing may render at, so it
   // reads its own list rather than the render resolutions.
