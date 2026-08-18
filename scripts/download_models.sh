@@ -196,6 +196,16 @@ download \
     "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors" \
     "models/loras"
 
+# MiniMax H3 latent upscaler — Remix "H3 latent" mode. Community Apache-2.0
+# model over H3's 24-channel latents. bf16 only: the repo's .pth loads through
+# torch.load(weights_only=False), which we won't run.
+# https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler
+download \
+    "LBH-123-AI/Minimax_h3_latent_Upscaler" \
+    "minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+    "models/latent_upscale_models" \
+    || echo "  [warn] MiniMax H3 latent upscaler skipped"
+
 download \
     "Comfy-Org/ltx-2" \
     "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" \

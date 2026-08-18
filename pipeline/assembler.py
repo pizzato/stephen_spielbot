@@ -398,6 +398,8 @@ def temporal_ai_upscale_video(
       - ``ic_lora`` — Lightricks LTX-2.3 IC-LoRA Pixel Spatial Upscaler
         (generative 2×/4×; https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler)
       - ``ltx_latent`` — simpler LTXVLatentUpsampler + latent spatial-upscaler-x2 model
+      - ``h3_latent`` — MiniMax H3 24-channel latent upscaler (learned 3D resize;
+        https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler)
 
     An explicit *command_template* (or TEMPORAL_VIDEO_UPSCALER_CMD) overrides both
     and runs as a shell command instead.
@@ -413,13 +415,19 @@ def temporal_ai_upscale_video(
         eng = "ic_lora"
     if eng in {"latent", "latent_ai", "ltx_latent_upsampler"}:
         eng = "ltx_latent"
-    if eng not in {"ic_lora", "ltx_latent"}:
+    if eng in {"h3", "h3_latent_upscaler", "minimax_h3_latent"}:
+        eng = "h3_latent"
+    if eng not in {"ic_lora", "ltx_latent", "h3_latent"}:
         raise ValueError(f"Unknown AI upscale engine: {engine!r}")
 
     template = command_template or os.environ.get("TEMPORAL_VIDEO_UPSCALER_CMD", "")
     timeout = timeout_seconds or int(os.environ.get("TEMPORAL_VIDEO_UPSCALER_TIMEOUT", "7200"))
     if not template.strip():
-        from pipeline.comfyui import upscale_video_ltx, upscale_video_ltx_latent
+        from pipeline.comfyui import (
+            upscale_video_h3_latent,
+            upscale_video_ltx,
+            upscale_video_ltx_latent,
+        )
 
         duration = _get_duration(input_path)
         fps = _get_video_fps(input_path)
@@ -443,6 +451,15 @@ def temporal_ai_upscale_video(
                     fps=fps,
                     timeout_seconds=timeout_seconds,
                     comfy_url=cu,
+                )
+            if eng == "h3_latent":
+                return upscale_video_h3_latent(
+                    inp, out, w, h,
+                    fps=fps,
+                    timeout_seconds=timeout_seconds,
+                    comfy_url=cu,
+                    source_width=actual_w,
+                    source_height=actual_h,
                 )
             return upscale_video_ltx(
                 inp, out, w, h,
@@ -470,6 +487,12 @@ def temporal_ai_upscale_video(
             result = upscale_video_ltx_latent(
                 input_path, output_path, width, height,
                 fps=fps, timeout_seconds=timeout, comfy_url=url,
+            )
+        elif eng == "h3_latent":
+            result = upscale_video_h3_latent(
+                input_path, output_path, width, height,
+                fps=fps, timeout_seconds=timeout, comfy_url=url,
+                source_width=actual_w, source_height=actual_h,
             )
         else:
             result = upscale_video_ltx(

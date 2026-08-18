@@ -1503,6 +1503,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             <strong> LTX latent</strong> is the simple model upscaler (latent 2×).
             <strong> LTX IC-LoRA</strong> is the generative{' '}
             <a href="https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" target="_blank" rel="noreferrer">Pixel Spatial Upscaler</a>.
+            <strong> H3 latent</strong> resizes inside MiniMax H3's latent space with the{' '}
+            <a href="https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler" target="_blank" rel="noreferrer">H3 latent upscaler</a>{' '}
+            (any factor up to 4×) — best suited to films rendered on H3.
           </p>
           <div className="stack gap-14 mt-24">
             <Field label="Target resolution">
@@ -1519,6 +1522,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                 <option value="fast">Fast (ffmpeg)</option>
                 <option value="ltx_latent">LTX latent (simple model)</option>
                 <option value="ic_lora">LTX IC-LoRA (generative)</option>
+                <option value="h3_latent">H3 latent (MiniMax H3)</option>
               </select>
             </Field>
           </div>
