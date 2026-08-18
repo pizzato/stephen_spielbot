@@ -100,7 +100,16 @@ they exist, plus a history of how long each step took.
 ### Rendering now
 
 When a film render is active, a banner at the top gives it a progress bar, a percentage,
-the remaining time, and **Open render**.
+the remaining time, and **Open render**. The banner follows the film whose render process
+is actually running — creating another film while one renders doesn't steal it. A film
+whose script or song is still being written before its render starts appears in its own
+group as **Render queued** until the render takes over.
+
+Under the banner, **Also in flight** lists every other film with live work — one line per
+film showing its current step (writing the song, re-voicing, a final upscale, a queued
+render) with its progress or elapsed time and an open button, so anything going on can be
+followed from the top of the screen. When nothing is rendering but other work is live,
+the same card appears as **Happening now**.
 
 ### Filters
 

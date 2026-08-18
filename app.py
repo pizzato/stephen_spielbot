@@ -1837,11 +1837,36 @@ def _latest_work_dir() -> Path | None:
 
 
 
+def _running_work_dirs() -> list[Path]:
+    """Work dirs whose generation process is actually alive right now
+    (job.json says "running" and the recorded pid answers), oldest first."""
+    running: list[tuple[float, Path]] = []
+    try:
+        for meta_path in OUTPUT_DIR.glob("*/job.json"):
+            try:
+                meta = _read_json(meta_path)
+            except Exception:
+                continue
+            if meta.get("status") == "running" and _process_running(meta.get("pid")):
+                started = float(meta.get("created_at") or meta.get("updated_at") or 0)
+                running.append((started, meta_path.parent))
+    except Exception:
+        pass
+    return [p for _ts, p in sorted(running)]
+
+
 def _preferred_work_dir(active_job_dir: str = "") -> Path | None:
     if active_job_dir:
         active = Path(active_job_dir)
         if active.exists():
             return active
+    # The mtime heuristic below tracks whichever film wrote a marker file last,
+    # which flips to a freshly created film (script/song generation touches its
+    # files constantly) while another is still rendering. A job whose render
+    # process is actually alive always wins over recency.
+    running = _running_work_dirs()
+    if running:
+        return running[0]
     return _latest_work_dir()
 
 

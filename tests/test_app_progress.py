@@ -71,6 +71,61 @@ class AppProgressTests(unittest.TestCase):
                     app._preferred_work_dir(str(output_dir / "gone")), new_dir
                 )
 
+    def test_running_render_wins_over_newer_files(self):
+        """Creating a second film touches its script/job files constantly, which
+        made every 'current render' surface flip to it while the first film was
+        still rendering. The job whose process is actually alive must win."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            rendering = output_dir / "rendering-20260818-000001"
+            creating = output_dir / "creating-20260818-000002"
+            rendering.mkdir()
+            creating.mkdir()
+            (rendering / "job.json").write_text(json.dumps(
+                # Our own pid answers os.kill(pid, 0) — a live render process.
+                {"status": "running", "pid": os.getpid(), "created_at": 1}
+            ))
+            (rendering / "progress.json").write_text(
+                json.dumps({"pct": 40, "msg": "Scene 4", "ts": 1})
+            )
+            (creating / "script.json").write_text("{}")
+            (creating / "progress.json").write_text(
+                json.dumps({"pct": 0, "msg": "Waiting to start...", "ts": 2})
+            )
+            for p in rendering.iterdir():
+                os.utime(p, (1, 1))
+            for p in creating.iterdir():
+                os.utime(p, (10, 10))
+
+            with mock.patch.object(app, "OUTPUT_DIR", output_dir):
+                # The mtime heuristic alone would pick the film being created…
+                self.assertEqual(app._latest_work_dir(), creating)
+                # …but the live render process wins.
+                self.assertEqual(app._running_work_dirs(), [rendering])
+                self.assertEqual(app._preferred_work_dir(""), rendering)
+
+    def test_dead_pid_does_not_count_as_running(self):
+        """A job.json left at status "running" by a crashed process must not
+        hijack the current-render pick — recency applies as before."""
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            stale = output_dir / "crashed-20260818-000001"
+            fresh = output_dir / "fresh-20260818-000002"
+            stale.mkdir()
+            fresh.mkdir()
+            (stale / "job.json").write_text(json.dumps(
+                {"status": "running", "pid": 2 ** 22 + 1234, "created_at": 1}
+            ))
+            (fresh / "progress.json").write_text(
+                json.dumps({"pct": 0, "msg": "Waiting to start...", "ts": 2})
+            )
+            os.utime(stale / "job.json", (1, 1))
+            os.utime(fresh / "progress.json", (10, 10))
+
+            with mock.patch.object(app, "OUTPUT_DIR", output_dir):
+                self.assertEqual(app._running_work_dirs(), [])
+                self.assertEqual(app._preferred_work_dir(""), fresh)
+
 
 class WorkerActivityTests(unittest.TestCase):
     """``/api/progress`` builds its worker list from the configured render fleet
