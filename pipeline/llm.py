@@ -1772,10 +1772,30 @@ def _parse_suggestions(text: str) -> list[dict]:
     return []
 
 
-def style_suggestion_context(style: dict | None) -> str:
+# How each film format shapes a good topic — appended to the style context so
+# idea generation pitches subjects the style's default format can deliver.
+# Narration (the plain default) needs no steer.
+_FORMAT_SUGGESTION_NOTES = {
+    "dialogue": ("These videos are ACTED: the characters speak their own lines on "
+                 "screen, with no narrator. Suggest topics that come alive as scenes "
+                 "and conversations between a few characters."),
+    "mixed": ("These videos blend narration, acted dialogue and silent visual "
+              "scenes. Suggest topics that offer both a story to tell and "
+              "characters worth putting on screen."),
+    "silent": ("These videos are told almost entirely in pictures — no narrator, "
+               "barely a spoken line. Suggest visually striking topics that need "
+               "no words to land."),
+    "song": ("Every video is a MUSIC VIDEO: the topic becomes an original song the "
+             "lead character performs on camera. Suggest topics that sing — "
+             "subjects, stories or moods that make strong lyrics and a strong hook."),
+}
+
+
+def style_suggestion_context(style: dict | None, video_format: str | None = None) -> str:
     """Render a style profile (issue #66) into prompt lines steering idea
-    generation — including how titles should be worded (issue #82). Empty when
-    there's nothing distinctive to say."""
+    generation — including how titles should be worded (issue #82) and what the
+    style's default film format needs from a topic. Empty when there's nothing
+    distinctive to say."""
     if not style:
         return ""
     lines = []
@@ -1789,6 +1809,9 @@ def style_suggestion_context(style: dict | None) -> str:
         lines.append(f"That style is described as: {description}")
     if visual:
         lines.append(f"Its visuals look like: {visual}")
+    fmt_note = _FORMAT_SUGGESTION_NOTES.get((video_format or "").strip().lower())
+    if fmt_note:
+        lines.append(fmt_note)
     if lines:
         lines.append("Every suggested topic must suit videos made in that style.")
     # Title styling is independent of topic suitability — apply it even when the
@@ -1815,13 +1838,16 @@ def _drop_repeats(suggestions: list[dict], previous_titles: list[str] | None) ->
 
 def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = None,
                                style: dict | None = None,
-                               discarded_titles: list[str] | None = None) -> list[dict]:
+                               discarded_titles: list[str] | None = None,
+                               video_format: str | None = None) -> list[dict]:
     """Generate 5 video topic suggestions that suit the channel's style.
 
     ``style`` (optional) is a style profile dict (name/description/visual_style)
     whose character steers the ideas — a children-story style should yield
-    children-story topics, NOT topics inferred from past videos. ``previous_titles``
-    and ``discarded_titles`` are shown to the model only as 'do not repeat' lists,
+    children-story topics, NOT topics inferred from past videos. ``video_format``
+    (optional) is the style's default film format, so a music-video style is
+    pitched songs and an acted style scenes. ``previous_titles`` and
+    ``discarded_titles`` are shown to the model only as 'do not repeat' lists,
     and verbatim repeats are also filtered out programmatically. Returns a list of
     dicts with keys: title, reason, interestingness.
     """
@@ -1840,7 +1866,7 @@ def generate_video_suggestions(previous_titles: list[str], cfg: dict | None = No
     sys_msg = _prompts.system("video_suggestions")
     user_msg = _prompts.user("video_suggestions", titles_list=titles_list,
                              discarded_list=discarded_list,
-                             style_context=style_suggestion_context(style))
+                             style_context=style_suggestion_context(style, video_format))
     try:
         text = _chat_complete(cfg, sys_msg, user_msg, max_tokens=2048, label="video_suggestions")
         return _drop_repeats(_parse_suggestions(text), previous_titles)

@@ -2958,7 +2958,7 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               )}
               <div>
                 <Field label="Default format"
-                  hint="The style's default film format: the Create screen starts on it (ideas you send to Create inherit it too), and unattended films are written in it. Every film can still switch formats on the Create screen.">
+                  hint="The style's default film format: the Create screen starts on it, AI ideas are pitched to suit it, and unattended films are written in it. Every film can still switch formats on the Create screen.">
                   <Segmented value={av.auto_format || 'narration'}
                     onChange={(v) => setAuto('auto_format', v)}
                     options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },

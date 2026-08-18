@@ -348,8 +348,9 @@ Per style (see above), or globally as the baseline.
   scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
 - **Default format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
   style's default [format](create.md#format). The Create screen starts on it (ideas you
-  send to Create inherit it too), and it is what automation writes unattended films in.
-  Every film can still switch formats on the Create screen
+  send to Create inherit it too), [AI ideas](ideas.md) for the style are pitched to suit
+  it, and it is what automation writes unattended films in. Every film can still switch
+  formats on the Create screen
 
 The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
 drafts to review, and *auto-start with approval required* renders only what you've ticked.

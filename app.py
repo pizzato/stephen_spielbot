@@ -4187,8 +4187,9 @@ def _generate_mixed_suggestions(cfg: dict, style_names: list[str],
         ch = _dedup_scope(cfg, name)
         existing_titles = _channel_video_titles(cfg, style_name=name) + fresh_by_channel.get(ch, [])
         try:
-            new_data = generate_video_suggestions(existing_titles, cfg, style=ss,
-                                                  discarded_titles=discarded)
+            new_data = generate_video_suggestions(
+                existing_titles, cfg, style=ss, discarded_titles=discarded,
+                video_format=automation_settings(cfg, name)["auto_format"])
         except Exception as exc:
             logger.warning("_generate_mixed_suggestions: generation failed for %r: %s", name, exc)
             new_data = []
