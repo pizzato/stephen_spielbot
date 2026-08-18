@@ -71,6 +71,35 @@ class QueueFromJobDedupTests(unittest.TestCase):
         self.add.assert_called_once()
         self.assertEqual(out["queue_item_id"], "new1")
 
+    def test_creating_slot_updates_in_place_without_unapproving(self):
+        # Automation claims the row ("creating", approved) BEFORE the script
+        # generation, whose queue_from_job (queue_item_id via the create brief,
+        # approved=False) used to fall through and append a duplicate row on
+        # the same work_dir — which auto-approve later re-rendered.
+        self.queue.append({"id": "slot1", "status": "creating", "approved": True,
+                           "video_job_id": "", "work_dir": ""})
+        out = backend.queue_from_job(self.body(queue_item_id="slot1", approved=False))
+        self.assertTrue(out["updated_in_place"])
+        self.assertEqual(out["queue_item_id"], "slot1")
+        self.add.assert_not_called()
+        self.update.assert_called_once()
+        # Starting was the approval — linking the script must not revoke it.
+        self.assertNotIn("approved", self.update.call_args.kwargs)
+
+    def test_creating_slot_matched_by_work_dir_without_id(self):
+        self.queue.append({"id": "slot1", "status": "creating", "approved": True,
+                           "video_job_id": "job_abc", "work_dir": "/videos/topic-150008"})
+        out = backend.queue_from_job(self.body(queue_item_id=""))
+        self.assertTrue(out["updated_in_place"])
+        self.assertEqual(out["queue_item_id"], "slot1")
+        self.add.assert_not_called()
+
+    def test_creating_slot_keeps_explicit_approval(self):
+        self.queue.append({"id": "slot1", "status": "creating", "approved": False,
+                           "video_job_id": "", "work_dir": ""})
+        backend.queue_from_job(self.body(queue_item_id="slot1", approved=True))
+        self.assertTrue(self.update.call_args.kwargs.get("approved"))
+
 
 if __name__ == "__main__":
     unittest.main()

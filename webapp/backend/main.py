@@ -12343,8 +12343,10 @@ def queue_from_job(body: FromJobBody) -> dict:
     If body.queue_item_id points at a still-pending slot, update THAT item in
     place (keeping its position) instead of appending a new entry. This is how
     the Queue "Edit" flow attaches a ready script to an existing slot so it
-    renders fast (issue #43). In-place updates never auto-start — the item stays
-    queued exactly where it was."""
+    renders fast (issue #43). A slot already claimed as "creating" (automation
+    starts the item before writing its script) is likewise updated in place —
+    never duplicated, and never un-approved. In-place updates never auto-start —
+    the item stays queued exactly where it was."""
     cfg = gapp.load_config()
     title = (body.video_title or "").strip() or Path(body.work_dir).name
     n = body.n_scenes
@@ -12373,8 +12375,8 @@ def queue_from_job(body: FromJobBody) -> dict:
     if minutes > 0:
         script_fields["suggested_minutes"] = minutes
 
-    # In-place update of an existing pending slot — keep its queue position.
-    # Prefer the explicit queue_item_id; otherwise fall back to a pending row
+    # In-place update of an existing pending or creating slot — keep its queue
+    # position. Prefer the explicit queue_item_id; otherwise fall back to a row
     # that already points at this job/work_dir, so a second approve of the same
     # script fills that slot instead of appending a duplicate. Both rows would
     # share one work_dir, and a Library delete removes every row matching it —
@@ -12385,10 +12387,24 @@ def queue_from_job(body: FromJobBody) -> dict:
         existing = next((q for q in queue if q.get("id") == body.queue_item_id), None)
     if existing is None:
         existing = next((q for q in queue
-                         if q.get("status") == "pending"
+                         if q.get("status") in ("pending", "creating")
                          and ((body.job_id and q.get("video_job_id") == body.job_id)
                               or (body.work_dir and q.get("work_dir") == body.work_dir))), None)
     if existing is not None and existing.get("status") == "pending":
+        yt.update_queue_item(existing["id"], final_title=title,
+                             suggested_scene_count=n, **script_fields)
+        return {"ok": True, "queue_item_id": existing["id"],
+                "started": None, "updated_in_place": True}
+    if existing is not None and existing.get("status") == "creating":
+        # The slot is already claimed by a running start: automation's
+        # _start_queue_item flips the row to "creating" BEFORE the ~45s script
+        # generation, and a music video's script gen then reaches here via the
+        # queue_item_id carried in the create brief. Appending would spawn a
+        # duplicate row for the same work_dir (which auto-approve would later
+        # re-render). Link the fresh script to the claimed row instead — and
+        # never downgrade its approval: starting was itself the approval.
+        if not body.approved:
+            script_fields.pop("approved", None)
         yt.update_queue_item(existing["id"], final_title=title,
                              suggested_scene_count=n, **script_fields)
         return {"ok": True, "queue_item_id": existing["id"],
