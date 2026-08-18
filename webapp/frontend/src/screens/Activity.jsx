@@ -318,7 +318,10 @@ export default function Activity({ go }) {
                 variant="primary"
                 icon="gauge-high"
                 onClick={() => {
-                  const liveRender = (data.live || []).find((e) => e.category === 'render' && e.work_dir)
+                  // Prefer the render that is actually running — a queued
+                  // render row would open the wrong film's Render screen.
+                  const renders = (data.live || []).filter((e) => e.category === 'render' && e.work_dir)
+                  const liveRender = renders.find((e) => e.status === 'running') || renders[0]
                   if (liveRender?.work_dir) go('progress', { workDir: liveRender.work_dir })
                   else go('progress')
                 }}

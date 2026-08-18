@@ -776,61 +776,107 @@ def _record_film_task_activity(
         )
 
 
+def _render_activity_item(wd: Path) -> dict:
+    """One "Rendering film" activity row with progress % and a learned ETA."""
+    pct, msg = gapp._status_for_work_dir(wd)
+    title = wd.name
+    eta_text, eta_seconds = None, None
+    started_at = None
+    eta, status = None, ""
+    store = DurableStore.default()
+    try:
+        job_row = store.get_job_by_work_dir(str(wd))
+        if job_row is not None:
+            job = _row_to_dict(job_row)
+            status = job.get("status", "")
+            title = job.get("title") or title
+            try:
+                started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
+            except (TypeError, ValueError):
+                started_at = None
+            tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
+            cfg = gapp.load_config()
+            try:
+                eta = estimate_eta(tasks, store.timing_table(), cfg,
+                                   reserved_comfy=_ui_reserved_comfy(cfg))
+                if eta:
+                    eta_text = eta.get("eta_text")
+                    eta_seconds = eta.get("eta_seconds")
+            except Exception:
+                pass
+    finally:
+        store.close()
+    # Same reconciliation the Progress screen + sidebar badge use, so the
+    # Activity % matches the ETA instead of the raw band value.
+    final_path = gapp._final_path_for_work_dir(wd)
+    _done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
+    pct = _display_pct(int(round(pct)), eta, status, _done)
+    return _make_activity_event(
+        name="Rendering film",
+        detail=msg or title,
+        started_at=started_at or time.time(),
+        status="running",
+        work_dir=str(wd),
+        title=title,
+        pct=pct,
+        eta_text=eta_text,
+        eta_seconds=eta_seconds,
+        event_id=f"render:{wd.name}",
+        category="render",
+    )
+
+
 def _live_render_activity_items() -> list[dict]:
-    """Running durable generation jobs with progress % and learned ETAs."""
+    """Live full-film generation, one item per job.
+
+    Running renders are found by their job.json pid — the mtime heuristic in
+    _preferred_work_dir flips to a freshly created film while another is still
+    rendering, which made the real render vanish from Activity. Queue items
+    still creating their script/song follow as "queued" rows so a film whose
+    render hasn't started is never presented as the one rendering."""
     items: list[dict] = []
     try:
-        if not gapp._is_job_running():
-            return items
-        wd = gapp._preferred_work_dir("")
-        if wd is None:
-            return items
-        pct, msg = gapp._status_for_work_dir(wd)
-        title = wd.name
-        eta_text, eta_seconds = None, None
-        started_at = None
-        eta, status = None, ""
-        store = DurableStore.default()
-        try:
-            job_row = store.get_job_by_work_dir(str(wd))
-            if job_row is not None:
-                job = _row_to_dict(job_row)
-                status = job.get("status", "")
-                title = job.get("title") or title
-                try:
-                    started_at = float(job.get("started_at") or job.get("created_at") or 0) or None
-                except (TypeError, ValueError):
-                    started_at = None
-                tasks = [_row_to_dict(t) for t in store.task_rows(job["id"])]
-                cfg = gapp.load_config()
-                try:
-                    eta = estimate_eta(tasks, store.timing_table(), cfg,
-                                       reserved_comfy=_ui_reserved_comfy(cfg))
-                    if eta:
-                        eta_text = eta.get("eta_text")
-                        eta_seconds = eta.get("eta_seconds")
-                except Exception:
-                    pass
-        finally:
-            store.close()
-        # Same reconciliation the Progress screen + sidebar badge use, so the
-        # Activity % matches the ETA instead of the raw band value.
-        final_path = gapp._final_path_for_work_dir(wd)
-        _done = final_path.exists() and final_path.stat().st_size > 10_000 and (wd / "combined.mp4").exists()
-        pct = _display_pct(int(round(pct)), eta, status, _done)
-        items.append(_make_activity_event(
-            name="Rendering film",
-            detail=msg or title,
-            started_at=started_at or time.time(),
-            status="running",
-            work_dir=str(wd),
-            title=title,
-            pct=pct,
-            eta_text=eta_text,
-            eta_seconds=eta_seconds,
-            event_id=f"render:{wd.name}",
-            category="render",
-        ))
+        running = gapp._running_work_dirs()
+        if not running and gapp._is_job_running():
+            # No live render process (script/song generation, or the moment
+            # between launch and the pid landing in job.json) — fall back to
+            # the recency pick so the banner keeps showing the live work.
+            wd = gapp._preferred_work_dir("")
+            if wd is not None:
+                running = [wd]
+        for wd in running:
+            try:
+                items.append(_render_activity_item(wd))
+            except Exception:
+                continue
+        seen = {str(wd) for wd in running}
+        cutoff = time.time() - 86400
+        for q in yt.load_queue():
+            if q.get("status") != "creating":
+                continue
+            qwd = q.get("work_dir") or ""
+            if not qwd or qwd in seen:
+                continue
+            ts = q.get("updated_at") or q.get("created_at") or 0
+            if ts <= cutoff:
+                continue
+            try:
+                job_meta = json.loads((Path(qwd) / "job.json").read_text())
+                if job_meta.get("status") in ("error", "cancelled", "paused", "done"):
+                    continue
+            except Exception:
+                pass
+            _pct, msg = gapp._status_for_work_dir(Path(qwd))
+            items.append(_make_activity_event(
+                name="Render queued",
+                detail=msg or "",
+                started_at=float(ts) or time.time(),
+                status="queued",
+                work_dir=qwd,
+                title=q.get("title") or Path(qwd).name,
+                event_id=f"render:{Path(qwd).name}",
+                category="render",
+            ))
     except Exception:
         pass
     return items

@@ -100,7 +100,10 @@ they exist, plus a history of how long each step took.
 ### Rendering now
 
 When a film render is active, a banner at the top gives it a progress bar, a percentage,
-the remaining time, and **Open render**.
+the remaining time, and **Open render**. The banner follows the film whose render process
+is actually running — creating another film while one renders doesn't steal it. A film
+whose script or song is still being written before its render starts appears in its own
+group as **Render queued** until the render takes over.
 
 ### Filters
 
