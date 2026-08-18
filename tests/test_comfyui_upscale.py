@@ -234,11 +234,11 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
 
             self.assertEqual(queued["workflow"]["4"]["inputs"]["scale"], 4.0)
 
-    def test_h3_latent_trims_vae_frame_padding(self):
-        """H3's VAE pads up to its 17k+5 grid; the extra tail must come back off.
+    def test_h3_latent_conforms_vae_length_drift(self):
+        """H3's chunked VAE returns a different length; conform it either way.
 
-        Without this a 5.00s scene returns as 5.17s, and a whole film of them
-        walks out of sync with its captions.
+        Long desyncs the film from its captions; short silently drops the tail
+        of the scene, narration included.
         """
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.mp4"
@@ -257,8 +257,8 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out), \
                  mock.patch("pipeline.assembler._get_duration", side_effect=lambda *_a, **_k: next(durations)), \
-                 mock.patch("pipeline.assembler.trim_video",
-                            side_effect=lambda i, o, d: (Path(o).write_bytes(b"trimmed"), o)[1]) as trim, \
+                 mock.patch("pipeline.assembler.conform_video_to_source",
+                            side_effect=lambda v, s, o, d: (Path(o).write_bytes(b"fixed"), o)[1]) as trim, \
                  mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
                 comfyui.upscale_video_h3_latent(
                     src, out, 1408, 1408, fps=24.0,
@@ -266,8 +266,65 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                 )
 
             trim.assert_called_once()
-            # trimmed back to the source length, not the padded one
-            self.assertEqual(trim.call_args[0][2], 5.0)
+            # conformed to the source length, not the padded one
+            self.assertEqual(trim.call_args[0][3], 5.0)
+            # audio comes from the source clip, not the round-tripped copy
+            self.assertEqual(trim.call_args[0][1], src)
+
+    def test_h3_latent_conforms_when_decode_comes_back_short(self):
+        """Measured: a 6.250s/150-frame clip decoded back as 5.875s/141."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"video")
+            durations = iter([6.25, 5.875])
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", return_value="prompt-1"), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", side_effect=lambda *_a, **_k: next(durations)), \
+                 mock.patch("pipeline.assembler.conform_video_to_source",
+                            side_effect=lambda v, s, o, d: (Path(o).write_bytes(b"fixed"), o)[1]) as conform, \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_h3_latent(
+                    src, out, 2048, 2048, fps=24.0,
+                    source_width=1024, source_height=1024,
+                )
+
+            conform.assert_called_once()
+            self.assertEqual(conform.call_args[0][3], 6.25)
+
+class UpscaleResolutionSplitTests(unittest.TestCase):
+    """Finishing sizes must be reachable by upscale and by nothing else."""
+
+    def test_render_list_excludes_upscale_only_tiers(self):
+        import app
+        for name in app._RESOLUTIONS:
+            self.assertNotIn("4K", name, f"4K leaked into the render list: {name}")
+            self.assertNotIn("QHD", name, f"QHD leaked into the render list: {name}")
+
+    def test_upscale_list_is_a_superset(self):
+        import app
+        for name in app._RESOLUTIONS:
+            self.assertIn(name, app._UPSCALE_RESOLUTIONS)
+        extra = set(app._UPSCALE_RESOLUTIONS) - set(app._RESOLUTIONS)
+        self.assertEqual(len(extra), 6)  # QHD + 4K across three orientations
+
+    def test_four_k_present_for_every_orientation(self):
+        import app
+        for want in ("Landscape 4K (3840×2160)",
+                     "Portrait 4K (2160×3840)",
+                     "Square 4K (2160×2160)"):
+            self.assertIn(want, app._UPSCALE_RESOLUTIONS)
+
+    def test_default_render_resolution_still_renderable(self):
+        import app
+        self.assertIn(app._DEFAULT_RESOLUTION, app._RESOLUTIONS)
 
 
 if __name__ == "__main__":

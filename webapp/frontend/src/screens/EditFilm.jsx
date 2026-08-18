@@ -770,7 +770,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const currentResolution = data?.resolution || meta.default_resolution || ''
   const orientation = videoDims ? (videoDims.h > videoDims.w ? 'Portrait' : 'Landscape') : String(currentResolution || '').split(' ')[0]
   const currentPixels = videoDims ? videoDims.w * videoDims.h : resPixels(currentResolution)
-  const upscaleOptions = (meta?.resolutions || [])
+  // Upscale reaches finishing sizes (QHD/4K) that nothing may render at, so it
+  // reads its own list rather than the render resolutions.
+  const upscaleOptions = (meta?.upscale_resolutions || meta?.resolutions || [])
     .filter((r) => String(r || '').startsWith(`${orientation} `) || String(r || '').startsWith(`${orientation} (`))
     .filter((r) => resPixels(r) > currentPixels)
 

@@ -936,6 +936,9 @@ def get_config() -> dict:
         "characters_dir": str(gapp._characters_dir()),
         # Kept for backward compatibility (composed name strings stay canonical).
         "resolutions": list(gapp._RESOLUTIONS.keys()),
+        # Upscale-only finishing sizes (QHD/4K) live here, never in `resolutions`
+        # — nothing may render at them.
+        "upscale_resolutions": list(gapp._UPSCALE_RESOLUTIONS.keys()),
         "default_resolution": gapp._DEFAULT_RESOLUTION,
         # Structured selectors so the UI can offer an orientation + pixel toggle.
         "orientations": gapp._ORIENTATIONS,
@@ -7793,7 +7796,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         if not final_path.exists() or final_path.stat().st_size <= 0:
             raise RuntimeError("Final video not found; render the film first.")
 
-        target_dims = gapp._RESOLUTIONS.get((target_name or "").strip())
+        target_dims = gapp._UPSCALE_RESOLUTIONS.get((target_name or "").strip())
         if not target_dims:
             raise RuntimeError("Choose a valid upscale resolution.")
         mode = _normalize_upscale_mode(upscale_mode)
@@ -8033,7 +8036,7 @@ def remix_upscale_video(body: RemixUpscaleBody) -> dict:
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
     target_name = (body.target_resolution or "").strip()
-    if target_name not in gapp._RESOLUTIONS:
+    if target_name not in gapp._UPSCALE_RESOLUTIONS:
         raise HTTPException(400, "Choose a valid upscale resolution.")
     try:
         mode = _normalize_upscale_mode(body.upscale_mode)
