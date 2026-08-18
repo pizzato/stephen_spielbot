@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Card, Field, Segmented, ResolutionPicker, Check, Button, Icon, Banner, RegenLabel, voiceMetaMap, voiceLabel, effectiveWpm, styleMinutes, lengthEstimate, lengthEstimateLabel, sceneBounds, fmtDuration, LEGACY_SCENE_SECS, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX } from '../components.jsx'
 import { api } from '../api.js'
-import { resolveStyle, styleTreeOrder } from '../styleUtils.js'
+import { resolveStyle, resolveAutomation, styleTreeOrder } from '../styleUtils.js'
 
 // Read a picked file into a base64 data-URL for upload.
 const fileToDataUrl = (file) => new Promise((resolve, reject) => {
@@ -54,6 +54,12 @@ export default function Create({ seed, meta, onGenerated }) {
     return raw ? resolveStyle(styleList, raw.name) : null
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
+  // The style's DEFAULT format (Settings → Automation → Default format): the
+  // same per-style setting unattended runs film in. It only seeds the picker —
+  // the format stays free to change per film.
+  const styleFormat = profile
+    ? (resolveAutomation(styleList, profile.name, meta.config || {}).auto_format || 'narration')
+    : 'narration'
   // The visual style locks only when the style actually HAS one. A style that
   // leaves it blank has nothing to sync to, so the field stays free to write
   // (whatever is typed is combined with the profile server-side) instead of
@@ -78,7 +84,7 @@ export default function Create({ seed, meta, onGenerated }) {
   const [resolution, setResolution] = useState(profile?.resolution || meta.default_resolution || '')
   const [style, setStyle] = useState(profile?.visual_style || '')
   const [autoApprove, setAutoApprove] = useState(false)
-  const [format, setFormat] = useState(seed?.format || 'narration')  // narration | dialogue | mixed | silent | song
+  const [format, setFormat] = useState(seed?.format || styleFormat)  // narration | dialogue | mixed | silent | song
   const [music, setMusic] = useState(true)   // score this film? (style default, overridable here)
   // Script mode ('classic' | 'story'): owned by the style, like the narrator
   // voice and visual style — locked while a style is active, editable under
@@ -152,6 +158,14 @@ export default function Create({ seed, meta, onGenerated }) {
     if (seed?.resolution || !profile) return
     setResolution(profile.resolution || meta.default_resolution || '')
   }, [profile, profile?.resolution, meta.default_resolution, seed?.resolution])
+
+  // Picking a style re-seeds the Format picker from that style's default
+  // format ("No style" falls back to narration). A restored brief owns its
+  // format, and the picker stays editable either way.
+  useEffect(() => {
+    if (seed?.format) return
+    setFormat(styleFormat)
+  }, [styleFormat, seed?.format])
 
   // Estimate the idea's early-window reach (debounced). Silently no-ops when no model
   // has been built — the card simply doesn't render. A portrait resolution means

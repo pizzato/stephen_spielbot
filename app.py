@@ -328,9 +328,10 @@ DEFAULT_CFG = {
     "youtube_auto_critic": False,
     # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
     "youtube_auto_critic_passes": 0,
-    # The FORMAT automation writes films in — the Create screen's Format picker,
-    # for unattended runs (narration | dialogue | mixed | silent | song).
-    # "song" is the Music-video format and pulls in the song_* steps below.
+    # The style's DEFAULT film format (narration | dialogue | mixed | silent |
+    # song): the Create screen's Format picker starts on it, and unattended
+    # runs film in it. "song" is the Music-video format and pulls in the
+    # song_* steps below.
     "youtube_auto_format": "narration",
     # Music videos only. The song must exist BEFORE the story is divided: the
     # scene windows are timed against the real track and each singing take has

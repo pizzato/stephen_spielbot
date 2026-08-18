@@ -2919,8 +2919,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           </Card>
 
           {/* ── What automation makes: per-film flags, resolved per style.
-               The Create screen's Format picker for unattended runs, with the
-               music-video steps unfolding under it. ── */}
+               The style's default format (which also seeds the Create screen's
+               picker), with the music-video steps unfolding under it. ── */}
           <Card span={12} className="reveal reveal-d1">
             <span className="label-sm">What automation makes{scope ? ` · ${scope}` : ''}</span>
             <div className="stack gap-16 mt-16">
@@ -2957,8 +2957,8 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </div>
               )}
               <div>
-                <Field label="Format"
-                  hint="The format automation writes films in — what you'd pick on the Create screen, answered once for every unattended film. Films you start yourself still choose their own.">
+                <Field label="Default format"
+                  hint="The style's default film format: the Create screen starts on it (ideas you send to Create inherit it too), and unattended films are written in it. Every film can still switch formats on the Create screen.">
                   <Segmented value={av.auto_format || 'narration'}
                     onChange={(v) => setAuto('auto_format', v)}
                     options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },

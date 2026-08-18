@@ -14238,11 +14238,12 @@ def _retryable_failed(cfg: dict) -> dict | None:
 
 
 def _auto_format(cfg: dict, style_name: str = "") -> str:
-    """The film format automation writes in (Settings → Automation → Format).
+    """The style's default film format (Settings → Automation → Default
+    format) — globally, or per style where a style overrides it.
 
-    The Create screen asks a human which format each film is; unattended runs
-    have nobody to ask, so the setting answers for them — globally, or per
-    style where a style overrides it."""
+    The Create screen starts its Format picker on this default (a human can
+    still switch it per film); unattended runs have nobody to ask, so they
+    film in it as-is."""
     return gapp.automation_settings(cfg, style_name)["auto_format"]
 
 
