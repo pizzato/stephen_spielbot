@@ -202,11 +202,12 @@ longer film loops the song, restart audible, so keep song films short.
     music video is the honest shape of a "singing character": the film's real vocals come
     from the music engine, and the takes perform them.
 
-**Unattended.** [Settings → Automation](manual/settings.md#what-automation-makes) has a
-**Default format** picker — the style's default, which seeds the Create screen and is
-what automation writes when there is no Create screen to ask — and,
-for `Music video`, the song steps: write and generate the song, QC the lyrics, re-voice
-the track, and a gate that parks the song for you to hear before anything is built on it.
+**Unattended.** A style's [**Default format**](manual/settings.md#script-content) (Styles
+tab) seeds the Create screen and is what automation writes when there is no Create screen
+to ask. Choosing `Music video` unfolds the song steps under
+[Settings → Automation](manual/settings.md#what-automation-makes): write and generate the
+song, QC the lyrics, re-voice the track, and a gate that parks the song for you to hear
+before anything is built on it.
 All of it is set globally or [per style](manual/settings.md#scope-global-then-per-style),
 so one channel can be a music-video channel while the rest stay narrated.
 

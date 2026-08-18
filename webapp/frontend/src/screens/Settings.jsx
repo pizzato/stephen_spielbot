@@ -1443,6 +1443,26 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
     }
     return next
   })
+  // The style's DEFAULT film format — the same per-style automation override
+  // as Settings → Automation → Default format, surfaced here because it shapes
+  // the style's films (the Create picker starts on it, AI ideas are pitched
+  // for it, unattended runs film in it). Inheritance is equality, as with
+  // setAuto: picking what the style would inherit stores nothing, so the
+  // style keeps following its parent chain — and Global — live.
+  const stFormatInherited = resolveAutomation(styles, st.name, cfg, -1).auto_format || 'narration'
+  const stFormat = resolveAutomation(styles, st.name, cfg).auto_format || 'narration'
+  const setStyleFormat = (v) => editCfg((c) => ({
+    ...c,
+    styles: (c.styles || []).map((s, i) => {
+      if (i !== styleIdx) return s
+      const next = { ...(s.automation || {}) }
+      if (v === stFormatInherited) delete next.auto_format
+      else next.auto_format = v
+      const { automation: _drop, ...rest } = s
+      return Object.keys(next).length ? { ...rest, automation: next } : rest
+    }),
+  }))
+
   // Drop an override so the field falls back to the parent's value.
   const clearStyleField = (k) => editCfg((c) => {
     const list = c.styles || []
@@ -2205,6 +2225,26 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
           <Card span={12} className="reveal reveal-d2">
             <span className="label-sm">Script & content</span>
             <div className="stack gap-22 mt-16">
+              <Field label="Default format"
+                hint="What this style films by default: the Create screen starts on it, AI ideas are pitched to suit it, and unattended films are written in it. Every film can still switch formats on the Create screen. Music video unfolds its song steps under Settings → Automation.">
+                <Segmented value={stFormat}
+                  onChange={setStyleFormat}
+                  options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
+                            { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
+                            { value: 'song', label: 'Music video' }]} />
+                {(() => {
+                  const from = (() => { const s = automationSource(styles, st.name, 'auto_format'); return s ? `“${s}”` : 'Global' })()
+                  const lbl = { narration: 'Narration', dialogue: 'Dialogue', mixed: 'Mixed', silent: 'Silent', song: 'Music video' }[stFormatInherited] || String(stFormatInherited)
+                  if (!('auto_format' in (st.automation || {}))) return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Follows {from}.</div>
+                  return (
+                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                      {from}: <a role="button" tabIndex={0} title={`Use ${from}’s value again`}
+                        style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                        onClick={() => setStyleFormat(stFormatInherited)}><em>{lbl}</em></a> — click to use it.
+                    </div>
+                  )
+                })()}
+              </Field>
               <Field label={`Video length — ${fmtDuration(styleMinutes(eff))}`}
                 hint={`How long this style's videos run. The script's word budget comes from the narrator's cadence, divided into scenes — ${lengthEstimateLabel(styleMinutes(eff), effectiveWpm(meta, eff).wpm, eff.tts_sentence_pause, eff.video_scenes, sceneBounds(eff))}.`}>
                 <DurationInput value={eff.video_minutes || styleMinutes(eff)}
@@ -2957,15 +2997,32 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 </div>
               )}
               <div>
-                <Field label="Default format"
-                  hint="The style's default film format: the Create screen starts on it, AI ideas are pitched to suit it, and unattended films are written in it. Every film can still switch formats on the Create screen.">
-                  <Segmented value={av.auto_format || 'narration'}
-                    onChange={(v) => setAuto('auto_format', v)}
-                    options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
-                              { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
-                              { value: 'song', label: 'Music video' }]} />
-                </Field>
-                <AutoVal k="auto_format" />
+                {/* The default format itself lives on the Styles tab (it shapes
+                    the style's films, not just automation); the Global baseline
+                    has no style row to live on, so it stays editable here. */}
+                {scope ? (
+                  <Field label="Default format">
+                    <div className="muted" style={{ fontSize: 13 }}>
+                      This style films <strong>{fmtAutoVal('auto_format', av.auto_format)}</strong> by default — set it in
+                      the <a role="button" tabIndex={0}
+                        style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                        onClick={() => { const i = styles.findIndex((s) => s.name === scope); if (i >= 0) setStyleIdx(i); setTab('styles') }}>Styles tab</a>,
+                      alongside its length and visual style.{av.auto_format === 'song' ? ' Music video unfolds the song steps below.' : ''}
+                    </div>
+                  </Field>
+                ) : (
+                  <>
+                    <Field label="Default format"
+                      hint="The baseline: what a style films unless it sets its own default format in the Styles tab. The Create screen starts on the style's resolved default, AI ideas are pitched to suit it, and unattended films are written in it.">
+                      <Segmented value={av.auto_format || 'narration'}
+                        onChange={(v) => setAuto('auto_format', v)}
+                        options={[{ value: 'narration', label: 'Narration' }, { value: 'dialogue', label: 'Dialogue' },
+                                  { value: 'mixed', label: 'Mixed' }, { value: 'silent', label: 'Silent' },
+                                  { value: 'song', label: 'Music video' }]} />
+                    </Field>
+                    <AutoVal k="auto_format" />
+                  </>
+                )}
               </div>
               {av.auto_format === 'song' && (<>
                 <div>

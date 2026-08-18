@@ -149,6 +149,7 @@ those scripts, so they accent the last line instead — nothing when the title f
 
 | Field | Effect |
 |---|---|
+| **Default format** | `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video` — what this style films by default: the [Create screen](create.md#format) starts on it, [AI ideas](ideas.md) are pitched to suit it, and unattended films are written in it. Every film can still switch formats on the Create screen. A child style inherits its parent's; `Music video` unfolds its song steps under [Automation](#what-automation-makes) |
 | **Video length (minutes)** | The style's default runtime. The script's word budget is length × the narrator's cadence, divided into 10–15 s scenes |
 | **Scenes** | How many scenes that length becomes. *Auto* leaves it to the scene size (~12 s narrated, ~10 s a take when the scenes are clips); a count divides the length instead, so fewer scenes are longer ones — never past what the video engine holds in one take. [Create](create.md#length-scenes-and-resolution) can override it per film |
 | **Visual style** | Appended to every image prompt |
@@ -346,11 +347,10 @@ Per style (see above), or globally as the baseline.
 - **Run the script critic on every automation-written script** — QC for consistency,
   repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
   scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
-- **Default format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
-  style's default [format](create.md#format). The Create screen starts on it (ideas you
-  send to Create inherit it too), [AI ideas](ideas.md) for the style are pitched to suit
-  it, and it is what automation writes unattended films in. Every film can still switch
-  formats on the Create screen
+- **Default format** — set per style in the [Styles tab](#script-content); a style's
+  scope here just shows its resolved default and links there. The Global scope keeps a
+  picker for the baseline — what a style films unless it sets its own. Choosing
+  `Music video` (either place) unfolds the song steps below
 
 The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
 drafts to review, and *auto-start with approval required* renders only what you've ticked.

@@ -18,10 +18,9 @@ A segmented control switches between them:
 ## Generating ideas
 
 Pick a **style** — ideas are generated for that style's channel and voice, and pitched to
-suit its [default format](settings.md#what-automation-makes): a music-video style is
-offered topics that make good songs, an acted style topics that play as scenes. With more
-than one style, **All styles (mix)** shows a blended view and tags each card with its
-style.
+suit its [default format](settings.md#script-content): a music-video style is offered
+topics that make good songs, an acted style topics that play as scenes. With more than
+one style, **All styles (mix)** shows a blended view and tags each card with its style.
 
 The free-text box guides the batch: *"Rock bands of the 90s"*. Leave it empty and the
 button reads **Generate more**; type something and it becomes **Generate ideas**.
