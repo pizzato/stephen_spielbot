@@ -973,6 +973,40 @@ def mux_video_audio(
     return output_path
 
 
+def conform_video_to_source(
+    video_path: Path, source_path: Path, output_path: Path, duration: float,
+) -> Path:
+    """Force a processed clip back to its source's exact length, with source audio.
+
+    A VAE round-trip does not preserve frame count: MiniMax H3's video VAE
+    encodes in overlapping temporal chunks, so a clip comes back a few frames
+    long or short depending on where the chunk boundaries land. Either way the
+    scene no longer matches the length the rest of the film assumes.
+
+    Trims when the result ran long, and holds the final frame when it ran short.
+    The audio is taken from *source_path* rather than the processed copy — it was
+    never upscaled, only carried along, and the round-trip can clip its tail.
+    """
+    pad = max(0.0, duration - _get_duration(video_path))
+    cmd = [_FFMPEG, "-y", "-i", str(video_path), "-i", str(source_path)]
+    if pad > 0.001:
+        cmd += ["-filter_complex", f"[0:v]tpad=stop_mode=clone:stop_duration={pad:.3f}[v]",
+                "-map", "[v]"]
+    else:
+        cmd += ["-map", "0:v:0"]
+    cmd += [
+        "-map", "1:a?",
+        "-t", f"{duration:.3f}",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output_path),
+    ]
+    _run(cmd)
+    return output_path
+
+
 def trim_video(input_path: Path, output_path: Path, duration: float) -> Path:
     """Keep the first *duration* seconds of a clip, audio track included.
 

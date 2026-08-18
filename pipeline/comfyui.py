@@ -1736,7 +1736,7 @@ def upscale_video_h3_latent(
     Unlike the LTX latent path (fixed 2x), the node takes a continuous factor, so
     the requested target drives the scale directly.
     """
-    from pipeline.assembler import _get_duration, _get_video_dimensions, trim_video
+    from pipeline.assembler import _get_duration, _get_video_dimensions, conform_video_to_source
 
     src = Path(input_path)
     if source_width is None or source_height is None:
@@ -1798,19 +1798,21 @@ def upscale_video_h3_latent(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
 
-    # H3's VAE pads a clip up to its 17k+5 latent grid, so the decode comes back
-    # longer than it went in — a 5.00 s / 120-frame scene returns as 5.17 s /
-    # 124. Left in, every upscaled scene runs long and the reassembled film
-    # walks out of sync with its captions, so cut the padding back off.
+    # H3's video VAE encodes in overlapping temporal chunks, so the decode does
+    # not come back the length it went in: measured 5.000s/120f → 5.167s/124f on
+    # one clip and 6.250s/150f → 5.875s/141f on another. Long desyncs the film
+    # from its captions; short silently drops the tail of the scene, narration
+    # included. Conform it back either way, and take the audio from the source
+    # rather than the round-tripped copy.
     result_duration = _get_duration(downloaded)
-    if result_duration > source_duration + 0.01:
+    if abs(result_duration - source_duration) > 0.01:
         logger.info(
-            "[comfy] h3 latent upscale padded %.3fs → %.3fs; trimming back",
-            source_duration, result_duration,
+            "[comfy] h3 latent upscale returned %.3fs for a %.3fs clip; conforming",
+            result_duration, source_duration,
         )
-        trimmed = downloaded.with_name(f"{downloaded.stem}.trim{downloaded.suffix}")
-        trim_video(downloaded, trimmed, source_duration)
-        trimmed.replace(downloaded)
+        fixed = downloaded.with_name(f"{downloaded.stem}.conform{downloaded.suffix}")
+        conform_video_to_source(downloaded, src, fixed, source_duration)
+        fixed.replace(downloaded)
 
     return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
 
