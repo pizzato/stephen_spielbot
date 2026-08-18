@@ -189,6 +189,7 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                      {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
                  mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
                 comfyui.upscale_video_h3_latent(
                     src, out, 1408, 2560, fps=24,
@@ -224,6 +225,7 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                      {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
                  mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
                 comfyui.upscale_video_h3_latent(
                     src, out, 3840, 2160, fps=24,
@@ -231,6 +233,41 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
                 )
 
             self.assertEqual(queued["workflow"]["4"]["inputs"]["scale"], 4.0)
+
+    def test_h3_latent_trims_vae_frame_padding(self):
+        """H3's VAE pads up to its 17k+5 grid; the extra tail must come back off.
+
+        Without this a 5.00s scene returns as 5.17s, and a whole film of them
+        walks out of sync with its captions.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"video")
+
+            # source 5.00s in, padded 5.17s back out
+            durations = iter([5.0, 5.1666])
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", return_value="prompt-1"), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", side_effect=lambda *_a, **_k: next(durations)), \
+                 mock.patch("pipeline.assembler.trim_video",
+                            side_effect=lambda i, o, d: (Path(o).write_bytes(b"trimmed"), o)[1]) as trim, \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_h3_latent(
+                    src, out, 1408, 1408, fps=24.0,
+                    source_width=704, source_height=704,
+                )
+
+            trim.assert_called_once()
+            # trimmed back to the source length, not the padded one
+            self.assertEqual(trim.call_args[0][2], 5.0)
 
 
 if __name__ == "__main__":

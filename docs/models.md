@@ -314,7 +314,7 @@ The Edit film screen's final-video upscale has four modes:
 | **Fast** | Plain ffmpeg scale |
 | **LTX latent** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1` |
 | **LTX IC-LoRA** | Generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) (2×/4× IC-LoRA via ComfyUI-LTXVideo) |
-| **H3 latent** | Encodes with MiniMax H3's video VAE, resizes the 24-channel latent with the [H3 latent upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler), decodes (any factor up to 4×) |
+| **H3 latent** | Encodes with MiniMax H3's video VAE, resizes the 24-channel latent with the [H3 latent upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler), decodes (any factor up to 4×). ~2 min per 5 s scene on a GB10. H3's VAE pads clips to its 17k+5 latent grid, so the decode is trimmed back to the source length — otherwise every scene would run long and desync the captions |
 
 Each upscale is kept as a selectable final-video version, so you can switch back to the
 original at any time.

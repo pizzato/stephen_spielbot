@@ -1736,11 +1736,12 @@ def upscale_video_h3_latent(
     Unlike the LTX latent path (fixed 2x), the node takes a continuous factor, so
     the requested target drives the scale directly.
     """
-    from pipeline.assembler import _get_video_dimensions
+    from pipeline.assembler import _get_duration, _get_video_dimensions, trim_video
 
     src = Path(input_path)
     if source_width is None or source_height is None:
         source_width, source_height = _get_video_dimensions(src)
+    source_duration = _get_duration(src)
 
     requested_w, requested_h = int(width), int(height)
     # Overshoot rather than undershoot on non-matching aspects; the final
@@ -1796,6 +1797,21 @@ def upscale_video_h3_latent(
     video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
     output_path.parent.mkdir(parents=True, exist_ok=True)
     downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+
+    # H3's VAE pads a clip up to its 17k+5 latent grid, so the decode comes back
+    # longer than it went in — a 5.00 s / 120-frame scene returns as 5.17 s /
+    # 124. Left in, every upscaled scene runs long and the reassembled film
+    # walks out of sync with its captions, so cut the padding back off.
+    result_duration = _get_duration(downloaded)
+    if result_duration > source_duration + 0.01:
+        logger.info(
+            "[comfy] h3 latent upscale padded %.3fs → %.3fs; trimming back",
+            source_duration, result_duration,
+        )
+        trimmed = downloaded.with_name(f"{downloaded.stem}.trim{downloaded.suffix}")
+        trim_video(downloaded, trimmed, source_duration)
+        trimmed.replace(downloaded)
+
     return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
 
 
