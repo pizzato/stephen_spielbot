@@ -319,6 +319,17 @@ The Edit film screen's final-video upscale has four modes:
 Each upscale is kept as a selectable final-video version, so you can switch back to the
 original at any time.
 
+!!! warning "H3 latent upscaler — keep the `.pth` off your workers"
+
+    The community node lists **every** file in `models/latent_upscale_models/` in its
+    model dropdown, and loads anything that isn't a `.safetensors` through
+    `torch.load(weights_only=False)` — which executes arbitrary code from the file.
+    Spielbot only ever names the `bf16.safetensors` checkpoint, so the pipeline never
+    takes that path, and `scripts/download_models.sh` installs only that file, pinned
+    to a specific revision. If you download the repo's `fp32.pth` by hand, do not put
+    it in that folder — selecting it in ComfyUI's own UI would run whatever is pickled
+    inside it.
+
 ## Licensing
 
 The defaults — FLUX.2 Klein, LTX-Video, ACE-Step, and the OpenF5 narration model — are
