@@ -1,0 +1,60 @@
+{
+  "1": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "{{VIDEO_VAE}}"
+    }
+  },
+  "2": {
+    "class_type": "VHS_LoadVideoFFmpeg",
+    "inputs": {
+      "video": "{{VIDEO_NAME}}",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "start_time": 0
+    }
+  },
+  "3": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": ["2", 0],
+      "vae": ["1", 0]
+    }
+  },
+  "4": {
+    "class_type": "MinimaxH3LatentUpscalerNode3D",
+    "inputs": {
+      "latent": ["3", 0],
+      "model_name": "{{UPSCALER_NAME}}",
+      "scale": "{{SCALE}}",
+      "device": "cuda",
+      "precision": "{{PRECISION}}"
+    }
+  },
+  "5": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": ["4", 0],
+      "vae": ["1", 0]
+    }
+  },
+  "7": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["5", 0],
+      "frame_rate": "{{FPS}}",
+      "loop_count": 0,
+      "filename_prefix": "spielbot-h3-latent-upscale",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 16,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "audio": ["2", 2]
+    }
+  }
+}

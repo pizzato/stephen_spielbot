@@ -1702,6 +1702,119 @@ def upscale_video_ltx_latent(
     return _ensure_exact_video_resolution(downloaded, int(width), int(height))
 
 
+# Community 3D-conv latent upscaler trained on MiniMax H3's 24-channel latents
+# (Apache-2.0). https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler
+# The bf16 checkpoint is the one we install; the repo also ships fp16 and a
+# .pth, which we deliberately avoid — loading it goes through torch.load with
+# weights_only=False, i.e. arbitrary pickle execution.
+_H3_LATENT_UPSCALER = "minimax_h3_latent_upscaler_3d_bf16.safetensors"
+_H3_LATENT_UPSCALER_PRECISION = "bf16"
+# The node accepts a continuous 1.0-4.0 factor in 0.1 steps.
+_H3_UPSCALE_MIN_SCALE = 1.1
+_H3_UPSCALE_MAX_SCALE = 4.0
+
+
+def upscale_video_h3_latent(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    timeout_seconds: int = 7200,
+    comfy_url: str = COMFYUI_URL,
+    *,
+    source_width: int | None = None,
+    source_height: int | None = None,
+) -> Path:
+    """Upscale an existing MP4 through MiniMax H3's latent space.
+
+    Encodes the clip with H3's video VAE, resizes the 24-channel latent with the
+    learned 3D upscaler, and decodes — the H3 analogue of
+    :func:`upscale_video_ltx_latent`. Requires the Comfyui_Minimax_h3_latent_Upscaler
+    custom nodes plus the checkpoint under models/latent_upscale_models/.
+
+    Unlike the LTX latent path (fixed 2x), the node takes a continuous factor, so
+    the requested target drives the scale directly.
+    """
+    from pipeline.assembler import _get_duration, _get_video_dimensions, trim_video
+
+    src = Path(input_path)
+    if source_width is None or source_height is None:
+        source_width, source_height = _get_video_dimensions(src)
+    source_duration = _get_duration(src)
+
+    requested_w, requested_h = int(width), int(height)
+    # Overshoot rather than undershoot on non-matching aspects; the final
+    # normalize scales/crops back to exactly what was asked for.
+    scale = max(requested_w / max(1, int(source_width)),
+                requested_h / max(1, int(source_height)))
+    scale = round(min(max(scale, _H3_UPSCALE_MIN_SCALE), _H3_UPSCALE_MAX_SCALE), 1)
+    fps_val = max(1.0, float(fps or LTX_FPS))
+
+    video_name = _stage_video_for_load(src, comfy_url=comfy_url)
+    workflow = _load_workflow("h3_latent_upscale.json")
+    workflow = _fill_template(workflow, {
+        "VIDEO_NAME": video_name,
+        "VIDEO_VAE": _engines.VIDEO_ENGINES["minimax-h3"]["video_vae"],
+        "UPSCALER_NAME": _H3_LATENT_UPSCALER,
+        "PRECISION": _H3_LATENT_UPSCALER_PRECISION,
+        "SCALE": scale,
+        "FPS": fps_val,
+    })
+
+    logger.info(
+        "[comfy] upscale_video_h3_latent %s %dx%d -> %dx%d (scale %.1fx) "
+        "fps=%.3f timeout=%ds on %s",
+        src.name, source_width, source_height, requested_w, requested_h,
+        scale, fps_val, timeout_seconds, comfy_url,
+    )
+    last_retryable: Exception | None = None
+    prompt_id = ""
+    for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
+        client_id = str(uuid.uuid4())
+        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+        try:
+            _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+            break
+        except (DroppedJobError, StuckJobError) as exc:
+            last_retryable = exc
+            if attempt >= _COMFY_PROMPT_ATTEMPTS:
+                raise RuntimeError(
+                    f"ComfyUI H3 latent upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                    f"{_final_retryable_message(exc)}"
+                ) from exc
+            logger.warning(
+                "[comfy] H3 latent upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
+            )
+    else:
+        raise RuntimeError(f"ComfyUI H3 latent upscale did not complete: {last_retryable}")
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for H3 latent upscale prompt {prompt_id} ({comfy_url})")
+
+    video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+
+    # H3's VAE pads a clip up to its 17k+5 latent grid, so the decode comes back
+    # longer than it went in — a 5.00 s / 120-frame scene returns as 5.17 s /
+    # 124. Left in, every upscaled scene runs long and the reassembled film
+    # walks out of sync with its captions, so cut the padding back off.
+    result_duration = _get_duration(downloaded)
+    if result_duration > source_duration + 0.01:
+        logger.info(
+            "[comfy] h3 latent upscale padded %.3fs → %.3fs; trimming back",
+            source_duration, result_duration,
+        )
+        trimmed = downloaded.with_name(f"{downloaded.stem}.trim{downloaded.suffix}")
+        trim_video(downloaded, trimmed, source_duration)
+        trimmed.replace(downloaded)
+
+    return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
+
+
 def _ensure_exact_video_resolution(video_path: Path, width: int, height: int) -> Path:
     from pipeline.assembler import ensure_video_resolution
 

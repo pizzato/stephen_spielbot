@@ -171,6 +171,104 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             self.assertEqual(workflow["3"]["inputs"]["model_name"],
                              "ltx-2.3-spatial-upscaler-x2-1.1.safetensors")
 
+    def test_h3_latent_workflow_scale_and_models(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_h3_latent(
+                    src, out, 1408, 2560, fps=24,
+                    source_width=704, source_height=1280,
+                )
+
+            workflow = queued["workflow"]
+            self.assertEqual(workflow["4"]["class_type"], "MinimaxH3LatentUpscalerNode3D")
+            self.assertEqual(workflow["4"]["inputs"]["model_name"], comfyui._H3_LATENT_UPSCALER)
+            # 704x1280 -> 1408x2560 is an exact doubling.
+            self.assertEqual(workflow["4"]["inputs"]["scale"], 2.0)
+            # Encodes and decodes through H3's own video VAE.
+            self.assertEqual(workflow["1"]["inputs"]["vae_name"],
+                             "minimax_h3_video_vae_fp16.safetensors")
+            self.assertEqual(workflow["3"]["class_type"], "VAEEncode")
+
+    def test_h3_latent_scale_clamped_to_node_ceiling(self):
+        """The node tops out at 4x; a bigger jump must not send an invalid scale."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_h3_latent(
+                    src, out, 3840, 2160, fps=24,
+                    source_width=480, source_height=270,
+                )
+
+            self.assertEqual(queued["workflow"]["4"]["inputs"]["scale"], 4.0)
+
+    def test_h3_latent_trims_vae_frame_padding(self):
+        """H3's VAE pads up to its 17k+5 grid; the extra tail must come back off.
+
+        Without this a 5.00s scene returns as 5.17s, and a whole film of them
+        walks out of sync with its captions.
+        """
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"video")
+
+            # source 5.00s in, padded 5.17s back out
+            durations = iter([5.0, 5.1666])
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", return_value="prompt-1"), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-h3-latent-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", side_effect=lambda *_a, **_k: next(durations)), \
+                 mock.patch("pipeline.assembler.trim_video",
+                            side_effect=lambda i, o, d: (Path(o).write_bytes(b"trimmed"), o)[1]) as trim, \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_h3_latent(
+                    src, out, 1408, 1408, fps=24.0,
+                    source_width=704, source_height=704,
+                )
+
+            trim.assert_called_once()
+            # trimmed back to the source length, not the padded one
+            self.assertEqual(trim.call_args[0][2], 5.0)
+
 
 if __name__ == "__main__":
     unittest.main()

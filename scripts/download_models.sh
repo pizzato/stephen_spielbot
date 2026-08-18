@@ -68,7 +68,10 @@ echo ""
 # After downloading we move the file to the flat local_dir and clean up the
 # leftover subdirectory so the rest of the script finds it at the expected path.
 download() {
-    local repo="$1" remote_path="$2" local_dir="$3"
+    # 4th arg pins a git revision. Reputable org repos track main; use this for
+    # sources where a silent weight swap is a real risk (see the H3 latent
+    # upscaler below).
+    local repo="$1" remote_path="$2" local_dir="$3" revision="${4:-}"
     local filename="${remote_path##*/}"
     local dest="$COMFY_DIR/$local_dir/$filename"
 
@@ -83,6 +86,7 @@ download() {
     mkdir -p "$COMFY_DIR/$local_dir"
     local extra_args=()
     [[ -n "$HF_TOKEN" ]] && extra_args+=(--token "$HF_TOKEN")
+    [[ -n "$revision" ]] && extra_args+=(--revision "$revision")
     "$HF_CMD" download "$repo" "$remote_path" \
         --local-dir "$COMFY_DIR/$local_dir" \
         --quiet \
@@ -195,6 +199,24 @@ download \
     "Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler" \
     "ltx-2.3-22b-ic-lora-pixel-spatial-upscaler-x4-0.9.safetensors" \
     "models/loras"
+
+# MiniMax H3 latent upscaler — Remix "H3 latent" mode. Community Apache-2.0
+# model over H3's 24-channel latents. bf16 only: the repo's .pth loads through
+# torch.load(weights_only=False), which we won't run.
+# https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler
+# PINNED to a revision, unlike the org-published models above: this is a
+# single-author repo first published 2026-08-17, so tracking a mutable main
+# would let the weights be swapped under us on any future rebuild.
+# Verified contents of this revision (s3, 2026-08-18): pure safetensors, 322
+# BF16 tensors, all names matching the node's declared architecture, no
+# __metadata__ blob. sha256:
+#   4f57821f5837f32f7142b67d815606dbd7550f194e5c769f7d6c3f83b146a5e6
+download \
+    "LBH-123-AI/Minimax_h3_latent_Upscaler" \
+    "minimax_h3_latent_upscaler_3d_bf16.safetensors" \
+    "models/latent_upscale_models" \
+    "97b4a93d3ab57957d80244b141348a322d77c80a" \
+    || echo "  [warn] MiniMax H3 latent upscaler skipped"
 
 download \
     "Comfy-Org/ltx-2" \

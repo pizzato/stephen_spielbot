@@ -92,6 +92,7 @@ Upscale the finished film and keep the result as a selectable final version.
 | **Fast** | Plain ffmpeg scale |
 | **LTX latent** | The simple model upscaler (latent 2×) |
 | **LTX IC-LoRA** | The generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) |
+| **H3 latent** | The [MiniMax H3 latent upscaler](https://huggingface.co/LBH-123-AI/Minimax_h3_latent_Upscaler) — resizes inside H3's own latent space, at any factor up to 4×. Recovers real detail that **Fast** cannot (faces and edges resolve properly), at the cost of a fine cross-hatch texture on smooth areas like skin. Suits films rendered on H3; needs the H3 video VAE on the worker |
 
 Pick a **target resolution** — only larger ones are offered — then a mode. The original
 stays available.

@@ -222,6 +222,24 @@ RUN if [ -n "${H3_MOTION_CONTEXT_REF}" ]; then \
     else \
         echo "H3 Motion Context not installed (H3_MOTION_CONTEXT_REF empty)"; \
     fi
+# H3 Latent Upscaler — learned 3D-conv resize of H3's 24-channel latents, the
+# H3 counterpart to LTXVLatentUpsampler. Drives the Remix "H3 latent" upscale
+# mode (workflows/h3_latent_upscale.json); the checkpoint lands in
+# models/latent_upscale_models/ via scripts/download_models.sh.
+#
+# PINNED: community pack, first published 2026-08-17 — treat any bump as
+# untrusted until a real clip has been upscaled on the rebuilt worker.
+# Pure-Python (torch + einops, both already in the image), no extra deps.
+ARG H3_LATENT_UPSCALER_REF=59f399f63a9ff81c588521e405b391c0d6decb90
+RUN if [ -n "${H3_LATENT_UPSCALER_REF}" ]; then \
+        git clone https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler.git \
+            custom_nodes/Comfyui_Minimax_h3_latent_Upscaler \
+        && git -C custom_nodes/Comfyui_Minimax_h3_latent_Upscaler checkout "${H3_LATENT_UPSCALER_REF}" \
+        && rm -rf custom_nodes/Comfyui_Minimax_h3_latent_Upscaler/examples; \
+    else \
+        echo "H3 latent upscaler not installed (H3_LATENT_UPSCALER_REF empty)"; \
+    fi
+
 # Audio-driven H3 (this repo's addition, proven 2026-08-14): pin a whole audio
 # track across a clip so the video is generated to match it. Appended into the
 # Motion Context pack because it reuses its layout/payload patches and encode
