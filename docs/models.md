@@ -307,6 +307,11 @@ gated engine weights.
 
 ## Upscaler modes
 
+Upscale targets run to **4K** (3840×2160 landscape, 2160×3840 portrait, 2160×2160
+square) plus QHD — larger than any render resolution, since these are finishing sizes
+the engines cannot generate at directly. Measured on a GB10: the H3 latent upscaler
+reached 4096×4096 from a 1024×1024 source in ~13 min for a 6 s clip.
+
 The Edit film screen's final-video upscale has four modes:
 
 | Mode | What it does |

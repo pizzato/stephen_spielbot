@@ -299,6 +299,33 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             conform.assert_called_once()
             self.assertEqual(conform.call_args[0][3], 6.25)
 
+class UpscaleResolutionSplitTests(unittest.TestCase):
+    """Finishing sizes must be reachable by upscale and by nothing else."""
+
+    def test_render_list_excludes_upscale_only_tiers(self):
+        import app
+        for name in app._RESOLUTIONS:
+            self.assertNotIn("4K", name, f"4K leaked into the render list: {name}")
+            self.assertNotIn("QHD", name, f"QHD leaked into the render list: {name}")
+
+    def test_upscale_list_is_a_superset(self):
+        import app
+        for name in app._RESOLUTIONS:
+            self.assertIn(name, app._UPSCALE_RESOLUTIONS)
+        extra = set(app._UPSCALE_RESOLUTIONS) - set(app._RESOLUTIONS)
+        self.assertEqual(len(extra), 6)  # QHD + 4K across three orientations
+
+    def test_four_k_present_for_every_orientation(self):
+        import app
+        for want in ("Landscape 4K (3840×2160)",
+                     "Portrait 4K (2160×3840)",
+                     "Square 4K (2160×2160)"):
+            self.assertIn(want, app._UPSCALE_RESOLUTIONS)
+
+    def test_default_render_resolution_still_renderable(self):
+        import app
+        self.assertIn(app._DEFAULT_RESOLUTION, app._RESOLUTIONS)
+
 
 if __name__ == "__main__":
     unittest.main()

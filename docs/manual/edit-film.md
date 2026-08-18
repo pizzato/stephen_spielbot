@@ -87,6 +87,11 @@ Dialogue and silent scenes keep their original language.
 
 Upscale the finished film and keep the result as a selectable final version.
 
+The target list goes beyond what a film can be *rendered* at: **QHD** and **4K** are
+finishing sizes, offered here only. The video engines cannot generate at those sizes in
+any sensible time, so they never appear in the render or style pickers. Only targets
+larger than the film's current size are listed.
+
 | Mode | What it does |
 |---|---|
 | **Fast** | Plain ffmpeg scale |

@@ -85,12 +85,19 @@ _ORIENTATIONS = ["Landscape", "Portrait", "Square"]
 # Ordered low→high.  ``label`` is the in-name tag ("" = the base tier, which has
 # no tag).  (long_edge, short_edge) are the 16:9 dimensions; square uses
 # (long_edge, long_edge).
+# ``upscale_only`` tiers are targets you can upscale a finished film *to*, but
+# never render at: the video engines cannot generate at these sizes in any
+# sensible time, while the Remix upscalers reach them comfortably (the H3 latent
+# upscaler was measured at 4096x4096 on a GB10). Keep them out of _RESOLUTIONS
+# so no render path can select one.
 _PIXEL_TIERS = [
     {"key": "fast", "label": "Fast", "long": 512,  "short": 288},
     {"key": "base", "label": "",     "long": 832,  "short": 480},
     {"key": "hd",   "label": "HD",   "long": 1024, "short": 576},
     {"key": "720p", "label": "720p", "long": 1280, "short": 720},
     {"key": "fhd",  "label": "FHD",  "long": 1920, "short": 1080},
+    {"key": "qhd",  "label": "QHD",  "long": 2560, "short": 1440, "upscale_only": True},
+    {"key": "4k",   "label": "4K",   "long": 3840, "short": 2160, "upscale_only": True},
 ]
 
 
@@ -101,7 +108,8 @@ def _resolution_dims(orientation: str, tier: dict) -> tuple[int, int]:
         return (short_e, long_e)
     if orientation == "Square":
         # Square uses a single edge per tier (the historical 1:1 sizes).
-        side = {"fast": 288, "base": 512, "hd": 576, "720p": 720, "fhd": 1080}[tier["key"]]
+        side = {"fast": 288, "base": 512, "hd": 576, "720p": 720, "fhd": 1080,
+                "qhd": 1440, "4k": 2160}[tier["key"]]
         return (side, side)
     return (long_e, short_e)  # Landscape
 
@@ -119,16 +127,25 @@ def compose_resolution(orientation: str, tier_key: str) -> str:
     return f"{orientation}{tag} ({w}×{h})"
 
 
-def _build_resolutions() -> dict:
-    """Build the canonical {name: (w, h)} map from orientations × pixel tiers."""
+def _build_resolutions(include_upscale_only: bool = False) -> dict:
+    """Build the canonical {name: (w, h)} map from orientations × pixel tiers.
+
+    Renders use the default (render-capable tiers only). The Remix upscale picker
+    passes *include_upscale_only* to reach the larger finishing sizes as well.
+    """
     out = {}
     for orientation in _ORIENTATIONS:
         for tier in _PIXEL_TIERS:
+            if tier.get("upscale_only") and not include_upscale_only:
+                continue
             out[compose_resolution(orientation, tier["key"])] = _resolution_dims(orientation, tier)
     return out
 
 
+# Sizes a film can be RENDERED at. Every render path resolves through this.
 _RESOLUTIONS = _build_resolutions()
+# Sizes a finished film can be UPSCALED to — a superset of the render sizes.
+_UPSCALE_RESOLUTIONS = _build_resolutions(include_upscale_only=True)
 _DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
