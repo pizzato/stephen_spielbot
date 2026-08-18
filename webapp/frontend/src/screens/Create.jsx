@@ -54,7 +54,7 @@ export default function Create({ seed, meta, onGenerated }) {
     return raw ? resolveStyle(styleList, raw.name) : null
   }, [styleList, styleName, meta.config?.default_style])
   const locked = !!profile
-  // The style's DEFAULT format (Settings → Automation → Default format): the
+  // The style's DEFAULT format (Settings → Styles → Default format): the
   // same per-style setting unattended runs film in. It only seeds the picker —
   // the format stays free to change per film.
   const styleFormat = profile

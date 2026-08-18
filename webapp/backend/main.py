@@ -14247,8 +14247,9 @@ def _retryable_failed(cfg: dict) -> dict | None:
 
 
 def _auto_format(cfg: dict, style_name: str = "") -> str:
-    """The style's default film format (Settings → Automation → Default
-    format) — globally, or per style where a style overrides it.
+    """The style's default film format (Settings → Styles → Default format;
+    the Global baseline under Settings → Automation) — globally, or per style
+    where a style overrides it.
 
     The Create screen starts its Format picker on this default (a human can
     still switch it per film); unattended runs have nobody to ask, so they
