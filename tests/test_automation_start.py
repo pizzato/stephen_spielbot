@@ -166,6 +166,27 @@ class AutoStartApproveModeTests(TempConfigCase):
         self.assertEqual(out, {"ok": True})
         self.assertEqual([i["id"] for i in started], ["idea1"])
 
+    def test_style_scoped_ai_ideas_reaches_the_pick(self):
+        # Global ai-ideas OFF: a single style opting in through its automation
+        # dict is enough to run the fallback (the per-style eligibility filter
+        # inside _auto_pick_suggestion decides who actually gets fed).
+        self.write_config({"youtube_auto_start_job": True,
+                           "youtube_auto_ai_ideas": False,
+                           "styles": [{"name": "H3",
+                                       "automation": {"auto_ai_ideas": True,
+                                                      "auto_approve_script": True}}],
+                           "default_style": "H3"})
+        idea = _scriptless_item("idea1", "Invented")
+        started = []
+        with mock.patch.object(backend.gapp, "_is_job_running", return_value=False), \
+             mock.patch.object(backend.yt, "load_queue", return_value=[]), \
+             mock.patch.object(backend.gapp, "_auto_pick_suggestion", return_value=idea), \
+             mock.patch.object(backend, "_start_queue_item",
+                               side_effect=lambda it: started.append(it) or {"ok": True}):
+            out = backend._auto_start_best()
+        self.assertEqual(out, {"ok": True})
+        self.assertEqual([i["id"] for i in started], ["idea1"])
+
 
 class QueueSortOrderTests(TempConfigCase):
     """queue_sort_order (the Queue page sort) drives which pending item starts

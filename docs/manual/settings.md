@@ -344,6 +344,11 @@ Per style (see above), or globally as the baseline.
 - **Auto-approve scripts** — also writes missing scripts and renders them without review
 - **Auto-start the next queue item with a ready script** — loops until the queue is empty.
   Off for a style, its films are prepared but never started for you
+- **Top up the empty queue with AI ideas for this style** — when the queue runs dry,
+  automation invents a topic and runs it end to end. Invented films render without review,
+  so a style is only fed when its own resolved flags also have *auto-approve* and
+  *auto-start* on, and it isn't excluded from auto-pick on the
+  [Styles tab](#styles). Enabled on several styles, top-ups rotate between them
 - **Run the script critic on every automation-written script** — QC for consistency,
   repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
   scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
@@ -384,9 +389,9 @@ Global only.
 - **⚡ Fully automated mode** — turns on every global step, in this card and the one above
 - **Fetch & evaluate comments on a schedule**
 - **Auto-approve requests above the confidence threshold**
-- **Top up the queue with an AI idea when it runs empty** — needs a style that auto-approves
-  scripts. **Clear declined ideas** here lets previously declined topics resurface (ignored
-  ones stay hidden)
+- **Clear declined ideas** — lets previously declined topics resurface in new AI
+  suggestions (ignored ones stay hidden). The AI-ideas top-up itself is per style — see
+  [What automation makes](#what-automation-makes)
 - **Auto-post to YouTube the moment a film finishes** — off means it waits in the publish
   queue
 - **Default privacy** — `private`, `unlisted`, or `public`

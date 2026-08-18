@@ -246,5 +246,53 @@ class PerStyleStartTests(TempConfigCase):
         self.assertEqual(self._start([unapproved, approved]), {"id": "q2"})
 
 
+class AutoFeedStylesTests(TempConfigCase):
+    """_auto_feed_styles: which styles automation may INVENT ideas for.
+
+    Per-style ai-ideas plus the review-gate closure: an invented idea has no
+    reviewed script, so only styles whose own automation auto-approves and
+    auto-starts are ever fed — a review-mode style must not ride on another
+    style's auto-approve (the old global gate let it)."""
+
+    def _cfg(self, **kw):
+        self.write_config(kw)
+        return app.load_config()
+
+    def test_style_scoped_ai_ideas_feeds_only_that_style(self):
+        # Global ai-ideas OFF: one style opts in on its own.
+        cfg = self._cfg(
+            youtube_auto_start_job=True,
+            styles=_styles({"name": "Docs"},
+                           {"name": "H3", "automation": {"auto_ai_ideas": True,
+                                                         "auto_approve_script": True}}),
+            default_style="Docs")
+        self.assertEqual(app._auto_feed_styles(cfg), ["H3"])
+        self.assertTrue(app.automation_enabled_anywhere(cfg, "auto_ai_ideas"))
+
+    def test_review_mode_style_is_never_fed(self):
+        # Global ai-ideas ON, but only H3 auto-approves: Docs stays in review
+        # mode and must not receive invented (unreviewed) films.
+        cfg = self._cfg(
+            youtube_auto_start_job=True, youtube_auto_ai_ideas=True,
+            styles=_styles({"name": "Docs"},
+                           {"name": "H3", "automation": {"auto_approve_script": True}}),
+            default_style="Docs")
+        self.assertEqual(app._auto_feed_styles(cfg), ["H3"])
+
+    def test_auto_pick_exclude_still_wins(self):
+        cfg = self._cfg(
+            youtube_auto_start_job=True, youtube_auto_ai_ideas=True,
+            styles=_styles({"name": "H3", "auto_pick_exclude": True,
+                            "automation": {"auto_approve_script": True}}),
+            default_style="H3")
+        self.assertEqual(app._auto_feed_styles(cfg), [])
+
+    def test_style_without_auto_start_is_not_fed(self):
+        cfg = self._cfg(
+            youtube_auto_ai_ideas=True, youtube_auto_approve_script=True,
+            styles=_styles({"name": "H3"}), default_style="H3")
+        self.assertEqual(app._auto_feed_styles(cfg), [])
+
+
 if __name__ == "__main__":
     unittest.main()

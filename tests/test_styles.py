@@ -580,6 +580,12 @@ class StyleAwareIdeasTests(TempConfigCase):
         self.write_config({
             "styles": [_style("A"), _style("B", description="Bedtime tales for kids")],
             "default_style": "A",
+            # Auto-pick eligibility is per style now (auto_ai_ideas +
+            # auto_approve_script + auto_start_job) — grant the baseline so
+            # these tests keep exercising idea stamping, not the gate.
+            "youtube_auto_start_job": True,
+            "youtube_auto_approve_script": True,
+            "youtube_auto_ai_ideas": True,
         })
 
     def test_style_suggestion_context_lines(self):
@@ -750,7 +756,14 @@ class AutoPickMixTests(TempConfigCase):
         for s in styles:
             if s["name"] in exclude:
                 s["auto_pick_exclude"] = True
-        self.write_config({"styles": styles, "default_style": default or names[0]})
+        self.write_config({"styles": styles, "default_style": default or names[0],
+                           # Eligibility is per style now (auto_ai_ideas +
+                           # auto_approve_script + auto_start_job) — grant the
+                           # baseline so these tests keep exercising rotation
+                           # and opt-out, not the feed gate.
+                           "youtube_auto_start_job": True,
+                           "youtube_auto_approve_script": True,
+                           "youtube_auto_ai_ideas": True})
 
     # ── per-style opt-out field ──
     def test_auto_pick_exclude_round_trips_and_defaults_false(self):
