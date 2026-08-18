@@ -594,6 +594,20 @@ class StyleAwareIdeasTests(TempConfigCase):
         self.assertEqual(style_suggestion_context(None), "")
         self.assertEqual(style_suggestion_context({"name": "(none)"}), "")
 
+    def test_format_steers_suggestion_context(self):
+        # The style's default film format shapes what topics get pitched: a
+        # music-video style is asked for songs, an acted style for scenes.
+        # Narration is the plain default and adds no steer.
+        from pipeline.llm import style_suggestion_context
+        ctx = style_suggestion_context({"name": "Bangers"}, video_format="song")
+        self.assertIn("MUSIC VIDEO", ctx)
+        self.assertIn("must suit", ctx)   # the format note counts as a descriptor
+        self.assertIn("ACTED", style_suggestion_context({"name": "Plays"}, video_format="dialogue"))
+        for plain in ("narration", None, "", "interpretive-dance"):
+            ctx = style_suggestion_context({"name": "Docs"}, video_format=plain)
+            self.assertNotIn("MUSIC VIDEO", ctx)
+            self.assertNotIn("ACTED", ctx)
+
     def test_title_style_steers_even_without_other_context(self):
         # A profile whose ONLY distinctive field is title_style still yields a
         # steering line — title wording is independent of topic suitability.
@@ -695,7 +709,7 @@ class StyleAwareIdeasTests(TempConfigCase):
         existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
         captured = {}
 
-        def fake_gen(prev, cfg, style=None, discarded_titles=None):
+        def fake_gen(prev, cfg, style=None, discarded_titles=None, video_format=None):
             captured["previous"] = list(prev)
             return [{"title": "New A", "reason": "r", "interestingness": 0.7}]
 
@@ -786,7 +800,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B", "C", exclude=("B",))
         seen = []
 
-        def fake_gen(titles, cfg, style=None, discarded_titles=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None, video_format=None):
             seen.append(style["name"])
             return [{"title": f"{style['name']} idea", "reason": "r", "interestingness": 0.7}]
 
@@ -815,7 +829,7 @@ class AutoPickMixTests(TempConfigCase):
         # generated for the eligible styles instead.
         self._styles("A", "B", exclude=("B",))
 
-        def fake_gen(titles, cfg, style=None, discarded_titles=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None, video_format=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         item = self._auto_pick(cached=[self._idea("B")], gen=fake_gen)
@@ -838,7 +852,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B")
         saved = {}
 
-        def fake_gen(titles, cfg, style=None, discarded_titles=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None, video_format=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \
@@ -870,7 +884,7 @@ class AutoPickMixTests(TempConfigCase):
         self._styles("A", "B", exclude=("B",))
         saved, seen = {}, []
 
-        def fake_gen(titles, cfg, style=None, discarded_titles=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None, video_format=None):
             seen.append(style["name"])
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
@@ -903,7 +917,7 @@ class AutoPickMixTests(TempConfigCase):
         existing = [{"id": "a0", "title": "Old A", "style_name": "A", "used": False}]
         saved = {}
 
-        def fake_gen(titles, cfg, style=None, discarded_titles=None):
+        def fake_gen(titles, cfg, style=None, discarded_titles=None, video_format=None):
             return [{"title": f"{style['name']} fresh", "reason": "r", "interestingness": 0.7}]
 
         with mock.patch.object(backend, "generate_video_suggestions", side_effect=fake_gen), \

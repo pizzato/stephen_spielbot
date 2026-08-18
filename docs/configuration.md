@@ -51,7 +51,7 @@ the flat `youtube_auto_*` keys:
 styles:
   - name: Music Channel
     automation:
-      auto_format: song      # this style makes music videos…
+      auto_format: song      # the style's default format: music videos…
       auto_song: true        # …song first, before the story
 ```
 

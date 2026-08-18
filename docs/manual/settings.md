@@ -346,9 +346,11 @@ Per style (see above), or globally as the baseline.
 - **Run the script critic on every automation-written script** — QC for consistency,
   repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
   scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**
-- **Format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
-  [format](create.md#format) automation writes films in, answered once instead of per film.
-  Films you start yourself on the Create screen still pick their own
+- **Default format** — `Narration`, `Dialogue`, `Mixed`, `Silent`, or `Music video`: the
+  style's default [format](create.md#format). The Create screen starts on it (ideas you
+  send to Create inherit it too), [AI ideas](ideas.md) for the style are pitched to suit
+  it, and it is what automation writes unattended films in. Every film can still switch
+  formats on the Create screen
 
 The two useful middle grounds: *auto-write scripts but don't render* gives you a queue of
 drafts to review, and *auto-start with approval required* renders only what you've ticked.

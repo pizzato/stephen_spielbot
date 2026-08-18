@@ -328,9 +328,10 @@ DEFAULT_CFG = {
     "youtube_auto_critic": False,
     # 0 = keep passing until the critic proposes nothing (≤5); 1-5 = fixed count.
     "youtube_auto_critic_passes": 0,
-    # The FORMAT automation writes films in — the Create screen's Format picker,
-    # for unattended runs (narration | dialogue | mixed | silent | song).
-    # "song" is the Music-video format and pulls in the song_* steps below.
+    # The style's DEFAULT film format (narration | dialogue | mixed | silent |
+    # song): the Create screen's Format picker starts on it, and unattended
+    # runs film in it. "song" is the Music-video format and pulls in the
+    # song_* steps below.
     "youtube_auto_format": "narration",
     # Music videos only. The song must exist BEFORE the story is divided: the
     # scene windows are timed against the real track and each singing take has
@@ -4186,8 +4187,9 @@ def _generate_mixed_suggestions(cfg: dict, style_names: list[str],
         ch = _dedup_scope(cfg, name)
         existing_titles = _channel_video_titles(cfg, style_name=name) + fresh_by_channel.get(ch, [])
         try:
-            new_data = generate_video_suggestions(existing_titles, cfg, style=ss,
-                                                  discarded_titles=discarded)
+            new_data = generate_video_suggestions(
+                existing_titles, cfg, style=ss, discarded_titles=discarded,
+                video_format=automation_settings(cfg, name)["auto_format"])
         except Exception as exc:
             logger.warning("_generate_mixed_suggestions: generation failed for %r: %s", name, exc)
             new_data = []

@@ -8462,10 +8462,12 @@ def youtube_comments() -> dict:
 
 def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 6,
                         style: dict | None = None,
-                        discarded: list[str] | None = None) -> list[dict]:
+                        discarded: list[str] | None = None,
+                        video_format: str | None = None) -> list[dict]:
     """Generate video ideas steered by a free-text theme (e.g. 'Rock bands of
-    the 90s') and, optionally, a style profile. ``discarded`` topics are shown
-    as a do-not-suggest list. Uses the configured LLM backend via _llm_complete."""
+    the 90s') and, optionally, a style profile with its default film format.
+    ``discarded`` topics are shown as a do-not-suggest list. Uses the
+    configured LLM backend via _llm_complete."""
     import re
     avoid = "; ".join(previous)
     rejected = "; ".join(discarded or [])
@@ -8474,7 +8476,7 @@ def _guided_suggestions(guidance: str, previous: list[str], cfg: dict, n: int = 
     user = (
         f'Generate {n} specific, compelling video ideas guided by this theme: "{guidance}".\n'
         f"Each must be a concrete topic that fits both the theme and the channel style below.\n"
-        + llm.style_suggestion_context(style)
+        + llm.style_suggestion_context(style, video_format)
         + (f"These titles already exist — use this ONLY to avoid repeats, not as a guide to subject or style: {avoid}\n" if avoid else "")
         + (f"Never suggest these previously discarded ideas or close variations: {rejected}\n" if rejected else "")
         + '\nGive each a simple, plain-language title that captures the real topic.'
@@ -8814,12 +8816,16 @@ def _interleave(batches: list[list[dict]]) -> list[dict]:
 
 def _style_idea_batch(cfg: dict, ss: dict, g: str, previous: list[str],
                       discarded: list[str] | None = None) -> list[dict]:
-    """Generate + stamp a batch of ideas for one resolved style profile."""
+    """Generate + stamp a batch of ideas for one resolved style profile,
+    pitched for the style's default film format."""
+    fmt = _auto_format(cfg, ss["name"])
     if g:
-        ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded)
+        ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded,
+                                    video_format=fmt)
     else:
         ideas = _normalize_suggestions(
-            generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded))
+            generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded,
+                                       video_format=fmt))
     return [{**idea, "id": str(idea.get("id") or str(uuid.uuid4())[:8]),
              "style_name": ss["name"], "created_at": time.time(),
              "used": False, "dismissed": False}
@@ -8926,11 +8932,14 @@ def youtube_suggestions(guidance: str = Query(""), refresh: bool = Query(False),
         except Exception:
             previous, discarded = [], []
         try:
+            fmt = _auto_format(cfg, target)
             if g:
-                ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded)
+                ideas = _guided_suggestions(g, previous, cfg, style=ss, discarded=discarded,
+                                            video_format=fmt)
             else:
                 ideas = _normalize_suggestions(
-                    generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded))
+                    generate_video_suggestions(previous, cfg, style=ss, discarded_titles=discarded,
+                                               video_format=fmt))
         except Exception as e:
             raise HTTPException(503, f"Could not generate suggestions: {str(e).splitlines()[0][:160]}")
 
@@ -14238,11 +14247,12 @@ def _retryable_failed(cfg: dict) -> dict | None:
 
 
 def _auto_format(cfg: dict, style_name: str = "") -> str:
-    """The film format automation writes in (Settings → Automation → Format).
+    """The style's default film format (Settings → Automation → Default
+    format) — globally, or per style where a style overrides it.
 
-    The Create screen asks a human which format each film is; unattended runs
-    have nobody to ask, so the setting answers for them — globally, or per
-    style where a style overrides it."""
+    The Create screen starts its Format picker on this default (a human can
+    still switch it per film); unattended runs have nobody to ask, so they
+    film in it as-is."""
     return gapp.automation_settings(cfg, style_name)["auto_format"]
 
 

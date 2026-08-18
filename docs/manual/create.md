@@ -82,8 +82,11 @@ the bundled LibriVox library plus anything you've recorded or uploaded in
 
 See [acted scenes](../performance_films.md) for what the modes actually render, and
 [singing films](../performance_films.md#singing-films-the-music-video-format) for the
-Music-video format in detail. Films the queue makes on its own have no-one to ask, so they
-take their format from [Settings → Automation](settings.md#what-automation-makes) instead.
+Music-video format in detail. The picker starts on the style's **default format**
+([Settings → Automation](settings.md#what-automation-makes)) — switching styles re-seeds
+it, and you can still change it freely for this film. Films the queue makes on its own
+have no-one to ask, so they use that default as-is; the same goes for ideas you send to
+Create, until you pick otherwise.
 
 A dialogue, silent or music-video film is measured in clips rather than words: every scene
 is one take of about ten seconds, so the length you ask for becomes a scene count at that
