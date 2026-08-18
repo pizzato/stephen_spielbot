@@ -9324,13 +9324,14 @@ def get_activity(limit: int = 80) -> dict:
     op = dict(active_ops[0]) if active_ops else {}
 
     render_active, render_pct, render_msg, render_title = False, 0, "", ""
-    render_eta = None
+    render_eta, render_work_dir = None, ""
     for r in render_items:
         render_active = True
         render_pct = int(r.get("pct") or 0)
         render_msg = r.get("detail") or ""
         render_title = r.get("title") or ""
         render_eta = r.get("eta_text")
+        render_work_dir = r.get("work_dir") or ""
         break
 
     try:
@@ -9365,6 +9366,7 @@ def get_activity(limit: int = 80) -> dict:
         "render_msg": render_msg,
         "render_title": render_title,
         "render_eta": render_eta,
+        "render_work_dir": render_work_dir,
         "queue_pending": queue_pending,
     }
 

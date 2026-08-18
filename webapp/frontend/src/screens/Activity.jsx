@@ -271,6 +271,34 @@ export default function Activity({ go }) {
   const liveCount = data.live_count || (data.live || []).length || 0
   const isActive = liveCount > 0 || data.render_active
 
+  // One follow row per film with live work, so everything in flight can be
+  // reached from the top of the screen — not just the render. Rank picks the
+  // row that best represents the film: its running render, else any running
+  // step (song render, re-voice, upscale…), else its queued render.
+  const liveFilms = useMemo(() => {
+    const rank = (e) =>
+      e.category === 'render' && e.status === 'running' ? 0 : e.status === 'running' ? 1 : 2
+    const byFilm = new Map()
+    for (const e of data.live || []) {
+      if (!e.work_dir || e.noise) continue
+      const cur = byFilm.get(e.work_dir)
+      if (!cur || rank(e) < rank(cur)) byFilm.set(e.work_dir, e)
+    }
+    return [...byFilm.values()].sort((a, b) => rank(a) - rank(b))
+  }, [data.live])
+  // The film already shown as the big "Rendering now" block — the backend
+  // names it explicitly so both agree even with two renders alive.
+  const bannerRender = data.render_active
+    ? liveFilms.find((e) => e.work_dir === data.render_work_dir)
+      || liveFilms.find((e) => e.category === 'render' && e.status === 'running')
+    : null
+  const otherLiveFilms = liveFilms.filter((e) => e !== bannerRender)
+
+  const openLive = (e) => {
+    if (e.category === 'render' && e.status === 'running') go('progress', { workDir: e.work_dir })
+    else go('editfilm', { workDir: e.work_dir })
+  }
+
   return (
     <div>
       <div className="page-head">
@@ -296,40 +324,74 @@ export default function Activity({ go }) {
 
       <Banner tone="danger">{error}</Banner>
 
-      {data.render_active && (
+      {(data.render_active || otherLiveFilms.length > 0) && (
         <Card span={12} padLg className="reveal reveal-d1" style={{ marginBottom: 16 }}>
-          <div className="row center between gap-16" style={{ flexWrap: 'wrap' }}>
-            <div className="grow" style={{ minWidth: 200 }}>
-              <span className="label-sm">Rendering now</span>
-              <div style={{ fontWeight: 600, fontSize: 16, marginTop: 6 }}>
-                {data.render_title || 'Film render'}
+          {data.render_active && (
+            <div className="row center between gap-16" style={{ flexWrap: 'wrap' }}>
+              <div className="grow" style={{ minWidth: 200 }}>
+                <span className="label-sm">Rendering now</span>
+                <div style={{ fontWeight: 600, fontSize: 16, marginTop: 6 }}>
+                  {data.render_title || 'Film render'}
+                </div>
+                <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{data.render_msg}</div>
+                <div className="mt-12"><ProgressBar pct={data.render_pct || 0} /></div>
               </div>
-              <div className="muted" style={{ fontSize: 13, marginTop: 4 }}>{data.render_msg}</div>
-              <div className="mt-12"><ProgressBar pct={data.render_pct || 0} /></div>
+              <div className="stack gap-10" style={{ alignItems: 'flex-end' }}>
+                <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>
+                  {data.render_pct || 0}%
+                </span>
+                {data.render_eta ? (
+                  <span className="muted">{data.render_eta} remaining</span>
+                ) : null}
+                <Button
+                  variant="primary"
+                  icon="gauge-high"
+                  onClick={() => {
+                    // Prefer the render that is actually running — a queued
+                    // render row would open the wrong film's Render screen.
+                    if (bannerRender?.work_dir) go('progress', { workDir: bannerRender.work_dir })
+                    else go('progress')
+                  }}
+                >
+                  Open render
+                </Button>
+              </div>
             </div>
-            <div className="stack gap-10" style={{ alignItems: 'flex-end' }}>
-              <span style={{ fontSize: 28, fontWeight: 700, letterSpacing: '-0.02em' }}>
-                {data.render_pct || 0}%
-              </span>
-              {data.render_eta ? (
-                <span className="muted">{data.render_eta} remaining</span>
-              ) : null}
-              <Button
-                variant="primary"
-                icon="gauge-high"
-                onClick={() => {
-                  // Prefer the render that is actually running — a queued
-                  // render row would open the wrong film's Render screen.
-                  const renders = (data.live || []).filter((e) => e.category === 'render' && e.work_dir)
-                  const liveRender = renders.find((e) => e.status === 'running') || renders[0]
-                  if (liveRender?.work_dir) go('progress', { workDir: liveRender.work_dir })
-                  else go('progress')
-                }}
-              >
-                Open render
-              </Button>
+          )}
+          {otherLiveFilms.length > 0 && (
+            <div style={data.render_active
+              ? { borderTop: '1px solid var(--line)', marginTop: 16, paddingTop: 14 }
+              : undefined}>
+              <span className="label-sm">{data.render_active ? 'Also in flight' : 'Happening now'}</span>
+              <div className="stack gap-10" style={{ marginTop: 10 }}>
+                {otherLiveFilms.map((e) => (
+                  <div key={e.work_dir} className="row center gap-12" style={{ flexWrap: 'wrap' }}>
+                    <div className="grow" style={{ minWidth: 180 }}>
+                      <span style={{ fontWeight: 600, fontSize: 13.5 }}>{e.title || e.name}</span>
+                      <span className="muted" style={{ fontSize: 12.5, marginLeft: 8 }}>
+                        {e.status === 'queued' ? 'queued — ' : ''}{e.detail || e.name}
+                      </span>
+                    </div>
+                    <span className="muted mono" style={{ fontSize: 11.5, whiteSpace: 'nowrap' }}>
+                      {[
+                        e.pct != null ? `${e.pct}%` : null,
+                        e.eta_text ? `${e.eta_text} left` : null,
+                        e.elapsed_s != null && !e.eta_text ? `${fmtDuration(e.elapsed_s)} elapsed` : null,
+                      ].filter(Boolean).join(' · ')}
+                    </span>
+                    <button
+                      type="button"
+                      className="btn btn--quiet"
+                      style={{ padding: '4px 10px', fontSize: 12 }}
+                      onClick={() => openLive(e)}
+                    >
+                      {e.category === 'render' && e.status === 'running' ? 'Open render' : 'Open film'}
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
         </Card>
       )}
 
