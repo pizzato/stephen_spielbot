@@ -25,6 +25,7 @@ export const AUTOMATION_FIELDS = {
   auto_start_job: 'youtube_auto_start_job',
   auto_write_scripts: 'youtube_auto_write_scripts',
   auto_approve_script: 'youtube_auto_approve_script',
+  auto_ai_ideas: 'youtube_auto_ai_ideas',
   auto_critic: 'youtube_auto_critic',
   auto_critic_passes: 'youtube_auto_critic_passes',
   auto_format: 'youtube_auto_format',

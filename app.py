@@ -320,7 +320,7 @@ DEFAULT_CFG = {
     "youtube_auto_start_job": False,           # auto-start the next queue item with a ready script; loops until the queue is empty
     "youtube_auto_write_scripts": False,       # write (but don't render) scripts for pending queue items, parking them unapproved for review/edit
     "youtube_auto_approve_script": False,      # let auto-start also WRITE missing scripts and render them without review
-    "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (needs auto_approve_script)
+    "youtube_auto_ai_ideas": False,            # queue an AI idea when the queue runs empty (style-scopable; the style also needs auto_approve_script + auto_start_job)
     "youtube_auto_post": False,               # auto-publish when video generation completes
     # Run the script critic (QC: consistency, repetition, engagement — may
     # rewrite/delete/add/reorder scenes) on every automation-written script,
@@ -527,6 +527,7 @@ AUTOMATION_FIELD_TO_FLAT = {
     "auto_start_job":          "youtube_auto_start_job",
     "auto_write_scripts":      "youtube_auto_write_scripts",
     "auto_approve_script":     "youtube_auto_approve_script",
+    "auto_ai_ideas":           "youtube_auto_ai_ideas",
     "auto_critic":             "youtube_auto_critic",
     "auto_critic_passes":      "youtube_auto_critic_passes",
     "auto_format":             "youtube_auto_format",
@@ -4154,6 +4155,24 @@ def _auto_pick_styles(cfg: dict) -> list[str]:
             and not style_settings(cfg, s["name"]).get("auto_pick_exclude")]
 
 
+def _auto_feed_styles(cfg: dict) -> list[str]:
+    """Styles automation may INVENT ideas for, in config order.
+
+    Stricter than _auto_pick_styles (which the AI-ideas screen's mixed view
+    also uses): besides being in the auto-pick rotation, the style's own
+    resolved automation must ask to be fed (``auto_ai_ideas``) and be able to
+    run the idea unattended (``auto_approve_script`` + ``auto_start_job``).
+    An invented idea has no reviewed script, so a review-mode style must never
+    receive one — the old global gate let any style ride on another style's
+    auto-approve."""
+    out = []
+    for name in _auto_pick_styles(cfg):
+        a = automation_settings(cfg, name)
+        if a["auto_ai_ideas"] and a["auto_approve_script"] and a["auto_start_job"]:
+            out.append(name)
+    return out
+
+
 def _auto_pick_style_of(idea: dict, default_name: str) -> str:
     """Which style an idea belongs to — legacy ideas (no stamp) are the default's."""
     return str(idea.get("style_name") or "") or default_name
@@ -4241,11 +4260,14 @@ def _auto_pick_suggestion(cfg: dict, discarded: list[str] | None = None) -> dict
     Generates a fresh mixed batch across the eligible styles when none is
     waiting (steering the LLM away from ``discarded`` topics). Returns the new
     pending queue item dict, or None on failure. Called only when there are no
-    pending user requests and auto-start is enabled.
+    pending user requests and auto-start is enabled. Eligibility is per style
+    (_auto_feed_styles): only styles whose own automation asks for ideas and
+    renders them unattended are ever fed.
     """
-    eligible = _auto_pick_styles(cfg)
+    eligible = _auto_feed_styles(cfg)
     if not eligible:
-        logger.info("_auto_pick_suggestion: every style is excluded from auto-pick — nothing to do")
+        logger.info("_auto_pick_suggestion: no style asks to be fed AI ideas "
+                    "(auto_ai_ideas + auto_approve_script + auto_start_job, not auto-pick-excluded)")
         return None
     default_name = cfg.get("default_style", "")
 

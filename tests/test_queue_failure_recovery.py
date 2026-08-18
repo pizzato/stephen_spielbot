@@ -118,6 +118,17 @@ class ReconcileFailedRenderTests(TempConfigCase):
         out, _ = self._reconcile([item])
         self.assertEqual(out[0]["status"], "failed")
 
+    def test_cancelled_job_closes_item_as_cancelled(self):
+        # on_cancel_active_job stamps the job "cancelled" (deliberately not
+        # "error", so nothing auto-retries it) — the queue row must close too,
+        # not sit in "creating" showing a phantom render forever.
+        wd = self.make_work_dir("stopped", "cancelled")
+        item = {"id": "q1", "status": "creating", "final_title": "T", "work_dir": str(wd)}
+        out, saved = self._reconcile([item])
+        self.assertEqual(out[0]["status"], "cancelled")
+        self.assertNotIn("error", out[0])
+        self.assertTrue(saved, "reconcile must persist the repaired row")
+
     def test_just_launched_job_is_left_alone(self):
         # Dead pid but job.json written seconds ago: the relaunch window.
         wd = self.make_work_dir("fresh", "running", pid=2 ** 30, meta_age_secs=5)

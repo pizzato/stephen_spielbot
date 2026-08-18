@@ -2977,6 +2977,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <AutoVal k="auto_start_job" />
               </div>
               <div>
+                <Check checked={!!av.auto_ai_ideas} onChange={(v) => setAuto('auto_ai_ideas', v)} label="Top up the empty queue with AI ideas for this style — invented films render without review, so the style also needs auto-approve and auto-start on (and not to be excluded from auto-pick on the Styles tab)" />
+                <AutoVal k="auto_ai_ideas" />
+              </div>
+              <div>
                 <Check checked={!!av.auto_critic} onChange={(v) => setAuto('auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
                 <AutoVal k="auto_critic" />
               </div>
@@ -3083,8 +3087,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
               <Check checked={fullyAutomated} onChange={setFullyAutomated} label="⚡ Fully automated mode — turns on every global step, here and above" />
               <Check checked={!!cfg.youtube_auto_fetch_evaluate} onChange={(v) => set('youtube_auto_fetch_evaluate', v)} label="Fetch & evaluate comments on a schedule" />
               <Check checked={!!cfg.youtube_auto_approve_comments} onChange={(v) => set('youtube_auto_approve_comments', v)} label="Auto-approve requests above the confidence threshold" />
-              <Check checked={!!cfg.youtube_auto_ai_ideas} onChange={(v) => set('youtube_auto_ai_ideas', v)} label="Top up the queue with an AI idea when it runs empty (needs a style that auto-approves scripts)" />
-              <div className="row center between row--wrap gap-10" style={{ paddingLeft: 26 }}>
+              {/* The AI-ideas top-up itself is per style now — it lives in
+                   "What automation makes" above, like the other per-film flags. */}
+              <div className="row center between row--wrap gap-10">
                 <span className="muted" style={{ fontSize: 12.5 }}>Declined ideas are kept out of new AI suggestions. Clear the list to let those topics resurface — ignored ideas stay hidden.</span>
                 <Button variant="ghost" icon="trash-can" disabled={clearingDeclined} onClick={resetDeclinedIdeas}>{clearingDeclined ? 'Clearing…' : 'Clear declined ideas'}</Button>
               </div>

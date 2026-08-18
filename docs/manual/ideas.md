@@ -75,12 +75,15 @@ To let *every* declined topic resurface, use **Clear declined ideas** in
 
 ## Automation
 
-With *Top up the queue with an AI idea when it runs empty* enabled in
-[Settings → Automation](settings.md#automation), the studio invents its own topics when
-the queue empties, rotating across styles. A style can opt out of the rotation with
-**auto-pick exclude** in [Settings → Styles](settings.md#styles).
+With *Top up the empty queue with AI ideas* enabled for a style in
+[Settings → Automation](settings.md#what-automation-makes), the studio invents its own
+topics for it when the queue empties, rotating across every style that asks to be fed.
+A style can also opt out of the rotation with **auto-pick exclude** in
+[Settings → Styles](settings.md#styles).
 
-That toggle needs auto-approved scripts, since nobody is there to review them.
+Invented films render without review, so a style is only fed when its own automation also
+auto-approves scripts and auto-starts the queue — a style in review mode never receives
+invented ideas.
 
 ## How dedup works
 
