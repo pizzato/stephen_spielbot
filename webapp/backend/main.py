@@ -8385,6 +8385,14 @@ def _reconcile_queue() -> list[dict]:
                 it["error"] = str(meta.get("error") or "Render failed.")[:300]
                 it["updated_at"] = time.time()
                 changed = True
+            elif meta.get("status") == "cancelled":
+                # The render was stopped on purpose (on_cancel_active_job stamps
+                # the job "cancelled" precisely so it is NOT failed/retried).
+                # Close the queue row the same way — left "creating" it showed a
+                # phantom render forever.
+                it["status"] = "cancelled"
+                it["updated_at"] = time.time()
+                changed = True
             elif (meta.get("status") == "running"
                     and not gapp._process_running(meta.get("pid"))
                     # Grace period: right around (re)launch job.json can briefly
@@ -14452,14 +14460,14 @@ def _auto_start_best() -> dict | None:
     if not item:
         # Nothing fresh to start — retry a failed item before inventing new work.
         item = _retryable_failed(cfg)
-    if (not item and cfg.get("youtube_auto_ai_ideas")
-            # An invented idea has no style yet (_auto_pick_suggestion picks
-            # one), so the gate is "some style renders without review".
-            and gapp.automation_enabled_anywhere(cfg, "auto_approve_script")):
+    if not item and gapp.automation_enabled_anywhere(cfg, "auto_ai_ideas"):
         # Queue idle — opt-in fallback: invent an AI idea to keep the channel
         # fed. _auto_pick_suggestion picks the best unused idea, marks it used
         # (so it's closed and never re-picked), and generates a fresh batch
-        # when none remain.
+        # when none remain. Per style now (_auto_feed_styles): it only invents
+        # ideas for styles whose OWN automation asks for them and renders them
+        # unattended — a review-mode style never rides on another style's
+        # auto-approve. The anywhere-check is just the cheap pre-gate.
         try:
             item = gapp._auto_pick_suggestion(cfg, discarded=_discarded_idea_titles(cfg))
         except Exception:
