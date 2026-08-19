@@ -264,6 +264,12 @@ DEFAULT_CFG = {
     # Blank uses LTX-2.3 IC-LoRA Pixel Spatial Upscaler (ComfyUI workflow).
     "temporal_video_upscaler_cmd": "",
     "temporal_video_upscaler_timeout": 7200,
+    # RECOVERY chunk length, not a threshold: every clip is upscaled whole, and
+    # only if the worker runs out of memory (the result comes back black) is it
+    # retried in pieces this long, halving until it fits. Splitting is never the
+    # default because xfade-joining independently upscaled pieces breaks
+    # continuity at every seam. 0 uses the packaged default (12s).
+    "temporal_video_upscale_chunk_seconds": 0,
     # Generation defaults
     "default_voice": "",
     # Robotic-monotone post-processing of narration (issue #52): 0.0 is off

@@ -45,19 +45,24 @@ _FFPROBE = _resolve_media_tool("ffprobe")
 # fps + audio rate/layout so the concat filter accepts them.
 _FILM_FPS = 25
 _FILM_AR = 48000
-# Longest clip handed to the AI upscaler in one piece; longer ones are split
-# into overlapped chunks and xfade-joined.
+# Chunk length used to RECOVER from a failed upscale — clips are always tried
+# whole first, and only split into overlapped, xfade-joined pieces when the
+# worker returns black frames (see temporal_ai_upscale_video).
 #
 # The LTX graph's own ceiling is 1000 frames (~40s at 25fps), but well under
-# that a worker can run out of memory and return a *solid black clip while
+# that sampling can overflow to NaN and return a *solid black clip while
 # reporting success* — observed on a GB10 at 505 frames (20.2s) after 78
-# minutes, on a film whose 244-317 frame scenes all upscaled cleanly. 12s sits
-# below every length known to work, so the split lands inside the proven range.
+# minutes, and again at 174 frames once the target was 2160x2160. It scales
+# with frames x pixels per pass rather than clip length alone, so this is the
+# size to fall back to, not a length that is always safe.
 # Raise it with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS on a roomier GPU.
 _TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "12.0",
 ))
 _TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP", "0.5"))
+# Floor for the halve-and-retry after a blank result: below this the overlapped
+# pieces cost more to stitch than the retry saves.
+_TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS = 2.0
 # A silently-failed upscale is uniformly black, so compare brightness against
 # the source rather than a fixed floor — a genuinely dark scene must still pass.
 _UPSCALE_MIN_LUMA_RATIO = 0.35
@@ -254,9 +259,17 @@ def _luma_profile(path: Path, probes: int = _UPSCALE_PROBES) -> list[float]:
 def _verify_upscale_not_blank(source: Path, result: Path) -> None:
     """Reject an AI upscale that came back blank.
 
-    ComfyUI reports success and hands back a solid black clip when the worker
-    runs out of memory on a long one. Nothing downstream notices, so the black
-    scene is concatenated into the film and published over the good final.
+    ComfyUI reports success and hands back a solid black clip when sampling
+    overflows to NaN, which the frame writer then casts to zeros ("invalid value
+    encountered in cast"). Nothing downstream notices, so the black scene is
+    concatenated into the film and published over the good final.
+
+    Measured on scene_05 of a 1024x1024 film upscaled to 2160x2160: the whole
+    clip came back at brightness 16.0 against 118.2 in the source, reproducibly,
+    across three seeds and two workers. It is NOT memory and NOT the decoder —
+    a tiled VAE decode returns the same black clip, so the NaN is already in the
+    latent when it arrives. Fewer frames per sampling pass is what avoids it,
+    which is why the chunked retry works.
 
     Compared probe by probe at matching positions (the upscale preserves
     duration), not on the average: a single black chunk out of several would
@@ -275,10 +288,11 @@ def _verify_upscale_not_blank(source: Path, result: Path) -> None:
         raise RuntimeError(
             f"AI upscale of {source.name} came back blank {at}/{len(source_luma)} "
             f"of the way in — brightness {got:.1f} against {want:.1f} in the "
-            f"source. The worker most likely ran out of memory on this "
-            f"{_get_duration(source):.0f}s clip; lower "
-            f"TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS (currently "
-            f"{_TEMPORAL_UPSCALE_CHUNK_SECONDS:.0f}s) and try again."
+            f"source. Sampling overflowed to NaN on this "
+            f"{_get_duration(source):.0f}s clip at this size (not a memory "
+            f"limit, and not the decoder — a tiled decode fails the same way). "
+            f"It is retried automatically in smaller pieces; lower the upscale "
+            f"chunk length in Settings if the retries also fail."
         )
 
 
@@ -391,6 +405,7 @@ def temporal_ai_upscale_video(
     comfy_url: str | None = None,
     *,
     engine: str = "ic_lora",
+    chunk_seconds: float | None = None,
 ) -> Path:
     """Run a ComfyUI (or custom CLI) AI video upscaler on one clip.
 
@@ -431,7 +446,8 @@ def temporal_ai_upscale_video(
 
         duration = _get_duration(input_path)
         fps = _get_video_fps(input_path)
-        chunk_seconds = max(1.0, float(os.environ.get(
+        # Config wins, then the env override, then the packaged default.
+        chunk_seconds = max(1.0, float(chunk_seconds or os.environ.get(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
             str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
         )))
@@ -470,39 +486,66 @@ def temporal_ai_upscale_video(
                 source_height=actual_h,
             )
 
-        if duration > chunk_seconds + 0.25:
-            result = _chunked_comfy_temporal_upscale(
-                input_path,
-                output_path,
-                width,
-                height,
-                fps=fps,
-                timeout_seconds=timeout,
-                comfy_url=url,
-                chunk_seconds=chunk_seconds,
-                overlap_seconds=chunk_overlap,
-                upscale_fn=_comfy_upscale,
-            )
-        elif eng == "ltx_latent":
-            result = upscale_video_ltx_latent(
-                input_path, output_path, width, height,
-                fps=fps, timeout_seconds=timeout, comfy_url=url,
-            )
-        elif eng == "h3_latent":
-            result = upscale_video_h3_latent(
-                input_path, output_path, width, height,
-                fps=fps, timeout_seconds=timeout, comfy_url=url,
-                source_width=actual_w, source_height=actual_h,
-            )
-        else:
-            result = upscale_video_ltx(
+        def _run_once(chunk: float | None) -> Path:
+            """*chunk* None upscales the clip whole, in one piece."""
+            if chunk is not None and duration > chunk + 0.25:
+                return _chunked_comfy_temporal_upscale(
+                    input_path,
+                    output_path,
+                    width,
+                    height,
+                    fps=fps,
+                    timeout_seconds=timeout,
+                    comfy_url=url,
+                    chunk_seconds=chunk,
+                    overlap_seconds=min(chunk_overlap, max(0.0, chunk * 0.45)),
+                    upscale_fn=_comfy_upscale,
+                )
+            if eng == "ltx_latent":
+                return upscale_video_ltx_latent(
+                    input_path, output_path, width, height,
+                    fps=fps, timeout_seconds=timeout, comfy_url=url,
+                )
+            if eng == "h3_latent":
+                return upscale_video_h3_latent(
+                    input_path, output_path, width, height,
+                    fps=fps, timeout_seconds=timeout, comfy_url=url,
+                    source_width=actual_w, source_height=actual_h,
+                )
+            return upscale_video_ltx(
                 input_path, output_path, width, height,
                 fps=fps, timeout_seconds=timeout, comfy_url=url,
                 source_width=actual_w, source_height=actual_h,
                 duration_seconds=duration,
             )
-        _verify_upscale_not_blank(input_path, result)
-        return result
+
+        # The whole clip first, ALWAYS, however long it is. Splitting a clip and
+        # xfade-joining the pieces breaks continuity at every seam — badly so
+        # with the generative IC-LoRA upscaler, whose pieces diverge from each
+        # other. Chunking is how we recover from a worker running out of memory
+        # (the upscale comes back black), never a mode we choose up front.
+        attempts: list[float | None] = [None]
+        chunk = min(chunk_seconds, duration / 2)
+        while chunk >= _TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS:
+            attempts.append(chunk)
+            chunk /= 2
+        last_blank: RuntimeError | None = None
+        for i, attempt_chunk in enumerate(attempts):
+            result = _run_once(attempt_chunk)
+            try:
+                _verify_upscale_not_blank(input_path, result)
+                return result
+            except RuntimeError as exc:
+                last_blank = exc
+                if i + 1 >= len(attempts):
+                    break
+                logger.warning(
+                    "[upscale] %s came back blank %s; retrying in %.1fs chunks (%s)",
+                    input_path.name,
+                    "whole" if attempt_chunk is None else f"at {attempt_chunk:.1f}s chunks",
+                    attempts[i + 1], eng,
+                )
+        raise last_blank
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     values = {
@@ -594,11 +637,27 @@ def _chunked_comfy_temporal_upscale(
         else:
             _xfade_video_chunks(upscaled, video_only, body_seconds=body, overlap_seconds=overlap)
         _mux_source_audio(video_only, input_path, output_path, target_duration=duration)
+        # Every upscaler round-trips through a VAE, which does not preserve frame
+        # count, so each chunk returns slightly short and the join compounds it
+        # (measured: 6.250s of source came back as 5.917s over two chunks).
+        # _mux_source_audio can only trim, so conform to pad the shortfall —
+        # otherwise every chunked scene runs short and the reassembled film
+        # drifts out of sync with its captions.
+        if abs(_get_duration(output_path) - duration) > 0.01:
+            conformed = tmp_dir / "conformed.mp4"
+            conform_video_to_source(output_path, input_path, conformed, duration)
+            shutil.move(str(conformed), str(output_path))
     return output_path
 
 
 def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, duration: float) -> Path:
-    """Extract a video-only segment (frame-accurate) for ComfyUI upscaling."""
+    """Extract a segment (frame-accurate) for ComfyUI upscaling.
+
+    The chunk keeps its audio even though only the picture is upscaled and the
+    source audio is muxed back over the join: every packaged upscale workflow
+    feeds VHS_LoadVideoFFmpeg's audio output into VideoCombine, and VHS fails
+    the whole prompt with "failed to extract audio" when handed a silent file.
+    """
     # -ss after -i is slower but frame-accurate — hard cuts at chunk boundaries
     # were worsened by keyframe-inaccurate input seeking.
     _run([
@@ -606,10 +665,10 @@ def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, d
         "-i", str(input_path),
         "-ss", f"{start:.3f}",
         "-t", f"{duration:.3f}",
-        "-map", "0:v:0",
-        "-an",
+        "-map", "0:v:0", "-map", "0:a?",
         "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(output_path),
     ], timeout=1800)

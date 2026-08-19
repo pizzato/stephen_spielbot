@@ -7911,8 +7911,12 @@ def _temporal_upscale_scenes_to_final(
     """Upscale rendered scene clips as separate worker jobs, then rebuild final."""
     import concurrent.futures
     import shutil
-    import tempfile
-    from pipeline.assembler import concatenate_scenes_hard_cut, mix_background_music, temporal_ai_upscale_video
+    from pipeline.assembler import (
+        _verify_upscale_not_blank,
+        concatenate_scenes_hard_cut,
+        mix_background_music,
+        temporal_ai_upscale_video,
+    )
     from pipeline.worker_pool import WorkerPool
 
     scene_finals = _rendered_scene_finals(wd)
@@ -7924,6 +7928,7 @@ def _temporal_upscale_scenes_to_final(
         raise RuntimeError("No ComfyUI workers reachable for AI upscale.")
 
     timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
+    chunk_seconds = float(cfg.get("temporal_video_upscale_chunk_seconds") or 0) or None
     pool = WorkerPool(worker_urls) if worker_urls else None
     n_scenes = len(scene_finals)
     try:
@@ -7932,101 +7937,133 @@ def _temporal_upscale_scenes_to_final(
         film_title = wd.name
     per_scene_est, _learned = film_timing.estimate("upscale_scene", width=target_w, height=target_h)
     tmp_root = wd / "final_upscale_scenes"
-    tmp_root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="run-", dir=str(tmp_root)) as tmp:
-        tmp_dir = Path(tmp)
-        upscaled_by_index: list[Path | None] = [None] * n_scenes
-        # Parent stays an aggregate (fanout) while each scene shows as its own
-        # sub-job below, so the Activity screen lists every busy worker instead of
-        # one flickering "Upscaling scene N". _film_tasks still drives the Remix
-        # poll (step stays "final_upscale"); current/total give it scene progress.
-        _film_tasks[task_id] = {
-            "status": "running", "step": "final_upscale", "fanout": True,
-            "current": 0, "total": n_scenes,
-        }
+    # Keyed by engine + target so a re-run reuses only work done for the SAME
+    # job, and kept on disk rather than thrown away: a film can spend hours
+    # upscaling its scenes, and losing all of them because the last one failed
+    # means starting from nothing.
+    tmp_dir = tmp_root / f"{engine}-{target_w}x{target_h}"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    upscaled_by_index: list[Path | None] = [None] * n_scenes
+    # Parent stays an aggregate (fanout) while each scene shows as its own
+    # sub-job below, so the Activity screen lists every busy worker instead of
+    # one flickering "Upscaling scene N". _film_tasks still drives the Remix
+    # poll (step stays "final_upscale"); current/total give it scene progress.
+    _film_tasks[task_id] = {
+        "status": "running", "step": "final_upscale", "fanout": True,
+        "current": 0, "total": n_scenes,
+    }
 
-        def upscale_one(index: int, scene_path: Path) -> tuple[int, Path]:
-            _film_checkpoint(task_id)
-            sub_id = f"film:{task_id}#s{index + 1}"
-            _register_film_subjob(
-                sub_id,
-                name=f"Upscaling scene {index + 1}/{n_scenes}",
-                detail=f"{engine} → {target_w}×{target_h}",
-                work_dir=str(wd),
-                title=film_title,
-                est_seconds=per_scene_est,
-            )
-            sub_started = time.time()
-            url = pool.acquire() if pool else None
-            try:
-                out = tmp_dir / f"{scene_path.stem}.upscaled.mp4"
-                temporal_ai_upscale_video(
-                    scene_path,
-                    out,
-                    target_w,
-                    target_h,
-                    command_template=command_template,
-                    timeout_seconds=timeout,
-                    comfy_url=url,
-                    engine=engine,
-                )
-                film_timing.record(
-                    "upscale_scene", time.time() - sub_started,
-                    width=target_w, height=target_h,
-                )
-                return index, out
-            finally:
-                _clear_film_subjob(sub_id)
-                if pool and url:
-                    pool.release(url)
-
-        if command_template:
-            max_workers = min(max(1, int(cfg.get("temporal_video_upscaler_jobs") or 1)), n_scenes)
-        else:
-            max_workers = min(len(worker_urls), n_scenes)
+    def _reusable(out: Path, scene_path: Path) -> bool:
+        """True when a previous run already produced this scene at this size."""
+        from pipeline.assembler import _get_duration, _get_video_dimensions
+        if not out.exists() or out.stat().st_size <= 10_000:
+            return False
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = [
-                    executor.submit(upscale_one, idx, scene_path)
-                    for idx, scene_path in enumerate(scene_finals)
-                ]
-                done = 0
-                for fut in concurrent.futures.as_completed(futures):
-                    idx, out = fut.result()
-                    upscaled_by_index[idx] = out
-                    done += 1
-                    _film_tasks[task_id] = {
-                        "status": "running", "step": "final_upscale", "fanout": True,
-                        "current": done, "total": n_scenes,
-                    }
-        finally:
-            _clear_film_subjobs_for(task_id)
+            if _get_video_dimensions(out) != (target_w, target_h):
+                return False
+            if abs(_get_duration(out) - _get_duration(scene_path)) > 0.2:
+                return False
+            # A run that died mid-write can leave a blank file behind; the
+            # same check the upscaler itself uses keeps it from being reused.
+            _verify_upscale_not_blank(scene_path, out)
+        except Exception:
+            return False
+        return True
 
-        upscaled = [p for p in upscaled_by_index if p is not None]
-        if len(upscaled) != n_scenes:
-            raise RuntimeError("Temporal scene upscale did not produce every scene.")
-
+    def upscale_one(index: int, scene_path: Path) -> tuple[int, Path]:
         _film_checkpoint(task_id)
-        _film_tasks[task_id] = {"status": "running", "step": "finalize"}
-        combined = tmp_dir / "combined.upscaled.mp4"
-        concatenate_scenes_hard_cut(upscaled, combined)
-
-        jc = _film_job_config(wd)
-        music_path = wd / "background_music.wav"
-        ambient = wd / "ambient.wav"
-        if music_path.exists():
-            voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
-            mix_background_music(
-                combined,
-                music_path,
-                staged_final,
-                volume=music_vol / 100.0,
-                voice_volume=voice_vol / 100.0,
-                ambient_path=ambient if ambient.exists() else None,
-                ambient_volume=ambient_vol / 100.0,
+        sub_id = f"film:{task_id}#s{index + 1}"
+        _register_film_subjob(
+            sub_id,
+            name=f"Upscaling scene {index + 1}/{n_scenes}",
+            detail=f"{engine} → {target_w}×{target_h}",
+            work_dir=str(wd),
+            title=film_title,
+            est_seconds=per_scene_est,
+        )
+        sub_started = time.time()
+        out = tmp_dir / f"{scene_path.stem}.upscaled.mp4"
+        if _reusable(out, scene_path):
+            gapp.logger.info("[upscale] reusing scene %d/%d from a previous run (%s)",
+                             index + 1, n_scenes, out.name)
+            _clear_film_subjob(sub_id)
+            return index, out
+        url = pool.acquire() if pool else None
+        try:
+            temporal_ai_upscale_video(
+                scene_path,
+                out,
+                target_w,
+                target_h,
+                command_template=command_template,
+                timeout_seconds=timeout,
+                comfy_url=url,
+                engine=engine,
+                chunk_seconds=chunk_seconds,
             )
-        else:
-            shutil.copy2(combined, staged_final)
+            film_timing.record(
+                "upscale_scene", time.time() - sub_started,
+                width=target_w, height=target_h,
+            )
+            return index, out
+        except Exception:
+            # Never leave a rejected clip behind for the next run to reuse.
+            out.unlink(missing_ok=True)
+            raise
+        finally:
+            _clear_film_subjob(sub_id)
+            if pool and url:
+                pool.release(url)
+
+    if command_template:
+        max_workers = min(max(1, int(cfg.get("temporal_video_upscaler_jobs") or 1)), n_scenes)
+    else:
+        max_workers = min(len(worker_urls), n_scenes)
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [
+                executor.submit(upscale_one, idx, scene_path)
+                for idx, scene_path in enumerate(scene_finals)
+            ]
+            done = 0
+            for fut in concurrent.futures.as_completed(futures):
+                idx, out = fut.result()
+                upscaled_by_index[idx] = out
+                done += 1
+                _film_tasks[task_id] = {
+                    "status": "running", "step": "final_upscale", "fanout": True,
+                    "current": done, "total": n_scenes,
+                }
+    finally:
+        _clear_film_subjobs_for(task_id)
+
+    upscaled = [p for p in upscaled_by_index if p is not None]
+    if len(upscaled) != n_scenes:
+        raise RuntimeError("Temporal scene upscale did not produce every scene.")
+
+    _film_checkpoint(task_id)
+    _film_tasks[task_id] = {"status": "running", "step": "finalize"}
+    combined = tmp_dir / "combined.upscaled.mp4"
+    concatenate_scenes_hard_cut(upscaled, combined)
+
+    jc = _film_job_config(wd)
+    music_path = wd / "background_music.wav"
+    ambient = wd / "ambient.wav"
+    if music_path.exists():
+        voice_vol, music_vol, ambient_vol = _mix_volumes(wd, jc, cfg)
+        mix_background_music(
+            combined,
+            music_path,
+            staged_final,
+            volume=music_vol / 100.0,
+            voice_volume=voice_vol / 100.0,
+            ambient_path=ambient if ambient.exists() else None,
+            ambient_volume=ambient_vol / 100.0,
+        )
+    else:
+        shutil.copy2(combined, staged_final)
+    # Reached only on success — the per-scene work is no longer needed.
+    shutil.rmtree(tmp_dir, ignore_errors=True)
     return staged_final
 
 
@@ -12541,6 +12578,10 @@ def _finish_film_task_error(task_id: str, e: Exception) -> None:
         # finished_at lets /films/tasks re-surface this failure (bounded by
         # _FILM_ERROR_TTL_S) when the user returns to the editor, instead of the
         # scene silently showing its old frame/clip.
+        # Logged as well as stored: _film_tasks is in-memory, so a restart (or a
+        # user who closed the tab) otherwise loses the only record of WHY a
+        # multi-hour job failed.
+        gapp.logger.error("[film] task %s failed: %s", task_id, e, exc_info=True)
         _film_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:200],
                                 "finished_at": time.time()}
 

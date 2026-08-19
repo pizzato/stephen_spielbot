@@ -137,11 +137,7 @@
     "class_type": "VAEDecode",
     "inputs": {
       "samples": ["16", 2],
-      "vae": ["1", 2],
-      "tile_size": 0,
-      "overlap": 0,
-      "temporal_size": 0,
-      "temporal_overlap": 0
+      "vae": ["1", 2]
     }
   },
   "18": {

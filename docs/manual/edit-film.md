@@ -92,6 +92,11 @@ finishing sizes, offered here only. The video engines cannot generate at those s
 any sensible time, so they never appear in the render or style pickers. Only targets
 larger than the film's current size are listed.
 
+Scenes are upscaled one per worker in parallel and kept on disk as they finish, so if a
+scene fails the completed ones are reused when you run it again rather than redone.
+Each scene is upscaled in one piece; only a scene that exhausts its worker is retried
+in smaller chunks, because joining separately upscaled pieces shows at the seams.
+
 | Mode | What it does |
 |---|---|
 | **Fast** | Plain ffmpeg scale |

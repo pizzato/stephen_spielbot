@@ -125,7 +125,7 @@ class FilmUpscaleTests(unittest.TestCase):
         scene = wd / "scene_01_final.mp4"
         scene.write_bytes(b"scene-one" * 1500)
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora", chunk_seconds=None):
             self.assertEqual(src, scene)
             self.assertEqual((width, height), (1920, 1080))
             self.assertEqual(command_template, "temporal-cli -i {input} -o {output}")
@@ -165,7 +165,7 @@ class FilmUpscaleTests(unittest.TestCase):
         scene = wd / "scene_01_final.mp4"
         scene.write_bytes(b"scene-one" * 1500)
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora", chunk_seconds=None):
             self.assertEqual(engine, "ltx_latent")
             self.assertEqual(src, scene)
             out.write_bytes(b"latent-upscaled-scene")
@@ -206,7 +206,7 @@ class FilmUpscaleTests(unittest.TestCase):
         calls = []
         mixed = []
 
-        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora"):
+        def fake_temporal(src, out, width, height, command_template=None, timeout_seconds=None, comfy_url=None, engine="ic_lora", chunk_seconds=None):
             self.assertNotEqual(src, final)
             self.assertEqual((width, height), (1920, 1080))
             self.assertIsNone(command_template)

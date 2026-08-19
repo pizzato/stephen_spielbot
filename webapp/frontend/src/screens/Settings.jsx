@@ -1761,6 +1761,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   value={Math.max(1, Math.round((cfg.temporal_video_upscaler_timeout ?? 7200) / 60))}
                   onChange={(e) => set('temporal_video_upscaler_timeout', Math.max(1, +e.target.value || 1) * 60)} />
               </Field>
+              <Field label="Temporal AI upscale chunk (sec)" hint="Recovery only: clips are always upscaled whole. If a worker runs out of memory and returns black frames, the clip is retried in pieces this long, halving until it fits. 0 uses the default (12s). Splitting is never the default — joining separately upscaled pieces breaks continuity at the seams.">
+                <input className="input" type="number" min={0} step={1}
+                  value={cfg.temporal_video_upscale_chunk_seconds ?? 0}
+                  onChange={(e) => set('temporal_video_upscale_chunk_seconds', Math.max(0, +e.target.value || 0))} />
+              </Field>
             </div>
           </Card>
 

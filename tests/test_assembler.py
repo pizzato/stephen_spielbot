@@ -71,6 +71,111 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(result, out)
             fallback.assert_called_once_with([scene_1, scene_2], out, fade=0.0)
 
+    def test_temporal_chunks_keep_their_audio(self):
+        """Every packaged upscale workflow feeds VHS's audio into VideoCombine,
+        and VHS fails the prompt outright when the input has no audio track."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "chunk.mp4"
+            src.write_bytes(b"video")
+            seen = {}
+
+            def fake_run(cmd, **kw):
+                seen["cmd"] = cmd
+
+            with mock.patch.object(assembler, "_run", side_effect=fake_run):
+                assembler._extract_temporal_chunk(src, out, 0.0, 4.0)
+
+            cmd = seen["cmd"]
+            self.assertNotIn("-an", cmd, "chunks must not be stripped of audio")
+            self.assertIn("0:a?", cmd)
+
+    def test_blank_result_retries_at_half_the_chunk(self):
+        """A blank clip means the worker OOMed; split it rather than fail the film."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+            calls = []
+
+            def fake_chunked(*a, **kw):
+                calls.append(("chunked", kw.get("chunk_seconds")))
+                return out
+
+            def fake_single(*a, **kw):
+                calls.append(("single", None))
+                return out
+
+            # blank the first time (the 7.25s single-shot), fine on the retry
+            verdicts = iter([RuntimeError("came back blank"), None])
+
+            def fake_verify(_src, _res):
+                v = next(verdicts)
+                if v:
+                    raise v
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=7.25), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank", side_effect=fake_verify), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale", side_effect=fake_chunked), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=fake_single), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=12.0,
+                )
+
+            # whole clip first, then recovery chunks at min(configured, duration/2)
+            self.assertEqual(calls[0][0], "single")
+            self.assertEqual(calls[1][0], "chunked")
+            self.assertAlmostEqual(calls[1][1], 3.625, places=3)
+
+    def test_blank_result_gives_up_once_chunks_hit_the_floor(self):
+        """Below the floor the retry cannot help, so the failure must surface."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=2.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank",
+                                   side_effect=RuntimeError("came back blank")), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    assembler.temporal_ai_upscale_video(
+                        src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=2.0,
+                    )
+
+    def test_long_clip_is_never_split_up_front(self):
+        """Chunking is recovery only: a clip well past the chunk length still goes
+        through whole, because joining separate pieces breaks continuity."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=40.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank"), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale",
+                                   return_value=out) as chunked, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out) as single, \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=4.0,
+                )
+
+            # 40s clip, 4s recovery chunk — old behaviour would have split it into ten
+            chunked.assert_not_called()
+            single.assert_called_once()
+
     def test_temporal_ai_upscale_uses_configured_command_template(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"
@@ -174,11 +279,13 @@ class AssemblerToolResolutionTests(unittest.TestCase):
         self.assertFalse(chunked)
         self.assertTrue(whole)
 
-    def test_long_scene_is_split_before_the_worker_can_blank_it(self):
-        """A 20s scene is what came back solid black on a GB10 — it must split."""
+    def test_long_scene_still_goes_through_whole(self):
+        """A 20s scene is what came back solid black on a GB10, but splitting it
+        up front breaks continuity at the seams — it is tried whole and only
+        split if that actually fails."""
         chunked, whole = self._route_upscale(20.2)
-        self.assertTrue(chunked)
-        self.assertFalse(whole)
+        self.assertFalse(chunked)
+        self.assertTrue(whole)
 
     def test_temporal_ai_upscale_chunks_long_packaged_comfy_workflow(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -213,6 +320,8 @@ class AssemblerToolResolutionTests(unittest.TestCase):
                  mock.patch.object(assembler, "_concat_video_chunks") as concat, \
                  mock.patch.object(assembler, "_mux_source_audio", side_effect=fake_mux) as mux, \
                  mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=lambda _src, dst, *_args, **_kw: dst) as comfy_upscale, \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank",
+                                   side_effect=[RuntimeError("came back blank"), None]), \
                  mock.patch.dict("os.environ", {
                      "TEMPORAL_VIDEO_UPSCALER_CMD": "",
                      "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS": "4",
@@ -229,7 +338,8 @@ class AssemblerToolResolutionTests(unittest.TestCase):
 
             self.assertEqual(result, out)
             self.assertEqual(extract.call_count, 3)
-            self.assertEqual(comfy_upscale.call_count, 3)
+            # one whole-clip attempt (which blanked) plus the three recovery chunks
+            self.assertEqual(comfy_upscale.call_count, 4)
             # Non-final chunks extend by the overlap so xfade can blend the same
             # source-time region; final chunk is the remainder only.
             self.assertEqual(extract_calls[0], (0.0, 4.5))
