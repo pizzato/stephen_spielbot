@@ -58,6 +58,9 @@ _TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "12.0",
 ))
 _TEMPORAL_UPSCALE_CHUNK_OVERLAP = float(os.environ.get("TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP", "0.5"))
+# Floor for the halve-and-retry after a blank result: below this the overlapped
+# pieces cost more to stitch than the retry saves.
+_TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS = 2.0
 # A silently-failed upscale is uniformly black, so compare brightness against
 # the source rather than a fixed floor — a genuinely dark scene must still pass.
 _UPSCALE_MIN_LUMA_RATIO = 0.35
@@ -391,6 +394,7 @@ def temporal_ai_upscale_video(
     comfy_url: str | None = None,
     *,
     engine: str = "ic_lora",
+    chunk_seconds: float | None = None,
 ) -> Path:
     """Run a ComfyUI (or custom CLI) AI video upscaler on one clip.
 
@@ -431,7 +435,8 @@ def temporal_ai_upscale_video(
 
         duration = _get_duration(input_path)
         fps = _get_video_fps(input_path)
-        chunk_seconds = max(1.0, float(os.environ.get(
+        # Config wins, then the env override, then the packaged default.
+        chunk_seconds = max(1.0, float(chunk_seconds or os.environ.get(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
             str(_TEMPORAL_UPSCALE_CHUNK_SECONDS),
         )))
@@ -470,38 +475,55 @@ def temporal_ai_upscale_video(
                 source_height=actual_h,
             )
 
-        if duration > chunk_seconds + 0.25:
-            result = _chunked_comfy_temporal_upscale(
-                input_path,
-                output_path,
-                width,
-                height,
-                fps=fps,
-                timeout_seconds=timeout,
-                comfy_url=url,
-                chunk_seconds=chunk_seconds,
-                overlap_seconds=chunk_overlap,
-                upscale_fn=_comfy_upscale,
-            )
-        elif eng == "ltx_latent":
-            result = upscale_video_ltx_latent(
-                input_path, output_path, width, height,
-                fps=fps, timeout_seconds=timeout, comfy_url=url,
-            )
-        elif eng == "h3_latent":
-            result = upscale_video_h3_latent(
-                input_path, output_path, width, height,
-                fps=fps, timeout_seconds=timeout, comfy_url=url,
-                source_width=actual_w, source_height=actual_h,
-            )
-        else:
-            result = upscale_video_ltx(
+        def _run_once(chunk: float) -> Path:
+            if duration > chunk + 0.25:
+                return _chunked_comfy_temporal_upscale(
+                    input_path,
+                    output_path,
+                    width,
+                    height,
+                    fps=fps,
+                    timeout_seconds=timeout,
+                    comfy_url=url,
+                    chunk_seconds=chunk,
+                    overlap_seconds=min(chunk_overlap, max(0.0, chunk * 0.45)),
+                    upscale_fn=_comfy_upscale,
+                )
+            if eng == "ltx_latent":
+                return upscale_video_ltx_latent(
+                    input_path, output_path, width, height,
+                    fps=fps, timeout_seconds=timeout, comfy_url=url,
+                )
+            if eng == "h3_latent":
+                return upscale_video_h3_latent(
+                    input_path, output_path, width, height,
+                    fps=fps, timeout_seconds=timeout, comfy_url=url,
+                    source_width=actual_w, source_height=actual_h,
+                )
+            return upscale_video_ltx(
                 input_path, output_path, width, height,
                 fps=fps, timeout_seconds=timeout, comfy_url=url,
                 source_width=actual_w, source_height=actual_h,
                 duration_seconds=duration,
             )
-        _verify_upscale_not_blank(input_path, result)
+
+        result = _run_once(chunk_seconds)
+        try:
+            _verify_upscale_not_blank(input_path, result)
+        except RuntimeError:
+            # A blank result means the worker ran out of memory on a clip this
+            # long at this target. Halving the chunk splits it into pieces the
+            # worker can hold — cheaper than failing a film that may already
+            # have spent hours upscaling its other scenes.
+            retry_chunk = max(_TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS, min(chunk_seconds, duration) / 2)
+            if retry_chunk >= min(chunk_seconds, duration) - 0.01:
+                raise  # already as small as we go; the split cannot get smaller
+            logger.warning(
+                "[upscale] %s came back blank at %.1fs chunks; retrying at %.1fs (%s)",
+                input_path.name, chunk_seconds, retry_chunk, eng,
+            )
+            result = _run_once(retry_chunk)
+            _verify_upscale_not_blank(input_path, result)
         return result
 
     output_path.parent.mkdir(parents=True, exist_ok=True)

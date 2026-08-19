@@ -264,6 +264,13 @@ DEFAULT_CFG = {
     # Blank uses LTX-2.3 IC-LoRA Pixel Spatial Upscaler (ComfyUI workflow).
     "temporal_video_upscaler_cmd": "",
     "temporal_video_upscaler_timeout": 7200,
+    # Longest clip handed to the AI upscaler in one piece. Clips longer than this
+    # are split and cross-faded back together. It exists because the generative
+    # IC-LoRA upscaler runs out of worker memory on long clips at large targets
+    # and returns black frames; 0 falls back to the packaged default (12s).
+    # Lower it when upscaling to 4K — at that size even a 7s clip can exhaust a
+    # worker, and every scene shorter than this is upscaled in one shot.
+    "temporal_video_upscale_chunk_seconds": 0,
     # Generation defaults
     "default_voice": "",
     # Robotic-monotone post-processing of narration (issue #52): 0.0 is off

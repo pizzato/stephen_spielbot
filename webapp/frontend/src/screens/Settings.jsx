@@ -1761,6 +1761,11 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   value={Math.max(1, Math.round((cfg.temporal_video_upscaler_timeout ?? 7200) / 60))}
                   onChange={(e) => set('temporal_video_upscaler_timeout', Math.max(1, +e.target.value || 1) * 60)} />
               </Field>
+              <Field label="Temporal AI upscale chunk (sec)" hint="Longest clip sent to the AI upscaler in one piece; longer ones are split and cross-faded. 0 uses the default (12s). Lower it when upscaling to 4K — at that size a worker can run out of memory even on a 7s scene and return black frames.">
+                <input className="input" type="number" min={0} step={1}
+                  value={cfg.temporal_video_upscale_chunk_seconds ?? 0}
+                  onChange={(e) => set('temporal_video_upscale_chunk_seconds', Math.max(0, +e.target.value || 0))} />
+              </Field>
             </div>
           </Card>
 

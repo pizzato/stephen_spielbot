@@ -71,6 +71,90 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(result, out)
             fallback.assert_called_once_with([scene_1, scene_2], out, fade=0.0)
 
+    def test_blank_result_retries_at_half_the_chunk(self):
+        """A blank clip means the worker OOMed; split it rather than fail the film."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+            calls = []
+
+            def fake_chunked(*a, **kw):
+                calls.append(("chunked", kw.get("chunk_seconds")))
+                return out
+
+            def fake_single(*a, **kw):
+                calls.append(("single", None))
+                return out
+
+            # blank the first time (the 7.25s single-shot), fine on the retry
+            verdicts = iter([RuntimeError("came back blank"), None])
+
+            def fake_verify(_src, _res):
+                v = next(verdicts)
+                if v:
+                    raise v
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=7.25), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank", side_effect=fake_verify), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale", side_effect=fake_chunked), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", side_effect=fake_single), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=12.0,
+                )
+
+            # first attempt single-shot (7.25s < 12s), retry chunked at half the clip
+            self.assertEqual(calls[0][0], "single")
+            self.assertEqual(calls[1][0], "chunked")
+            self.assertAlmostEqual(calls[1][1], 3.625, places=3)
+
+    def test_blank_result_gives_up_once_chunks_hit_the_floor(self):
+        """Below the floor the retry cannot help, so the failure must surface."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=2.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank",
+                                   side_effect=RuntimeError("came back blank")), \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                with self.assertRaises(RuntimeError):
+                    assembler.temporal_ai_upscale_video(
+                        src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=2.0,
+                    )
+
+    def test_configured_chunk_seconds_beats_the_env_default(self):
+        """The Settings value must force a split the 12s default would not make."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            out.write_bytes(b"upscaled")
+
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1024, 1024)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=7.25), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank"), \
+                 mock.patch.object(assembler, "_chunked_comfy_temporal_upscale",
+                                   return_value=out) as chunked, \
+                 mock.patch("pipeline.comfyui.upscale_video_ltx", return_value=out), \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
+                assembler.temporal_ai_upscale_video(
+                    src, out, 2160, 2160, comfy_url="http://w:8188", chunk_seconds=4.0,
+                )
+
+            chunked.assert_called_once()
+            self.assertEqual(chunked.call_args.kwargs["chunk_seconds"], 4.0)
+
     def test_temporal_ai_upscale_uses_configured_command_template(self):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "src.mp4"

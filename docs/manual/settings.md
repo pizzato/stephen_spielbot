@@ -24,6 +24,12 @@ Seven tabs: **Infrastructure**, **Styles**, **Characters**, **Assets**, **Voices
 - **UI worker idle timeout (min)** — how long the UI must be idle before its
   [reserved render worker](../cluster.md#the-reserved-ui-worker) rejoins the pool
 - **Temporal AI upscale timeout (min)**
+- **Temporal AI upscale chunk (sec)** — the longest clip handed to the AI upscaler in
+  one piece; anything longer is split and cross-faded back together. `0` uses the
+  packaged default of 12s. **Lower this when upscaling to 4K**: at that size a worker
+  can run out of memory even on a 7-second scene and return black frames. A blank
+  result is detected and retried once at half the chunk length automatically, so this
+  is the knob for making that first attempt succeed.
 
 A read-only cluster status panel sits alongside, and **Container power** lets you start
 and stop worker containers over SSH without leaving the app.
