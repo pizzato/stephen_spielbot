@@ -45,8 +45,9 @@ _FFPROBE = _resolve_media_tool("ffprobe")
 # fps + audio rate/layout so the concat filter accepts them.
 _FILM_FPS = 25
 _FILM_AR = 48000
-# Longest clip handed to the AI upscaler in one piece; longer ones are split
-# into overlapped chunks and xfade-joined.
+# Chunk length used to RECOVER from a failed upscale — clips are always tried
+# whole first, and only split into overlapped, xfade-joined pieces when the
+# worker returns black frames (see temporal_ai_upscale_video).
 #
 # The LTX graph's own ceiling is 1000 frames (~40s at 25fps), but well under
 # that a worker can run out of memory and return a *solid black clip while
@@ -475,8 +476,9 @@ def temporal_ai_upscale_video(
                 source_height=actual_h,
             )
 
-        def _run_once(chunk: float) -> Path:
-            if duration > chunk + 0.25:
+        def _run_once(chunk: float | None) -> Path:
+            """*chunk* None upscales the clip whole, in one piece."""
+            if chunk is not None and duration > chunk + 0.25:
                 return _chunked_comfy_temporal_upscale(
                     input_path,
                     output_path,
@@ -507,24 +509,33 @@ def temporal_ai_upscale_video(
                 duration_seconds=duration,
             )
 
-        result = _run_once(chunk_seconds)
-        try:
-            _verify_upscale_not_blank(input_path, result)
-        except RuntimeError:
-            # A blank result means the worker ran out of memory on a clip this
-            # long at this target. Halving the chunk splits it into pieces the
-            # worker can hold — cheaper than failing a film that may already
-            # have spent hours upscaling its other scenes.
-            retry_chunk = max(_TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS, min(chunk_seconds, duration) / 2)
-            if retry_chunk >= min(chunk_seconds, duration) - 0.01:
-                raise  # already as small as we go; the split cannot get smaller
-            logger.warning(
-                "[upscale] %s came back blank at %.1fs chunks; retrying at %.1fs (%s)",
-                input_path.name, chunk_seconds, retry_chunk, eng,
-            )
-            result = _run_once(retry_chunk)
-            _verify_upscale_not_blank(input_path, result)
-        return result
+        # The whole clip first, ALWAYS, however long it is. Splitting a clip and
+        # xfade-joining the pieces breaks continuity at every seam — badly so
+        # with the generative IC-LoRA upscaler, whose pieces diverge from each
+        # other. Chunking is how we recover from a worker running out of memory
+        # (the upscale comes back black), never a mode we choose up front.
+        attempts: list[float | None] = [None]
+        chunk = min(chunk_seconds, duration / 2)
+        while chunk >= _TEMPORAL_UPSCALE_MIN_CHUNK_SECONDS:
+            attempts.append(chunk)
+            chunk /= 2
+        last_blank: RuntimeError | None = None
+        for i, attempt_chunk in enumerate(attempts):
+            result = _run_once(attempt_chunk)
+            try:
+                _verify_upscale_not_blank(input_path, result)
+                return result
+            except RuntimeError as exc:
+                last_blank = exc
+                if i + 1 >= len(attempts):
+                    break
+                logger.warning(
+                    "[upscale] %s came back blank %s; retrying in %.1fs chunks (%s)",
+                    input_path.name,
+                    "whole" if attempt_chunk is None else f"at {attempt_chunk:.1f}s chunks",
+                    attempts[i + 1], eng,
+                )
+        raise last_blank
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     values = {
