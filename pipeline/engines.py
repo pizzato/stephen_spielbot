@@ -497,6 +497,12 @@ MUSIC_ENGINES: dict[str, dict] = {
         "label": "ACE-Step 1.5 Turbo",
         "sub": "Fast · 8 steps · instrumental beds · commercial OK",
         "workflow": "ace_music.json",
+        # Repaint-extend: keep an existing take's audio verbatim and generate
+        # only the added tail ("re-generate longer" without losing the song).
+        # Needs the AudioLatentExtendMask custom node on the worker — the
+        # caller probes for it and falls back to a fresh generation.
+        "extend_workflow": "ace_music_extend.json",
+        "extend_node": "AudioLatentExtendMask",
         "commercial_ok": True,
         "license": "Apache-2.0",
         # EmptyAceStep15LatentAudio accepts up to 1000 s — far past any film.

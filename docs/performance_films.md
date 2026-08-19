@@ -145,8 +145,11 @@ song can end mid-bar or mid-word. The Song tab's **Ending** control cures either
 *Extend the ending* fades the take's last seconds out into a tail of silence (ffmpeg on
 the controller — the approved arrangement is kept and the extended track becomes the
 film's, so the scene division divides the longer length), while *Re-generate that much
-longer* asks the engine for the current length plus those seconds, which gives it room to
-finish but yields a fresh take. Both keep the previous track as a version.
+longer* repaints the take in use: its audio is encoded and pinned, and only the added
+tail is generated, so the song stays the same and gains a finished ending. The repaint
+needs ACE-Step plus the `AudioLatentExtendMask` node on the worker (in the ComfyUI image
+since 2026-08; older workers, and the MiniMax engine, fall back to a fresh longer take —
+the Song tab says which happened). Both keep the previous track as a version.
 
 **Whose voice sings?** Two levels. The music engines can't clone a voice, so at
 generation time the chosen singing voice only *describes* the vocalist (below). But the

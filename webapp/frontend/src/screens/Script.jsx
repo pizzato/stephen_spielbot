@@ -186,20 +186,23 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         : 'Sound re-written — generate the song again to hear it.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
-  // Re-generate the song. `addSeconds` sings it that much longer than the take
-  // now playing — the fix for an ending the model never got to finish (it is a
-  // fresh take; the current one stays in the version list).
+  // Re-generate the song. `addSeconds` extends the take marked "In use" that
+  // much: where the worker can repaint (ACE-Step), the song stays the same and
+  // only the new tail is generated; otherwise it falls back to a fresh longer
+  // take. Either way the current one stays in the version list.
   const generateSongTrack = async (addSeconds = 0) => {
     setBusy(addSeconds ? 'song-gen-longer' : 'song-gen'); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
-      await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
-                               lyrics: cur.lyrics, voice: songVoiceSel,
-                               add_seconds: addSeconds })
+      const s = await api.songGenerate({ work_dir: job.work_dir, caption: cur.caption,
+                                         lyrics: cur.lyrics, voice: songVoiceSel,
+                                         add_seconds: addSeconds })
       setSongDraft(null); await refreshSong()
-      setSongMsg(addSeconds
-        ? `Sung again about ${addSeconds}s longer — listen, and pick whichever take ends better below.`
-        : 'Song generated — listen below, re-voice it, or draft the story.')
+      setSongMsg(!addSeconds
+        ? 'Song generated — listen below, re-voice it, or draft the story.'
+        : s?.result?.extended
+          ? `Same song, about ${addSeconds}s longer — the take you had is untouched up to its old ending, only the tail is new.`
+          : `Sung again about ${addSeconds}s longer — this worker can't extend a take in place, so it's a fresh take. Pick whichever ends better below.`)
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // The other half of the same problem: keep this take and just give it a
@@ -1151,7 +1154,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                   a blunt ending needs a tail, an unfinished one needs room. */}
               {song.song_url && (
                 <Field label="Ending"
-                  hint={`Currently ${(Number(song.duration) || 0).toFixed(0)} s. Extending the take fades its last seconds out into ${extendOk ? extendSecsN : 'X'} s of silence — instant, nothing is re-generated, and the arrangement you approved is untouched. Re-generating longer sings it again with room to land the ending and finish the words, which is a fresh take. Either way the current one stays in the list below.`}>
+                  hint={`Currently ${(Number(song.duration) || 0).toFixed(0)} s. Extending the take fades its last seconds out into ${extendOk ? extendSecsN : 'X'} s of silence — instant, nothing is re-generated, and the arrangement you approved is untouched. Re-generating longer keeps the song too: the take in use stays as it is and the model sings only the added tail, finishing the words it cut off. Either way the current one stays in the list below.`}>
                   <div className="row center gap-8 row--wrap">
                     <input className="input" type="number" min={0.5} max={30} step={0.5}
                       style={{ width: 110 }} value={extendSecs} disabled={!!busy}

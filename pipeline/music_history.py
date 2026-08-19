@@ -191,11 +191,3 @@ def find(work_dir: Path, version_id: int) -> dict | None:
     """One kept version (with its on-disk ``path``), or None."""
     return next((v for v in history(work_dir)["versions"]
                  if v["id"] == int(version_id)), None)
-
-
-def latest_sung(work_dir: Path) -> dict | None:
-    """The newest version that came out of the music engine rather than a
-    re-voicing — the track a "sing this as X" should convert FROM, so a second
-    re-voicing clones the original vocals instead of the previous clone."""
-    return next((v for v in reversed(history(work_dir)["versions"])
-                 if not v.get("voice")), None)
