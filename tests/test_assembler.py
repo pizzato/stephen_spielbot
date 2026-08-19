@@ -71,6 +71,25 @@ class AssemblerToolResolutionTests(unittest.TestCase):
             self.assertEqual(result, out)
             fallback.assert_called_once_with([scene_1, scene_2], out, fade=0.0)
 
+    def test_temporal_chunks_keep_their_audio(self):
+        """Every packaged upscale workflow feeds VHS's audio into VideoCombine,
+        and VHS fails the prompt outright when the input has no audio track."""
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src.mp4"
+            out = Path(tmp) / "chunk.mp4"
+            src.write_bytes(b"video")
+            seen = {}
+
+            def fake_run(cmd, **kw):
+                seen["cmd"] = cmd
+
+            with mock.patch.object(assembler, "_run", side_effect=fake_run):
+                assembler._extract_temporal_chunk(src, out, 0.0, 4.0)
+
+            cmd = seen["cmd"]
+            self.assertNotIn("-an", cmd, "chunks must not be stripped of audio")
+            self.assertIn("0:a?", cmd)
+
     def test_blank_result_retries_at_half_the_chunk(self):
         """A blank clip means the worker OOMed; split it rather than fail the film."""
         with tempfile.TemporaryDirectory() as tmp:

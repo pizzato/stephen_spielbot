@@ -616,11 +616,27 @@ def _chunked_comfy_temporal_upscale(
         else:
             _xfade_video_chunks(upscaled, video_only, body_seconds=body, overlap_seconds=overlap)
         _mux_source_audio(video_only, input_path, output_path, target_duration=duration)
+        # Every upscaler round-trips through a VAE, which does not preserve frame
+        # count, so each chunk returns slightly short and the join compounds it
+        # (measured: 6.250s of source came back as 5.917s over two chunks).
+        # _mux_source_audio can only trim, so conform to pad the shortfall —
+        # otherwise every chunked scene runs short and the reassembled film
+        # drifts out of sync with its captions.
+        if abs(_get_duration(output_path) - duration) > 0.01:
+            conformed = tmp_dir / "conformed.mp4"
+            conform_video_to_source(output_path, input_path, conformed, duration)
+            shutil.move(str(conformed), str(output_path))
     return output_path
 
 
 def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, duration: float) -> Path:
-    """Extract a video-only segment (frame-accurate) for ComfyUI upscaling."""
+    """Extract a segment (frame-accurate) for ComfyUI upscaling.
+
+    The chunk keeps its audio even though only the picture is upscaled and the
+    source audio is muxed back over the join: every packaged upscale workflow
+    feeds VHS_LoadVideoFFmpeg's audio output into VideoCombine, and VHS fails
+    the whole prompt with "failed to extract audio" when handed a silent file.
+    """
     # -ss after -i is slower but frame-accurate — hard cuts at chunk boundaries
     # were worsened by keyframe-inaccurate input seeking.
     _run([
@@ -628,10 +644,10 @@ def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, d
         "-i", str(input_path),
         "-ss", f"{start:.3f}",
         "-t", f"{duration:.3f}",
-        "-map", "0:v:0",
-        "-an",
+        "-map", "0:v:0", "-map", "0:a?",
         "-c:v", "libx264", "-crf", "18", "-preset", "veryfast",
         "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(output_path),
     ], timeout=1800)
