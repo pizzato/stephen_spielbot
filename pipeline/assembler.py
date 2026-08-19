@@ -50,10 +50,11 @@ _FILM_AR = 48000
 # worker returns black frames (see temporal_ai_upscale_video).
 #
 # The LTX graph's own ceiling is 1000 frames (~40s at 25fps), but well under
-# that a worker can run out of memory and return a *solid black clip while
+# that sampling can overflow to NaN and return a *solid black clip while
 # reporting success* — observed on a GB10 at 505 frames (20.2s) after 78
-# minutes, on a film whose 244-317 frame scenes all upscaled cleanly. 12s sits
-# below every length known to work, so the split lands inside the proven range.
+# minutes, and again at 174 frames once the target was 2160x2160. It scales
+# with frames x pixels per pass rather than clip length alone, so this is the
+# size to fall back to, not a length that is always safe.
 # Raise it with TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS on a roomier GPU.
 _TEMPORAL_UPSCALE_CHUNK_SECONDS = float(os.environ.get(
     "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS", "12.0",
@@ -258,9 +259,17 @@ def _luma_profile(path: Path, probes: int = _UPSCALE_PROBES) -> list[float]:
 def _verify_upscale_not_blank(source: Path, result: Path) -> None:
     """Reject an AI upscale that came back blank.
 
-    ComfyUI reports success and hands back a solid black clip when the worker
-    runs out of memory on a long one. Nothing downstream notices, so the black
-    scene is concatenated into the film and published over the good final.
+    ComfyUI reports success and hands back a solid black clip when sampling
+    overflows to NaN, which the frame writer then casts to zeros ("invalid value
+    encountered in cast"). Nothing downstream notices, so the black scene is
+    concatenated into the film and published over the good final.
+
+    Measured on scene_05 of a 1024x1024 film upscaled to 2160x2160: the whole
+    clip came back at brightness 16.0 against 118.2 in the source, reproducibly,
+    across three seeds and two workers. It is NOT memory and NOT the decoder —
+    a tiled VAE decode returns the same black clip, so the NaN is already in the
+    latent when it arrives. Fewer frames per sampling pass is what avoids it,
+    which is why the chunked retry works.
 
     Compared probe by probe at matching positions (the upscale preserves
     duration), not on the average: a single black chunk out of several would
@@ -279,10 +288,11 @@ def _verify_upscale_not_blank(source: Path, result: Path) -> None:
         raise RuntimeError(
             f"AI upscale of {source.name} came back blank {at}/{len(source_luma)} "
             f"of the way in — brightness {got:.1f} against {want:.1f} in the "
-            f"source. The worker most likely ran out of memory on this "
-            f"{_get_duration(source):.0f}s clip; lower "
-            f"TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS (currently "
-            f"{_TEMPORAL_UPSCALE_CHUNK_SECONDS:.0f}s) and try again."
+            f"source. Sampling overflowed to NaN on this "
+            f"{_get_duration(source):.0f}s clip at this size (not a memory "
+            f"limit, and not the decoder — a tiled decode fails the same way). "
+            f"It is retried automatically in smaller pieces; lower the upscale "
+            f"chunk length in Settings if the retries also fail."
         )
 
 

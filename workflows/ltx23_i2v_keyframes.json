@@ -22,7 +22,7 @@
   "17": {"class_type": "SamplerCustomAdvanced", "inputs": {"noise": ["14", 0], "guider": ["13", 0], "sampler": ["15", 0], "sigmas": ["16", 0], "latent_image": ["12", 0]}},
   "18": {"class_type": "LTXVSeparateAVLatent", "inputs": {"av_latent": ["17", 0]}},
   "42": {"class_type": "LTXVCropGuides", "inputs": {"positive": ["41", 0], "negative": ["41", 1], "latent": ["18", 0]}},
-  "31": {"class_type": "VAEDecode", "inputs": {"samples": ["42", 2], "vae": ["1", 2], "tile_size": 0, "overlap": 0, "temporal_size": 0, "temporal_overlap": 0}},
+  "31": {"class_type": "VAEDecode", "inputs": {"samples": ["42", 2], "vae": ["1", 2]}},
   "33": {"class_type": "CreateVideo", "inputs": {"images": ["31", 0], "fps": 25}},
   "34": {"class_type": "SaveVideo", "inputs": {"video": ["33", 0], "filename_prefix": "ltx-keyframe", "format": "mp4", "codec": "auto"}}
 }

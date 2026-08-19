@@ -326,6 +326,26 @@ class UpscaleResolutionSplitTests(unittest.TestCase):
         import app
         self.assertIn(app._DEFAULT_RESOLUTION, app._RESOLUTIONS)
 
+class PackagedWorkflowSanityTests(unittest.TestCase):
+    """Inputs ComfyUI does not recognise are dropped silently, so a graph can
+    look configured while doing nothing. VAEDecode carried tile_size/overlap/
+    temporal_size/temporal_overlap for the tiled decode it never performed."""
+
+    def test_vae_decode_nodes_carry_no_phantom_inputs(self):
+        import json
+        from pipeline.comfyui import WORKFLOWS_DIR
+        for path in sorted(Path(WORKFLOWS_DIR).glob("*.json")):
+            graph = json.loads(path.read_text())
+            for node_id, node in graph.items():
+                if node.get("class_type") != "VAEDecode":
+                    continue
+                extra = set(node.get("inputs", {})) - {"samples", "vae"}
+                self.assertFalse(
+                    extra,
+                    f"{path.name} node {node_id} passes {sorted(extra)} to VAEDecode, "
+                    "which has no such inputs — ComfyUI drops them silently",
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
