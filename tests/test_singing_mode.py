@@ -535,6 +535,20 @@ class SongVersionTests(_SongFilmCase):
         self.assertEqual(source.read_bytes(), b"as-generated")
         self.assertEqual(len(backend.music_history.history(self.wd)["versions"]), 3)
 
+    def test_revoicing_converts_the_take_in_use_not_the_newest(self):
+        """Two engine takes, the older one put back In use: "sing this as"
+        must convert what the user is hearing, not the latest generation."""
+        backend.music_history.seed_if_empty(self.wd, self.wd / "background_music.wav")
+        newer = self.wd / "newer.wav"
+        newer.write_bytes(b"newer-take")
+        backend.music_history.record(self.wd, newer)
+        first = backend.music_history.history(self.wd)["versions"][0]["id"]
+        backend.select_song_version(self.job_id, {"version_id": first})
+
+        source = self._convert()
+
+        self.assertEqual(source.read_bytes(), b"as-generated")
+
     def test_putting_the_original_back_stops_claiming_a_revoicing(self):
         self._convert()
         original = backend.music_history.history(self.wd)["versions"][0]["id"]
@@ -752,9 +766,18 @@ class SongEndingTests(_SongFilmCase):
 
         versions = backend.music_history.history(self.wd)["versions"]
         self.assertEqual(versions[-1]["voice"], "Nora")
-        # …so the next "sing this as" still converts the engine's own vocals.
-        self.assertEqual(Path(backend.music_history.latest_sung(self.wd)["path"]).read_bytes(),
-                         b"as-generated")
+        # …so the next "sing this as" still converts the engine's own vocals:
+        # the extended re-voicing's source chain walks back to the original.
+        seen = {}
+
+        def fake_convert(source, ref, out, **kw):
+            seen["source"] = Path(source)
+            Path(out).write_bytes(b"as-luiz")
+            return out
+
+        with unittest.mock.patch("pipeline.svc.convert_song", fake_convert):
+            backend._do_song_convert(self.wd, "Nora")
+        self.assertEqual(seen["source"].read_bytes(), b"as-generated")
 
     def test_the_tail_has_to_be_a_sane_length(self):
         for bad in (0, 45):
@@ -763,24 +786,51 @@ class SongEndingTests(_SongFilmCase):
                     work_dir=str(self.wd), seconds=bad))
             self.assertEqual(ctx.exception.status_code, 400)
 
-    def test_regenerating_longer_asks_for_more_than_is_playing(self):
-        """The added seconds land on the track's REAL length, not the length
-        originally asked for — "5 seconds longer than this" is literal."""
-        data = json.loads((self.wd / "song.json").read_text())
-        data["duration"] = 44.2
-        (self.wd / "song.json").write_text(json.dumps(data))
+    def _generate(self, add=0.0, can_extend=True):
+        """Run _do_song_generate with the worker and engine stubbed out;
+        returns (result, what generate_music was called with)."""
+        calls = {}
 
-        with unittest.mock.patch.object(backend, "_run_song_generate_task"):
-            backend.song_generate(backend.SongGenerateBody(
-                work_dir=str(self.wd), add_seconds=5))
+        def fake_generate_music(title, secs, staged, tags, **kw):
+            calls.update(secs=secs, extend_from=kw.get("extend_from"),
+                         keep_seconds=kw.get("keep_seconds"))
+            Path(staged).write_bytes(b"new-take")
 
-        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 49.2)
+        with unittest.mock.patch("pipeline.comfyui.generate_music", fake_generate_music), \
+             unittest.mock.patch("pipeline.comfyui.music_engine_can_extend",
+                                 return_value=can_extend), \
+             unittest.mock.patch.object(backend.gapp, "_preview_worker_urls",
+                                        return_value=["http://w1:8188"]), \
+             unittest.mock.patch.object(backend.subprocess, "run"):
+            res = backend._do_song_generate(self.wd, add_seconds=add)
+        return res, calls
+
+    def test_regenerating_longer_extends_the_take_in_use(self):
+        """"5 seconds longer than this" keeps THIS song: the take in use rides
+        along as the repaint source, its real length (not song.json's) is what
+        the seconds land on, and only the tail past it is generated."""
+        res, calls = self._generate(add=5)
+
+        self.assertTrue(res["extended"])
+        self.assertEqual(calls["secs"], 50.0)          # measured 45.0 + 5
+        self.assertEqual(calls["keep_seconds"], 45.0)  # the take survives whole
+        self.assertIsNotNone(calls["extend_from"])
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 50.0)
+
+    def test_a_worker_without_the_extend_node_falls_back_to_a_fresh_take(self):
+        res, calls = self._generate(add=5, can_extend=False)
+
+        self.assertFalse(res["extended"])
+        self.assertEqual(calls["secs"], 50.0)
+        self.assertIsNone(calls["extend_from"])
 
     def test_a_plain_regeneration_keeps_the_length(self):
-        with unittest.mock.patch.object(backend, "_run_song_generate_task"):
-            backend.song_generate(backend.SongGenerateBody(work_dir=str(self.wd)))
+        res, calls = self._generate()
 
-        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45)
+        self.assertFalse(res["extended"])
+        self.assertEqual(calls["secs"], 45.0)
+        self.assertIsNone(calls["extend_from"])
+        self.assertEqual(json.loads((self.wd / "song.json").read_text())["seconds"], 45.0)
 
 
 class MusicOnlyMixTests(_SongFilmCase):

@@ -2106,6 +2106,15 @@ def comfy_node_exists(comfy_url: str, node_class: str) -> bool | None:
         return None
 
 
+def music_engine_can_extend(comfy_url: str, music_engine: str | None = None) -> bool:
+    """True if this engine + worker can repaint-extend an existing track (the
+    engine ships an extend workflow AND the worker registers its mask node)."""
+    eng = _engines.resolve_music(music_engine)
+    if not eng.get("extend_workflow"):
+        return False
+    return bool(comfy_node_exists(comfy_url, eng.get("extend_node") or ""))
+
+
 def generate_music(
     topic: str,
     duration_seconds: float,
@@ -2115,6 +2124,8 @@ def generate_music(
     comfy_url: str = COMFYUI_URL,
     music_engine: str | None = None,
     lyrics: str | None = None,
+    extend_from: Path | None = None,
+    keep_seconds: float | None = None,
 ) -> Path:
     """Generate the background-music bed and save it to output_path.
 
@@ -2129,6 +2140,12 @@ def generate_music(
     tagged lyrics ([Verse]/[Chorus]/…) they are given. Empty keeps today's
     lyric-free instrumental behaviour — the caption should then say
     "instrumental" explicitly (the models are trained to write songs).
+
+    *extend_from* + *keep_seconds* re-generate the SAME track longer: the given
+    audio (already padded to *duration_seconds* by the caller) is encoded and
+    its first *keep_seconds* survive sampling verbatim — only the tail past
+    them is generated. Check ``music_engine_can_extend`` first; calling this on
+    an engine/worker without the extend graph raises RuntimeError.
     """
     if seed is None:
         seed = random.randint(0, 2**32 - 1)
@@ -2143,13 +2160,22 @@ def generate_music(
     check_engine_supported(eng, comfy_url)
     duration = min(round(duration_seconds, 1), eng["max_seconds"])
 
-    workflow = _load_workflow(eng["workflow"])
-    workflow = _fill_template(workflow, {
+    repl = {
         "TAGS":     tags,
         "DURATION": duration,
         "SEED":     seed,
         "LYRICS":   (lyrics or "").strip(),
-    })
+    }
+    if extend_from is not None:
+        if not eng.get("extend_workflow"):
+            raise RuntimeError(f"{eng['label']} cannot extend an existing track.")
+        repl["SOURCE_AUDIO"] = _upload_input_file(
+            Path(extend_from), content_type="audio/wav", comfy_url=comfy_url)
+        repl["KEEP_SECONDS"] = round(float(keep_seconds or 0.0), 2)
+        workflow = _load_workflow(eng["extend_workflow"])
+    else:
+        workflow = _load_workflow(eng["workflow"])
+    workflow = _fill_template(workflow, repl)
 
     client_id = str(uuid.uuid4())
     prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)

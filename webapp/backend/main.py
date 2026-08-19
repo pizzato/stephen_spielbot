@@ -3096,15 +3096,22 @@ class SongGenerateBody(BaseModel):
 _MAX_SONG_EXTEND = 30.0
 
 
-def _do_song_generate(wd: Path) -> dict:
+def _do_song_generate(wd: Path, add_seconds: float = 0.0) -> dict:
     """Render the song itself (song.json → background_music.wav) on a worker.
 
     The finished track IS the film's final soundtrack: the render's music step
     sees the file already present and reuses it verbatim, so what was approved
     here is exactly what plays under the film. Each generation is kept in the
-    music history for comparison."""
-    from pipeline.assembler import _get_duration
-    from pipeline.comfyui import generate_music
+    music history for comparison.
+
+    *add_seconds* re-generates the take marked "In use" that much longer — a
+    repaint extend: the current audio survives verbatim and only the added tail
+    is generated, so the song stays the same. That needs the engine's extend
+    graph on the worker (ACE-Step + the AudioLatentExtendMask node); without
+    it this falls back to a fresh full-length take, flagged ``extended: False``
+    so the UI can say which one happened."""
+    from pipeline.assembler import _get_duration, _resolve_media_tool
+    from pipeline.comfyui import generate_music, music_engine_can_extend
     from pipeline.worker_pool import WorkerPool
 
     cfg = gapp.load_config()
@@ -3118,36 +3125,61 @@ def _do_song_generate(wd: Path) -> dict:
     urls = gapp._preview_worker_urls()
     if not urls:
         raise RuntimeError("No ComfyUI workers reachable.")
+    final = wd / "background_music.wav"
+    keep = 0.0
+    if add_seconds > 0 and final.exists():
+        # Longer than what the user is HEARING — the take in use is the
+        # canonical file (select() keeps them in sync), so measure it rather
+        # than trusting song.json's last-generation fields.
+        keep = float(_get_duration(final) or 0.0)
+        if keep > 0:
+            secs = round(keep + float(add_seconds), 1)
     pool = WorkerPool(urls)
     staged = wd / "background_music.staging.wav"
+    padded = wd / "background_music.extend-src.wav"
     title = str(data.get("title") or wd.name)
     url = pool.acquire()
+    extended = False
     # Minutes on a GPU — tracked so the Activity screen shows the song being
     # sung, whether it was asked for in the Song tab or by automation.
     try:
-        with _track_op("Singing the song", f"{int(secs)}s · {engine}",
+        extend_from = None
+        if keep > 0 and music_engine_can_extend(url, engine):
+            # The extend graph wants the source already at the target length —
+            # the padding is what the model turns into the new tail.
+            subprocess.run(
+                [_resolve_media_tool("ffmpeg"), "-v", "error", "-y", "-i", str(final),
+                 "-af", f"apad=whole_dur={secs}", str(padded)],
+                check=True, capture_output=True, timeout=120)
+            extend_from = padded
+            extended = True
+        op = "Singing the song's new ending" if extended else "Singing the song"
+        with _track_op(op, f"{int(secs)}s · {engine}",
                        work_dir=str(wd), title=title, category="film"):
             generate_music(title, secs, staged,
                            caption or None, comfy_url=url, music_engine=engine,
-                           lyrics=data.get("lyrics") or None)
+                           lyrics=data.get("lyrics") or None,
+                           extend_from=extend_from,
+                           keep_seconds=keep if extend_from else None)
     finally:
         pool.release(url)
-    final = wd / "background_music.wav"
+        padded.unlink(missing_ok=True)
     staged.replace(final)
     try:
         music_history.record(wd, final, caption)
     except Exception:
         gapp.logger.warning("Could not record song into music history", exc_info=True)
     dur = _get_duration(final)
-    data.update({"generated_at": time.time(), "duration": dur})
+    data.update({"generated_at": time.time(), "duration": dur, "seconds": secs})
     (wd / "song.json").write_text(json.dumps(data, indent=2))
-    return {"ok": True, "duration": dur,
+    return {"ok": True, "duration": dur, "extended": extended,
             "song_url": f"/api/file?path={final}&t={int(time.time())}"}
 
 
-def _run_song_generate_task(task_id: str, wd: Path) -> None:
+def _run_song_generate_task(task_id: str, wd: Path, add_seconds: float = 0.0) -> None:
     try:
-        _script_tasks[task_id] = {"status": "done", "result": _do_song_generate(wd)}
+        _script_tasks[task_id] = {"status": "done",
+                                  "result": _do_song_generate(wd, add_seconds)}
     except Exception as e:
         _script_tasks[task_id] = {"status": "error", "error": str(e).splitlines()[0][:300]}
 
@@ -3172,21 +3204,18 @@ def song_generate(body: SongGenerateBody) -> dict:
         data["caption"] = body.caption.strip()
     if body.voice is not None:
         data["voice"] = (body.voice or "").strip()
-    if body.add_seconds:
-        add = float(body.add_seconds)
-        if not (0.5 <= add <= _MAX_SONG_EXTEND):
-            raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
-        # Longer than what the user is HEARING (the generated track's real
-        # length), falling back to the length asked for if nothing was sung yet.
-        base = float(data.get("duration") or data.get("seconds") or 0) or 60.0
-        data["seconds"] = round(base + add, 1)
+    add = float(body.add_seconds or 0)
+    if add and not (0.5 <= add <= _MAX_SONG_EXTEND):
+        raise HTTPException(400, f"Extend by between 0.5 and {int(_MAX_SONG_EXTEND)} seconds.")
     if not (data.get("lyrics") or "").strip():
         raise HTTPException(400, "The song has no lyrics.")
     data["updated_at"] = time.time()
     path.write_text(json.dumps(data, indent=2))
     task_id = uuid.uuid4().hex[:12]
     _script_tasks[task_id] = {"status": "running"}
-    threading.Thread(target=_run_song_generate_task, args=(task_id, wd),
+    # The length arithmetic happens in _do_song_generate, measured off the take
+    # in use — not off song.json, which describes the last generation.
+    threading.Thread(target=_run_song_generate_task, args=(task_id, wd, add),
                      daemon=True).start()
     return {"task_id": task_id}
 
@@ -3275,9 +3304,10 @@ def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     pinned into the takes sing in this voice too. Either version can be put
     back (and re-mixed into the final) from the Song tab or the film editor.
 
-    The conversion runs on the newest version that came out of the music
-    engine, not on whatever is canonical: re-voicing an already re-voiced track
-    would clone a clone."""
+    The conversion runs on the version marked "In use" — the take the user is
+    hearing — never the newest one. If the take in use is itself a re-voicing,
+    its engine-sung source is converted instead (re-voicing an already
+    re-voiced track would clone a clone), which is still the same take."""
     from pipeline import svc
     from pipeline.assembler import _get_duration
 
@@ -3297,9 +3327,19 @@ def _do_song_convert(wd: Path, voice: str, *, track_op: bool = True) -> dict:
     except Exception:
         gapp.logger.warning("Could not seed original song into history", exc_info=True)
     source, source_id = track, None
-    sung = music_history.latest_sung(wd)
-    if sung and Path(sung["path"]).exists():
-        source, source_id = Path(sung["path"]), sung["id"]
+    hist = music_history.history(wd)
+    sel = next((v for v in hist["versions"] if v["id"] == hist["selected"]), None)
+    # If the take in use is a re-voicing, walk back to its engine-sung source —
+    # the same take before any cloning (converting a clone clones a clone).
+    seen_ids = set()
+    while sel and sel.get("voice") and sel.get("source_id") and sel["id"] not in seen_ids:
+        seen_ids.add(sel["id"])
+        parent = music_history.find(wd, sel["source_id"])
+        if parent is None:
+            break
+        sel = parent
+    if sel and Path(sel["path"]).exists():
+        source, source_id = Path(sel["path"]), sel["id"]
     cfg = gapp.load_config()
     staged = wd / "background_music.staging.wav"
     # Re-voicing is UI work like a cover: stamping activity makes a running
@@ -3391,16 +3431,23 @@ def get_job_song(job_id: str) -> dict:
 
 
 def _stamp_song_voice(wd: Path, version_id: int) -> str:
-    """Point song.json's ``sung_as`` at whoever sings the version now in use.
+    """Point song.json's ``sung_as`` and ``duration`` at the version now in use.
 
-    The label has to follow the track: reverting to the original generation
-    must stop claiming a re-voicing. Returns the voice ("" for the original)."""
+    The labels have to follow the track: reverting to the original generation
+    must stop claiming a re-voicing, and the length shown (and extended from)
+    must be the selected take's, not the last generation's. Returns the voice
+    ("" for the original)."""
+    from pipeline.assembler import _get_duration
+
     voice = ((music_history.find(wd, version_id) or {}).get("voice") or "")
     path = wd / "song.json"
     if path.exists():
         try:
             data = json.loads(path.read_text())
             data["sung_as"] = voice
+            track = wd / "background_music.wav"
+            if track.exists():
+                data["duration"] = _get_duration(track)
             path.write_text(json.dumps(data, indent=2))
         except Exception:
             gapp.logger.warning("Could not update sung_as in song.json", exc_info=True)

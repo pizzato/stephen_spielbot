@@ -56,7 +56,10 @@ the format does to the render.
   song** renders the track on a worker, and **Sing this as [voice]** re-voices it with
   seed-vc — always converting the sung
   original, never a previous re-voicing. Every generation and re-voicing is kept as a
-  version — the one marked *In use* is the film's track, and they travel with the film
+  version — the one marked *In use* is the film's track and the one every operation
+  works from: extending, re-generating longer and re-voicing all act on it (a
+  re-voicing in use is converted from its own sung source, not from the newest take),
+  and they travel with the film
   so either side of a re-voicing can be
   [put back after the render](edit-film.md#a-song-films-song) too.
 - **Deleting a version** — landing a song takes takes, and the list only grows. The **×**
@@ -74,9 +77,11 @@ the format does to the render.
     - **Extend the ending** keeps the take you have — its last couple of seconds are faded
       out and that many seconds of silence padded after them. It runs on the controller,
       so it is instant, and the arrangement is untouched.
-    - **Re-generate that much longer** sings it again that much longer than what is
-      playing, so the model has room to land the ending and finish the words. It is a
-      fresh take, so the arrangement changes.
+    - **Re-generate that much longer** keeps the song and gives it a real ending: the
+      take in use survives verbatim and the model sings only the added tail, finishing
+      the words it cut off (a repaint on the worker — ACE-Step only). On a worker that
+      can't repaint yet, or with the MiniMax engine, it falls back to a fresh longer
+      take, and the message under the button says which one you got.
     - Either way the previous track stays in the version list and can be put back.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
