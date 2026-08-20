@@ -682,11 +682,21 @@ def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
             "".join(f"file {shlex.quote(str(chunk))}\n" for chunk in chunks),
             encoding="utf-8",
         )
+        # setts pins the joined VIDEO timeline back to zero. The concat demuxer
+        # offsets every video packet by the first segment's AAC priming (+23 ms
+        # here), keeping combined.mp4 self-consistent — but a music video's mix
+        # then throws that audio away and lays the song at 0, so the shift
+        # became a constant audio-leads-video error across the whole film: each
+        # take was in sync on its own and every mouth ran late in the merge.
+        # With the picture starting at 0, scene N's first frame sits at exactly
+        # the film time its song window says. (-avoid_negative_ts make_zero is
+        # NOT a substitute: measured, it moved the picture 83 ms the same way.)
         _run([
             _FFMPEG, "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(list_path),
             "-c", "copy",
+            "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTDTS",
             "-movflags", "+faststart",
             str(output_path),
         ], timeout=1800)
