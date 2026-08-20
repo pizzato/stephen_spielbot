@@ -237,6 +237,13 @@ proportional split is used unchanged. Without demucs, the coarser mix-level spli
 it finds intros and breaks on tracks whose bed is quieter than the voice, but cannot
 tell a loud instrumental solo from a sung line, since both are simply loud.
 
+Level alone still over-reads a little: separation leaves enough of the arrangement on the
+stem for an instrumental intro or outro to clear the bar, and the scene that lands on one
+is told a voice sings over it while the lyric sheet has no words to give it — the cast
+mimes a guitar. When the lyric sheet is aligned (below), every measured stretch is held
+to the words actually transcribed inside it, and a stretch no word landed in at all is
+dropped. Held notes and unwritten ad-libs inside a stretch still count as singing.
+
 **Each line's time can be measured, not estimated** — the *Align lyrics to the sung
 track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
 default). Level measurement knows *where* singing is but never *which* line is being
@@ -248,7 +255,10 @@ matches the transcript against the lyric sheet it already knows — alignment, n
 transcription, so the fixed line order disambiguates a chorus sung four times, a garbled
 word interpolates from its neighbours, and words "heard" outside the measured singing
 are discarded as hallucinations. Scenes then name and cut on the words actually sung
-under them. When fewer than half the lyric words match — or whisper is not installed —
+under them. The transcription is pinned to a deterministic decode, so the same track
+always times the same way — whisper's default sampling fallback fires constantly on a
+sung stem and made the transcript differ run to run, once dropping a song's first 30
+seconds outright. When fewer than half the lyric words match — or whisper is not installed —
 the paced estimate is used instead, so the option never makes timing worse. The model
 (whisper *small*, multilingual) downloads on the first alignment; the divide's "Timing
 the song's lyrics" step covers it in Activity.
@@ -266,6 +276,14 @@ and keep the grid exactly. When the lyric lines were whisper-aligned (above), th
 cut between *measured* lines; when the alignment is off or fell back to the paced
 estimate, a cut can still graze a word if the delivery is very uneven. Cuts that land in
 instrumental breaks are exact either way.
+
+**Every cut lands on a frame.** The seams are then snapped forward to the film's 24 fps
+grid, so each window is a whole number of frames. A window that is not cannot be trimmed
+to exactly — the trim keeps the frame straddling its end, and that spare fraction is
+never given back, so it adds up scene by scene until the picture is visibly behind the
+song it was shot against. Shipped films drifted up to 0.44 s by their last shot. On the
+grid the takes stay sample-aligned with the track from the first frame to the last, and
+the film ends a fraction of a frame inside the song rather than running past it.
 
 ## What you need first
 

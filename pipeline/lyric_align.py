@@ -68,8 +68,39 @@ def word_times(stem: Path, language: str = "") -> list[tuple[str, float, float]]
              float(w.get("end") or 0)) for w in data.get("words") or []]
 
 
+def voiced_regions(regions: list[tuple[float, float]],
+                   words: list[tuple[str, float, float]] | None,
+                   ) -> list[tuple[float, float]]:
+    """The measured vocal regions, trimmed to the words actually heard in them.
+
+    The level split answers "is the stem loud here", which is not the same
+    question as "is someone singing here": separation bleed rides an
+    instrumental intro or an outro loudly enough to clear the floor, and the
+    scene handed one is told a voice sings over it while the lyric sheet has
+    no words to give it — the cast mimed a guitar intro for the first 20 s of
+    a film, and 13 s of wordless outro at the end of it. Each region is cut
+    back to the stretch its transcript words occupy, _REGION_SLACK either side
+    so a held note or a breath is not clipped off; a region no word landed in
+    at all drops out entirely. A track with no transcript (no whisper install)
+    keeps every region measured, unchanged."""
+    if not words:
+        return list(regions)
+    out = []
+    for start, end in regions:
+        inside = [w for w in words
+                  if start - _REGION_SLACK <= (w[1] + w[2]) / 2 <= end + _REGION_SLACK]
+        if not inside:
+            continue
+        lo = max(start, min(w[1] for w in inside) - _REGION_SLACK)
+        hi = min(end, max(w[2] for w in inside) + _REGION_SLACK)
+        if hi - lo > 0.2:
+            out.append((round(lo, 2), round(hi, 2)))
+    return out
+
+
 def align_lines(stem: Path, lines: list[str], *, language: str = "",
                 regions: list[tuple[float, float]] | None = None,
+                words: list[tuple[str, float, float]] | None = None,
                 ) -> list[tuple[float, float]] | None:
     """Measured (start, end) for each lyric line, or None to keep the estimate.
 
@@ -77,8 +108,12 @@ def align_lines(stem: Path, lines: list[str], *, language: str = "",
     outside them (plus slack) are hallucinations and are dropped before
     matching. Lines whisper garbled are interpolated between their matched
     neighbours; the result is monotonic and non-overlapping, which is what
-    lines_in_window/snap_cuts assume."""
-    words = word_times(stem, language)
+    lines_in_window/snap_cuts assume.
+
+    *words* is an already-fetched transcript (word_times), so a caller that
+    also needs it — voiced_regions does — transcribes the stem once."""
+    if words is None:
+        words = word_times(stem, language)
     if words is None:
         return None
     if regions:

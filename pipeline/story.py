@@ -772,6 +772,11 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
     lines = lyric_lines(lyrics)
     regions = _song_timing.measure_regions(track) if track else []
     spans: list[tuple[float, float]] = []
+    # What the prompt calls singing. The level split alone counts separation
+    # bleed over an intro or an outro as a voice, and the scene it lands on is
+    # told to mime words the sheet has none of; the transcription below throws
+    # those regions out. Without it (no whisper install) the split stands.
+    sung = regions
     if regions and align_lyrics:
         # The option (song_align_lyrics): whisper-align the KNOWN lyric sheet
         # against the cached vocal stem so each line's time is measured, not
@@ -779,8 +784,10 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         from pipeline import lyric_align
         stem = _song_timing.vocal_stem(Path(track))
         if stem is not None:
+            words = lyric_align.word_times(stem, language)
+            sung = lyric_align.voiced_regions(regions, words)
             spans = lyric_align.align_lines(stem, lines, language=language,
-                                            regions=regions) or []
+                                            regions=regions, words=words) or []
     if not spans:
         spans = _song_timing.line_times(regions, len(lines)) if regions else []
 
@@ -790,7 +797,7 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         if spans:
             extra["sings"] = "\n".join(
                 _song_timing.lines_in_window(lines, spans, t0, t1)).strip()
-            extra["vocal_ranges"] = _song_timing.window_vocals(regions, t0, t1)
+            extra["vocal_ranges"] = _song_timing.window_vocals(sung, t0, t1)
         else:
             extra["sings"] = "\n".join(lines[lo:hi]).strip()
 
@@ -809,7 +816,8 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         cuts = (_song_timing.snap_cuts(len(scenes), total, spans, regions,
                                        min_secs=MIN_SCENE_SECONDS,
                                        max_secs=MAX_SCENE_SECONDS)
-                or [round(i * per, 2) for i in range(len(scenes) + 1)])
+                or [_song_timing.frame_snap(i * per) for i in range(len(scenes))]
+                + [_song_timing.frame_snap(total, down=True)])
         for i, s in enumerate(scenes):
             t0, t1 = cuts[i], cuts[i + 1]
             extra = dict(getattr(s, "metadata_extra", None) or {})
@@ -836,7 +844,8 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
             continue
         lo = int(round(len(lines) * (start / film_len))) if film_len else 0
         hi = int(round(len(lines) * (end / film_len))) if film_len else 0
-        extra["song_window"] = [round(start * scale, 1), round(end * scale, 1)]
+        extra["song_window"] = [_song_timing.frame_snap(start * scale),
+                                _song_timing.frame_snap(end * scale)]
         stamp(extra, extra["song_window"][0], extra["song_window"][1], lo, hi)
         s.metadata_extra = extra
         s.duration = max(MIN_SCENE_SECONDS,

@@ -20,9 +20,18 @@ def main() -> None:
     # No VAD filter: silero VAD is speech-trained and can drop sung stretches.
     # Hallucinations over instrumental sections are handled by the caller,
     # which gates words by the measured vocal regions and by the lyric sheet.
+    #
+    # temperature=0 pins the decode to greedy/beam rather than whisper's
+    # default fallback ladder, which SAMPLES (temperature 0.2…1.0) whenever a
+    # segment trips the compression-ratio or logprob threshold. A sung vocal
+    # stem trips it constantly, and the sampling made the transcript a coin
+    # flip: back-to-back runs over one 2-minute song returned 82 words then
+    # 119, one of them missing the first 30 seconds entirely — so the lines
+    # each scene was told to mouth changed from render to render.
     segments, info = model.transcribe(
         path, language=language or None, word_timestamps=True,
-        vad_filter=False, condition_on_previous_text=False, beam_size=5)
+        vad_filter=False, condition_on_previous_text=False, beam_size=5,
+        temperature=0.0)
     words = []
     for segment in segments:
         for w in segment.words or []:
