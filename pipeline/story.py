@@ -785,7 +785,8 @@ def assign_song_slices(scenes: list[Scene], lyrics: str,
         stem = _song_timing.vocal_stem(Path(track))
         if stem is not None:
             words = lyric_align.word_times(stem, language)
-            sung = lyric_align.voiced_regions(regions, words)
+            sung = lyric_align.voiced_regions(regions, words, stem=stem,
+                                              language=language)
             spans = lyric_align.align_lines(stem, lines, language=language,
                                             regions=regions, words=words) or []
     if not spans:

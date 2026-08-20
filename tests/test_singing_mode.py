@@ -1122,6 +1122,36 @@ class VoicedRegionTests(unittest.TestCase):
         self.assertEqual(lyric_align.voiced_regions(self.REGIONS, words),
                          [(0.25, 18.0), (21.25, 40.0)])
 
+    def test_a_silent_stretch_is_asked_again_on_its_own(self):
+        from pipeline import lyric_align
+        # A whole-track pass reads a stretch in the context of its neighbours
+        # and skips a wordless vocal in it: a real "ooh-ooh" intro came back
+        # empty beside the verses and as 130 "oh"s when handed over alone.
+        # Anything about to be dropped gets that second chance.
+        asked = []
+
+        def reask(stem, start, end, language):
+            asked.append((round(start, 2), round(end, 2)))
+            return [("oh", start + 0.5, end - 0.5)]
+
+        with unittest.mock.patch.object(lyric_align, "_words_in_slice",
+                                        side_effect=reask):
+            kept = lyric_align.voiced_regions(
+                self.REGIONS, [("paper", 22.0, 22.5), ("crown", 22.5, 23.2)],
+                stem=Path("stem.wav"), language="en")
+        # The empty region and the unheard tail of the second one, nothing else.
+        self.assertEqual(asked, [(0.0, 18.0), (23.95, 40.0)])
+        self.assertEqual(kept, [(0.0, 18.0), (21.25, 40.0)])
+
+    def test_a_stretch_still_empty_the_second_time_is_bleed(self):
+        from pipeline import lyric_align
+        with unittest.mock.patch.object(lyric_align, "_words_in_slice",
+                                        return_value=[]):
+            kept = lyric_align.voiced_regions(
+                self.REGIONS, [("paper", 22.0, 22.5), ("crown", 22.5, 23.2)],
+                stem=Path("stem.wav"), language="en")
+        self.assertEqual(kept, [(21.25, 23.95)])
+
     def test_no_transcript_keeps_every_measured_region(self):
         from pipeline import lyric_align
         self.assertEqual(lyric_align.voiced_regions(self.REGIONS, None),

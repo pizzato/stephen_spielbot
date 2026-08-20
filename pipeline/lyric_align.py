@@ -24,6 +24,7 @@ import json
 import logging
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 logger = logging.getLogger("video_gen")
@@ -35,6 +36,9 @@ _MIN_MATCH = 0.5
 # A transcript word may sit this far outside a measured vocal region before
 # it is discarded as hallucination.
 _REGION_SLACK = 0.75
+# A stretch shorter than this is not re-transcribed on its own before being
+# dropped: it cannot hold a mimed phrase, and the pass is not free.
+_REASK_SECS = 1.5
 
 
 def _norm_word(word: str) -> str:
@@ -68,34 +72,92 @@ def word_times(stem: Path, language: str = "") -> list[tuple[str, float, float]]
              float(w.get("end") or 0)) for w in data.get("words") or []]
 
 
+def _words_in_slice(stem: Path, start: float, end: float,
+                    language: str) -> list[tuple[str, float, float]]:
+    """Transcribe [*start*, *end*) of *stem* ALONE, on the track's own clock.
+
+    A whole-track pass reads a stretch in the context of its 30-second window
+    and skips a wordless vocal in it — an "ooh-ooh" intro came back empty
+    beside the verses and as 83 "whoa"s when handed over on its own. That gap
+    is the whole difference between separation bleed and a voice with no
+    lyrics, so the stretches nothing was heard in are asked again by
+    themselves. Failure returns nothing, which reads as bleed."""
+    from pipeline.assembler import _resolve_media_tool
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            cut = Path(tmp) / "region.wav"
+            subprocess.run(
+                [_resolve_media_tool("ffmpeg"), "-y", "-v", "error",
+                 "-i", str(stem), "-ss", f"{start:.3f}", "-to", f"{end:.3f}",
+                 "-c:a", "pcm_s16le", str(cut)],
+                check=True, capture_output=True)
+            words = word_times(cut, language) or []
+    except Exception:  # noqa: BLE001 — a failed re-ask must not fail the divide
+        logger.warning("Could not re-transcribe %.2f–%.2fs of %s",
+                       start, end, stem.name, exc_info=True)
+        return []
+    return [(w, t0 + start, t1 + start) for w, t0, t1 in words]
+
+
 def voiced_regions(regions: list[tuple[float, float]],
                    words: list[tuple[str, float, float]] | None,
-                   ) -> list[tuple[float, float]]:
-    """The measured vocal regions, trimmed to the words actually heard in them.
+                   *, stem: Path | None = None,
+                   language: str = "") -> list[tuple[float, float]]:
+    """The measured vocal regions, trimmed to the singing actually heard.
 
     The level split answers "is the stem loud here", which is not the same
     question as "is someone singing here": separation bleed rides an
     instrumental intro or an outro loudly enough to clear the floor, and the
     scene handed one is told a voice sings over it while the lyric sheet has
-    no words to give it — the cast mimed a guitar intro for the first 20 s of
-    a film, and 13 s of wordless outro at the end of it. Each region is cut
-    back to the stretch its transcript words occupy, _REGION_SLACK either side
-    so a held note or a breath is not clipped off; a region no word landed in
-    at all drops out entirely. A track with no transcript (no whisper install)
-    keeps every region measured, unchanged."""
+    no words to give it — the cast mimed a fingerpicked guitar for the first
+    20 s of a film, and 13 s of wordless outro at the end of it.
+
+    Each region is cut back to the stretch its words occupy, _REGION_SLACK
+    either side so a held note or a breath survives. Before any stretch worth
+    more than _REASK_SECS is thrown away it is transcribed ON ITS OWN, because
+    that is exactly where a wordless vocal hides: an "ooh-ooh" intro comes
+    back empty beside the verses and as 130 "oh"s when handed over alone,
+    while a fingerpicked outro stays empty either way. Whatever the second
+    pass hears is kept on the same terms — a 13 s outro that yields one stray
+    word keeps a second of singing, not thirteen.
+
+    With no transcript at all every measured region stands, unchanged."""
     if not words:
         return list(regions)
     out = []
     for start, end in regions:
-        inside = [w for w in words
-                  if start - _REGION_SLACK <= (w[1] + w[2]) / 2 <= end + _REGION_SLACK]
-        if not inside:
+        heard = _within(words, start, end)
+        if stem is not None:
+            for gap0, gap1 in _unheard(start, end, heard):
+                if gap1 - gap0 >= _REASK_SECS:
+                    heard += _within(_words_in_slice(stem, gap0, gap1, language),
+                                     gap0, gap1)
+        if not heard:
             continue
-        lo = max(start, min(w[1] for w in inside) - _REGION_SLACK)
-        hi = min(end, max(w[2] for w in inside) + _REGION_SLACK)
+        lo = max(start, min(w[1] for w in heard) - _REGION_SLACK)
+        hi = min(end, max(w[2] for w in heard) + _REGION_SLACK)
         if hi - lo > 0.2:
             out.append((round(lo, 2), round(hi, 2)))
     return out
+
+
+def _within(words: list[tuple[str, float, float]], start: float,
+            end: float) -> list[tuple[str, float, float]]:
+    """The words whose middle falls inside [*start*, *end*], plus slack."""
+    return [w for w in words
+            if start - _REGION_SLACK <= (w[1] + w[2]) / 2 <= end + _REGION_SLACK]
+
+
+def _unheard(start: float, end: float,
+             heard: list[tuple[str, float, float]]) -> list[tuple[float, float]]:
+    """The head and tail of a region no word claimed — the whole of it when
+    none did. Gaps BETWEEN words are breaths and instrumental breaks the
+    region split already accounts for; only the edges are about to be lost."""
+    if not heard:
+        return [(start, end)]
+    lo = min(w[1] for w in heard) - _REGION_SLACK
+    hi = max(w[2] for w in heard) + _REGION_SLACK
+    return [(start, min(lo, end)), (max(hi, start), end)]
 
 
 def align_lines(stem: Path, lines: list[str], *, language: str = "",
