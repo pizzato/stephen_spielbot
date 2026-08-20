@@ -167,9 +167,6 @@ those scripts, so they accent the last line instead — nothing when the title f
 | **YouTube description suffix** | Appended to every description |
 | **Attribution footer / X hashtags / YouTube tags** | The open-source attribution added to published videos |
 
-**Auto-pick exclude** keeps automation from inventing ideas in this style when topping up
-an empty queue. The manual [AI ideas](ideas.md) screen still offers it.
-
 ### Video models
 
 A film can hold two kinds of scene, and each has its own model, picked side by side:
@@ -353,8 +350,11 @@ Per style (see above), or globally as the baseline.
 - **Top up the empty queue with AI ideas for this style** — when the queue runs dry,
   automation invents a topic and runs it end to end. Invented films render without review,
   so a style is only fed when its own resolved flags also have *auto-approve* and
-  *auto-start* on, and it isn't excluded from auto-pick on the
-  [Styles tab](#styles). Enabled on several styles, top-ups rotate between them
+  *auto-start* on, and it's included in auto-pick (below). Enabled on several styles,
+  top-ups rotate between them
+- **Include in auto-picked ideas** — whether queue top-ups may invent films in this style
+  at all (per style; child styles inherit it). Unticked, the style is manual-only — the
+  [AI ideas](ideas.md) screen still offers it
 - **Run the script critic on every automation-written script** — QC for consistency,
   repetition, and engagement before it can render. It may rewrite, delete, add, or reorder
   scenes. Choose **1, 2, 3, 5 passes** or **Until stable (≤5)**

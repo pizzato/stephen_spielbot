@@ -2220,9 +2220,6 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   systemFonts={fontInfo || []} bundledFonts={fontBundled} />
                 <ParentVal k="cover_typography" />
               </Field>
-              <Check checked={!!eff.auto_pick_exclude} onChange={(v) => setStyleField('auto_pick_exclude', v)}
-                label="Exclude from auto-picked ideas — automation won’t top up an empty queue with this style (you can still pick it manually on the AI ideas screen)" />
-              <ParentVal k="auto_pick_exclude" />
             </div>
           </Card>
 
@@ -2881,6 +2878,49 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
             }))
           }
           const clearAuto = (k) => setAuto(k, inherited[k])
+          // Auto-pick rotation membership is a STYLE-row field (auto_pick_exclude,
+          // children inherit it through the style chain), surfaced here — positively,
+          // as "include" — because it gates the same top-up loop as the flags below.
+          const scopeRow = scope ? styles.find((s) => s.name === scope) : null
+          const pickInheritedExclude = !!((scopeRow?.parent
+            ? (resolveStyle(styles, scopeRow.parent) || {}).auto_pick_exclude
+            : undefined) ?? cfg.default_auto_pick_exclude)
+          const pickExclude = scopeRow && 'auto_pick_exclude' in scopeRow
+            ? !!scopeRow.auto_pick_exclude : pickInheritedExclude
+          const setAutoPick = (include) => editCfg((c) => ({
+            ...c,
+            styles: (c.styles || []).map((s) => {
+              if (s.name !== scope) return s
+              // Inheritance is equality (as on the Styles tab): a child set back
+              // to its parent's effective value stores nothing and follows live.
+              const drop = s.parent && JSON.stringify(!include) ===
+                JSON.stringify((resolveStyle(c.styles || [], s.parent) || {}).auto_pick_exclude ?? null)
+              if (drop) { const { auto_pick_exclude: _x, ...rest } = s; return rest }
+              return { ...s, auto_pick_exclude: !include }
+            }),
+          }))
+          const clearAutoPick = () => editCfg((c) => ({
+            ...c,
+            styles: (c.styles || []).map((s) => {
+              if (s.name !== scope) return s
+              const { auto_pick_exclude: _x, ...rest } = s
+              return rest
+            }),
+          }))
+          const PickVal = () => {
+            if (!scope) return null
+            const from = scopeRow?.parent ? `“${scopeRow.parent}”` : 'Global'
+            if (!(scopeRow && 'auto_pick_exclude' in scopeRow)) {
+              return <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>Follows {from}.</div>
+            }
+            return (
+              <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                {from}: <a role="button" tabIndex={0} title={`Use ${from}’s value again`}
+                  style={{ cursor: 'pointer', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                  onClick={clearAutoPick}><em>{pickInheritedExclude ? 'not included' : 'included'}</em></a> — click to use it.
+              </div>
+            )
+          }
           const fmtAutoVal = (k, v) => {
             if (k === 'auto_format') return { narration: 'Narration', dialogue: 'Dialogue', mixed: 'Mixed', silent: 'Silent', song: 'Music video' }[v] || String(v)
             if (k === 'auto_song_voice') return v ? String(v) : 'the model’s own vocalist'
@@ -2982,9 +3022,16 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <AutoVal k="auto_start_job" />
               </div>
               <div>
-                <Check checked={!!av.auto_ai_ideas} onChange={(v) => setAuto('auto_ai_ideas', v)} label="Top up the empty queue with AI ideas for this style — invented films render without review, so the style also needs auto-approve and auto-start on (and not to be excluded from auto-pick on the Styles tab)" />
+                <Check checked={!!av.auto_ai_ideas} onChange={(v) => setAuto('auto_ai_ideas', v)} label={`Top up the empty queue with AI ideas for this style — invented films render without review, so the style also needs auto-approve and auto-start on (and to be included in auto-pick${scope ? ', below' : ' — a per-style switch on each style’s scope'})`} />
                 <AutoVal k="auto_ai_ideas" />
               </div>
+              {scope && (
+                <div>
+                  <Check checked={!pickExclude} onChange={setAutoPick}
+                    label="Include in auto-picked ideas — let queue top-ups invent films in this style (unticked, the style is manual-only; the AI ideas screen still offers it)" />
+                  <PickVal />
+                </div>
+              )}
               <div>
                 <Check checked={!!av.auto_critic} onChange={(v) => setAuto('auto_critic', v)} label="Run the script critic on every automation-written script — QC for consistency, repetition and engagement (may rewrite, delete, add or reorder scenes) before it can render" />
                 <AutoVal k="auto_critic" />
