@@ -1198,10 +1198,22 @@ def mix_background_music(
                     music_dur, video_dur)
     music_in = (["-stream_loop", "-1"] if loop_music else []) + ["-i", str(music_path)]
 
+    # The film's audio arrives from a hard-cut stream copy with each scene's
+    # AAC padding OVERLAPPED at the seams (two packets stamped microseconds
+    # apart) — self-correcting when played, because what a player drops there
+    # is padding. But amix passes those timestamps through to its OUTPUT, so
+    # the mixed track — now carrying the continuous song — kept stamps that
+    # tell a player to drop ~23 ms of SONG at every seam. Sample decoders
+    # (and sample-order checks) read it intact; a real player loses a frame
+    # of song per scene, so the voice pulled ahead of every mouth, worse each
+    # scene — ~440 ms early by the 20th. aresample rebuilds the voice stream
+    # as the uniform timeline its stamps describe BEFORE the mix, so the mix
+    # inherits clean time.
+    _VOICE_NORM = "aresample=async=1000:first_pts=0"
     use_ambient = ambient_path and Path(ambient_path).exists() and ambient_volume > 0
     if use_ambient:
         filter_str = (
-            f"[0:a]volume={voice_volume:.3f}[voice];"
+            f"[0:a]{_VOICE_NORM},volume={voice_volume:.3f}[voice];"
             f"[1:a]volume={volume:.3f}[bg];"
             f"[2:a]volume={ambient_volume:.3f}[amb];"
             "[voice][bg][amb]amix=inputs=3:duration=first:dropout_transition=3:normalize=0[aout]"
@@ -1209,7 +1221,7 @@ def mix_background_music(
         inputs = ["-i", str(video_path), *music_in, "-i", str(ambient_path)]
     else:
         filter_str = (
-            f"[0:a]volume={voice_volume:.3f}[voice];"
+            f"[0:a]{_VOICE_NORM},volume={voice_volume:.3f}[voice];"
             f"[1:a]volume={volume:.3f}[bg];"
             "[voice][bg]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]"
         )
