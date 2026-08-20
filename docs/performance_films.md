@@ -241,8 +241,11 @@ Level alone still over-reads a little: separation leaves enough of the arrangeme
 stem for an instrumental intro or outro to clear the bar, and the scene that lands on one
 is told a voice sings over it while the lyric sheet has no words to give it — the cast
 mimes a guitar. When the lyric sheet is aligned (below), every measured stretch is held
-to the words actually transcribed inside it, and a stretch no word landed in at all is
-dropped. Held notes and unwritten ad-libs inside a stretch still count as singing.
+to the words actually transcribed inside it. Held notes and breaths inside a stretch
+still count as singing, and any stretch about to be discarded is transcribed **on its
+own** first — a wordless "ooh-ooh" intro comes back empty beside the verses and as 130
+"oh"s when handed over alone, so it keeps its mouths moving, while a fingerpicked intro
+stays empty either way and loses them.
 
 **Each line's time can be measured, not estimated** — the *Align lyrics to the sung
 track* option ([Settings → Music](manual/settings.md), `song_align_lyrics`, on by
