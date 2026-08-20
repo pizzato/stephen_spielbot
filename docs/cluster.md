@@ -40,7 +40,7 @@ Each worker machine runs the same stack, sharing that machine's GPU(s):
 | Service | Port | What it is |
 |---|---|---|
 | `comfyui` | 8188 | ComfyUI + PyTorch (LTX 2.5 / ACE-Step / MiniMax Music 3 / FLUX — all native nodes) |
-| `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server |
+| `tts` | 8189 | F5-TTS + Chatterbox Multilingual behind a small HTTP server (Raon-OpenTTS too when built with `--build-arg INSTALL_RAON=1`) |
 | `autoheal` | — | Restarts any container whose GPU-aware healthcheck fails |
 
 ComfyUI models (~49 GB) are **not** baked into the images — they live on the host and are

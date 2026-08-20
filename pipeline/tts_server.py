@@ -26,7 +26,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
-from pipeline import tts_engines  # selectable narration model (per style)
+from pipeline import raon, tts_engines  # selectable narration model (per style)
 
 # We run inside the f5tts environment, so the current interpreter is the one
 # that can import f5_tts.
@@ -64,6 +64,9 @@ def prewarm(req: PrewarmRequest) -> dict:
     """Download an engine's weights into the HF cache so the first render is fast."""
     if not tts_engines.get(req.engine):
         raise HTTPException(status_code=400, detail=f"Unknown engine: {req.engine!r}")
+    # Refuse before pulling ~16 GB onto a worker that could never run it.
+    if tts_engines.backend(req.engine) == "raon" and not raon.available():
+        raise HTTPException(status_code=501, detail=raon.NOT_INSTALLED)
     try:
         tts_engines.ensure(req.engine)
     except Exception as e:  # noqa: BLE001 — surface the fetch error to the caller
@@ -85,7 +88,8 @@ def tts(req: TTSRequest) -> Response:
         else:
             ref = DEFAULT_REF
 
-        if tts_engines.backend(req.engine) == "chatterbox":
+        backend = tts_engines.backend(req.engine)
+        if backend == "chatterbox":
             # Different inference stack: the multilingual Chatterbox CLI
             # (pipeline/chatterbox.py) instead of the F5-TTS one.
             cmd = [
@@ -95,6 +99,19 @@ def tts(req: TTSRequest) -> Response:
                 "--ref",      str(ref),
                 "--out",      str(out),
                 "--speed",    str(req.speed),
+            ]
+        elif backend == "raon":
+            # KRAFTON's F5-TTS fork, on the interpreter of its own virtualenv:
+            # it installs a package named `f5_tts` too, so it cannot share this
+            # environment (see pipeline/raon.py).
+            if not raon.available():
+                raise HTTPException(status_code=501, detail=raon.NOT_INSTALLED)
+            cmd = [
+                raon.RAON_PYTHON, "-m", "pipeline.raon",
+                "--text",  text,
+                "--ref",   str(ref),
+                "--out",   str(out),
+                "--speed", str(req.speed),
             ]
         else:
             cmd = [

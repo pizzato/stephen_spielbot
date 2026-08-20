@@ -10,7 +10,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from pipeline import cadence, tts_text
+from pipeline import cadence, raon, tts_text
 
 logger = logging.getLogger("video_gen")
 
@@ -113,10 +113,13 @@ def _robotize_wav(path: Path, amount: float) -> None:
 def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0,
               tts_engine: str = "openf5", language: str = "en") -> None:
     from pipeline import tts_engines  # selectable narration model (per style)
-    if tts_engines.backend(tts_engine) == "chatterbox":
+    backend = tts_engines.backend(tts_engine)
+    # The non-F5 backends run their own CLI from the repo root, so that
+    # `-m pipeline.<module>` resolves regardless of the caller's cwd.
+    repo_root = str(Path(__file__).parent.parent)
+    if backend == "chatterbox":
         # Different inference stack: the multilingual Chatterbox CLI
-        # (pipeline/chatterbox.py) instead of the F5-TTS one. Run from the repo
-        # root so `-m pipeline.chatterbox` resolves regardless of caller cwd.
+        # (pipeline/chatterbox.py) instead of the F5-TTS one.
         cmd = [
             _LOCAL_PYTHON, "-m", "pipeline.chatterbox",
             "--text",     text,
@@ -125,7 +128,20 @@ def _f5_local(text: str, ref: Path, output_path: Path, speed: float = 1.0,
             "--out",      str(output_path),
             "--speed",    str(speed),
         ]
-        cwd = str(Path(__file__).parent.parent)
+        cwd = repo_root
+    elif backend == "raon":
+        # KRAFTON's F5-TTS fork, on its own interpreter: it installs a package
+        # named `f5_tts` too, so it cannot share the f5tts env (pipeline/raon.py).
+        if not raon.available():
+            raise RuntimeError(raon.NOT_INSTALLED)
+        cmd = [
+            raon.RAON_PYTHON, "-m", "pipeline.raon",
+            "--text",  text,
+            "--ref",   str(ref),
+            "--out",   str(output_path),
+            "--speed", str(speed),
+        ]
+        cwd = repo_root
     else:
         cmd = [
             _LOCAL_PYTHON, "-m", "f5_tts.infer.infer_cli",

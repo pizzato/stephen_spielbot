@@ -44,13 +44,15 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | **OpenF5-TTS-Base** (narration — **default**) | `mrfakename/OpenF5-TTS-Base` | Apache-2.0 | ✅ Yes |
 | F5-TTS Base original (narration — opt-in) | `SWivid/F5-TTS` (`F5TTS_v1_Base`) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
 | Chatterbox Multilingual (narration — 23-language option) | `ResembleAI/chatterbox` | MIT | ✅ Yes (embeds Resemble's Perth watermark — kept on purpose) |
+| Raon-OpenTTS-1B (narration — opt-in, English) | `KRAFTON/Raon-OpenTTS-1B` (+ its vocoder, `speechbrain/tts-hifigan-libritts-16kHz`, Apache-2.0) | CC-BY-NC-4.0 | ❌ No (non-commercial) |
 
 > Narration uses a **per-style voice-model picker** (`pipeline/tts_engines.py`):
 > the default `openf5` is Apache-2.0 and commercial-safe, and the multilingual
-> `chatterbox-multilingual` engine is MIT (code and weights); the original SWivid
-> `f5-original` weights are CC-BY-NC and offered only as an opt-in "preview"
-> (flagged non-commercial in Settings) for A/B quality checks — **don't** select
-> it for monetized output. See [`docs/tts_licensing.md`](docs/tts_licensing.md)
+> `chatterbox-multilingual` engine is MIT (code and weights). Two engines are
+> CC-BY-NC and offered only as opt-in "preview" weights (flagged
+> **non-commercial** in Settings) for A/B quality checks — the original SWivid
+> `f5-original` and KRAFTON's `raon-opentts-1b`. **Don't** select either for
+> monetized output. See [`docs/tts_licensing.md`](docs/tts_licensing.md)
 > for the TTS-weights rationale. The bundled reference clip
 > (`assets/default_narrator.mp3`) provenance is still pending a public-domain
 > replacement (tracked TODO).
@@ -96,6 +98,7 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [seed-vc](https://github.com/Plachtaa/seed-vc) (song re-voicing; run with `docker exec`, never imported) | `docker/comfyui` (cloned into `/opt/seed-vc`; `make svc-install` adds it to older containers) | GPL-3.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |
+| [Raon-OpenTTS](https://github.com/krafton-ai/Raon-OpenTTS) (code only; own virtualenv, opt-in via `--build-arg INSTALL_RAON=1`) | `docker/tts` | Apache-2.0 |
 
 > Running the built images locally is unremarkable. But **publishing** a built
 > `spielbot-comfyui` image to a registry distributes GPL-3.0 code (and
