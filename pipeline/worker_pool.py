@@ -1,13 +1,31 @@
 """Manages a pool of ComfyUI worker URLs for distributed video generation."""
 
+import errno
+import fcntl
 import logging
+import os
+import re
 from collections import deque
+from pathlib import Path
 import threading
 import urllib.request
 import urllib.error
 from typing import Callable, Optional
 
 logger = logging.getLogger("video_gen")
+
+# Cross-process worker leases. Every WorkerPool instance — the render
+# subprocess's pool, the backend's shared edit pool, and any ad-hoc pool a
+# request builds — flocks one file per worker URL before using that worker, so
+# two schedulers can never double-book the same GPU. flock is released by the
+# OS when a process dies, so a crashed render never leaves a stale lease.
+# Same state dir as ui_activity so the render subprocess and backend agree.
+LEASE_DIR = Path.home() / ".local" / "share" / "video-generator" / "worker_leases"
+
+
+def _lease_path(url: str) -> Path:
+    slug = re.sub(r"[^A-Za-z0-9._-]+", "_", url).strip("_") or "worker"
+    return LEASE_DIR / f"{slug}.lock"
 
 
 def check_alive(url: str, timeout: int = 5) -> bool:
@@ -65,6 +83,11 @@ def idle_workers(urls: list[str], timeout: int = 5) -> list[str]:
 class WorkerPool:
     """Per-URL semaphore pool. Each worker handles one job at a time.
 
+    The one-job-at-a-time rule holds ACROSS pools and processes, not just within
+    this instance: acquire() also takes a flock lease on the worker's file under
+    LEASE_DIR, and skips workers whose lease another pool (e.g. the render
+    subprocess vs the backend, or two concurrent upscale batches) already holds.
+
     Optionally reserves one worker for the web UI (issue #98): while
     ``reserve_check()`` returns True (the UI is being actively used), one worker
     is held back — left idle — so cover/preview jobs the web backend submits land
@@ -86,6 +109,7 @@ class WorkerPool:
         self._waiters: deque[object] = deque()
         self._urls = list(urls)
         self._sems: dict[str, threading.Semaphore] = {u: threading.Semaphore(1) for u in self._urls}
+        self._lease_fds: dict[str, int] = {}
         self._reserve_check = reserve_check
         self._reserved_url: Optional[str] = None   # held idle for the UI
         self._closed = False
@@ -107,6 +131,48 @@ class WorkerPool:
         """The worker currently held idle for the UI, or None."""
         with self._lock:
             return self._reserved_url
+
+    def _try_lease(self, url: str) -> bool:
+        """Take the cross-process lease for *url* without blocking. Caller holds
+        the pool lock and this worker's semaphore. False means another pool or
+        process is using the worker right now."""
+        if url in self._lease_fds:
+            return True
+        try:
+            LEASE_DIR.mkdir(parents=True, exist_ok=True)
+            fd = os.open(str(_lease_path(url)), os.O_CREAT | os.O_RDWR, 0o644)
+        except Exception:
+            # A state-dir problem must never brick rendering: run unleased.
+            logger.warning("WorkerPool: cannot open lease file for %s; skipping lease", url)
+            return True
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as e:
+            os.close(fd)
+            if e.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                return False
+            logger.warning("WorkerPool: lease flock failed for %s (%s); skipping lease", url, e)
+            return True
+        try:
+            os.ftruncate(fd, 0)
+            os.write(fd, f"{os.getpid()}\n".encode())
+        except Exception:
+            pass
+        self._lease_fds[url] = fd
+        return True
+
+    def _drop_lease(self, url: str) -> None:
+        fd = self._lease_fds.pop(url, None)
+        if fd is None:
+            return
+        try:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            os.close(fd)
+        except Exception:
+            pass
 
     def _want_reserve(self) -> bool:
         """True if a worker should be held for the UI right now. Caller holds the
@@ -182,6 +248,11 @@ class WorkerPool:
                                 continue  # held idle for the UI
                             sem = self._sems.get(url)
                             if sem and sem.acquire(blocking=False):
+                                if not self._try_lease(url):
+                                    # Busy in another pool or process — put the
+                                    # semaphore back and try the next worker.
+                                    sem.release()
+                                    continue
                                 self._waiters.popleft()
                                 self._cond.notify_all()
                                 logger.debug("WorkerPool: acquired %s", url)
@@ -198,6 +269,9 @@ class WorkerPool:
 
     def release(self, url: str) -> None:
         with self._cond:
+            # The lease goes first: a reserved-for-UI worker keeps its semaphore
+            # at 0 in THIS pool but must be leasable by the backend's pools.
+            self._drop_lease(url)
             # UI is active and nothing is held yet — keep this freed worker idle
             # for the UI instead of returning it to the render pool. (It keeps the
             # semaphore at 0; _refresh_reservation releases it once the UI idles.)
@@ -216,6 +290,7 @@ class WorkerPool:
     def mark_failed(self, url: str) -> None:
         """Permanently remove a worker from the pool after a failure."""
         with self._cond:
+            self._drop_lease(url)
             if url in self._sems:
                 logger.warning("WorkerPool: %s failed, removing from pool", url)
                 self._urls = [u for u in self._urls if u != url]
@@ -233,4 +308,6 @@ class WorkerPool:
         subprocess just exits and lets the daemon thread die."""
         with self._cond:
             self._closed = True
+            for url in list(self._lease_fds):
+                self._drop_lease(url)
             self._cond.notify_all()

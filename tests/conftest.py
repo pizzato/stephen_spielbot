@@ -20,6 +20,14 @@ _REAL_HOME = Path.home()
 os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
 
 
+@pytest.fixture(autouse=True)
+def _isolated_worker_leases(tmp_path, monkeypatch):
+    """Give every test its own cross-process worker-lease dir so a pool leaked
+    by one test can never block acquire() in the next."""
+    from pipeline import worker_pool
+    monkeypatch.setattr(worker_pool, "LEASE_DIR", tmp_path / "worker_leases")
+
+
 def pytest_sessionstart(session):
     """Fail the run rather than let it write the real config directory."""
     if Path.home() == _REAL_HOME:

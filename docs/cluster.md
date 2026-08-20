@@ -146,6 +146,16 @@ that host uses it automatically.
     fix is loading the modules before Docker at boot — see `modules-load.d` above — not
     regenerating the spec.
 
+## One job per worker, no matter who asks
+
+Every ComfyUI-bound task — a film render, a batch upscale, scene re-renders, previews,
+inpainting, song generation — takes a per-worker **lease** before submitting, shared
+across the whole app (backend and the render subprocess alike). A worker runs one job
+at a time; everything else waits its turn and shows as *queued · waiting for a free
+worker* on the Activity screen. Starting an upscale mid-render (or two upscales at
+once) queues the work instead of stacking jobs onto GPUs that are already busy. A
+crashed process releases its leases automatically.
+
 ## The reserved UI worker
 
 Cover and preview regeneration has no dedicated worker. While the web UI is in use, the
