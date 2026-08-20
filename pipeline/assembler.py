@@ -682,11 +682,21 @@ def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
             "".join(f"file {shlex.quote(str(chunk))}\n" for chunk in chunks),
             encoding="utf-8",
         )
+        # setts pins the joined VIDEO timeline back to zero. The concat demuxer
+        # offsets every video packet by the first segment's AAC priming (+23 ms
+        # here), keeping combined.mp4 self-consistent — but a music video's mix
+        # then throws that audio away and lays the song at 0, so the shift
+        # became a constant audio-leads-video error across the whole film: each
+        # take was in sync on its own and every mouth ran late in the merge.
+        # With the picture starting at 0, scene N's first frame sits at exactly
+        # the film time its song window says. (-avoid_negative_ts make_zero is
+        # NOT a substitute: measured, it moved the picture 83 ms the same way.)
         _run([
             _FFMPEG, "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(list_path),
             "-c", "copy",
+            "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTDTS",
             "-movflags", "+faststart",
             str(output_path),
         ], timeout=1800)
@@ -1188,10 +1198,22 @@ def mix_background_music(
                     music_dur, video_dur)
     music_in = (["-stream_loop", "-1"] if loop_music else []) + ["-i", str(music_path)]
 
+    # The film's audio arrives from a hard-cut stream copy with each scene's
+    # AAC padding OVERLAPPED at the seams (two packets stamped microseconds
+    # apart) — self-correcting when played, because what a player drops there
+    # is padding. But amix passes those timestamps through to its OUTPUT, so
+    # the mixed track — now carrying the continuous song — kept stamps that
+    # tell a player to drop ~23 ms of SONG at every seam. Sample decoders
+    # (and sample-order checks) read it intact; a real player loses a frame
+    # of song per scene, so the voice pulled ahead of every mouth, worse each
+    # scene — ~440 ms early by the 20th. aresample rebuilds the voice stream
+    # as the uniform timeline its stamps describe BEFORE the mix, so the mix
+    # inherits clean time.
+    _VOICE_NORM = "aresample=async=1000:first_pts=0"
     use_ambient = ambient_path and Path(ambient_path).exists() and ambient_volume > 0
     if use_ambient:
         filter_str = (
-            f"[0:a]volume={voice_volume:.3f}[voice];"
+            f"[0:a]{_VOICE_NORM},volume={voice_volume:.3f}[voice];"
             f"[1:a]volume={volume:.3f}[bg];"
             f"[2:a]volume={ambient_volume:.3f}[amb];"
             "[voice][bg][amb]amix=inputs=3:duration=first:dropout_transition=3:normalize=0[aout]"
@@ -1199,7 +1221,7 @@ def mix_background_music(
         inputs = ["-i", str(video_path), *music_in, "-i", str(ambient_path)]
     else:
         filter_str = (
-            f"[0:a]volume={voice_volume:.3f}[voice];"
+            f"[0:a]{_VOICE_NORM},volume={voice_volume:.3f}[voice];"
             f"[1:a]volume={volume:.3f}[bg];"
             "[voice][bg]amix=inputs=2:duration=first:dropout_transition=3:normalize=0[aout]"
         )

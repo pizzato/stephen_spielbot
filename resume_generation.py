@@ -659,14 +659,19 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
 
 
 def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
-    """Cut [t0, t1] seconds out of an audio file (re-encoded PCM, sample-exact)."""
+    """Cut [t0, t1] seconds out of an audio file (re-encoded PCM, sample-exact).
+
+    Held to microseconds rather than milliseconds: a song window sits on the
+    film's frame grid (song_timing.frame_snap) and a frame is 41.6667 ms, so
+    rounding the cut to 3 places would put the segment back off the grid — and
+    the mux that trims the picture to it would keep a whole extra frame."""
     import subprocess
     from pipeline.assembler import _resolve_media_tool
     if t1 <= t0:
         raise ValueError(f"empty audio segment [{t0}, {t1}]")
     subprocess.run(
         [_resolve_media_tool("ffmpeg"), "-y", "-v", "error",
-         "-i", str(src), "-ss", f"{t0:.3f}", "-to", f"{t1:.3f}",
+         "-i", str(src), "-ss", f"{t0:.6f}", "-to", f"{t1:.6f}",
          "-c:a", "pcm_s16le", str(out)],
         check=True, capture_output=True)
     return out

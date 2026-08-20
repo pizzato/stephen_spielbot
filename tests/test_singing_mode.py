@@ -1036,10 +1036,11 @@ class SnapCutTests(unittest.TestCase):
         cuts = song_timing.snap_cuts(2, 20.0, spans, regions,
                                      min_secs=5.0, max_secs=12.0)
         self.assertEqual(cuts, [0.0, 11.25, 20.0])
-        # Without the measured regions the nearer estimated seam wins.
+        # Without the measured regions the nearer estimated seam wins — on the
+        # frame grid, so 9.6 rounds forward to the 231st frame.
         cuts = song_timing.snap_cuts(2, 20.0, spans,
                                      min_secs=5.0, max_secs=12.0)
-        self.assertEqual(cuts, [0.0, 9.6, 20.0])
+        self.assertEqual(cuts, [0.0, 9.625, 20.0])
 
     def test_nothing_to_snap_to_reports_nothing(self):
         from pipeline import song_timing
@@ -1047,6 +1048,116 @@ class SnapCutTests(unittest.TestCase):
                                                min_secs=5.0, max_secs=12.0), [])
         self.assertEqual(song_timing.snap_cuts(1, 20.0, [(0.0, 20.0)],
                                                min_secs=5.0, max_secs=12.0), [])
+
+
+class FrameGridTests(unittest.TestCase):
+    """Windows land on the film's frame grid, so a take is exactly as long as
+    its own stretch of the song.
+
+    Off the grid the trim keeps the frame straddling the window's end — up to
+    42 ms of picture the overlaid track never gets back — and the error adds
+    up scene by scene: a shipped 14-scene film ran 0.44 s behind its own song
+    by the last shot, 20-scene and 24-scene films 0.38 s and 0.25 s."""
+
+    def test_a_cut_never_lands_between_frames(self):
+        from pipeline import song_timing
+        # 4.9s windows: 117.6 frames, which no trim can deliver.
+        spans = [(0.0, 4.9), (4.9, 9.8), (9.8, 14.7), (14.7, 19.6)]
+        cuts = song_timing.snap_cuts(4, 19.6, spans, min_secs=4.0, max_secs=6.0)
+        for cut in cuts:
+            self.assertAlmostEqual(cut * 24, round(cut * 24), delta=1e-4,
+                                   msg=f"cut {cut} is not on the frame grid")
+
+    def test_the_takes_add_up_to_the_song_and_never_outrun_it(self):
+        from pipeline import song_timing
+        spans = [(0.0, 4.9), (4.9, 9.8), (9.8, 14.7), (14.7, 19.6)]
+        cuts = song_timing.snap_cuts(4, 19.63, spans, min_secs=4.0, max_secs=6.0)
+        # Each window is a whole number of frames, so the trim delivers it
+        # exactly and the seams stay where the song put them.
+        clock = 0.0
+        for start, end in zip(cuts, cuts[1:]):
+            self.assertAlmostEqual(clock, start, places=6)
+            clock += round((end - start) * 24) / 24
+        self.assertLessEqual(cuts[-1], 19.63)
+
+    def test_a_seam_rounds_forward_off_the_line_it_protects(self):
+        from pipeline import song_timing
+        # The line ends at 8.06 — 193.44 frames. Rounding back would put the
+        # seam inside it and hand the line to both scenes.
+        spans = [(4.0, 8.06), (8.06, 12.12)]
+        cuts = song_timing.snap_cuts(2, 16.12, spans, min_secs=5.0, max_secs=12.0)
+        self.assertGreaterEqual(cuts[1], 8.06)
+        self.assertEqual(song_timing.lines_in_window(["one", "two"], spans,
+                                                     0.0, cuts[1]), ["one"])
+
+    def test_a_line_grazing_the_seam_is_not_sung_in_both(self):
+        from pipeline import song_timing
+        # Under a frame of overlap is not a sung line: the seam sits 20 ms
+        # inside "two", which belongs to the scene that holds the rest of it.
+        spans = [(0.0, 5.0), (5.0, 10.0)]
+        self.assertEqual(song_timing.lines_in_window(["one", "two"], spans,
+                                                     0.0, 5.02), ["one"])
+        self.assertEqual(song_timing.lines_in_window(["one", "two"], spans,
+                                                     5.02, 10.0), ["two"])
+
+
+class VoicedRegionTests(unittest.TestCase):
+    """What counts as singing: the level split, held to the words actually
+    transcribed inside it."""
+
+    REGIONS = [(0.0, 18.0), (21.0, 40.0)]
+
+    def test_a_loud_region_with_no_word_in_it_is_bleed(self):
+        from pipeline import lyric_align
+        # Measured on a shipped film: 13 s of stem-loud intro that whisper
+        # heard nothing in — the lead mimed a fingerpicked guitar.
+        words = [("paper", 22.0, 22.5), ("crown", 22.5, 23.2)]
+        self.assertEqual(lyric_align.voiced_regions(self.REGIONS, words),
+                         [(21.25, 23.95)])
+
+    def test_a_region_keeps_the_singing_it_carries(self):
+        from pipeline import lyric_align
+        words = [("one", 1.0, 1.5), ("two", 16.0, 17.5),
+                 ("three", 22.0, 23.0), ("four", 38.0, 39.5)]
+        self.assertEqual(lyric_align.voiced_regions(self.REGIONS, words),
+                         [(0.25, 18.0), (21.25, 40.0)])
+
+    def test_a_silent_stretch_is_asked_again_on_its_own(self):
+        from pipeline import lyric_align
+        # A whole-track pass reads a stretch in the context of its neighbours
+        # and skips a wordless vocal in it: a real "ooh-ooh" intro came back
+        # empty beside the verses and as 130 "oh"s when handed over alone.
+        # Anything about to be dropped gets that second chance.
+        asked = []
+
+        def reask(stem, start, end, language):
+            asked.append((round(start, 2), round(end, 2)))
+            return [("oh", start + 0.5, end - 0.5)]
+
+        with unittest.mock.patch.object(lyric_align, "_words_in_slice",
+                                        side_effect=reask):
+            kept = lyric_align.voiced_regions(
+                self.REGIONS, [("paper", 22.0, 22.5), ("crown", 22.5, 23.2)],
+                stem=Path("stem.wav"), language="en")
+        # The empty region and the unheard tail of the second one, nothing else.
+        self.assertEqual(asked, [(0.0, 18.0), (23.95, 40.0)])
+        self.assertEqual(kept, [(0.0, 18.0), (21.25, 40.0)])
+
+    def test_a_stretch_still_empty_the_second_time_is_bleed(self):
+        from pipeline import lyric_align
+        with unittest.mock.patch.object(lyric_align, "_words_in_slice",
+                                        return_value=[]):
+            kept = lyric_align.voiced_regions(
+                self.REGIONS, [("paper", 22.0, 22.5), ("crown", 22.5, 23.2)],
+                stem=Path("stem.wav"), language="en")
+        self.assertEqual(kept, [(21.25, 23.95)])
+
+    def test_no_transcript_keeps_every_measured_region(self):
+        from pipeline import lyric_align
+        self.assertEqual(lyric_align.voiced_regions(self.REGIONS, None),
+                         self.REGIONS)
+        self.assertEqual(lyric_align.voiced_regions(self.REGIONS, []),
+                         self.REGIONS)
 
 
 class StemTimingTests(unittest.TestCase):
@@ -1458,6 +1569,22 @@ class SoundedTakeTests(unittest.TestCase):
         _, cuts, muxes, _ = self._render(clip_secs=3.5)
         self.assertEqual(cuts[-1][2:], (4.0, 7.5))
         self.assertEqual(len(muxes), 1)
+
+    def test_the_cut_keeps_the_windows_own_frame(self):
+        # The window sits on the frame grid (song_timing.frame_snap) and a
+        # frame is 41.6667 ms, so a cut rounded to milliseconds lands back
+        # between frames — and the mux that trims the picture to it keeps a
+        # whole extra frame, which is the drift this path exists to avoid.
+        # Cut for real: what matters is the audio that comes out.
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as tmp:
+            song = _write_song(Path(tmp) / "song.wav", [(20.0, 0.4)])
+            out = rg._cut_audio_segment(song, Path(tmp) / "cut.wav",
+                                        4.916667, 9.833333)
+            with wave.open(str(out), "rb") as handle:
+                secs = handle.getnframes() / handle.getframerate()
+        # 118 frames of picture, to within a hundredth of one.
+        self.assertAlmostEqual(secs * 24, 118, delta=0.01)
 
     def test_no_song_on_disk_falls_back_to_the_old_trim(self):
         # Nothing to lay under it: the take keeps its own voice, but still has

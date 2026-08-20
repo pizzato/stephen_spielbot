@@ -130,6 +130,27 @@ def vocal_regions(track: Path | str, *, frame_secs: float = 0.25,
 # Quieter than this on a separated vocal stem is bleed, not a voice.
 _STEM_FLOOR_DB = -45.0
 
+# The film is cut on H3's 24 fps grid, and a window that is not a whole number
+# of frames cannot be trimmed to exactly: ffmpeg keeps the frame straddling the
+# end, so the take comes out up to 42 ms LONGER than its own stretch of the
+# song. Nothing ever gives that back, so the error adds up scene by scene and
+# the picture slides behind the overlaid track — measured at 0.44 s by the last
+# shot of a 14-scene film. Snapping the cuts themselves is what removes it:
+# on-grid windows trim exactly, so the concatenated takes stay sample-aligned
+# with the song from the first frame to the last.
+FPS = 24.0
+
+
+def frame_snap(seconds: float, *, down: bool = False) -> float:
+    """*seconds* placed on the film's frame grid.
+
+    Forward to the next frame by default: a cut candidate is the moment a line
+    ENDED (or the middle of a gap), and rounding back across it would put the
+    seam inside the line the cut exists to protect. *down* floors instead, for
+    the track's own end — the film must never outrun the song."""
+    frames = math.floor(seconds * FPS) if down else math.ceil(seconds * FPS)
+    return round(frames / FPS, 6)
+
 
 def vocal_stem(track: Path) -> Path | None:
     """A separated vocal stem for *track*, cached beside it as
@@ -250,8 +271,10 @@ def snap_cuts(n_scenes: int, total: float,
     because cutting silence is exact while the seams are estimates. A seam
     with no candidate in reach falls back to the even grid, so the result is
     never worse than the plain division; takes at the *min_secs* floor have
-    no slack at all and keep the grid exactly. Empty when there is nothing to
-    snap to or only one scene."""
+    no slack at all and keep the grid exactly. Every cut lands on the film's
+    frame grid (frame_snap) so each window is a whole number of frames and the
+    takes cannot drift against the track. Empty when there is nothing to snap
+    to or only one scene."""
     if n_scenes < 2 or total <= 0 or not spans:
         return []
     per = total / n_scenes
@@ -274,8 +297,8 @@ def snap_cuts(n_scenes: int, total: float,
             best = min(near, key=lambda cb: abs(cb[0] - target) - cb[1])[0]
         else:
             best = min(max(target, earliest), latest)
-        cuts.append(round(best, 2))
-    cuts.append(round(total, 2))
+        cuts.append(frame_snap(best))
+    cuts.append(frame_snap(total, down=True))
     return cuts
 
 
@@ -296,6 +319,11 @@ def window_vocals(regions: list[tuple[float, float]], t0: float,
 
 def lines_in_window(lines: list[str], spans: list[tuple[float, float]],
                     t0: float, t1: float) -> list[str]:
-    """The lyric lines whose sung span overlaps the window [*t0*, *t1*)."""
+    """The lyric lines whose sung span overlaps the window [*t0*, *t1*).
+
+    A line has to be in the window by more than a FRAME to count as sung in
+    it. Consecutive lines share a boundary that rarely lands on the frame grid
+    the seams snap to, so without the margin the line ending at the seam is
+    handed to both scenes and each is told to mouth a line the other sings."""
     return [line for line, (start, end) in zip(lines, spans)
-            if end > t0 and start < t1]
+            if min(end, t1) - max(start, t0) > 1.0 / FPS]
