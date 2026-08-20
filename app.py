@@ -4169,9 +4169,10 @@ def _channel_video_titles(cfg: dict, style_name: str = "") -> list[str]:
 def _auto_pick_styles(cfg: dict) -> list[str]:
     """Style names eligible for auto-picked queue top-ups, in config order.
 
-    A style opts out via ``auto_pick_exclude`` (Settings → style), so automation
-    only invents ideas for the styles left in the rotation. Manual idea
-    generation ignores this flag — it governs the automatic top-up only.
+    A style opts out via ``auto_pick_exclude``, shown positively as "Include in
+    auto-picked ideas" (Settings → Automation, style scope), so automation only
+    invents ideas for the styles left in the rotation. Manual idea generation
+    ignores this flag — it governs the automatic top-up only.
     Resolved via style_settings so a child style inherits its parent's opt-out."""
     return [s["name"] for s in (cfg.get("styles") or [])
             if isinstance(s, dict) and str(s.get("name") or "").strip()
