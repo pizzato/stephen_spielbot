@@ -146,6 +146,27 @@ def _build_resolutions(include_upscale_only: bool = False) -> dict:
 _RESOLUTIONS = _build_resolutions()
 # Sizes a finished film can be UPSCALED to — a superset of the render sizes.
 _UPSCALE_RESOLUTIONS = _build_resolutions(include_upscale_only=True)
+# Largest tier the video engines can actually generate at — the render size
+# behind every upscale-only target.
+_MAX_RENDER_PIXELS = next(
+    t["key"] for t in reversed(_PIXEL_TIERS) if not t.get("upscale_only")
+)
+
+
+def split_render_target(name: str) -> tuple[str, str]:
+    """Split a requested resolution into (render_resolution, finish_resolution).
+
+    Render-capable names pass through with no finishing step. An upscale-only
+    name (QHD/4K) renders at the largest render-capable tier in the same
+    orientation and finishes with an upscale to the target after assembly.
+    Unknown names pass through unchanged so callers keep their existing
+    fallbacks."""
+    name = (name or "").strip()
+    if not name or name in _RESOLUTIONS or name not in _UPSCALE_RESOLUTIONS:
+        return (name, "")
+    orientation = name.split(" ")[0]
+    render_name = compose_resolution(orientation, _MAX_RENDER_PIXELS)
+    return (render_name or name, name)
 _DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
@@ -172,6 +193,10 @@ DEFAULT_CFG = {
     "voice_vol": 100,
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
+    # Upscaler that finishes a render whose target is an upscale-only size
+    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("ltx_latent", "ic_lora",
+    # "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
+    "default_finish_upscale_mode": "fast",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
@@ -304,6 +329,9 @@ DEFAULT_CFG = {
     # frame reads as a flash and gets discarded). Mirrors the default style.
     "default_first_frame_cover": "none",
     "default_first_frame_cover_seconds": 1.0,
+    # Burn the script's captions into the picture itself (open captions) when
+    # a render or rebuild produces the final video. Mirrors the default style.
+    "default_burn_subtitles": False,
     # Look of the "text" first-frame cover: font file ("" = bold system font),
     # size as % of the video width, and text colour. Mirror the default style.
     # Cover typography (pipeline/cover_typography.py): every cover background
@@ -491,6 +519,8 @@ STYLE_FIELD_TO_FLAT = {
     # uploaded thumbnail — and how long that cover is held (seconds)
     "first_frame_cover":    "default_first_frame_cover",
     "first_frame_cover_seconds": "default_first_frame_cover_seconds",
+    # Burn the script's captions into the picture itself (open captions)
+    "burn_subtitles":       "default_burn_subtitles",
     # Cover typography: text-free background + composited real-font title
     "cover_typography":     "default_cover_typography",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
@@ -526,6 +556,8 @@ STYLE_FIELD_TO_FLAT = {
     "tts_sentence_pause":   "default_tts_sentence_pause",
     # Render quality
     "resolution":           "resolution",
+    # Finishing upscaler for upscale-only targets (QHD/4K)
+    "finish_upscale_mode":  "default_finish_upscale_mode",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
     "size_presets":         "default_size_presets",
     "lora_strength":        "lora_strength",
@@ -675,7 +707,9 @@ def _norm_size_presets(value) -> dict:
                        else cadence.minutes_for_scenes(scenes))
         minutes = round(max(0.25, min(cadence.MAX_MINUTES, minutes)), 2)
         resolution = raw.get("resolution")
-        if resolution not in _RESOLUTIONS:
+        # Upscale-only targets (QHD/4K) are valid preset sizes: the render runs
+        # at the largest render tier and finishes with an upscale to the target.
+        if resolution not in _UPSCALE_RESOLUTIONS:
             resolution = default["resolution"]
         out[bucket] = {"minutes": minutes, "scenes": scenes, "resolution": resolution}
     return out
@@ -987,6 +1021,11 @@ def _norm_song_align_lyrics(value) -> bool:
     return _norm_h3_chain_scenes(value)
 
 
+def _norm_burn_subtitles(value) -> bool:
+    """Coerce the burned-in subtitles toggle to a plain bool (YAML/JSON/form)."""
+    return _norm_h3_chain_scenes(value)
+
+
 def _norm_first_frame_cover(value) -> str:
     """Coerce a first-frame cover mode to "none" | "image" | "text"."""
     from pipeline.cover import norm_first_frame_cover
@@ -1158,6 +1197,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "video_scenes", _norm_video_scenes)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
+        _coerce(row, "burn_subtitles", _norm_burn_subtitles)
         _coerce(row, "cover_typography", _norm_cover_typography)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
@@ -3825,8 +3865,12 @@ def _generate_active_scene_preview(
     image_history.seed_if_empty(work_dir, sid, out)
     # Which model bundle generates this style's scenes (defaults to flux1-schnell).
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    # An upscale-only target (QHD/4K) renders at its underlying render size, so
+    # previews must match that size — not fall back to the default dims.
     img_width, img_height = _RESOLUTIONS.get(
-        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
+        split_render_target(
+            resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION
+        )[0],
         (1024, 576),
     )
     # Match the render: snap the preview to LTX's renderable grid so the cached

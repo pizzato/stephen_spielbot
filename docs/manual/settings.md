@@ -125,6 +125,16 @@ discards; a second reads as its own shot. The burn freezes the picture for that 
 while the audio keeps running; the cover already carries the title, so the old
 big-title-overlay mode is gone (legacy `text` configs burn the cover image).
 
+**Burned-in subtitles** — burn the script's captions into the video picture itself
+(open captions) when a render finishes. The same track that would be attached as an
+SRT on upload is rendered into the frames, so it survives any player — including
+X posts, where API uploads can't always carry a caption track. Every rebuild that
+regenerates the final (remix, re-voice, music change, reassemble) re-burns it, and a
+[localized cut](edit-film.md#localize) is burned in its own language. Narrated scenes
+only — dialogue, silent, and music-video scenes carry no caption cues. Viewers can't
+switch burned captions off, so a channel that also attaches the SRT (the channel's
+**Upload captions** toggle) would show doubled text to viewers who turn CC on.
+
 **Cover typography** — how cover titles look. Diffusion models misspell in-image text,
 so covers are never asked to paint it: the background is always generated **text-free**,
 with the style's own image engine (it matches the film's look instead of the legacy
@@ -211,6 +221,16 @@ length. *Reset to natural pace* clears the target.
 
 **Resolution**, **first-pass steps**, **second-pass steps**. Higher is slower and more
 detailed.
+
+The resolution picker includes the **QHD** and **4K** finishing targets: the engines
+cannot render at those sizes, so a film aimed at one renders at FHD (same orientation)
+and is lifted to the target by a finishing upscale before the final is assembled. When
+anything in the style targets QHD/4K — the resolution here or a size preset below — a
+**Finishing upscaler** picker appears: **Fast** (plain ffmpeg resample, the default) or
+one of the AI modes from the [Edit film upscaler](edit-film.md#upscale-video)
+(LTX latent, LTX IC-LoRA, H3 latent), which shoot every scene through a ComfyUI
+upscaler and take real render time. If an AI mode fails on a scene, that scene falls
+back to Fast rather than failing the film.
 
 ### Image model
 

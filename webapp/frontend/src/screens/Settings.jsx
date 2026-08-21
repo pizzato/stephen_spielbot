@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, resolutionTier, Check, Button, Banner, Chip, Icon, VersionStrip, ImageLightbox, voiceMetaMap, voiceLabel, voiceWpm, effectiveWpm, styleMinutes, lengthEstimateLabel, sceneBounds, sceneSecsFor, fmtDuration, DurationInput, LEGACY_SCENE_SECS } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import SettingsAssets from './SettingsAssets.jsx'
 import { resolveStyle, styleLineage, styleTreeOrder, STYLE_TEXT_FIELDS, AUTOMATION_FIELDS,
@@ -2214,6 +2214,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(e) => setStyleField('first_frame_cover_seconds', +e.target.value)} style={{ maxWidth: 120 }} />
                 <ParentVal k="first_frame_cover_seconds" />
               </Field>
+              <Field label="Burned-in subtitles" hint="Burn the script's captions into the video picture itself (open captions) when a render finishes — and again on every rebuild (remix, reassemble, localized cut, which burns its own language). Narrated scenes only; viewers can't switch them off, so channels that also upload the SRT track may want the channel's “Upload captions” off to avoid doubled text.">
+                <label className="check">
+                  <input type="checkbox" checked={!!eff.burn_subtitles}
+                    onChange={(e) => setStyleField('burn_subtitles', e.target.checked)} />
+                  <span>Burn subtitles into the final video</span>
+                </label>
+                <ParentVal k="burn_subtitles" />
+              </Field>
               <Field label="Cover typography" hint="How cover titles look. The artwork is always generated TEXT-FREE (with this style's own image engine) and the title is drawn on top with real fonts — it can never be misspelled, regenerating rerolls only the artwork, and phrase edits re-apply instantly.">
                 <CoverTypographyEditor value={eff.cover_typography}
                   onChange={(v) => setStyleField('cover_typography', v)}
@@ -2423,6 +2431,30 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 <ResolutionPicker value={eff.resolution || ''} onChange={(r) => setStyleField('resolution', r)} meta={meta} />
                 <ParentVal k="resolution" />
               </Field>
+              {(() => {
+                // The finishing upscaler only matters when something in this
+                // style targets an upscale-only size (QHD/4K) — the render then
+                // finishes with this upscale to reach the target.
+                const upscaleOnly = (key) =>
+                  (meta.pixel_tiers || []).find((t) => t.key === key)?.upscale_only
+                const presetsInPlay = Object.values(eff.size_presets || {})
+                  .map((p) => p?.resolution).filter(Boolean)
+                const anyFinishing = [eff.resolution, ...presetsInPlay]
+                  .some((r) => r && upscaleOnly(resolutionTier(meta, r)))
+                if (!anyFinishing) return null
+                return (
+                  <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample.">
+                    <select className="select" value={eff.finish_upscale_mode || 'fast'}
+                      onChange={(e) => setStyleField('finish_upscale_mode', e.target.value)}>
+                      <option value="fast">Fast (ffmpeg)</option>
+                      <option value="ltx_latent">LTX latent (simple model)</option>
+                      <option value="ic_lora">LTX IC-LoRA (generative)</option>
+                      <option value="h3_latent">H3 latent (MiniMax H3)</option>
+                    </select>
+                    <ParentVal k="finish_upscale_mode" />
+                  </Field>
+                )
+              })()}
               <div className="row gap-22 row--wrap">
                 <div className="grow"><Field label="First-pass steps" hint="8 distilled · 20–30 dev model.">
                   <input className="input" type="number" value={eff.first_pass_steps ?? ''} onChange={(e) => setStyleField('first_pass_steps', +e.target.value)} /><ParentVal k="first_pass_steps" /></Field></div>

@@ -57,6 +57,12 @@ actually run.
 **Resolution** picks orientation first, then quality — higher is slower. Portrait means the
 film is treated as a Short, which the predictive model weighs differently.
 
+**QHD** and **4K** are finishing targets, not render sizes: the video engines cannot
+generate at them, so a film aimed at one renders at FHD in the same orientation and a
+finishing upscale lifts it to the target before the final is assembled (the picker says
+so when one is selected). Which upscaler does the lifting is the style's
+[**Finishing upscaler**](settings.md#render-quality) setting.
+
 ## Visual style
 
 Free text appended to every scene's image prompt — *"Cinematic 35mm, golden hour, painterly
