@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Field, Segmented, Icon, Banner, RegenLabel } from '../components.jsx'
+import { Card, Chip, Button, Field, Segmented, Icon, Banner, RegenLabel, FilterSelect } from '../components.jsx'
 import { api } from '../api.js'
+import { useHashParams } from '../nav.js'
 
 // Unified "Community" screen (issue #107): one comment-management UI for both
 // platforms, chosen by the YouTube/X toggle. The two platforms differ only in
@@ -68,7 +69,13 @@ function ReplyComposer({ comment, adapter, onSent, onCancel }) {
 }
 
 export default function Community() {
-  const [platform, setPlatform] = useState('youtube')
+  // Platform + filters live in the URL (#/community?platform=x&channel=…&status=…)
+  // so they accumulate and back-navigation returns to the same filtered view.
+  const [filters, setFilters] = useHashParams({ platform: 'youtube', channel: '', status: 'all' })
+  const platform = ADAPTERS[filters.platform] ? filters.platform : 'youtube'
+  const { channel: channelFilter, status: statusFilter } = filters
+  // Switching platform drops the channel filter — the ids belong to the old one.
+  const setPlatform = (v) => setFilters({ platform: v, channel: '' })
   const [comments, setComments] = useState([])
   const [targets, setTargets] = useState([])   // channels (YT) / accounts (X)
   const [error, setError] = useState('')
@@ -135,6 +142,35 @@ export default function Community() {
 
   const pending = (c) => c.is_request && !['approved', 'rejected'].includes(c.status)
 
+  // Status buckets overlap (an approved request is also a request), so this is
+  // a match, not a partition. "Needs action" = a request awaiting a decision or
+  // a drafted reply awaiting send.
+  const inBucket = (c, bucket) => {
+    switch (bucket) {
+      case 'requests': return !!c.is_request
+      case 'action': return pending(c) || (!c.is_request && c.engagement_status === 'draft')
+      case 'approved': return c.status === 'approved'
+      case 'rejected': return c.status === 'rejected'
+      case 'replied': return c.engagement_status === 'sent'
+      default: return true
+    }
+  }
+  const channelMatched = comments.filter((c) => !channelFilter || c.channel === channelFilter)
+  const shown = channelMatched.filter((c) => inBucket(c, statusFilter))
+  const statusOpts = [
+    { value: 'all', label: 'All', n: channelMatched.length },
+    { value: 'action', label: 'Needs action', n: 0 },
+    { value: 'requests', label: 'Requests', n: 0 },
+    { value: 'approved', label: 'Approved', n: 0 },
+    { value: 'rejected', label: 'Rejected', n: 0 },
+    { value: 'replied', label: 'Replied', n: 0 },
+  ].map((o) => (o.value === 'all' ? o : { ...o, n: channelMatched.filter((c) => inBucket(c, o.value)).length }))
+    .filter((o) => o.value === 'all' || o.n > 0 || o.value === statusFilter)
+    .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
+  const channelOpts = targets.map((t) => ({ value: t.id, label: adapter.prefix + (t.name || t.id) }))
+  if (channelFilter && !channelOpts.some((o) => o.value === channelFilter))
+    channelOpts.push({ value: channelFilter, label: channelFilter })
+
   return (
     <div>
       <div className="page-head">
@@ -149,11 +185,16 @@ export default function Community() {
         </div>
       </div>
 
-      <div className="reveal reveal-d1" style={{ marginBottom: 16 }}>
+      <div className="reveal reveal-d1 row center gap-10 row--wrap" style={{ marginBottom: 16 }}>
         <Segmented value={platform} onChange={setPlatform} options={[
           { value: 'youtube', label: 'YouTube' },
           { value: 'x', label: 'X' },
         ]} />
+        {comments.length > 0 && <Segmented options={statusOpts} value={statusFilter} onChange={(v) => setFilters({ status: v })} />}
+        {(channelOpts.length > 1 || channelFilter) && (
+          <FilterSelect value={channelFilter} onChange={(v) => setFilters({ channel: v })}
+            options={channelOpts} allLabel={platform === 'x' ? 'All accounts' : 'All channels'} />
+        )}
       </div>
 
       <Banner tone="danger">{error}</Banner>
@@ -171,7 +212,8 @@ export default function Community() {
           </div>
         </Card>
         {comments.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No {adapter.unit} cached. Click <strong>Fetch &amp; evaluate</strong> to pull and rank the latest {adapter.emptyHint}.</p></Card>}
-        {comments.map((c, i) => (
+        {comments.length > 0 && shown.length === 0 && <Card span={12}><p className="muted" style={{ fontSize: 13 }}>No {adapter.unit} match this filter.</p></Card>}
+        {shown.map((c, i) => (
           <Card key={c.comment_id || i} span={6} className={`reveal reveal-d${(i % 3) + 1}`}>
             <div className="row center between">
               <span className="row center gap-10">

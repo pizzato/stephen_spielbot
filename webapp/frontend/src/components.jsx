@@ -588,6 +588,21 @@ export function Field({ label, hint, children }) {
   )
 }
 
+// Compact dropdown for list filters (channel, style, …). '' = no filter; the
+// empty option wears `allLabel` ("All channels"). Options are strings or
+// {value, label} pairs, mirroring Segmented.
+export function FilterSelect({ value, onChange, options, allLabel = 'All' }) {
+  return (
+    <select className="select" style={{ width: 'auto', padding: '6px 10px', fontSize: 13 }}
+      value={value} onChange={(e) => onChange(e.target.value)}>
+      <option value="">{allLabel}</option>
+      {options.map((o) => (
+        <option key={o.value ?? o} value={o.value ?? o}>{o.label ?? o}</option>
+      ))}
+    </select>
+  )
+}
+
 export function Segmented({ options, value, onChange }) {
   return (
     <div className="seg">

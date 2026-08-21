@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Icon, Banner, Segmented } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Segmented, FilterSelect } from '../components.jsx'
 import { api } from '../api.js'
+import { useHashParams } from '../nav.js'
 
 // Publish-state bucket for a finished film, mirroring the card chip priority
 // (published → needs approval → approved), so every film lands in exactly one
@@ -26,7 +27,10 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
   const [busyDel, setBusyDel] = useState('')
   const [busyNew, setBusyNew] = useState('')         // work_dir pending "new version" copy
   const [busyApprove, setBusyApprove] = useState('') // work_dir pending publish approval
-  const [filter, setFilter] = useState('all')        // publish-state filter bucket
+  // Filters live in the URL (#/films?status=…&channel=…&style=…) so they
+  // accumulate and back-navigation returns to the same filtered view.
+  const [{ status: filter, channel, style }, setFilters] = useHashParams({ status: 'all', channel: '', style: '' })
+  const setFilter = (v) => setFilters({ status: v })
 
   const load = () => api.listJobs().then((d) => { setJobs(d); setLoaded(true) }).catch((e) => { setError(e.message); setLoaded(true) })
   useEffect(() => { load() }, [])
@@ -59,19 +63,35 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
     catch (e) { setError(e.message) } finally { setBusyDel('') }
   }
 
+  // Channel/style options come from the films themselves, so the dropdowns only
+  // offer values that actually select something. Filters accumulate: the status
+  // buckets (and their counts) are computed on the channel/style-narrowed set.
+  // A stale URL value (channel/style no longer present) stays listed so the
+  // empty result is explicable — and clearable — rather than silently ignored.
+  const distinct = (key, cur) => {
+    const vals = [...new Set(jobs.finished.map((f) => f[key]).filter(Boolean))].sort()
+    if (cur && !vals.includes(cur)) vals.push(cur)
+    return vals
+  }
+  const channelOpts = distinct('channel', channel)
+  const styleOpts = distinct('style_name', style)
+  const base = jobs.finished.filter((f) =>
+    (!channel || f.channel === channel) && (!style || f.style_name === style))
+
   // Filter options carry counts; a bucket only appears once it has films (or is
   // the current selection, so it doesn't vanish under the user when the last
   // match moves on). With the approval gate off, the approval buckets never show.
-  const counts = jobs.finished.reduce((m, f) => { const s = statusOf(f); m[s] = (m[s] || 0) + 1; return m }, {})
+  const counts = base.reduce((m, f) => { const s = statusOf(f); m[s] = (m[s] || 0) + 1; return m }, {})
   const filterOpts = [
-    { value: 'all', label: 'All', n: jobs.finished.length },
+    { value: 'all', label: 'All', n: base.length },
     { value: 'approval', label: 'Needs approval', n: counts.approval || 0 },
     { value: 'approved', label: 'Approved', n: counts.approved || 0 },
     { value: 'published', label: 'Published', n: counts.published || 0 },
     { value: 'unpublished', label: 'Not published', n: counts.unpublished || 0 },
   ].filter((o) => o.value === 'all' || o.n > 0 || o.value === filter)
     .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
-  const shown = filter === 'all' ? jobs.finished : jobs.finished.filter((f) => statusOf(f) === filter)
+  const shown = filter === 'all' ? base : base.filter((f) => statusOf(f) === filter)
+  const unfiltered = filter === 'all' && !channel && !style
 
   return (
     <div>
@@ -86,12 +106,20 @@ export default function Library({ go, onOpenProgress, onOpenEdit, onNewVersion }
       <Banner tone="danger">{error}</Banner>
 
       {loaded && jobs.finished.length > 0 && (
-        <div className="reveal" style={{ marginBottom: 20 }}>
+        <div className="reveal row center gap-10 row--wrap" style={{ marginBottom: 20 }}>
           <Segmented options={filterOpts} value={filter} onChange={setFilter} />
+          {(channelOpts.length > 1 || channel) && (
+            <FilterSelect value={channel} onChange={(v) => setFilters({ channel: v })}
+              options={channelOpts} allLabel="All channels" />
+          )}
+          {(styleOpts.length > 1 || style) && (
+            <FilterSelect value={style} onChange={(v) => setFilters({ style: v })}
+              options={styleOpts} allLabel="All styles" />
+          )}
         </div>
       )}
 
-      {filter === 'all' && jobs.resumable.length > 0 && (
+      {unfiltered && jobs.resumable.length > 0 && (
         <>
           <div className="label-sm" style={{ marginBottom: 12 }}>Active and unfinished</div>
           <div className="bento" style={{ marginBottom: 28 }}>

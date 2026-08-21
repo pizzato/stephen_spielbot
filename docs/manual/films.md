@@ -28,6 +28,13 @@ approval filters.
 | **Published** | Live somewhere |
 | **Not published** | Finished, no approval gate, not published |
 
+Next to it, **channel** and **style** dropdowns narrow the library to one channel or one
+style profile; they only appear once your films span more than one. Filters combine —
+publish state, channel and style all apply at once, and the status counts follow the
+narrowed set. The active filters live in the URL (`#/films?status=published&channel=…`),
+so the browser's Back button returns you to the same filtered view, and a filtered URL
+can be bookmarked or shared. Clicking **Films** in the sidebar starts fresh, unfiltered.
+
 ## The cards
 
 Each film shows its cover, its title, and a state chip — **Published**, **Needs

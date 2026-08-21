@@ -6622,6 +6622,36 @@ def _film_publish_status(wd: Path, meta: dict, cfg: dict) -> dict:
     return out
 
 
+def _style_names_for_work_dirs(dirs: list[str]) -> dict[str, str]:
+    """style_name per work dir, for list payloads. Same resolution order as
+    _work_dir_style_name (job_config.json → durable job config), but the
+    durable-store fallback runs in ONE store session — the per-item helper
+    opens sqlite per call, too slow for the 1000-film library list."""
+    out: dict[str, str] = {}
+    missing = []
+    for d in dirs:
+        name = str(_film_job_config(Path(d)).get("style_name") or "")
+        if name:
+            out[d] = name
+        else:
+            missing.append(d)
+    if missing:
+        try:
+            store = DurableStore.default()
+            try:
+                for d in missing:
+                    row = store.get_job(job_id_from_work_dir(Path(d)))
+                    cfg_json = _row_to_dict(row).get("config_json") if row else ""
+                    out[d] = json.loads(cfg_json or "{}").get("style_name", "")
+            finally:
+                store.close()
+        except Exception:
+            pass
+    for d in missing:
+        out.setdefault(d, "")
+    return out
+
+
 @api.get("/api/jobs")
 def list_jobs() -> dict:
     # The Library lists every finished film (it filters client-side, no paging),
@@ -6634,6 +6664,17 @@ def list_jobs() -> dict:
         if cover.exists() and cover.stat().st_size > 1000:
             return _busted_file_url(cover)
         return ""
+    # Style + publish-target channel per item, so the Films/Scripts lists can
+    # filter by them. Resolved in one batch (the per-item helper hits sqlite).
+    script_rows = list(gapp._list_script_jobs())
+    styles = _style_names_for_work_dirs(
+        [d for _, d in finished_rows] + [d for _, d in script_rows])
+    chan_cache: dict[str, str] = {}
+    def _channel_disp(style: str) -> str:
+        if style not in chan_cache:
+            key = gapp.channel_for_style(cfg, style)
+            chan_cache[style] = _channel_display_name(cfg, key) if key else ""
+        return chan_cache[style]
     finished = []
     for l, d in finished_rows:
         try:
@@ -6645,6 +6686,8 @@ def list_jobs() -> dict:
                          # Rendering one script at a second resolution leaves two
                          # films with the SAME label, so the card names the size.
                          "resolution": (_film_job_config(Path(d)).get("resolution") or "").strip(),
+                         "style_name": styles.get(d, ""),
+                         "channel": _channel_disp(styles.get(d, "")),
                          **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d,
                 # story drafted but not yet divided into scenes — the Script
@@ -6654,8 +6697,10 @@ def list_jobs() -> dict:
                 # it opens on the Song tab instead
                 "song_draft": (not (Path(d) / "script.json").exists()
                                and not (Path(d) / "story.json").exists()
-                               and (Path(d) / "song.json").exists())}
-               for l, d in gapp._list_script_jobs()]
+                               and (Path(d) / "song.json").exists()),
+                "style_name": styles.get(d, ""),
+                "channel": _channel_disp(styles.get(d, ""))}
+               for l, d in script_rows]
     resumable = []
     active_wd = gapp._preferred_work_dir("")
     active_key = _work_dir_title_key(active_wd) if active_wd else ""

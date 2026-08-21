@@ -8,6 +8,14 @@ video turned into queue items.
 Switch between **YouTube** and **X** at the top. With several accounts connected, a chip
 shows how many, and each card is tagged with the channel it came from.
 
+Next to the platform toggle, a status filter and a **channel/account** dropdown narrow the
+cards: **Needs action** (requests awaiting a decision, reply drafts awaiting a send),
+**Requests**, **Approved**, **Rejected**, **Replied** — each with a count, and a comment
+can match more than one (an approved request is still a request). Filters combine —
+platform included — and live in the URL (`#/community?platform=x&status=action`), so Back
+returns to the same filtered view. Switching platform clears the channel filter, since the
+ids belong to the other platform.
+
 !!! note "Reading mentions on X needs a paid tier"
     Posting works on the free X API tier. Fetching mentions, replies, and analytics does
     not — see [X setup](../x_setup.md).

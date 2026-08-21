@@ -2,6 +2,8 @@
 //
 // Routing is hash-based (#/...) so deep links, refresh, and back/forward all
 // work against the SPA's single index.html with no server-side routing.
+
+import { useState, useEffect } from 'react'
 //
 // Video-scoped pages carry the work_dir BASENAME — the readable
 // "<slug>-<timestamp>" id — so a link reads like "#/edit/abc-clip-20260607",
@@ -53,9 +55,11 @@ export function buildHash(route, { name } = {}) {
 }
 
 // Parse location.hash → { route, name?, view? }. Anything unrecognized → home,
-// so a stale or hand-edited URL degrades gracefully instead of breaking.
+// so a stale or hand-edited URL degrades gracefully instead of breaking. A
+// query part (#/films?status=published) belongs to the screen's filters
+// (useHashParams below) and is ignored here.
 export function parseHash(hash) {
-  const segs = (hash || '').replace(/^#/, '').split('/').filter(Boolean)
+  const segs = (hash || '').replace(/^#/, '').split('?')[0].split('/').filter(Boolean)
   if (!segs.length) return { route: 'home' }
   const route = BY_SEG[segs[0]]
   if (!route) return { route: 'home' }
@@ -63,6 +67,50 @@ export function parseHash(hash) {
   if (r.sub && segs[1] === r.sub) return { route, view: r.sub, name: segs[2] }
   if (r.name) return { route, name: segs[1] }
   return { route }
+}
+
+// Screen filter state that lives in the hash's query part
+// (#/films?status=published&channel=Kids), so filters accumulate in the URL
+// and back/forward restores them. `defaults` names the allowed keys and their
+// "no filter" values; default-valued keys are omitted from the URL. Updates
+// use history.replaceState — changing a filter refines the current history
+// entry rather than minting one per click, and in-app navigation (a fresh
+// buildHash) naturally starts the next page unfiltered.
+export function useHashParams(defaults) {
+  const read = () => {
+    const h = window.location.hash
+    const qi = h.indexOf('?')
+    const sp = new URLSearchParams(qi >= 0 ? h.slice(qi + 1) : '')
+    const out = { ...defaults }
+    for (const k of Object.keys(defaults)) {
+      const v = sp.get(k)
+      if (v != null) out[k] = v
+    }
+    return out
+  }
+  const [params, setParams] = useState(read)
+  // Back/forward (and sidebar re-clicks) arrive as hashchange: re-read so the
+  // screen's filters follow the URL.
+  useEffect(() => {
+    const onHash = () => setParams(read())
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const update = (patch) => setParams((cur) => {
+    const next = { ...cur, ...patch }
+    const h = window.location.hash || '#/'
+    const qi = h.indexOf('?')
+    const path = qi >= 0 ? h.slice(0, qi) : h
+    const sp = new URLSearchParams()
+    for (const k of Object.keys(defaults)) {
+      if (next[k] !== defaults[k] && next[k] !== '' && next[k] != null) sp.set(k, next[k])
+    }
+    const qs = sp.toString()
+    window.history.replaceState(null, '', path + (qs ? '?' + qs : ''))
+    return next
+  })
+  return [params, update]
 }
 
 // work_dir ⇄ basename. Every work_dir is a direct child of the videos dir, so

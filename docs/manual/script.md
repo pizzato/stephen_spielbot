@@ -28,6 +28,12 @@ against the same song rather than singing a new one. The copy also keeps the who
 images, locations, wardrobe and uploaded references, scene scoping included — so it
 renders with the same anchors as the original.
 
+A filter bar sits above the cards once you have scripts: a segmented control by state —
+**Scenes ready**, **Story drafts**, **Song drafts**, each with a count — plus **channel**
+and **style** dropdowns (shown once your scripts span more than one). Filters combine, and
+they live in the URL (`#/script?status=story&style=…`), so Back returns to the same
+filtered view. Each card wears its style as a chip.
+
 **New script** goes to [Create](create.md).
 
 ## Song
