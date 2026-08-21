@@ -88,9 +88,10 @@ Dialogue and silent scenes keep their original language.
 Upscale the finished film and keep the result as a selectable final version.
 
 The target list goes beyond what a film can be *rendered* at: **QHD** and **4K** are
-finishing sizes, offered here only. The video engines cannot generate at those sizes in
-any sensible time, so they never appear in the render or style pickers. Only targets
-larger than the film's current size are listed.
+finishing sizes the video engines cannot generate at directly. (The render and style
+pickers offer them too — as targets: such a film renders at FHD and the pipeline runs
+this same upscale as its finishing step.) Only targets larger than the film's current
+size are listed.
 
 Scenes are upscaled one per worker in parallel and kept on disk as they finish, so if a
 scene fails the completed ones are reused when you run it again rather than redone.
@@ -118,8 +119,10 @@ match the new dimensions, so the images are regenerated and fresh takes are shot
 full render, and expect the footage to differ.
 
 Pick any resolution other than this film's — a smaller one and the other orientation both
-count, so a landscape film can be re-shot portrait for Shorts — and click **Render at this
-size**. The copy is duplicated exactly as [Duplicate](script.md) would (scenes, cast,
+count, so a landscape film can be re-shot portrait for Shorts. **QHD** and **4K** targets
+are offered too: the copy renders at FHD and the pipeline finishes it with an upscale to
+the target (the style's [Finishing upscaler](settings.md#render-quality) picks the mode).
+Click **Render at this size**. The copy is duplicated exactly as [Duplicate](script.md) would (scenes, cast,
 cover, brief, and a music video's song all travel with it) and goes into the
 [queue](queue.md) approved, so it starts immediately if auto-start is on and nothing else
 is rendering.

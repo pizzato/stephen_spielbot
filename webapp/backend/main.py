@@ -947,7 +947,9 @@ def get_config() -> dict:
         "default_resolution": gapp._DEFAULT_RESOLUTION,
         # Structured selectors so the UI can offer an orientation + pixel toggle.
         "orientations": gapp._ORIENTATIONS,
-        "pixel_tiers": [{"key": t["key"], "label": t["label"]} for t in gapp._PIXEL_TIERS],
+        "pixel_tiers": [{"key": t["key"], "label": t["label"],
+                         "upscale_only": bool(t.get("upscale_only"))}
+                        for t in gapp._PIXEL_TIERS],
         "default_orientation": gapp._DEFAULT_ORIENTATION,
         "default_pixels": gapp._DEFAULT_PIXELS,
         # Small/Medium/Large size buckets and their fallback presets, so the
@@ -4717,7 +4719,9 @@ def duplicate_script_and_render(body: DuplicateRenderBody) -> dict:
     under the same rules as a Script approval — auto-start on, nothing else
     rendering — otherwise the copy waits in the queue."""
     resolution = (body.resolution or "").strip()
-    if resolution not in gapp._RESOLUTIONS:
+    # Upscale-only targets (QHD/4K) are allowed: the copy renders at the
+    # largest render tier and finishes with an upscale (split_render_target).
+    if resolution not in gapp._UPSCALE_RESOLUTIONS:
         raise HTTPException(400, "Choose a valid resolution.")
     dup = duplicate_script(DuplicateScriptBody(work_dir=body.work_dir, title=body.title))
     new_wd = Path(dup["work_dir"])
@@ -6185,6 +6189,10 @@ def start_generation(body: GenerateBody) -> dict:
         voice_name = ss.get("voice") or voice_name
     voice_ref = gapp.voice_path_for(voice_name)
     resolution = body.resolution or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
+    # An upscale-only target (QHD/4K) renders at the largest render-capable
+    # tier and the pipeline finishes with an upscale to the target — nothing
+    # may render at the target size itself.
+    resolution, finish_resolution = gapp.split_render_target(resolution)
     vid_width, vid_height = gapp._RESOLUTIONS.get(resolution, (832, 480))
 
     style_clean = body.style.strip().rstrip(".") if body.style and body.style.strip() else ""
@@ -6255,6 +6263,11 @@ def start_generation(body: GenerateBody) -> dict:
     job_cfg = gapp._job_config_snapshot(cfg)
     job_cfg.update({
         "resolution": resolution, "max_clip_secs": 0,
+        # Upscale-only target (QHD/4K) this render finishes at, and the
+        # upscaler that gets it there ("" = no finishing step). Stamped flat so
+        # resume_generation.py reads them like every other render key.
+        "finish_resolution": finish_resolution,
+        "finish_upscale_mode": ss.get("finish_upscale_mode") or "fast",
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
@@ -8570,7 +8583,10 @@ def _attach_render_estimates(queue: list[dict]) -> None:
             ss = gapp.style_settings(cfg, (it.get("gen_style_name") or "").strip())
             n = gapp.style_script_plan(ss, minutes=_queue_item_minutes(it, ss))["n_scenes"]
             res = it.get("gen_resolution") or ss.get("resolution") or gapp._DEFAULT_RESOLUTION
-            w, h = gapp._RESOLUTIONS.get(res, gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
+            # A QHD/4K target renders at its underlying render size — the ETA
+            # tracks the render, so estimate at that size.
+            w, h = gapp._RESOLUTIONS.get(gapp.split_render_target(res)[0],
+                                         gapp._RESOLUTIONS[gapp._DEFAULT_RESOLUTION])
             w, h = ltx_dimensions(w, h)
             eta = estimate_planned_job(n, w, h, table, cfg)
         except Exception:
@@ -13127,6 +13143,28 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
         # Same normalisation the full render applies after mixing. No-op when
         # the concat already matches.
         ensure_video_resolution(final_path, vid_w, vid_h)
+        # A film whose target is an upscale-only size (QHD/4K) must not shrink
+        # back to its render size on a rebuild. The fast path keeps the size
+        # without re-running an AI upscale on every edit; the Remix card can
+        # restore AI-upscale quality afterwards.
+        finish_dims = gapp._UPSCALE_RESOLUTIONS.get(
+            str(jc.get("finish_resolution") or "").strip())
+        if finish_dims and finish_dims != (vid_w, vid_h):
+            from pipeline.assembler import upscale_video
+            target_w, target_h = finish_dims
+            actual_w, actual_h = _get_video_dimensions(final_path)
+            if actual_w < target_w or actual_h < target_h:
+                staged = wd / "finish_upscale.staging.mp4"
+                try:
+                    upscale_video(final_path, staged, target_w, target_h)
+                    staged.replace(final_path)
+                except Exception as e:
+                    staged.unlink(missing_ok=True)
+                    gapp.logger.warning(
+                        "Reassemble: finishing upscale to %s failed (kept %dx%d): %s",
+                        jc.get("finish_resolution"), vid_w, vid_h, e)
+        # After the upscale, so open captions are drawn crisp at the target
+        # size instead of being resampled with the frame.
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,

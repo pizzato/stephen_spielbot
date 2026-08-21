@@ -43,9 +43,11 @@ from pipeline import prompts as _prompts
 from pipeline.comfyui import generate_music, generate_with_engine, ltx_dimensions, StuckJobError
 from pipeline.assembler import (
     _get_duration, mux_video_audio, FINAL_SCENE_TAIL_SECS,
+    _verify_upscale_not_blank,
     concat_audio, concatenate_scenes, concatenate_scenes_hard_cut,
     extract_last_frame, ensure_video_resolution, mix_background_music,
-    trim_video, write_silence_wav as _write_silence_wav,
+    temporal_ai_upscale_video, trim_video, upscale_video,
+    write_silence_wav as _write_silence_wav,
 )
 from pipeline import cadence as _cadence
 from pipeline import scene_context as _scene_context
@@ -62,7 +64,7 @@ from pipeline import ui_activity
 # Resolution name → (w, h) map. Import the canonical table from app rather than
 # keeping a copy here — a stale local copy silently dropped the 720p tier and
 # rendered every 720p job at the 1920×1080 fallback (wrong size and orientation).
-from app import _RESOLUTIONS, _DEFAULT_RESOLUTION
+from app import _RESOLUTIONS, _UPSCALE_RESOLUTIONS, _DEFAULT_RESOLUTION
 from app import build_cover_generation as _build_cover_generation
 from pipeline.cover import (
     burn_cover_into_first_frame as _burn_first_frame,
@@ -1015,6 +1017,93 @@ def generate_cover_image(work_dir: Path, cfg: dict, scenes: list, *, image_engin
         return None
 
 
+def _finish_upscale_scenes(
+    work_dir: Path,
+    scene_finals: list[Path],
+    cfg: dict,
+    status_file: Path,
+    worker_pool: WorkerPool,
+    vid_width: int,
+    vid_height: int,
+) -> tuple[list[Path], int, int]:
+    """Upscale every rendered scene clip to the job's finishing target (QHD/4K).
+
+    The video engines cannot generate at the upscale-only sizes, so a job whose
+    requested resolution is one of them renders at the largest render tier and
+    is lifted to the target here, BEFORE final assembly — the film that gets
+    concatenated, mixed and stamped done is already at the target size, so
+    publishing never sees the smaller intermediate.
+
+    Per-scene outputs are cached in finish_upscale_scenes/ and reused when
+    fresher than their source, so a resumed render skips finished scenes. Any
+    AI-upscale failure falls back to the fast ffmpeg path for that scene — a
+    finished film at fast-upscale quality beats a failed render.
+
+    Returns (clips, width, height); unchanged when there is nothing to do.
+    """
+    target_name = str(cfg.get("finish_resolution") or "").strip()
+    target = _UPSCALE_RESOLUTIONS.get(target_name)
+    if not target:
+        return scene_finals, vid_width, vid_height
+    target_w, target_h = target
+    if target_w <= vid_width and target_h <= vid_height:
+        return scene_finals, vid_width, vid_height
+
+    mode = str(cfg.get("finish_upscale_mode") or "fast").strip().lower()
+    if mode not in {"fast", "ltx_latent", "ic_lora", "h3_latent"}:
+        logger.warning("Unknown finish_upscale_mode %r — using fast", mode)
+        mode = "fast"
+
+    out_dir = work_dir / "finish_upscale_scenes"
+    out_dir.mkdir(exist_ok=True)
+    timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
+    chunk_seconds = float(cfg.get("temporal_video_upscale_chunk_seconds") or 0) or None
+    command_template = cfg.get("temporal_video_upscaler_cmd") or None
+
+    upscaled: list[Path] = []
+    n = len(scene_finals)
+    for i, clip in enumerate(scene_finals):
+        out = out_dir / f"{clip.stem}.up.mp4"
+        if (out.exists() and out.stat().st_size > 10_000
+                and out.stat().st_mtime >= clip.stat().st_mtime):
+            upscaled.append(out)
+            continue
+        write_progress(status_file, 90.0,
+                       f"Upscaling scene {i + 1}/{n} to {target_name}…")
+        staging = out_dir / f"{clip.stem}.up.staging.mp4"
+        staging.unlink(missing_ok=True)
+        done = False
+        if mode != "fast":
+            url = None
+            try:
+                url = worker_pool.acquire()
+                temporal_ai_upscale_video(
+                    clip, staging, target_w, target_h,
+                    command_template=command_template,
+                    timeout_seconds=timeout,
+                    comfy_url=url,
+                    engine=mode,
+                    chunk_seconds=chunk_seconds,
+                )
+                _verify_upscale_not_blank(clip, staging)
+                done = True
+            except Exception as e:
+                # The worker itself may be fine (e.g. the upscaler node isn't
+                # installed there), so it goes back to the pool rather than
+                # being marked failed.
+                logger.warning("AI upscale (%s) failed on %s — falling back to fast: %s",
+                               mode, clip.name, e)
+                staging.unlink(missing_ok=True)
+            finally:
+                if url is not None:
+                    worker_pool.release(url)
+        if not done:
+            upscale_video(clip, staging, target_w, target_h)
+        staging.replace(out)
+        upscaled.append(out)
+    return upscaled, target_w, target_h
+
+
 def main(work_dir: Path) -> None:
     global _PROGRESS_STORE, _PROGRESS_JOB_ID
     cfg = load_job_config(work_dir)
@@ -1758,6 +1847,14 @@ def main(work_dir: Path) -> None:
         scene_finals.append(scene_final)
 
     scene_ambient_wavs = [scene_ambient_map[s.id] for s in scenes if scene_ambient_map.get(s.id)]
+
+    # ── Finishing upscale (upscale-only targets: QHD/4K) ─────────────────────
+    # The scene clips are lifted to the target size BEFORE assembly, so the
+    # concat/crossfade, audio mix and cover burn below all run once at the
+    # final size and the job is only stamped done at the target resolution.
+    scene_finals, vid_width, vid_height = _finish_upscale_scenes(
+        work_dir, scene_finals, cfg, status_file, worker_pool,
+        vid_width, vid_height)
 
     # ── Final assembly (90–100%) ─────────────────────────────────────────────
     combined     = work_dir / "combined.mp4"

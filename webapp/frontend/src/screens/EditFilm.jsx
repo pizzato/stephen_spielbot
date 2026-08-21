@@ -791,8 +791,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }, [upscaleOptions.join('|')])
 
   // A re-render can be any size, smaller or in the other orientation — it goes
-  // through the whole pipeline again, so nothing is being resampled.
-  const reRenderOptions = (meta?.resolutions || []).filter((r) => r !== currentResolution)
+  // through the whole pipeline again, so nothing is being resampled. QHD/4K
+  // targets are offered too: those render at the largest render tier and the
+  // pipeline finishes them with an upscale to the target.
+  const reRenderOptions = (meta?.upscale_resolutions || meta?.resolutions || [])
+    .filter((r) => r !== currentResolution)
 
   useEffect(() => {
     if (!reRenderOptions.includes(reRenderResolution)) {

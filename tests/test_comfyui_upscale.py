@@ -326,6 +326,125 @@ class UpscaleResolutionSplitTests(unittest.TestCase):
         import app
         self.assertIn(app._DEFAULT_RESOLUTION, app._RESOLUTIONS)
 
+    def test_split_render_target_passes_render_names_through(self):
+        import app
+        for name in app._RESOLUTIONS:
+            self.assertEqual(app.split_render_target(name), (name, ""))
+
+    def test_split_render_target_maps_upscale_only_to_top_render_tier(self):
+        import app
+        self.assertEqual(
+            app.split_render_target("Landscape 4K (3840×2160)"),
+            ("Landscape FHD (1920×1080)", "Landscape 4K (3840×2160)"))
+        self.assertEqual(
+            app.split_render_target("Portrait QHD (1440×2560)"),
+            ("Portrait FHD (1080×1920)", "Portrait QHD (1440×2560)"))
+        self.assertEqual(
+            app.split_render_target("Square 4K (2160×2160)"),
+            ("Square FHD (1080×1080)", "Square 4K (2160×2160)"))
+
+    def test_split_render_target_render_half_is_always_renderable(self):
+        import app
+        for name in app._UPSCALE_RESOLUTIONS:
+            render_name, finish = app.split_render_target(name)
+            self.assertIn(render_name, app._RESOLUTIONS)
+            if finish:
+                self.assertNotIn(finish, app._RESOLUTIONS)
+                self.assertIn(finish, app._UPSCALE_RESOLUTIONS)
+
+    def test_split_render_target_unknown_and_blank_pass_through(self):
+        import app
+        self.assertEqual(app.split_render_target(""), ("", ""))
+        self.assertEqual(app.split_render_target("not a size"), ("not a size", ""))
+
+
+class FinishUpscaleScenesTests(unittest.TestCase):
+    """The pipeline's finishing stage lifts rendered scene clips to a QHD/4K
+    target before final assembly (resume_generation._finish_upscale_scenes)."""
+
+    def _work_dir(self, tmp, n=2):
+        wd = Path(tmp)
+        clips = []
+        for i in range(1, n + 1):
+            p = wd / f"scene_{i:02d}_final.mp4"
+            p.write_bytes(b"x" * 20_000)
+            clips.append(p)
+        return wd, clips
+
+    class _Pool:
+        def __init__(self):
+            self.acquired, self.released = 0, 0
+
+        def acquire(self):
+            self.acquired += 1
+            return "http://worker:8188"
+
+        def release(self, url):
+            self.released += 1
+
+    @staticmethod
+    def _fake_upscale(inp, out, w, h, **kw):
+        Path(out).write_bytes(b"u" * 20_000)
+        return Path(out)
+
+    def test_noop_without_finish_resolution(self):
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, clips = self._work_dir(tmp)
+            got = rg._finish_upscale_scenes(
+                wd, clips, {}, wd / "progress.json", self._Pool(), 1080, 1920)
+            self.assertEqual(got, (clips, 1080, 1920))
+
+    def test_fast_mode_upscales_every_scene_to_target_dims(self):
+        import resume_generation as rg
+        cfg = {"finish_resolution": "Portrait 4K (2160×3840)",
+               "finish_upscale_mode": "fast"}
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, clips = self._work_dir(tmp)
+            with mock.patch.object(rg, "upscale_video",
+                                   side_effect=self._fake_upscale) as up:
+                out, w, h = rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+            self.assertEqual((w, h), (2160, 3840))
+            self.assertEqual(up.call_count, 2)
+            self.assertEqual([p.parent.name for p in out],
+                             ["finish_upscale_scenes"] * 2)
+            for p in out:
+                self.assertTrue(p.exists())
+
+    def test_cached_scene_outputs_are_reused_on_resume(self):
+        import resume_generation as rg
+        cfg = {"finish_resolution": "Portrait 4K (2160×3840)",
+               "finish_upscale_mode": "fast"}
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, clips = self._work_dir(tmp)
+            with mock.patch.object(rg, "upscale_video",
+                                   side_effect=self._fake_upscale) as up:
+                rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+                rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", self._Pool(), 1080, 1920)
+            self.assertEqual(up.call_count, 2)  # second run reused both
+
+    def test_ai_failure_falls_back_to_fast_and_releases_worker(self):
+        import resume_generation as rg
+        cfg = {"finish_resolution": "Portrait QHD (1440×2560)",
+               "finish_upscale_mode": "h3_latent"}
+        with tempfile.TemporaryDirectory() as tmp:
+            wd, clips = self._work_dir(tmp, n=1)
+            pool = self._Pool()
+            with mock.patch.object(rg, "temporal_ai_upscale_video",
+                                   side_effect=RuntimeError("no node")), \
+                 mock.patch.object(rg, "upscale_video",
+                                   side_effect=self._fake_upscale) as up:
+                out, w, h = rg._finish_upscale_scenes(
+                    wd, clips, cfg, wd / "progress.json", pool, 1080, 1920)
+            self.assertEqual((w, h), (1440, 2560))
+            self.assertEqual(up.call_count, 1)
+            self.assertEqual(pool.acquired, 1)
+            self.assertEqual(pool.released, 1)
+            self.assertTrue(out[0].exists())
+
 class PackagedWorkflowSanityTests(unittest.TestCase):
     """Inputs ComfyUI does not recognise are dropped silently, so a graph can
     look configured while doing nothing. VAEDecode carried tile_size/overlap/
