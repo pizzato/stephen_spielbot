@@ -733,6 +733,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [reRenderDone, setReRenderDone] = useState(null)
   const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [ffSeconds, setFfSeconds] = useState(1)
+  const [subsBusy, setSubsBusy] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -1200,6 +1201,18 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setLocAudioBusy('') }
   }
 
+  const burnSubtitles = async (burn) => {
+    setSubsBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.remixSubtitles({ work_dir: data.work_dir, burn })
+      setStatus(r.message)
+      setData((d) => ({
+        ...d, burn_subtitles: r.burn_subtitles,
+        final_url: r.final_url ? r.final_url + `&t=${Date.now()}` : d.final_url,
+      }))
+    } catch (e) { setError(e.message) } finally { setSubsBusy(false) }
+  }
+
   const remix = async () => {
     setBusy(true); setError(''); setStatus('')
     try {
@@ -1238,7 +1251,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1394,6 +1407,30 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
                 Generate a cover image first.
               </p>
+            )}
+          </div>
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="closed-captioning" style={{ color: 'var(--ink-3)', width: 16 }} /> Subtitles</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Burn the film&apos;s captions into the picture itself (open captions) —
+            narration, the dialogue spoken in acted scenes, and a song&apos;s lyrics.
+            The final is rebuilt from the clean scene clips, so you can burn them
+            in after the fact and remove them again the same way. Once on, every
+            later rebuild keeps them.
+          </p>
+          <div className="mt-24">
+            {data.burn_subtitles ? (
+              <Button variant="ghost" block icon="eye-slash" disabled={anyBusy}
+                onClick={() => burnSubtitles(false)}>
+                {subsBusy ? 'Removing…' : 'Remove burned subtitles'}
+              </Button>
+            ) : (
+              <Button variant="primary" block icon="closed-captioning" disabled={anyBusy}
+                onClick={() => burnSubtitles(true)}>
+                {subsBusy ? 'Burning…' : 'Burn subtitles into the picture'}
+              </Button>
             )}
           </div>
         </Card>

@@ -1,7 +1,9 @@
 """Build a timed caption (SRT) track from a finished film's work directory.
 
-The narration text is known exactly — it's the script we fed to TTS — so we can
-hand YouTube accurate subtitles instead of relying on its speech recognition.
+The spoken text is known exactly — narration is the script we fed to TTS, an
+acted scene's dialogue is the lines the take performed, and a singing scene's
+lyrics are the slice of the song it mouths — so we can hand YouTube accurate
+subtitles instead of relying on its speech recognition.
 
 Timing is reconstructed from the per-scene durations, measured from the scene
 finals the published video actually concatenates (falling back to the narration
@@ -87,6 +89,91 @@ def _timestamp(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
+def _weighted_cues(texts: list[str], start: float,
+                   dur: float) -> list[tuple[float, float, str]]:
+    """*texts* sharing the window [*start*, start+*dur*), split by length —
+    the same even-delivery assumption the narration path makes per sentence."""
+    weights = [len(t) for t in texts]
+    total = sum(weights) or 1
+    cues = []
+    for text, weight in zip(texts, weights):
+        span = dur * weight / total
+        cues.append((start, start + span, text))
+        start += span
+    return cues
+
+
+def _dialogue_cues(meta: dict, start: float,
+                   dur: float) -> list[tuple[float, float, str]]:
+    """Cues for an acted scene's spoken lines, paced across its take.
+
+    Per-line timing isn't measured — the take's audio comes out of the video
+    model — so the lines share the scene window by spoken length, which holds
+    up well at the 10–15 s scenes the planner writes. Speaker names prefix the
+    text only when the scene has more than one voice in it."""
+    lines = [l for l in (meta.get("lines") or [])
+             if isinstance(l, dict) and str(l.get("text") or "").strip()]
+    if not lines:
+        return []
+    speakers = {str(l.get("speaker") or "").strip()
+                for l in lines if str(l.get("speaker") or "").strip()}
+    texts = []
+    for line in lines:
+        text = " ".join(str(line.get("text") or "").split())
+        speaker = str(line.get("speaker") or "").strip()
+        texts.append(f"{speaker}: {text}" if speaker and len(speakers) > 1
+                     else text)
+    return _weighted_cues(texts, start, dur)
+
+
+def _at_voiced(ranges: list[tuple[float, float]], offset: float, *,
+               end: bool = False) -> float:
+    """The clip second sitting *offset* seconds into the VOICED time —
+    the same seam rule as song_timing._absolute."""
+    remaining = offset
+    for lo, hi in ranges:
+        span = hi - lo
+        if remaining < span or (end and remaining <= span):
+            return lo + remaining
+        remaining -= span
+    return ranges[-1][1]
+
+
+def _lyric_cues(meta: dict, start: float,
+                dur: float) -> list[tuple[float, float, str]]:
+    """Cues for a singing scene's lyric lines (metadata ``sings``).
+
+    The divide stamped ``vocal_ranges`` — when inside the clip a voice is
+    actually heard, measured off the track's vocal stem — so the lines are
+    paced through the singing rather than the whole take, and an instrumental
+    intro or break stays caption-free. Without ranges the whole take is
+    treated as sung."""
+    lines = [l.strip() for l in str(meta.get("sings") or "").splitlines()
+             if l.strip()]
+    if not lines:
+        return []
+    ranges = []
+    for pair in (meta.get("vocal_ranges") or []):
+        try:
+            lo, hi = max(0.0, float(pair[0])), min(dur, float(pair[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if hi > lo:
+            ranges.append((lo, hi))
+    if not ranges:
+        ranges = [(0.0, dur)]
+    voiced = sum(hi - lo for lo, hi in ranges)
+    weights = [len(l) for l in lines]
+    total = sum(weights) or 1
+    cues, offset = [], 0.0
+    for line, weight in zip(lines, weights):
+        span = voiced * weight / total
+        cues.append((start + _at_voiced(ranges, offset),
+                     start + _at_voiced(ranges, offset + span, end=True), line))
+        offset += span
+    return cues
+
+
 def _load_translations(work_dir: Path, lang: str) -> dict[int, str]:
     """{scene_id: translated narration} saved by the localize feature, or {}."""
     path = work_dir / "localize_scripts" / f"{lang}.json"
@@ -135,7 +222,8 @@ def build_srt(work_dir: Path, lang: str | None = None,
     timeline) can carry caption tracks in several languages.
 
     Returns the file path, or ``None`` if there's nothing to caption (no script,
-    or none of the scenes have measurable narration on disk). Best-effort: a
+    or none of the scenes carry speech that can be placed on the timeline —
+    narration, dialogue lines, or sung lyrics). Best-effort: a
     ``None`` means "skip captions" — callers should still upload the video.
     """
     work_dir = Path(work_dir)
@@ -154,11 +242,31 @@ def build_srt(work_dir: Path, lang: str | None = None,
         if dur <= 0:
             continue  # scene not on disk — can't place it on the timeline
 
-        # Dialogue/silent scenes have no narration voice-over — any lingering
-        # narration text must not become captions. Their duration still advances
-        # the timeline so later narrated scenes stay in sync. (Per-line dialogue
-        # captions are a future improvement.)
-        mode = str((scene.get("metadata") or {}).get("mode") or "narration")
+        # Non-narrated scenes speak too: a singing scene mouths its slice of
+        # the song's lyrics and an acted scene performs its dialogue lines —
+        # both always in the original language (localization never touches
+        # them, so there is no translation to prefer). A silent scene that
+        # does neither just advances the timeline so later scenes stay in
+        # sync — any lingering narration text must not become captions.
+        meta = scene.get("metadata") if isinstance(scene.get("metadata"), dict) else {}
+        mode = str(meta.get("mode") or "narration")
+        if meta.get("singing"):
+            lyric = _lyric_cues(meta, cursor, dur)
+            # A line straddling the seam between two takes rides BOTH scenes'
+            # lyric slices (lines_in_window hands it to each side), which
+            # would caption it twice back to back — extend the standing cue
+            # across the seam instead.
+            if (lyric and cues and lyric[0][2] == cues[-1][2]
+                    and lyric[0][0] - cues[-1][1] < 0.5):
+                cues[-1] = (cues[-1][0], lyric[0][1], cues[-1][2])
+                lyric = lyric[1:]
+            cues.extend(lyric)
+            cursor += dur
+            continue
+        if mode in ("dialogue", "performance"):  # "performance" = older scripts
+            cues.extend(_dialogue_cues(meta, cursor, dur))
+            cursor += dur
+            continue
         if mode != "narration":
             cursor += dur
             continue
@@ -168,15 +276,7 @@ def build_srt(work_dir: Path, lang: str | None = None,
         # never translated (it plays in the original language on every cut).
         # [pause] markers are TTS pacing directives, never caption text.
         text = strip_pause_markers(translations.get(sid) or str(scene.get("narration") or ""))
-        sentences = _split_sentences(text)
-        if sentences:
-            weights = [len(s) for s in sentences]
-            total = sum(weights) or 1
-            start = cursor
-            for sentence, weight in zip(sentences, weights):
-                span = dur * weight / total
-                cues.append((start, start + span, sentence))
-                start += span
+        cues.extend(_weighted_cues(_split_sentences(text), cursor, dur))
         cursor += dur
 
     if not cues:
