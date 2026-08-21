@@ -99,6 +99,12 @@ the queue. **Cadence settings** jumps to Settings.
 
 Published, skipped, and errored entries.
 
+Every release attempt counts against the cadence — even one that later errors — so a
+failure can't make the scheduler release the next film early. Deleting a film in
+[Films](films.md) closes out its queue entry: if it already published, the entry stays
+here as published (deleting the local film doesn't remove the upload); if it was still
+waiting, it leaves the queue.
+
 ### Comment requests
 
 By default, videos made from an approved [viewer request](community.md) **skip the
