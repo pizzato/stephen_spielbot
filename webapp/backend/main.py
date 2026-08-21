@@ -6873,6 +6873,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        # Whether this film's final carries burned-in (open) captions, so the
+        # Subtitles card offers the opposite action (burn ⇄ remove).
+        "burn_subtitles": bool(jc.get("burn_subtitles")),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
         **_film_publish_status(wd, meta, cfg),
@@ -6908,6 +6911,47 @@ def remix_apply(body: RemixBody) -> dict:
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": _busted_file_url(Path(final_path))}
+
+
+class RemixSubtitlesBody(BaseModel):
+    work_dir: str
+    burn: bool = True
+
+
+@api.post("/api/remix/subtitles")
+def remix_subtitles(body: RemixSubtitlesBody) -> dict:
+    """Burn the film's captions into the picture after the fact — or remove
+    a burn again — by rebuilding the final from the (caption-free) scene
+    finals with the film's standing ``burn_subtitles`` flag flipped.
+
+    The flag is persisted to the film's job_config first, so every later
+    rebuild (remix, re-voice, reassemble, localize) keeps the choice. Works
+    for any film the reassemble path can rebuild — narrated, acted and song
+    films alike; the caption track covers narration, an acted scene's
+    dialogue lines and a singing scene's lyrics."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if body.burn:
+        from pipeline.captions import build_srt
+        if build_srt(wd) is None:
+            raise HTTPException(400, "Nothing to caption — this film has no "
+                                     "narration, dialogue or lyrics on its scenes.")
+    jc = _film_job_config(wd)
+    jc["burn_subtitles"] = bool(body.burn)
+    _write_film_job_config(wd, jc)
+    try:
+        _reassemble_film_core(
+            wd, "Burning subtitles" if body.burn else "Removing subtitles")
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    final_path = gapp._final_path_for_work_dir(wd)
+    return {
+        "message": ("Subtitles burned into the picture."
+                    if body.burn else "Burned subtitles removed."),
+        "final_url": _busted_file_url(final_path),
+        "burn_subtitles": bool(body.burn),
+    }
 
 
 def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:

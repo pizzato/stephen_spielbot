@@ -130,8 +130,12 @@ big-title-overlay mode is gone (legacy `text` configs burn the cover image).
 SRT on upload is rendered into the frames, so it survives any player — including
 X posts, where API uploads can't always carry a caption track. Every rebuild that
 regenerates the final (remix, re-voice, music change, reassemble) re-burns it, and a
-[localized cut](edit-film.md#localize) is burned in its own language. Narrated scenes
-only — dialogue, silent, and music-video scenes carry no caption cues. Viewers can't
+[localized cut](edit-film.md#localize) is burned in its own language. The track covers
+everything spoken or sung: narration, the dialogue lines acted scenes perform, and a
+song film's lyrics (paced through the measured singing, so instrumental stretches stay
+clean); only truly silent scenes carry no cues. A finished film can also gain or lose
+the burn after the fact from the film editor's **Subtitles** card
+(see [Edit film](edit-film.md#film)). Viewers can't
 switch burned captions off, so a channel that also attaches the SRT (the channel's
 **Upload captions** toggle) would show doubled text to viewers who turn CC on.
 

@@ -174,5 +174,76 @@ class RebuildReapplyTests(unittest.TestCase):
             backend._maybe_burn_subtitles(self.wd, self.final)  # must not raise
 
 
+class RemixSubtitlesEndpointTests(unittest.TestCase):
+    """POST /api/remix/subtitles: burn captions into a film after the fact —
+    or remove a burn — by persisting the flag and rebuilding the final."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        self.final = _OUT / f"{self.wd.name}.mp4"
+        self.final.write_bytes(b"v" * 20_000)
+
+    def _jc(self):
+        return backend._film_job_config(self.wd)
+
+    def test_burn_persists_flag_and_rebuilds(self):
+        with mock.patch("pipeline.captions.build_srt",
+                        return_value=self.wd / "captions.srt"), \
+             mock.patch.object(backend, "_reassemble_film_core",
+                               return_value=3) as core:
+            result = backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        self.assertIs(self._jc()["burn_subtitles"], True)
+        core.assert_called_once_with(self.wd, "Burning subtitles")
+        self.assertIs(result["burn_subtitles"], True)
+        self.assertIn(self.final.name, result["final_url"])
+
+    def test_remove_persists_flag_and_rebuilds_clean(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        with mock.patch("pipeline.captions.build_srt") as build, \
+             mock.patch.object(backend, "_reassemble_film_core",
+                               return_value=3) as core:
+            result = backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=False))
+        # Removal never needs a track — the rebuild simply skips the burn.
+        build.assert_not_called()
+        self.assertIs(self._jc()["burn_subtitles"], False)
+        core.assert_called_once_with(self.wd, "Removing subtitles")
+        self.assertIs(result["burn_subtitles"], False)
+
+    def test_nothing_to_caption_is_400_and_leaves_config_alone(self):
+        from fastapi import HTTPException
+        with mock.patch("pipeline.captions.build_srt", return_value=None), \
+             mock.patch.object(backend, "_reassemble_film_core") as core:
+            with self.assertRaises(HTTPException) as ctx:
+                backend.remix_subtitles(
+                    backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        self.assertEqual(ctx.exception.status_code, 400)
+        core.assert_not_called()
+        self.assertNotIn("burn_subtitles", self._jc())
+
+    def test_unrenderable_film_is_400(self):
+        from fastapi import HTTPException
+        with mock.patch("pipeline.captions.build_srt",
+                        return_value=self.wd / "captions.srt"), \
+             mock.patch.object(backend, "_reassemble_film_core",
+                               side_effect=ValueError("No rendered scenes found.")):
+            with self.assertRaises(HTTPException) as ctx:
+                backend.remix_subtitles(
+                    backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_outside_output_dir_is_rejected(self):
+        from fastapi import HTTPException
+        outside = Path(tempfile.mkdtemp(prefix="spielbot-outside-"))
+        with self.assertRaises(HTTPException) as ctx:
+            backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(outside), burn=True))
+        self.assertEqual(ctx.exception.status_code, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -521,6 +521,8 @@ and no prompt can separate them.
 - **One voice reference bleeds onto other speakers** in the same clip. Give every speaker
   their own voice (the model accepts 3 per scene), or write scenes with one speaker.
 - **Nine portraits and three voices** per scene, maximum.
-- **Acted scenes are not captioned.** There is no TTS step to measure, so the caption
-  track covers the narrated scenes only.
+- **Acted-scene captions are paced, not measured.** There is no TTS step to time
+  against, so the caption track places a scene's dialogue lines (and a singing
+  scene's lyric slice) across the take by spoken length — accurate to the scene,
+  approximate within it.
 - English is what this has been exercised on; other languages are untested.
