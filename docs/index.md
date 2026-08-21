@@ -60,7 +60,7 @@ the script, and nothing publishes until you say so.
 -   :material-upload: **Publishing on your terms**
 
     Multi-channel [YouTube](youtube_setup.md) and [X](x_setup.md) publishing with
-    playlists, captions, tags, a [cadence scheduler](manual/publishing.md), and C2PA
+    playlists, captions (attached or burned-in), tags, a [cadence scheduler](manual/publishing.md), and C2PA
     "AI-generated" content credentials.
 
 -   :material-comment-processing: **Community loop**

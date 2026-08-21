@@ -6310,6 +6310,10 @@ def start_generation(body: GenerateBody) -> dict:
         "first_frame_cover": gapp._norm_first_frame_cover(ss.get("first_frame_cover")),
         "first_frame_cover_seconds": gapp._norm_first_frame_cover_seconds(
             ss.get("first_frame_cover_seconds")),
+        # Burn the script's captions into the picture itself (open captions) at
+        # the end of the render. Stamped so the render reads it flat AND so
+        # every later rebuild (remix/reassemble/localize) re-burns the track.
+        "burn_subtitles": gapp._norm_burn_subtitles(ss.get("burn_subtitles")),
         # Cover typography: text-free background + composited real-font title
         # (pipeline/cover_typography.py). Stamped resolved so the render-time
         # cover uses the style's look without re-resolving the hierarchy.
@@ -6843,6 +6847,7 @@ def remix_apply(body: RemixBody) -> dict:
             voice_vol=voice_vol, music_vol=body.music_vol, ambient_vol=ambient_vol,
         )
         if final_path:
+            _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
@@ -6930,6 +6935,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
             ambient_path=ambient if ambient.exists() else None,
             ambient_volume=ambient_vol / 100.0,
         )
+        _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
@@ -7227,6 +7233,8 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
     except Exception as exc:
         gapp.logger.warning("Localized cover for %s failed (burning the original): %s",
                             lang, exc)
+    # A localized cut gets its captions burned in the published language too.
+    _maybe_burn_subtitles(wd, final_path, lang=lang)
     _maybe_burn_first_frame_cover(wd, final_path, cover_path=loc_cover)
     history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang,
                                          kind="localize")
@@ -7652,6 +7660,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
         )
         if not final_path:
             raise RuntimeError(message or "Re-mux failed after regenerating music.")
+        _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
@@ -7728,6 +7737,7 @@ def _remux_with_current_music(wd: Path) -> str:
     )
     if not final_path:
         raise RuntimeError(message or "Re-mux failed.")
+    _maybe_burn_subtitles(wd, final_path)
     _maybe_burn_first_frame_cover(wd, final_path)
     return final_path
 
@@ -7839,6 +7849,7 @@ def select_music(body: MusicSelectBody) -> dict:
             voice_vol=voice_vol, music_vol=music_vol, ambient_vol=ambient_vol,
         )
         if final_path:
+            _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Re-mux failed.")
@@ -8186,6 +8197,29 @@ def _first_frame_burn_opts(wd: Path) -> dict:
     return {
         "seconds": gapp._norm_first_frame_cover_seconds(ss.get("first_frame_cover_seconds")),
     }
+
+
+def _maybe_burn_subtitles(wd: Path, final_path: Path | str,
+                          lang: str | None = None) -> None:
+    """Re-burn the job's standing open captions after a final rebuild.
+
+    Burned subtitles live only in the published final — any flow that
+    regenerates it from combined.mp4 (remix, narrator/music change,
+    reassemble, localized cut) would silently ship a clean picture for a
+    style that burns captions into every render (job_config
+    "burn_subtitles"). *lang* burns the localized track on a localized cut.
+    Call BEFORE _maybe_burn_first_frame_cover so the cover overlays the text
+    rather than the text scribbling over the cover.
+    Best-effort: a rebuilt film without captions beats a failed rebuild."""
+    try:
+        if not _film_job_config(wd).get("burn_subtitles"):
+            return
+        from pipeline.captions import build_srt, burn_srt_into_video
+        srt = build_srt(wd, lang=lang, timing_lang=lang)
+        if srt:
+            burn_srt_into_video(Path(final_path), srt)
+    except Exception as e:
+        gapp.logger.warning("Subtitle burn re-apply failed (non-fatal): %s", e)
 
 
 def _maybe_burn_first_frame_cover(wd: Path, final_path: Path | str,
@@ -13034,7 +13068,8 @@ def _curated_final_version(wd: Path) -> dict | None:
 
 def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
     """Concat the scene finals in display order and re-mix music/ambient into
-    the published final (re-applying any standing first-frame cover burn).
+    the published final (re-applying any standing subtitle and first-frame
+    cover burns).
     Returns the scene count. Raises ValueError when the film has nothing to
     assemble; ffmpeg failures propagate as-is."""
     job_id = job_id_from_work_dir(wd)
@@ -13128,6 +13163,9 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
                     gapp.logger.warning(
                         "Reassemble: finishing upscale to %s failed (kept %dx%d): %s",
                         jc.get("finish_resolution"), vid_w, vid_h, e)
+        # After the upscale, so open captions are drawn crisp at the target
+        # size instead of being resampled with the frame.
+        _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,
         # so say so instead of leaving the manifest pointing at the upscale (or

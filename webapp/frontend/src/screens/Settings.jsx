@@ -2214,6 +2214,14 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   onChange={(e) => setStyleField('first_frame_cover_seconds', +e.target.value)} style={{ maxWidth: 120 }} />
                 <ParentVal k="first_frame_cover_seconds" />
               </Field>
+              <Field label="Burned-in subtitles" hint="Burn the script's captions into the video picture itself (open captions) when a render finishes — and again on every rebuild (remix, reassemble, localized cut, which burns its own language). Narrated scenes only; viewers can't switch them off, so channels that also upload the SRT track may want the channel's “Upload captions” off to avoid doubled text.">
+                <label className="check">
+                  <input type="checkbox" checked={!!eff.burn_subtitles}
+                    onChange={(e) => setStyleField('burn_subtitles', e.target.checked)} />
+                  <span>Burn subtitles into the final video</span>
+                </label>
+                <ParentVal k="burn_subtitles" />
+              </Field>
               <Field label="Cover typography" hint="How cover titles look. The artwork is always generated TEXT-FREE (with this style's own image engine) and the title is drawn on top with real fonts — it can never be misspelled, regenerating rerolls only the artwork, and phrase edits re-apply instantly.">
                 <CoverTypographyEditor value={eff.cover_typography}
                   onChange={(v) => setStyleField('cover_typography', v)}
