@@ -180,7 +180,7 @@ class FilmUpscaleTests(unittest.TestCase):
                  "comfy_workers": ["http://w1:8188"],
                  "temporal_video_upscaler_timeout": 60,
              }), \
-             mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w1:8188"]), \
+             mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
              mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
@@ -235,7 +235,7 @@ class FilmUpscaleTests(unittest.TestCase):
                  "voice_vol": 200,
                  "ambient_vol": 1,
              }), \
-             mock.patch.object(backend.gapp, "_preview_worker_urls", return_value=["http://w1:8188", "http://w2:8188"]), \
+             mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188", "http://w2:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
              mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \

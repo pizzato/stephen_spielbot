@@ -57,7 +57,10 @@ through ComfyUI's API: the controller copies the vocal stem in and runs the diff
 with `docker exec` inside `spielbot-worker-comfyui-1`, reusing that container's CUDA
 PyTorch. **Any worker can take it** — the backend picks the idle one (the same
 least-busy-first ordering covers use), tries the next if that host is down, and converts
-on the controller's own GPU only when no worker will.
+on the controller's own GPU only when no worker will. It honours the
+[fleet-wide worker lease](#one-job-per-worker-no-matter-who-asks): a worker busy with a
+render or upscale is skipped rather than double-booked, and when every worker is leased
+the controller converts (slow beats waiting out a multi-minute GPU job).
 
 The image carries seed-vc, so a worker deployed with `make install` is ready. Containers
 built before it landed need it added once — they keep running while it installs:
@@ -145,6 +148,16 @@ that host uses it automatically.
     effect. If a *reboot* (rather than an upgrade) appears to have "broken CDI", the real
     fix is loading the modules before Docker at boot — see `modules-load.d` above — not
     regenerating the spec.
+
+## One job per worker, no matter who asks
+
+Every ComfyUI-bound task — a film render, a batch upscale, scene re-renders, previews,
+inpainting, song generation, cover generation — takes a per-worker **lease** before submitting, shared
+across the whole app (backend and the render subprocess alike). A worker runs one job
+at a time; everything else waits its turn and shows as *queued · waiting for a free
+worker* on the Activity screen. Starting an upscale mid-render (or two upscales at
+once) queues the work instead of stacking jobs onto GPUs that are already busy. A
+crashed process releases its leases automatically.
 
 ## The reserved UI worker
 

@@ -710,15 +710,20 @@ def _film_subjob_activity_ops() -> list[dict]:
     for s in subs:
         started = float(s.get("started_at") or now)
         est = s.get("est_seconds")
+        # Waiting for a worker lease: no ETA countdown until it's on a GPU.
+        queued = bool(s.get("queued"))
         eta_text = eta_seconds = None
-        if est:
+        if est and not queued:
             remaining = max(3.0, float(est) - max(0.0, now - started))
             eta_text, eta_seconds = humanize_eta(remaining), round(remaining)
+        detail = s.get("detail") or ""
+        if queued:
+            detail = f"waiting for a free worker · {detail}" if detail else "waiting for a free worker"
         ops.append(_make_activity_event(
             name=s.get("name") or "Working",
-            detail=s.get("detail") or "",
+            detail=detail,
             started_at=started,
-            status="running",
+            status="queued" if queued else "running",
             work_dir=s.get("work_dir") or "",
             title=s.get("title") or "",
             pct=s.get("pct"),
@@ -7965,15 +7970,16 @@ def _temporal_upscale_scenes_to_final(
         mix_background_music,
         temporal_ai_upscale_video,
     )
-    from pipeline.worker_pool import WorkerPool
+    from pipeline.worker_pool import WorkerPool, alive_workers
 
     scene_finals = _rendered_scene_finals(wd)
     if not scene_finals:
         raise RuntimeError("No rendered scene clips found for scene-level temporal upscale.")
 
-    worker_urls = [] if command_template else gapp._preview_worker_urls()
-    if not command_template and not worker_urls:
-        raise RuntimeError("No ComfyUI workers reachable for AI upscale.")
+    # Pool over every reachable worker — not an idle-at-probe-time snapshot.
+    # WorkerPool's cross-process lease decides who actually runs where, so a
+    # concurrent render or second upscale queues instead of double-booking.
+    worker_urls = [] if command_template else alive_workers(cfg.get("comfy_workers") or [])
 
     timeout = int(cfg.get("temporal_video_upscaler_timeout") or 7200)
     chunk_seconds = float(cfg.get("temporal_video_upscale_chunk_seconds") or 0) or None
@@ -8021,15 +8027,15 @@ def _temporal_upscale_scenes_to_final(
     def upscale_one(index: int, scene_path: Path) -> tuple[int, Path]:
         _film_checkpoint(task_id)
         sub_id = f"film:{task_id}#s{index + 1}"
-        _register_film_subjob(
-            sub_id,
+        sub_fields = dict(
             name=f"Upscaling scene {index + 1}/{n_scenes}",
             detail=f"{engine} → {target_w}×{target_h}",
             work_dir=str(wd),
             title=film_title,
             est_seconds=per_scene_est,
         )
-        sub_started = time.time()
+        # In line for a worker until acquire() returns — show it that way.
+        _register_film_subjob(sub_id, **sub_fields, queued=bool(pool))
         out = tmp_dir / f"{scene_path.stem}.upscaled.mp4"
         if _reusable(out, scene_path):
             gapp.logger.info("[upscale] reusing scene %d/%d from a previous run (%s)",
@@ -8037,6 +8043,11 @@ def _temporal_upscale_scenes_to_final(
             _clear_film_subjob(sub_id)
             return index, out
         url = pool.acquire() if pool else None
+        if pool:
+            # On a GPU now — flip the row to running and start its ETA clock.
+            _register_film_subjob(sub_id, **sub_fields)
+        # Started after acquire so film_timing learns GPU time, not queue wait.
+        sub_started = time.time()
         try:
             temporal_ai_upscale_video(
                 scene_path,

@@ -289,16 +289,22 @@ class SvcTests(unittest.TestCase):
                                  "http://s3:8188"]}
         with unittest.mock.patch("pipeline.worker_pool.idle_workers",
                                  return_value=["http://s3:8188", "http://s1:8188"]):
-            self.assertEqual(svc.candidate_workers(cfg), ["s3", "s1"])
+            self.assertEqual(svc.candidate_workers(cfg),
+                             ["http://s3:8188", "http://s1:8188"])
 
     def test_a_pinned_worker_wins_and_a_dead_fleet_still_lists_hosts(self):
         from pipeline import svc
         cfg = {"comfy_workers": ["http://s1:8188", "http://s2:8188"]}
-        self.assertEqual(svc.candidate_workers({**cfg, "svc_worker": "s2"}), ["s2"])
+        # A pinned host resolves to its comfy URL so the worker lease keys on it.
+        self.assertEqual(svc.candidate_workers({**cfg, "svc_worker": "s2"}),
+                         ["http://s2:8188"])
+        # Pinned host outside the fleet: no URL to lease on — bare host.
+        self.assertEqual(svc.candidate_workers({**cfg, "svc_worker": "s9"}), ["s9"])
         # Nothing reachable: idle_workers raises, the configured order stands.
         with unittest.mock.patch("pipeline.worker_pool.idle_workers",
                                  side_effect=RuntimeError("no workers")):
-            self.assertEqual(svc.candidate_workers(cfg), ["s1", "s2"])
+            self.assertEqual(svc.candidate_workers(cfg),
+                             ["http://s1:8188", "http://s2:8188"])
         # A host ssh would read as an option is not a host.
         self.assertEqual(svc.candidate_workers({"svc_worker": "-oProxyCommand=x"}), [])
 
