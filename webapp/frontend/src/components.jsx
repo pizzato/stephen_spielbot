@@ -600,14 +600,18 @@ export function Segmented({ options, value, onChange }) {
 }
 
 // Compose the backend resolution name string for an (orientation, pixel tier)
-// pair, picked from meta.resolutions so the result is always a name the backend
+// pair, picked from the backend's own lists so the result is always a name it
 // already understands. Names look like "<Orientation>[ <Label>] (<w>×<h>)"; the
-// base tier has no label. Returns "" if no matching name exists.
+// base tier has no label. Upscale-only tiers (QHD/4K) only exist in
+// meta.upscale_resolutions — they are render TARGETS (render at the top render
+// tier, then upscale), so the picker may offer them too. Returns "" if no
+// matching name exists.
 export function composeResolution(meta = {}, orientation, tierKey) {
   const tier = (meta.pixel_tiers || []).find((t) => t.key === tierKey)
   const label = tier ? tier.label : ''
   const prefix = label ? `${orientation} ${label} (` : `${orientation} (`
-  return (meta.resolutions || []).find((n) => n.startsWith(prefix)) || ''
+  return (meta.resolutions || []).find((n) => n.startsWith(prefix))
+    || (meta.upscale_resolutions || []).find((n) => n.startsWith(prefix)) || ''
 }
 
 // Return the pixel-tier key (e.g. "fhd") of a resolution name string, or "" if
@@ -647,18 +651,31 @@ export function ResolutionPicker({ value, onChange, meta = {} }) {
     if (name) onChange(name)
   }
 
+  // QHD/4K are upscale-only targets: the film renders at the largest render
+  // tier and a finishing upscale lifts it to the target — say so in place.
+  const currentTier = tiers.find((t) => t.key === current.tier)
+  const maxRenderTier = [...tiers].reverse().find((t) => !t.upscale_only)
+
   return (
-    <div className="row gap-10 row--wrap">
-      <Segmented
-        options={orientations.map((o) => ({ value: o, label: o }))}
-        value={current.orientation}
-        onChange={(o) => emit(o, current.tier)}
-      />
-      <Segmented
-        options={tiers.map((t) => ({ value: t.key, label: t.label || 'Standard' }))}
-        value={current.tier}
-        onChange={(k) => emit(current.orientation, k)}
-      />
+    <div className="stack gap-6">
+      <div className="row gap-10 row--wrap">
+        <Segmented
+          options={orientations.map((o) => ({ value: o, label: o }))}
+          value={current.orientation}
+          onChange={(o) => emit(o, current.tier)}
+        />
+        <Segmented
+          options={tiers.map((t) => ({ value: t.key, label: t.label || 'Standard' }))}
+          value={current.tier}
+          onChange={(k) => emit(current.orientation, k)}
+        />
+      </div>
+      {currentTier?.upscale_only && (
+        <div className="muted" style={{ fontSize: 12 }}>
+          Renders at {maxRenderTier?.label || 'the largest render size'}, then
+          upscales to {currentTier.label}.
+        </div>
+      )}
     </div>
   )
 }

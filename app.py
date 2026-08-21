@@ -146,6 +146,27 @@ def _build_resolutions(include_upscale_only: bool = False) -> dict:
 _RESOLUTIONS = _build_resolutions()
 # Sizes a finished film can be UPSCALED to — a superset of the render sizes.
 _UPSCALE_RESOLUTIONS = _build_resolutions(include_upscale_only=True)
+# Largest tier the video engines can actually generate at — the render size
+# behind every upscale-only target.
+_MAX_RENDER_PIXELS = next(
+    t["key"] for t in reversed(_PIXEL_TIERS) if not t.get("upscale_only")
+)
+
+
+def split_render_target(name: str) -> tuple[str, str]:
+    """Split a requested resolution into (render_resolution, finish_resolution).
+
+    Render-capable names pass through with no finishing step. An upscale-only
+    name (QHD/4K) renders at the largest render-capable tier in the same
+    orientation and finishes with an upscale to the target after assembly.
+    Unknown names pass through unchanged so callers keep their existing
+    fallbacks."""
+    name = (name or "").strip()
+    if not name or name in _RESOLUTIONS or name not in _UPSCALE_RESOLUTIONS:
+        return (name, "")
+    orientation = name.split(" ")[0]
+    render_name = compose_resolution(orientation, _MAX_RENDER_PIXELS)
+    return (render_name or name, name)
 _DEFAULT_ORIENTATION = "Portrait"
 _DEFAULT_PIXELS = "fhd"
 _DEFAULT_RESOLUTION = compose_resolution(_DEFAULT_ORIENTATION, _DEFAULT_PIXELS)
@@ -172,6 +193,10 @@ DEFAULT_CFG = {
     "voice_vol": 100,
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
+    # Upscaler that finishes a render whose target is an upscale-only size
+    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("ltx_latent", "ic_lora",
+    # "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
+    "default_finish_upscale_mode": "fast",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;
@@ -518,6 +543,8 @@ STYLE_FIELD_TO_FLAT = {
     "tts_sentence_pause":   "default_tts_sentence_pause",
     # Render quality
     "resolution":           "resolution",
+    # Finishing upscaler for upscale-only targets (QHD/4K)
+    "finish_upscale_mode":  "default_finish_upscale_mode",
     # Small/Medium/Large size presets (scenes + resolution per bucket)
     "size_presets":         "default_size_presets",
     "lora_strength":        "lora_strength",
@@ -667,7 +694,9 @@ def _norm_size_presets(value) -> dict:
                        else cadence.minutes_for_scenes(scenes))
         minutes = round(max(0.25, min(cadence.MAX_MINUTES, minutes)), 2)
         resolution = raw.get("resolution")
-        if resolution not in _RESOLUTIONS:
+        # Upscale-only targets (QHD/4K) are valid preset sizes: the render runs
+        # at the largest render tier and finishes with an upscale to the target.
+        if resolution not in _UPSCALE_RESOLUTIONS:
             resolution = default["resolution"]
         out[bucket] = {"minutes": minutes, "scenes": scenes, "resolution": resolution}
     return out
@@ -3811,8 +3840,12 @@ def _generate_active_scene_preview(
     image_history.seed_if_empty(work_dir, sid, out)
     # Which model bundle generates this style's scenes (defaults to flux1-schnell).
     engine = engines.resolve(cfg, style_settings(cfg, style_name).get("image_engine"))
+    # An upscale-only target (QHD/4K) renders at its underlying render size, so
+    # previews must match that size — not fall back to the default dims.
     img_width, img_height = _RESOLUTIONS.get(
-        resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION,
+        split_render_target(
+            resolution or style_settings(cfg, style_name).get("resolution") or _DEFAULT_RESOLUTION
+        )[0],
         (1024, 576),
     )
     # Match the render: snap the preview to LTX's renderable grid so the cached

@@ -985,6 +985,20 @@ class SizePresetsTests(TempConfigCase):
         # default style A mirrors onto the flat key
         self.assertEqual(on_disk["default_size_presets"], a["size_presets"])
 
+    def test_upscale_only_targets_are_valid_preset_sizes(self):
+        # QHD/4K presets survive normalization: the render runs at the largest
+        # render tier and finishes with an upscale to the target.
+        self.write_config({
+            "styles": [_style("A", size_presets={
+                "small":  {"scenes": 4,  "resolution": "Portrait QHD (1440×2560)"},
+                "large":  {"scenes": 15, "resolution": "Landscape 4K (3840×2160)"},
+            })],
+            "default_style": "A",
+        })
+        sp = app.load_config()["styles"][0]["size_presets"]
+        self.assertEqual(sp["small"]["resolution"], "Portrait QHD (1440×2560)")
+        self.assertEqual(sp["large"]["resolution"], "Landscape 4K (3840×2160)")
+
     def test_missing_buckets_filled_from_defaults(self):
         self.write_config({
             "styles": [_style("A", size_presets={
