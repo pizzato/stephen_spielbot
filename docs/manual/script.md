@@ -30,9 +30,11 @@ renders with the same anchors as the original.
 
 A filter bar sits above the cards once you have scripts: a segmented control by state —
 **Scenes ready**, **Story drafts**, **Song drafts**, each with a count — plus **channel**
-and **style** dropdowns (shown once your scripts span more than one). Filters combine, and
-they live in the URL (`#/script?status=story&style=…`), so Back returns to the same
-filtered view. Each card wears its style as a chip.
+and **style** dropdowns (shown once your scripts span more than one) and a
+**Rendered / Not rendered** dropdown (shown once you have both) that keys on whether a
+finished film exists for the script — handy for finding scripts you haven't rendered yet.
+Filters combine, and they live in the URL (`#/script?status=story&style=…&rendered=no`),
+so Back returns to the same filtered view. Each card wears its style as a chip.
 
 **New script** goes to [Create](create.md).
 

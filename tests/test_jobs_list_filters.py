@@ -55,6 +55,16 @@ class JobsListFilterFields(unittest.TestCase):
         self.assertEqual(script["style_name"], "Kids")
         self.assertEqual(script["channel"], "Kids Channel")
 
+    def test_scripts_carry_rendered_flag(self):
+        # rendered mirrors the finished-film marker (combined.mp4), so the
+        # Scripts list can filter to scripts not rendered yet.
+        self._dir("kids-film", finished=True, style="Kids")
+        self._dir("draft-script", finished=False, style="Kids")
+        out = backend.list_jobs()
+        by_name = {Path(s["work_dir"]).name: s for s in out["scripts"]}
+        self.assertTrue(by_name["kids-film"]["rendered"])
+        self.assertFalse(by_name["draft-script"]["rendered"])
+
     def test_styleless_job_gets_empty_style_and_fallback_channel(self):
         # No style stamp anywhere → style_name ''; the publish-target channel
         # still resolves via the first-connected-channel fallback.

@@ -48,9 +48,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
   // Scripts tab
   const [savedScripts, setSavedScripts] = useState([])
-  // Scripts-tab filters, kept in the URL (#/script?status=…&channel=…&style=…)
+  // Scripts-tab filters, kept in the URL (#/script?status=…&channel=…&style=…&rendered=…)
   // so they accumulate and survive back-navigation.
-  const [scriptFilters, setScriptFilters] = useHashParams({ status: 'all', channel: '', style: '' })
+  const [scriptFilters, setScriptFilters] = useHashParams({ status: 'all', channel: '', style: '', rendered: '' })
   const [confirmDel, setConfirmDel] = useState('')
 
   // Shared (used across Cover + Scenes)
@@ -1331,7 +1331,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         // Filter bar state/options — mirrors the Films list: status buckets are
         // counted on the channel/style-narrowed set, dropdowns only offer values
         // present in the data (plus a stale URL value, so it can be cleared).
-        const { status: sFilter, channel: sChannel, style: sStyle } = scriptFilters
+        const { status: sFilter, channel: sChannel, style: sStyle, rendered: sRendered } = scriptFilters
         const statusOf = (s) => (s.song_draft ? 'song' : s.story_draft ? 'story' : 'ready')
         const distinct = (key, cur) => {
           const vals = [...new Set(savedScripts.map((s) => s[key]).filter(Boolean))].sort()
@@ -1341,7 +1341,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
         const channelOpts = distinct('channel', sChannel)
         const styleOpts = distinct('style_name', sStyle)
         const filtered = savedScripts.filter((s) =>
-          (!sChannel || s.channel === sChannel) && (!sStyle || s.style_name === sStyle))
+          (!sChannel || s.channel === sChannel) && (!sStyle || s.style_name === sStyle)
+          && (!sRendered || (sRendered === 'yes') === !!s.rendered))
         const counts = filtered.reduce((m, s) => { const k = statusOf(s); m[k] = (m[k] || 0) + 1; return m }, {})
         const statusOpts = [
           { value: 'all', label: 'All', n: filtered.length },
@@ -1363,6 +1364,11 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               {(styleOpts.length > 1 || sStyle) && (
                 <FilterSelect value={sStyle} onChange={(v) => setScriptFilters({ style: v })}
                   options={styleOpts} allLabel="All styles" />
+              )}
+              {(savedScripts.some((s) => s.rendered) && savedScripts.some((s) => !s.rendered) || sRendered) && (
+                <FilterSelect value={sRendered} onChange={(v) => setScriptFilters({ rendered: v })}
+                  options={[{ value: 'no', label: 'Not rendered' }, { value: 'yes', label: 'Rendered' }]}
+                  allLabel="Rendered or not" />
               )}
             </div>
           )}

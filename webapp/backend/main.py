@@ -6701,6 +6701,9 @@ def list_jobs() -> dict:
                          "channel": _channel_disp(styles.get(d, "")),
                          **_film_publish_status(Path(d), meta, cfg)})
     scripts = [{"label": l, "work_dir": d,
+                # a finished film exists for this script — same marker the
+                # finished list keys on, so "Not rendered" can filter on it
+                "rendered": (Path(d) / "combined.mp4").exists(),
                 # story drafted but not yet divided into scenes — the Script
                 # screen opens these straight into the Story view
                 "story_draft": not (Path(d) / "script.json").exists(),
