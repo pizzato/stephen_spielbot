@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
+import { useHashParams } from '../nav.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
 import ScriptVisuals from './ScriptVisuals.jsx'
 import { styleLineage, resolveStyle } from '../styleUtils.js'
@@ -47,6 +48,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
   // Scripts tab
   const [savedScripts, setSavedScripts] = useState([])
+  // Scripts-tab filters, kept in the URL (#/script?status=…&channel=…&style=…)
+  // so they accumulate and survive back-navigation.
+  const [scriptFilters, setScriptFilters] = useHashParams({ status: 'all', channel: '', style: '' })
   const [confirmDel, setConfirmDel] = useState('')
 
   // Shared (used across Cover + Scenes)
@@ -1323,18 +1327,59 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       )}
 
       {/* ── Scripts tab ─────────────────────────────────────────────────────── */}
-      {view === 'scripts' && (
+      {view === 'scripts' && (() => {
+        // Filter bar state/options — mirrors the Films list: status buckets are
+        // counted on the channel/style-narrowed set, dropdowns only offer values
+        // present in the data (plus a stale URL value, so it can be cleared).
+        const { status: sFilter, channel: sChannel, style: sStyle } = scriptFilters
+        const statusOf = (s) => (s.song_draft ? 'song' : s.story_draft ? 'story' : 'ready')
+        const distinct = (key, cur) => {
+          const vals = [...new Set(savedScripts.map((s) => s[key]).filter(Boolean))].sort()
+          if (cur && !vals.includes(cur)) vals.push(cur)
+          return vals
+        }
+        const channelOpts = distinct('channel', sChannel)
+        const styleOpts = distinct('style_name', sStyle)
+        const filtered = savedScripts.filter((s) =>
+          (!sChannel || s.channel === sChannel) && (!sStyle || s.style_name === sStyle))
+        const counts = filtered.reduce((m, s) => { const k = statusOf(s); m[k] = (m[k] || 0) + 1; return m }, {})
+        const statusOpts = [
+          { value: 'all', label: 'All', n: filtered.length },
+          { value: 'ready', label: 'Scenes ready', n: counts.ready || 0 },
+          { value: 'story', label: 'Story drafts', n: counts.story || 0 },
+          { value: 'song', label: 'Song drafts', n: counts.song || 0 },
+        ].filter((o) => o.value === 'all' || o.n > 0 || o.value === sFilter)
+          .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
+        const shown = sFilter === 'all' ? filtered : filtered.filter((s) => statusOf(s) === sFilter)
+        return (
         <div className="bento">
+          {savedScripts.length > 0 && (
+            <div className="row center gap-10 row--wrap" style={{ gridColumn: 'span 12' }}>
+              <Segmented options={statusOpts} value={sFilter} onChange={(v) => setScriptFilters({ status: v })} />
+              {(channelOpts.length > 1 || sChannel) && (
+                <FilterSelect value={sChannel} onChange={(v) => setScriptFilters({ channel: v })}
+                  options={channelOpts} allLabel="All channels" />
+              )}
+              {(styleOpts.length > 1 || sStyle) && (
+                <FilterSelect value={sStyle} onChange={(v) => setScriptFilters({ style: v })}
+                  options={styleOpts} allLabel="All styles" />
+              )}
+            </div>
+          )}
           {savedScripts.length === 0 && (
             <Card span={12} well>
               <p className="muted" style={{ fontSize: 13, margin: 0 }}>No saved scripts yet. Click <strong>New script</strong> to create one.</p>
             </Card>
           )}
-          {savedScripts.map((s, i) => (
+          {savedScripts.length > 0 && shown.length === 0 && (
+            <Card span={12}><p className="muted" style={{ fontSize: 13, margin: 0 }}>No scripts match this filter.</p></Card>
+          )}
+          {shown.map((s, i) => (
             <Card key={s.work_dir} span={4} className={`reveal reveal-d${(i % 3) + 1}`}>
               <div className="row center between">
                 <span style={{ fontWeight: 700 }}>{s.label}</span>
                 <span className="row center gap-8">
+                  {s.style_name && <Chip tone="accent"><Icon name="palette" style={{ fontSize: 10 }} /> {s.style_name}</Chip>}
                   {s.story_draft && <Chip dot>{s.song_draft ? 'Song draft' : 'Story draft'}</Chip>}
                   {job?.work_dir === s.work_dir && <Chip tone="ok" dot>Loaded</Chip>}
                 </span>
@@ -1362,7 +1407,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
             </Card>
           ))}
         </div>
-      )}
+        )
+      })()}
 
       {/* ── Cover tab (no script) ────────────────────────────────────────────── */}
       {view === 'cover' && !job && (

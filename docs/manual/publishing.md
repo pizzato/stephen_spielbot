@@ -79,6 +79,17 @@ The last two are mutually exclusive.
 **Queued** (waiting on cadence) · **Publishing** (uploading now) · **Published**
 (released).
 
+### Filters
+
+Below the counters, a segmented status filter — **Queued**, **Held** (awaiting approval),
+**Publishing**, **Published**, **Errors**, each with a count — and a **channel/account**
+dropdown (shown once the queue spans more than one destination). Filters combine and
+narrow both sections; the counters follow the channel filter. A film heading to two
+platforms can match several status buckets at once — done on YouTube while still queued
+on X. Filters live in the URL (`#/publish?status=queued&dest=…`), so Back returns to the
+same filtered view. They are view-only — unlike the sort, they never change what the
+scheduler releases.
+
 ### Waiting & in progress
 
 The queue in release order — top first, as each cadence allows.

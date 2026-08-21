@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Card, Chip, Button, Icon, Banner } from '../components.jsx'
+import { Card, Chip, Button, Icon, Banner, Segmented, FilterSelect } from '../components.jsx'
 import { api } from '../api.js'
+import { useHashParams } from '../nav.js'
 
 // Per-platform sub-state → [chip tone, label].
 const SUB_CHIP = {
@@ -56,6 +57,10 @@ export default function PublishSchedule({ go, meta = {} }) {
   const [busy, setBusy] = useState('')
   const [loaded, setLoaded] = useState(false)
   const [sortBy, setSortBy] = useState(() => validSort(meta.config?.publish_sort_order))
+  // View filters, kept in the URL (#/publish?status=…&dest=yt:<id>|x:<id>) so
+  // they accumulate and back-navigation returns to the same filtered view.
+  // Purely view-local — unlike the sort, they never touch config.
+  const [{ status: statusFilter, dest }, setFilters] = useHashParams({ status: 'all', dest: '' })
 
   const refresh = () => api.publishQueue()
     .then((d) => { setData(d); setLoaded(true); if (d.sort) setSortBy(validSort(d.sort)) })
@@ -81,16 +86,58 @@ export default function PublishSchedule({ go, meta = {} }) {
     finally { setBusy('') }
   }
 
-  const items = data.items || []
+  // Destination filter: one option per channel/account seen in the queue
+  // ("yt:<id>" / "x:<id>"); a stale URL value stays listed so it can be cleared.
+  const allItems = data.items || []
+  const destOpts = []
+  for (const e of allItems) {
+    if (e.youtube?.channel && !destOpts.some((o) => o.value === 'yt:' + e.youtube.channel))
+      destOpts.push({ value: 'yt:' + e.youtube.channel, label: chanName(e.youtube.channel) })
+    if (e.x?.account && !destOpts.some((o) => o.value === 'x:' + e.x.account))
+      destOpts.push({ value: 'x:' + e.x.account, label: acctName(e.x.account) })
+  }
+  if (dest && !destOpts.some((o) => o.value === dest)) destOpts.push({ value: dest, label: dest })
+  const matchesDest = (e) => {
+    if (!dest) return true
+    const i = dest.indexOf(':')
+    const plat = dest.slice(0, i), key = dest.slice(i + 1)
+    return plat === 'yt' ? e.youtube?.channel === key : e.x?.account === key
+  }
+  // Status buckets. A multi-platform entry can sit in several (done on YouTube
+  // while still queued on X), so this is a match, not a partition.
+  const inBucket = (e, bucket) => {
+    const subs = [e.youtube, e.x].filter(Boolean)
+    switch (bucket) {
+      case 'queued': return !e.awaiting_approval && subs.some((s) => s.status === 'pending')
+      case 'held': return !!e.awaiting_approval
+      case 'publishing': return subs.some((s) => s.status === 'publishing')
+      case 'published': return subs.some((s) => s.status === 'done')
+      case 'error': return subs.some((s) => s.status === 'error')
+      default: return true
+    }
+  }
+  const items = allItems.filter(matchesDest)
   const now = data.now || Date.now() / 1000
   const isActive = (s) => s === 'pending' || s === 'publishing'
-  const activeItems = items.filter((e) => isActive(e.youtube?.status) || isActive(e.x?.status))
-  const doneItems = items.filter((e) => !isActive(e.youtube?.status) && !isActive(e.x?.status))
+  const activeItems = items.filter((e) => (isActive(e.youtube?.status) || isActive(e.x?.status)) && inBucket(e, statusFilter))
+  const doneItems = items.filter((e) => !isActive(e.youtube?.status) && !isActive(e.x?.status) && inBucket(e, statusFilter))
   const counts = {
     queued: items.filter((e) => e.youtube?.status === 'pending' || e.x?.status === 'pending').length,
     publishing: items.filter((e) => e.youtube?.status === 'publishing' || e.x?.status === 'publishing').length,
     done: items.filter((e) => e.youtube?.status === 'done' || e.x?.status === 'done').length,
   }
+  // Same option pattern as the Films list: counts on the dest-narrowed set,
+  // zero-count buckets hidden unless currently selected.
+  const statusOpts = [
+    { value: 'all', label: 'All', n: items.length },
+    { value: 'queued', label: 'Queued', n: 0 },
+    { value: 'held', label: 'Held', n: 0 },
+    { value: 'publishing', label: 'Publishing', n: 0 },
+    { value: 'published', label: 'Published', n: 0 },
+    { value: 'error', label: 'Errors', n: 0 },
+  ].map((o) => (o.value === 'all' ? o : { ...o, n: items.filter((e) => inBucket(e, o.value)).length }))
+    .filter((o) => o.value === 'all' || o.n > 0 || o.value === statusFilter)
+    .map((o) => ({ value: o.value, label: `${o.label} (${o.n})` }))
 
   // One line per platform target: icon, channel/account, status, and (while
   // queued) when its cadence next allows a release.
@@ -223,6 +270,16 @@ export default function PublishSchedule({ go, meta = {} }) {
         <Card span={4} className="reveal reveal-d1"><span className="label-sm">Queued</span><div className="metric mt-8">{counts.queued}</div><div className="muted" style={{ fontSize: 13 }}>waiting on cadence</div></Card>
         <Card span={4} className="reveal reveal-d2"><span className="label-sm">Publishing</span><div className="metric mt-8">{counts.publishing}</div><div className="muted" style={{ fontSize: 13 }}>uploading now</div></Card>
         <Card span={4} className="reveal reveal-d3"><span className="label-sm">Published</span><div className="metric mt-8">{counts.done}</div><div className="muted" style={{ fontSize: 13 }}>released</div></Card>
+
+        {loaded && allItems.length > 0 && (
+          <div className="row center gap-10 row--wrap reveal" style={{ gridColumn: 'span 12' }}>
+            <Segmented options={statusOpts} value={statusFilter} onChange={(v) => setFilters({ status: v })} />
+            {(destOpts.length > 1 || dest) && (
+              <FilterSelect value={dest} onChange={(v) => setFilters({ dest: v })}
+                options={destOpts} allLabel="All channels" />
+            )}
+          </div>
+        )}
 
         {section('Waiting & in progress',
           sortBy === 'queue'
