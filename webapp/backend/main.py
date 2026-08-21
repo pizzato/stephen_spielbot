@@ -1930,6 +1930,32 @@ def _read_create_brief(wd: Path) -> dict:
         return {}
 
 
+def _save_brief_direction(wd: Path, direction: str | None) -> None:
+    """Persist a direction given (or edited) in the Song tab into the film's
+    create brief, so it steers every later re-write and comes back when the
+    Brief button restores the film's settings. ``None`` leaves the brief
+    alone; an empty string clears a stored direction back to the bare title
+    (the same fallback Create applies to an empty Direction box)."""
+    if direction is None:
+        return
+    brief = _read_create_brief(wd)
+    if not brief:
+        return
+    topic = direction.strip() or str(brief.get("video_title") or "").strip()
+    if topic and topic != str(brief.get("topic") or "").strip():
+        brief["topic"] = topic
+        _write_create_brief(wd, brief)
+
+
+def _brief_direction(wd: Path, song: dict | None = None) -> str:
+    """The film's direction as the Song tab shows it: the brief's topic, blank
+    when that is just the bare title Create fell back to for an empty box."""
+    brief = _read_create_brief(wd)
+    topic = str(brief.get("topic") or "").strip()
+    title = str(brief.get("video_title") or (song or {}).get("title") or "").strip()
+    return "" if topic == title else topic
+
+
 def _clean_lines(raw_lines) -> list[dict]:
     """Validated shot sequence from a client payload. Keeps SPEAKING shots
     (non-empty text) and SILENT shots (marked; people move, no speech); drops
@@ -3430,6 +3456,9 @@ def get_job_song(job_id: str) -> dict:
     hist = music_history.history(wd)
     return {"caption": str(data.get("caption") or ""),
             "lyrics": str(data.get("lyrics") or ""),
+            # The film's direction — editable in the studio because a song is
+            # often steered long after Create, and a re-write needs it.
+            "direction": _brief_direction(wd, data),
             "voice": str(data.get("voice") or ""),
             "sung_as": str(data.get("sung_as") or ""),
             # The generated track's real length (else the asked-for length) —
@@ -3511,6 +3540,9 @@ def delete_song_version(job_id: str, body: dict) -> dict:
 class SongUpdateBody(BaseModel):
     caption: str = ""
     lyrics: str = ""
+    # The film's direction, saved into the create brief. None = leave it alone
+    # (an older client that doesn't send the field must not clear it).
+    direction: str | None = None
 
 
 def _save_song_text(wd: Path, caption: str, lyrics: str) -> dict:
@@ -3546,8 +3578,10 @@ def update_job_song(job_id: str, body: SongUpdateBody) -> dict:
         raise HTTPException(404, "This film has no song.")
     if not (body.lyrics or "").strip():
         raise HTTPException(400, "The lyrics can't be empty — the song is the film's audio.")
+    _save_brief_direction(wd, body.direction)
     data = _save_song_text(wd, (body.caption or "").strip(), body.lyrics.strip())
-    return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"]}
+    return {"ok": True, "caption": data["caption"], "lyrics": data["lyrics"],
+            "direction": _brief_direction(wd, data)}
 
 
 class SongRegenBody(BaseModel):
@@ -3555,6 +3589,10 @@ class SongRegenBody(BaseModel):
     caption: str = ""              # what the editor currently shows…
     lyrics: str = ""               # …so a re-write never drops unsaved edits
     instruction: str = ""          # optional "tell it how" steering
+    # The film's direction as the studio shows it — persisted into the create
+    # brief BEFORE the re-write, so it both steers this one and survives for
+    # the next (and for the Brief button). None = leave the brief alone.
+    direction: str | None = None
 
 
 @api.post("/api/jobs/{job_id}/song/regenerate")
@@ -3578,6 +3616,7 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
     lyrics = (body.lyrics or data.get("lyrics") or "").strip()
     cfg = gapp.load_config()
     ss = gapp.style_settings(cfg, data.get("style_name") or "")
+    _save_brief_direction(wd, body.direction)
     brief = _read_create_brief(wd)
     video_title = (brief.get("video_title") or "").strip()
     topic = (brief.get("topic") or data.get("title") or "").strip()
@@ -3624,7 +3663,8 @@ def regenerate_job_song(job_id: str, body: SongRegenBody) -> dict:
 
     saved = _save_song_text(wd, caption, lyrics)
     return {"ok": True, "field": body.field,
-            "caption": saved["caption"], "lyrics": saved["lyrics"]}
+            "caption": saved["caption"], "lyrics": saved["lyrics"],
+            "direction": _brief_direction(wd, saved)}
 
 
 @api.get("/api/jobs/{job_id}/story")

@@ -179,11 +179,14 @@ export const api = {
   getStory: (jobId) => req('GET', `/jobs/${jobId}/story`),
   // A song film's song — the caption and tagged lyrics the music model sings.
   getSong: (jobId) => req('GET', `/jobs/${jobId}/song`),
-  saveSong: (jobId, caption, lyrics) => req('PUT', `/jobs/${jobId}/song`, { caption, lyrics }),
+  // `direction` (the film's brief topic) travels with saves and re-writes so a
+  // direction given in the studio persists — the Brief button restores it.
+  saveSong: (jobId, caption, lyrics, direction = null) =>
+    req('PUT', `/jobs/${jobId}/song`, { caption, lyrics, direction }),
   // Re-write one half of the song — "lyrics" or "caption" (the Sound field);
   // the other half is sent as the editor has it and kept.
-  regenSong: (jobId, field, caption, lyrics, instruction = '') =>
-    req('POST', `/jobs/${jobId}/song/regenerate`, { field, caption, lyrics, instruction }),
+  regenSong: (jobId, field, caption, lyrics, instruction = '', direction = null) =>
+    req('POST', `/jobs/${jobId}/song/regenerate`, { field, caption, lyrics, instruction, direction }),
   // The accept/revert step: put a kept version back as the film's track.
   songSelectVersion: (jobId, versionId) => req('POST', `/jobs/${jobId}/song/select`, { version_id: versionId }),
   // Throw a take away. Deleting the one in use promotes the newest one left.
