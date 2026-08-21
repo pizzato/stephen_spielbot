@@ -7,6 +7,7 @@ immediate auto-post toggles); immediate mode posts the moment a film finishes;
 the two are mutually exclusive and schedule wins as a backstop. Publishing a
 film manually drops it from the queue.
 """
+import json
 import os
 import tempfile
 import time
@@ -432,6 +433,144 @@ class StalePublishTargetTests(TempConfigCase):
         with mock.patch.object(backend, "_channel_for_work_dir", return_value="new"):
             backend._reconcile_publish_queue()
         self.assertEqual(backend.pq.load_queue()[0]["youtube"]["channel"], "old")
+
+
+class ErroredReleaseCadenceTests(TempConfigCase):
+    """A release that later errors still spends its cadence slot.
+
+    The 3-in-7-minutes burst (2026-08-21): deleting a film right after its
+    scheduled release flipped the entry to 'error: work dir missing', the
+    errored row vanished from the cadence seeding, and the governor saw the
+    channel as free since yesterday — releasing the next approved film on the
+    very next tick, twice. Any release attempt must hold the clock; only the
+    self-heal re-pend (which clears released_at) frees the slot for a retry."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                              Path(self._tmp.name) / "publish_queue.json")
+        p.start()
+        self.addCleanup(p.stop)
+        for name, ret in [("_reconcile_publish_queue", None), ("_film_job_config", {}),
+                          ("_youtube_channel_connected", True)]:
+            p = mock.patch.object(backend, name, return_value=ret)
+            p.start()
+            self.addCleanup(p.stop)
+        self.write_config({"youtube_channels": [{"id": "chan", "publish_per_day": 1}],
+                           "x_accounts": [{"id": "acct", "publish_per_day": 0}]})
+
+    def _entry(self, eid, status="pending", released=None, **yt_over):
+        yt = {"enabled": True, "channel": "chan", "status": status}
+        if released is not None:
+            yt["released_at"] = released
+        yt.update(yt_over)
+        return {"id": eid, "work_dir": f"/tmp/wd-{eid}", "title": eid, "source": "manual",
+                "created_at": 1.0, "youtube": yt,
+                "x": {"enabled": False, "account": "", "status": "skipped"}}
+
+    def test_errored_release_still_blocks_the_next(self):
+        backend.pq.save_queue([
+            self._entry("d1", status="error", released=time.time() - 60,
+                        error="work dir missing"),
+            self._entry("e1")])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_not_called()
+        self.assertEqual(out, {})
+
+    def test_repended_release_frees_the_slot(self):
+        # The self-heal re-pend clears released_at — a genuine failed upload
+        # must still be retryable on the next tick.
+        backend.pq.save_queue([self._entry("e1", status="pending")])
+        with mock.patch.object(backend, "_claim_and_post_youtube", return_value="yt") as cp:
+            out = backend._release_scheduled_publishes()
+        cp.assert_called_once()
+        self.assertEqual(out, {"youtube": ["e1"]})
+
+
+class DeleteFinalizesPublishEntryTests(TempConfigCase):
+    """Deleting a film closes out its publish-queue entry before the files go.
+
+    A released upload isn't undone by deleting the local film: the entry keeps
+    its history, with the ids synced from job.json while it's still readable.
+    A never-released entry is dropped — there's nothing left to publish."""
+
+    def setUp(self):
+        super().setUp()
+        p = mock.patch.object(backend.pq, "PUBLISH_QUEUE_PATH",
+                              Path(self._tmp.name) / "publish_queue.json")
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = self.output_dir / "film"
+        self.wd.mkdir()
+
+    def _queue(self, yt: dict):
+        base = {"enabled": True, "channel": "chan", "status": "pending",
+                "video_id": None, "url": None, "released_at": None,
+                "published_at": None, "error": None}
+        base.update(yt)
+        backend.pq.save_queue([{
+            "id": "e1", "work_dir": str(self.wd), "title": "T", "source": "manual",
+            "created_at": 1.0, "youtube": base,
+            "x": {"enabled": False, "account": "", "status": "skipped"},
+        }])
+
+    def _delete(self):
+        out = backend.delete_film(backend.JobActionBody(work_dir=str(self.wd)))
+        self.assertTrue(out["ok"])
+        self.assertFalse(self.wd.exists())
+
+    def test_uploaded_then_deleted_keeps_done_history(self):
+        # The async upload wrote its ids into job.json; deleting the film must
+        # preserve them as a done entry, not decay it to 'work dir missing'.
+        rel = time.time() - 30
+        (self.wd / "job.json").write_text(json.dumps({
+            "status": "done", "youtube_video_id": "vid123",
+            "youtube_url": "https://youtu.be/vid123"}))
+        self._queue({"status": "publishing", "released_at": rel})
+        self._delete()
+        e = backend.pq.load_queue()[0]
+        self.assertEqual(e["youtube"]["status"], "done")
+        self.assertEqual(e["youtube"]["video_id"], "vid123")
+        self.assertEqual(e["youtube"]["url"], "https://youtu.be/vid123")
+        self.assertEqual(e["youtube"]["published_at"], rel)
+
+    def test_waiting_sibling_platform_closes_as_skipped(self):
+        # YouTube already published, X still waiting on cadence: the deleted
+        # film can never post to X, so that sub closes as skipped instead of
+        # decaying to a 'work dir missing' error.
+        (self.wd / "job.json").write_text('{"status": "done"}')
+        backend.pq.save_queue([{
+            "id": "e1", "work_dir": str(self.wd), "title": "T", "source": "manual",
+            "created_at": 1.0,
+            "youtube": {"enabled": True, "channel": "chan", "status": "done",
+                        "video_id": "v", "released_at": 5.0, "published_at": 5.0},
+            "x": {"enabled": True, "account": "acct", "status": "pending",
+                  "released_at": None},
+        }])
+        self._delete()
+        e = backend.pq.load_queue()[0]
+        self.assertEqual(e["youtube"]["status"], "done")
+        self.assertEqual(e["x"]["status"], "skipped")
+
+    def test_never_released_entry_is_dropped(self):
+        (self.wd / "job.json").write_text('{"status": "done"}')
+        self._queue({"status": "pending"})
+        self._delete()
+        self.assertEqual(backend.pq.load_queue(), [])
+
+    def test_deleted_mid_upload_keeps_the_release_on_the_clock(self):
+        # Released but no id yet: the entry errors out, but keeps released_at
+        # so the cadence still counts the attempt.
+        rel = time.time() - 30
+        (self.wd / "job.json").write_text('{"status": "done"}')
+        self._queue({"status": "publishing", "released_at": rel})
+        self._delete()
+        e = backend.pq.load_queue()[0]
+        self.assertEqual(e["youtube"]["status"], "error")
+        self.assertEqual(e["youtube"]["released_at"], rel)
+        last = backend._seed_last_releases([e], {}, time.time())
+        self.assertEqual(last[("youtube", "chan")], rel)
 
 
 if __name__ == "__main__":

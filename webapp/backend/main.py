@@ -6518,6 +6518,7 @@ def delete_job(body: JobActionBody) -> dict:
     for item in yt.load_queue():
         if item.get("work_dir") == work_dir:
             yt.remove_queue_item(item["id"])
+    _finalize_publish_entry_on_delete(wd)
     import shutil
     if wd.exists():
         shutil.rmtree(wd, ignore_errors=True)
@@ -11360,13 +11361,18 @@ def _seed_last_releases(q: list[dict], clock: dict, now: float,
     """Newest release timestamp per ``(platform, key)`` — the derived publishing
     clock the cadence spaces from. Releases at or before a key's clock reset are
     voided (the reset re-anchors the cadence); *count*, when given, still tallies
-    every release made today, voided or not (it's display, not the clock)."""
+    every release made today, voided or not (it's display, not the clock).
+    Errored releases count too: the upload attempt happened, so the slot is
+    spent — otherwise a release that errors after the fact (e.g. its film
+    deleted right after publishing) refunds the slot and the governor
+    burst-releases the rest of the backlog. Genuine upload failures still free
+    the slot for a retry: the self-heal re-pend clears released_at."""
     last: dict[tuple, float] = {}
     for e in q:
         for plat, keyf in (("youtube", "channel"), ("x", "account")):
             sub = e.get(plat) or {}
             ts = sub.get("released_at") or sub.get("published_at")
-            if sub.get("status") not in ("publishing", "done") or not ts:
+            if sub.get("status") not in ("publishing", "done", "error") or not ts:
                 continue
             k = (plat, sub.get(keyf) or "")
             if count is not None and _same_local_day(ts, now):
@@ -14288,6 +14294,7 @@ def delete_film(body: JobActionBody) -> dict:
     # as the orphaned resume_generation.py in /api/jobs/delete (PR #76), but
     # these are in-process threads, so they are flagged rather than SIGTERMed.
     _cancel_film_tasks(wd)
+    _finalize_publish_entry_on_delete(wd)
     import shutil
     if wd.exists():
         shutil.rmtree(wd, ignore_errors=True)
@@ -14926,6 +14933,56 @@ def _reconcile_publish_queue() -> None:
             changed = True
     if changed:
         pq.save_queue(q)
+
+
+def _finalize_publish_entry_on_delete(work_dir) -> None:
+    """Close out a film's publish-queue entry before its files are deleted.
+
+    Deleting the local film doesn't undo an upload that already went out, so a
+    released platform keeps its history: sync the ids the async upload wrote
+    into job.json while the dir is still readable and mark the sub done. An
+    entry that was never released has nothing left to publish — drop it.
+    Without this the dangling row went 'error: work dir missing' with its
+    video id lost alongside job.json, showing a successful upload as a
+    failure."""
+    try:
+        entry = pq.item_by_work_dir(str(work_dir))
+        if not entry:
+            return
+        try:
+            meta = json.loads((Path(work_dir) / "job.json").read_text())
+        except Exception:
+            meta = {}
+        released = False
+        for plat, id_key, meta_id, meta_url in (
+                ("youtube", "video_id", "youtube_video_id", "youtube_url"),
+                ("x", "tweet_id", "x_tweet_id", "x_url")):
+            sub = entry.get(plat) or {}
+            if not sub.get("released_at") and sub.get("status") != "done":
+                continue  # never released — nothing to preserve
+            released = True
+            if sub.get("status") not in ("pending", "publishing"):
+                continue  # already terminal — keep as recorded
+            if meta.get(meta_id):
+                sub.update(status="done", url=meta.get(meta_url),
+                           published_at=sub.get("released_at") or time.time())
+                sub[id_key] = meta.get(meta_id)
+            else:
+                sub.update(status="error", error="film deleted during upload")
+            entry[plat] = sub
+        if released:
+            # A platform still waiting its turn can never publish now — close it
+            # as skipped rather than letting it decay to 'work dir missing'.
+            for plat in ("youtube", "x"):
+                sub = entry.get(plat) or {}
+                if sub.get("status") == "pending" and not sub.get("released_at"):
+                    sub.update(status="skipped")
+                    entry[plat] = sub
+            pq.update_item(entry["id"], youtube=entry.get("youtube"), x=entry.get("x"))
+        else:
+            pq.remove_item(entry["id"])
+    except Exception:
+        pass
 
 
 def _drop_from_publish_queue(work_dir) -> None:
