@@ -102,6 +102,71 @@ class CrossPoolLeaseTests(LeaseIsolationMixin):
         a.release("w1")
 
 
+class TryWorkerLeaseTests(LeaseIsolationMixin):
+    """try_worker_lease — the non-pool entry point (cover agent, seed-vc)."""
+
+    def test_collides_with_a_pool_lease_on_the_same_url(self):
+        pool = WorkerPool(["w1"])
+        pool.acquire()
+        self.assertIsNone(worker_pool.try_worker_lease("w1"))
+        pool.release("w1")
+        release = worker_pool.try_worker_lease("w1")
+        self.assertIsNotNone(release)
+        # And the pool now waits on it, both directions covered.
+        box: list = []
+        waiter = threading.Thread(target=lambda: box.append(pool.acquire()), daemon=True)
+        waiter.start()
+        waiter.join(0.4)
+        self.assertEqual(box, [])
+        release()
+        waiter.join(2.0)
+        self.assertEqual(box, ["w1"])
+
+    def test_svc_skips_leased_workers_and_falls_back_to_controller(self):
+        from pipeline import svc
+        from unittest import mock
+
+        held = worker_pool.try_worker_lease("http://s1:8188")
+        self.assertIsNotNone(held)
+        tried = []
+
+        def fake_remote(host, *a, **kw):
+            tried.append(host)
+
+        with mock.patch.object(svc, "_convert_remote", fake_remote), \
+             mock.patch.object(svc, "_convert") as local:
+            svc._convert_anywhere(Path("/x/s.wav"), Path("/x/r.wav"), Path("/x/o.wav"),
+                                  30, 60, ["http://s1:8188", "http://s2:8188"])
+        held()
+        # s1 is leased (busy) — skipped; s2 converts; the controller never runs.
+        self.assertEqual(tried, ["s2"])
+        local.assert_not_called()
+
+        held_all = [worker_pool.try_worker_lease(u)
+                    for u in ("http://s1:8188", "http://s2:8188")]
+        tried.clear()
+        with mock.patch.object(svc, "_convert_remote", fake_remote), \
+             mock.patch.object(svc, "_convert") as local:
+            svc._convert_anywhere(Path("/x/s.wav"), Path("/x/r.wav"), Path("/x/o.wav"),
+                                  30, 60, ["http://s1:8188", "http://s2:8188"])
+        for rel in held_all:
+            rel()
+        # Every worker leased — the controller converts rather than double-booking.
+        self.assertEqual(tried, [])
+        local.assert_called_once()
+
+    def test_svc_releases_the_lease_after_converting(self):
+        from pipeline import svc
+        from unittest import mock
+
+        with mock.patch.object(svc, "_convert_remote"):
+            svc._convert_anywhere(Path("/x/s.wav"), Path("/x/r.wav"), Path("/x/o.wav"),
+                                  30, 60, ["http://s1:8188"])
+        release = worker_pool.try_worker_lease("http://s1:8188")
+        self.assertIsNotNone(release, "lease must be freed after the conversion")
+        release()
+
+
 class CrossProcessLeaseTests(LeaseIsolationMixin):
     def test_worker_leased_by_another_process_is_skipped(self):
         lease = _lease_path("w1")

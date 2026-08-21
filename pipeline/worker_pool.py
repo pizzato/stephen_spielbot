@@ -28,6 +28,61 @@ def _lease_path(url: str) -> Path:
     return LEASE_DIR / f"{slug}.lock"
 
 
+# _take_lease_fd result when the lease dir is unusable: proceed without a lease
+# rather than brick the caller over a state-dir problem.
+_LEASE_FAIL_OPEN = -1
+
+
+def _take_lease_fd(url: str) -> Optional[int]:
+    """flock the lease file for *url* without blocking. Returns the held fd,
+    None when another pool or process holds it, or _LEASE_FAIL_OPEN when the
+    lease dir is unusable (fail open)."""
+    try:
+        LEASE_DIR.mkdir(parents=True, exist_ok=True)
+        fd = os.open(str(_lease_path(url)), os.O_CREAT | os.O_RDWR, 0o644)
+    except Exception:
+        logger.warning("WorkerPool: cannot open lease file for %s; skipping lease", url)
+        return _LEASE_FAIL_OPEN
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as e:
+        os.close(fd)
+        if e.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+            return None
+        logger.warning("WorkerPool: lease flock failed for %s (%s); skipping lease", url, e)
+        return _LEASE_FAIL_OPEN
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"{os.getpid()}\n".encode())
+    except Exception:
+        pass
+    return fd
+
+
+def _release_lease_fd(fd: int) -> None:
+    if fd == _LEASE_FAIL_OPEN:
+        return
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    except Exception:
+        pass
+    try:
+        os.close(fd)
+    except Exception:
+        pass
+
+
+def try_worker_lease(url: str) -> Optional[Callable[[], None]]:
+    """Non-blocking fleet-wide lease on one worker, for code that submits GPU
+    work outside a WorkerPool (the cover worker-agent, seed-vc re-voicing).
+    Returns a zero-arg release callable, or None when the worker is busy in
+    any pool or process. Collides with WorkerPool leases on the same URL."""
+    fd = _take_lease_fd(url)
+    if fd is None:
+        return None
+    return lambda: _release_lease_fd(fd)
+
+
 def check_alive(url: str, timeout: int = 5) -> bool:
     """Return True if the ComfyUI instance at url is responding."""
     try:
@@ -138,41 +193,17 @@ class WorkerPool:
         process is using the worker right now."""
         if url in self._lease_fds:
             return True
-        try:
-            LEASE_DIR.mkdir(parents=True, exist_ok=True)
-            fd = os.open(str(_lease_path(url)), os.O_CREAT | os.O_RDWR, 0o644)
-        except Exception:
-            # A state-dir problem must never brick rendering: run unleased.
-            logger.warning("WorkerPool: cannot open lease file for %s; skipping lease", url)
-            return True
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError as e:
-            os.close(fd)
-            if e.errno in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
-                return False
-            logger.warning("WorkerPool: lease flock failed for %s (%s); skipping lease", url, e)
-            return True
-        try:
-            os.ftruncate(fd, 0)
-            os.write(fd, f"{os.getpid()}\n".encode())
-        except Exception:
-            pass
-        self._lease_fds[url] = fd
+        fd = _take_lease_fd(url)
+        if fd is None:
+            return False
+        if fd != _LEASE_FAIL_OPEN:
+            self._lease_fds[url] = fd
         return True
 
     def _drop_lease(self, url: str) -> None:
         fd = self._lease_fds.pop(url, None)
-        if fd is None:
-            return
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        try:
-            os.close(fd)
-        except Exception:
-            pass
+        if fd is not None:
+            _release_lease_fd(fd)
 
     def _want_reserve(self) -> bool:
         """True if a worker should be held for the UI right now. Caller holds the

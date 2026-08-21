@@ -306,11 +306,29 @@ def _execute_ui_cover(store: DurableStore, task: TaskRecord, endpoint: str) -> N
     # with flux1-schnell filename overrides from the flux_* keys.
     if not isinstance(engine, dict) or not engine:
         engine = engines.resolve(p, p.get("image_engine") or jc.get("image_engine"))
-    generate_with_engine(
-        engine, prompt, work_dir / COVER_BASE_NAME,
-        width=cover_w, height=cover_h, comfy_url=comfy_url,
-        reference_images=ref_images or None,
-    )
+    # Wait for the fleet-wide worker lease so the cover queues behind whatever
+    # holds that GPU (render, upscale) instead of stacking a job onto it.
+    # Heartbeat while waiting so the controller doesn't re-lease the task.
+    from pipeline.worker_pool import try_worker_lease
+    release = try_worker_lease(comfy_url)
+    last_beat = time.monotonic()
+    while release is None:
+        time.sleep(2.0)
+        if time.monotonic() - last_beat >= 30.0:
+            try:
+                store.heartbeat_task(task.id, message="waiting for a free worker")
+            except Exception:
+                pass
+            last_beat = time.monotonic()
+        release = try_worker_lease(comfy_url)
+    try:
+        generate_with_engine(
+            engine, prompt, work_dir / COVER_BASE_NAME,
+            width=cover_w, height=cover_h, comfy_url=comfy_url,
+            reference_images=ref_images or None,
+        )
+    finally:
+        release()
     apply_cover_typography(work_dir, typo, title)
     image_history.cover_record(work_dir, cover_path)
     store.record_artifact(task.job_id, task.id, "cover_image", cover_path)
