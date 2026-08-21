@@ -603,9 +603,9 @@ export function FilterSelect({ value, onChange, options, allLabel = 'All' }) {
   )
 }
 
-export function Segmented({ options, value, onChange }) {
+export function Segmented({ options, value, onChange, className = '' }) {
   return (
-    <div className="seg">
+    <div className={`seg ${className}`.trim()}>
       {options.map((o) => (
         <button key={o.value ?? o} className={`seg__opt ${(o.value ?? o) === value ? 'is-active' : ''}`}
           onClick={() => onChange(o.value ?? o)}>{o.label ?? o}</button>
@@ -679,7 +679,10 @@ export function ResolutionPicker({ value, onChange, meta = {} }) {
           value={current.orientation}
           onChange={(o) => emit(o, current.tier)}
         />
+        {/* Seven tiers outgrow narrow form columns; wrap rather than hide the
+            largest ones behind the .seg control's invisible horizontal scroll. */}
         <Segmented
+          className="seg--wrap"
           options={tiers.map((t) => ({ value: t.key, label: t.label || 'Standard' }))}
           value={current.tier}
           onChange={(k) => emit(current.orientation, k)}
