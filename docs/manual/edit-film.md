@@ -220,14 +220,18 @@ Each button does only its own part. A narrated scene has:
 | **Narration** | Just the audio for this scene |
 | **Image** | Just the first frame (takes an instruction) |
 | **Edit image** | Masked inpaint — draw a region, describe the fix |
+| **Upload** | Use your own image file as the initial frame — saved at the film's render size |
+| **Paste** | Same, from an image on the clipboard |
 | **Video** | Just this scene's clip (takes an instruction) |
 | **Trim** | Cuts the tail off the existing clip — no re-render |
 
-An **acted** scene trades the Image buttons for **Remove first frame** (its frame is a
-reference, not a render input — see [acted scenes](../performance_films.md)), and its
-Video button reads **Shoot again**: the whole take re-renders from the references, and its
-instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*) rather
-than the picture. It also
+An **acted** scene keeps the same image buttons — its Image button reads **Add first
+frame** while it has none — but the frame is a reference the take opens on, not a render
+input (see [acted scenes](../performance_films.md#editing-an-acted-scene)), so it also
+gets **Remove first frame**: the next shoot then renders from portraits and visuals only.
+Its Video button reads **Shoot again**: the whole take re-renders from the references, and
+its instruction directs the performance (*"make her angrier"*, *"hold the pause longer"*)
+rather than the picture. It also
 gains **Continue**, which shoots more of the take it already has instead of replacing it.
 The **scene type** switch converts a scene between narration, dialogue and silent — same
 theme, the other shape — and keeps the version you leave, so switching back restores it.
