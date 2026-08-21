@@ -61,7 +61,9 @@ def _host_of(entry: str) -> str:
 
 
 def candidate_workers(cfg: dict) -> list[str]:
-    """Worker hosts that can run the diffusion, best first.
+    """Workers that can run the diffusion, best first — as their comfy URLs,
+    so the fleet-wide worker lease can key on them (the conversion itself
+    docker-execs on the URL's host).
 
     Any worker will do — every ComfyUI container carries seed-vc — so the
     pick is just "who is free": idle workers first, then least-busy, the
@@ -69,23 +71,29 @@ def candidate_workers(cfg: dict) -> list[str]:
     the controller is the last resort, so a host that is down, or whose
     container predates the seed-vc image, only costs the next one a moment.
 
-    ``svc_worker`` in the config pins one host instead of the whole fleet.
+    ``svc_worker`` in the config pins one host instead of the whole fleet
+    (returned as its comfy URL when the fleet lists it, else the bare host).
     """
+    urls = [u for u in (cfg.get("comfy_workers") or []) if u]
     pinned = _host_of(str(cfg.get("svc_worker") or ""))
     if pinned:
+        for url in urls:
+            if _host_of(url) == pinned:
+                return [url]
         return [pinned]
-    urls = [u for u in (cfg.get("comfy_workers") or []) if u]
     try:
         from pipeline.worker_pool import idle_workers
         urls = idle_workers(urls, timeout=2)
     except Exception:
         pass  # nothing reachable (or no workers at all) — order as configured
-    hosts: list[str] = []
+    out: list[str] = []
+    seen: set[str] = set()
     for url in urls:
         host = _host_of(url)
-        if host and host not in hosts:
-            hosts.append(host)
-    return hosts
+        if host and host not in seen:
+            seen.add(host)
+            out.append(url)
+    return out
 
 
 def convert_song(source: Path, voice_ref: Path, output: Path,
@@ -155,12 +163,25 @@ def separate_vocals(source: Path, output: Path) -> Path | None:
 def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
                       diffusion_steps: int, timeout: int,
                       workers: Sequence[str]) -> None:
-    """The diffusion pass, on the first worker that will take it — falling
-    back to the controller when none does, because a slow conversion beats a
-    failed one."""
+    """The diffusion pass, on the first free worker that will take it —
+    falling back to the controller when none does, because a slow conversion
+    beats a failed one.
+
+    Free means holding the fleet-wide worker lease: a worker busy with a
+    render or upscale is skipped rather than double-booked, and when every
+    worker is leased the controller converts (slow beats waiting out a
+    multi-minute GPU job)."""
+    from pipeline.worker_pool import try_worker_lease
+
     for worker in workers:
-        host = (worker or "").strip()
+        entry = (worker or "").strip()
+        host = _host_of(entry)
         if not host:
+            continue
+        release = try_worker_lease(entry)
+        if release is None:
+            logger.info("[svc] %s is busy (worker lease held) — trying the "
+                        "next worker", host)
             continue
         try:
             _convert_remote(host, source, voice_ref, output,
@@ -169,6 +190,8 @@ def _convert_anywhere(source: Path, voice_ref: Path, output: Path,
         except Exception as e:
             logger.warning("[svc] conversion on %s failed (%s) — trying the "
                            "next worker", host, e)
+        finally:
+            release()
     if workers:
         logger.warning("[svc] no worker took the conversion — running on the "
                        "controller (slow)")
