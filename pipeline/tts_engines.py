@@ -8,6 +8,9 @@ across. Each engine names a ``backend`` — the inference stack that runs it:
 - ``f5``          — the F5-TTS CLI; switching engines is a checkpoint swap.
 - ``chatterbox``  — Resemble AI's Chatterbox (``python -m pipeline.chatterbox``),
   which adds multilingual narration (issue #176).
+- ``raon``        — KRAFTON's Raon-OpenTTS fork (``python -m pipeline.raon``),
+  which runs in its own virtualenv because it occupies the ``f5_tts`` import
+  name too.
 
 Engines:
 
@@ -17,11 +20,20 @@ Engines:
   to A/B against ``openf5``. See docs/tts_licensing.md for the licensing rationale.
 - ``chatterbox-multilingual`` — Chatterbox Multilingual, MIT, 23 languages;
   the per-style ``tts_language`` picks which one it speaks.
+- ``raon-opentts-1b`` — KRAFTON's Raon-OpenTTS-1B, English only. CC-BY-NC
+  weights, so it is flagged "non-commercial" alongside ``f5-original``.
 """
 from __future__ import annotations
 
 from pipeline.chatterbox import CHATTERBOX_FILES, CHATTERBOX_REPO, LANGUAGES
 from pipeline.openf5 import OPENF5_REPO, ensure_openf5_model
+from pipeline.raon import (
+    RAON_FILES,
+    RAON_REPO,
+    RAON_VOCODER_FILES,
+    RAON_VOCODER_REPO,
+    ensure_raon_model,
+)
 
 TTS_ENGINES: dict[str, dict] = {
     "openf5": {
@@ -58,6 +70,18 @@ TTS_ENGINES: dict[str, dict] = {
         "repo": CHATTERBOX_REPO,
         "files": CHATTERBOX_FILES,
     },
+    "raon-opentts-1b": {
+        "key": "raon-opentts-1b",
+        "label": "Raon-OpenTTS-1B (KRAFTON)",
+        "sub": "CC-BY-NC \u00b7 English \u00b7 voice cloning \u00b7 non-commercial",
+        "license": "CC-BY-NC-4.0",
+        "commercial_ok": False,
+        "backend": "raon",
+        "repo": RAON_REPO,
+        "files": RAON_FILES,
+        # Its vocoder weights live in a second repo (see pipeline/raon.py).
+        "extra": [{"repo": RAON_VOCODER_REPO, "files": RAON_VOCODER_FILES}],
+    },
 }
 
 # Default for new styles and the normalize/resolve fallback. MUST stay
@@ -75,7 +99,7 @@ def norm(key: str) -> str:
 
 
 def backend(key: str) -> str:
-    """Which inference stack runs *key*: "f5" (the default) or "chatterbox"."""
+    """Which inference stack runs *key*: "f5" (the default), "chatterbox" or "raon"."""
     e = get(key) or TTS_ENGINES[DEFAULT_TTS_ENGINE]
     return e.get("backend", "f5")
 
@@ -92,7 +116,7 @@ def public_list() -> list[dict]:
 
 def cli_args(key: str) -> list[str]:
     """F5-TTS CLI flags selecting *key*'s weights (f5-backend engines only —
-    callers branch on backend() first; chatterbox runs its own CLI).
+    callers branch on backend() first; the other backends run their own CLI).
 
     Drop-in replacement for the old hardcoded ``["--model", "F5TTS_v1_Base"]``.
     For ``openf5`` this resolves (and caches) the OpenF5 config/checkpoint/vocab
@@ -108,6 +132,15 @@ def cli_args(key: str) -> list[str]:
     return ["--model", e["model_name"]]
 
 
+def _downloads(e: dict) -> list[tuple[str, str]]:
+    """Every ``(repo, file)`` *e* needs cached. Most engines live in one repo;
+    ``raon-opentts-1b`` also pulls its vocoder from a second one (``extra``)."""
+    pairs = [(e["repo"], f) for f in e["files"]]
+    for spec in e.get("extra", []):
+        pairs += [(spec["repo"], f) for f in spec["files"]]
+    return pairs
+
+
 def ensure(key: str) -> None:
     """Download *key*'s weights into the HuggingFace cache (idempotent).
 
@@ -120,9 +153,12 @@ def ensure(key: str) -> None:
     if e["key"] == "openf5":
         ensure_openf5_model()
         return
+    if e["key"] == "raon-opentts-1b":
+        ensure_raon_model()
+        return
     from huggingface_hub import hf_hub_download
-    for f in e["files"]:
-        hf_hub_download(e["repo"], f)
+    for repo, f in _downloads(e):
+        hf_hub_download(repo, f)
 
 
 def is_cached(key: str) -> bool:
@@ -131,7 +167,7 @@ def is_cached(key: str) -> bool:
     if not e:
         return False
     from huggingface_hub import try_to_load_from_cache
-    for f in e["files"]:
-        if not isinstance(try_to_load_from_cache(e["repo"], f), str):
+    for repo, f in _downloads(e):
+        if not isinstance(try_to_load_from_cache(repo, f), str):
             return False
     return True

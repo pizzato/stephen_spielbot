@@ -97,7 +97,7 @@ The Settings screen covers everything; this is the short list of what people cha
 | LLM backend | `local` (vLLM), `claude` (Anthropic), `grok` (xAI), or `openai` |
 | Local LLM URL | OpenAI-compatible endpoint, e.g. `http://localhost:8000/v1/chat/completions` |
 | Claude / Grok / OpenAI key + model | API key (or the matching [environment variable](environment.md)) and model name |
-| Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + a narration language that also drives the script), or the non-commercial `f5-original` preview |
+| Voice model / language | Per-style TTS engine — `openf5` (default), `chatterbox-multilingual` (23 languages + a narration language that also drives the script), or the non-commercial `f5-original` / `raon-opentts-1b` previews |
 | Image engine | Per-style generate and edit engines; default FLUX.2 Klein |
 | Video engine | Per-style scene I2V model — `ltx25` (default) or the opt-in `minimax-h3` / `minimax-h3-turbo` (see [Models → Video engines](models.md#video-engines-per-style)) |
 | Sampling steps | MiniMax engines only: overrides the engine's step count (0 = engine default — Turbo 4, base H3 15). More steps = sharper but slower |

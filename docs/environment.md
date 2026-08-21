@@ -32,6 +32,9 @@ the config file.
 | `TTS_TIMEOUT` | `300` | Per-narration TTS timeout, in seconds |
 | `OPENF5_REPO` | `mrfakename/OpenF5-TTS-Base` | Hugging Face repo for the narration weights — mirror or pin it, but keep it Apache/CC-BY licensed |
 | `CHATTERBOX_REPO` | `ResembleAI/chatterbox` | Hugging Face repo for the Chatterbox weights — keep it MIT licensed |
+| `RAON_PYTHON` | `/opt/raon/bin/python` | Interpreter of the virtualenv holding KRAFTON's Raon-OpenTTS fork. It ships its own `f5_tts` package, so it must never be the F5-TTS environment |
+| `RAON_REPO` | `KRAFTON/Raon-OpenTTS-1B` | Hugging Face repo for the Raon weights (**CC-BY-NC** — non-commercial) |
+| `RAON_VOCODER_REPO` | `speechbrain/tts-hifigan-libritts-16kHz` | Hugging Face repo for the 16 kHz HiFi-GAN vocoder Raon synthesises through |
 
 See [model licensing](tts_licensing.md) before pointing these at other weights.
 

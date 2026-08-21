@@ -82,6 +82,11 @@ services:
       args:
         BASE_IMAGE: ${BASE_IMAGE:-nvidia/cuda:13.0.1-runtime-ubuntu24.04}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cu130}
+        # Set to 1 to add the opt-in Raon-OpenTTS engine. It needs its own
+        # virtualenv (KRAFTON's fork occupies the `f5_tts` import name), so it
+        # costs a second copy of torch. Its weights are CC-BY-NC — see
+        # docs/tts_licensing.md before narrating monetized output with it.
+        INSTALL_RAON: ${INSTALL_RAON:-0}
     image: spielbot-tts:latest
     ports:
       - "${TTS_PORT:-8189}:8189"

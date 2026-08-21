@@ -31,7 +31,8 @@ survives fine-tuning:
 
 They are selectable in Settings as the opt-in `f5-original` engine (flagged
 **non-commercial**) for A/B quality comparison only — they **must not** be made
-the default or used for monetized output; the default stays `openf5`. The model
+the default or used for monetized output; the default stays `openf5`. The same
+applies to [Raon-OpenTTS-1B](#raon-opentts-1b--krafton-non-commercial) below. The model
 registry lives in [`pipeline/tts_engines.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/tts_engines.py) and the
 OpenF5 source in [`pipeline/openf5.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/openf5.py); the `OPENF5_REPO`
 environment variable can point at a mirror or pinned fork but should remain an
@@ -53,6 +54,41 @@ Resemble AI, selectable in Settings as the `chatterbox-multilingual` engine:
   [`pipeline/chatterbox.py`](https://github.com/pizzato/stephen_spielbot/blob/main/pipeline/chatterbox.py). The `CHATTERBOX_REPO`
   environment variable can point at a mirror or pinned fork but should remain an
   MIT-licensed repository.
+
+## Raon-OpenTTS-1B — KRAFTON (non-commercial)
+
+A second opt-in preview engine, `raon-opentts-1b`: a 1.048B-parameter DiT
+flow-matching model KRAFTON trained on 510K hours of *public* English speech.
+
+- **Code:** [`krafton-ai/Raon-OpenTTS`](https://github.com/krafton-ai/Raon-OpenTTS) — Apache-2.0.
+- **Weights:** [`KRAFTON/Raon-OpenTTS-1B`](https://huggingface.co/KRAFTON/Raon-OpenTTS-1B)
+  — **CC-BY-NC-4.0**, so it carries the same restriction as `f5-original`: A/B
+  comparison only, never the default and never monetized output. The training
+  data being public does not make the released weights commercial-use.
+- **Vocoder:** a 16 kHz HiFi-GAN from
+  [`speechbrain/tts-hifigan-libritts-16kHz`](https://huggingface.co/speechbrain/tts-hifigan-libritts-16kHz)
+  (Apache-2.0), fetched separately — the fork vendors a standalone loader for
+  it, so speechbrain itself is not installed.
+- **English only**, and it synthesises at **16 kHz** (the other engines run at
+  24 kHz), so it is the lower-bandwidth option of the three.
+
+### Why it needs its own virtualenv
+
+The HuggingFace repo declares `library_name: f5-tts` and ships the same
+`config.yaml` / checkpoint / `vocab.txt` trio as OpenF5, which makes it look
+like an `openf5`-style `--model_cfg/--ckpt_file/--vocab_file` swap. It is not:
+its `sbhifigan16k` mel type is unknown to upstream F5-TTS's `load_vocoder`, and
+KRAFTON's fork installs a package under the **same `f5_tts` import name** —
+installing it beside `f5-tts` would break `openf5` and `f5-original`. So it is
+a third *backend*, in its own virtualenv, always run as a separate process:
+`pipeline/raon.py` is the single-utterance entry point the fork lacks (its own
+`infer_cli` is a batch evaluation harness). The TTS worker image leaves it out
+by default; build with `--build-arg INSTALL_RAON=1` to include it, and point
+`RAON_PYTHON` elsewhere if the virtualenv lives somewhere else.
+
+The checkpoint is a ~16 GB training checkpoint (EMA state included), so
+pre-warm the engine from Settings rather than paying for the download and the
+`torch.load` on the first render.
 
 ## Singing-voice conversion (seed-vc)
 

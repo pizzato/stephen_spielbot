@@ -56,11 +56,35 @@ RUN pip install --no-deps ${CHATTERBOX_SPEC} \
     && pip install s3tokenizer resemble-perth conformer diffusers omegaconf \
         pykakasi spacy-pkuseg pyloudnorm
 
+# Raon-OpenTTS-1B (KRAFTON) — the opt-in non-commercial English engine
+# (pipeline/raon.py). OFF by default: KRAFTON's fork installs a package named
+# `f5_tts` too, so it gets its own virtualenv rather than clobbering the
+# openf5 / f5-original engines installed above. That means a second copy of
+# torch, hence the opt-in — build with `--build-arg INSTALL_RAON=1` to include
+# it. The 16 GB checkpoint is NOT baked in; it lands in HF_HOME on pre-warm.
+# matplotlib and huggingface_hub are installed explicitly: the fork's
+# utils_infer imports both but its pyproject declares neither.
+ARG INSTALL_RAON=0
+ARG RAON_GIT="https://github.com/krafton-ai/Raon-OpenTTS.git"
+RUN if [ "${INSTALL_RAON}" = "1" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends git python3-venv \
+        && rm -rf /var/lib/apt/lists/* \
+        && git clone --depth 1 ${RAON_GIT} /opt/raon-src \
+        && python3 -m venv /opt/raon \
+        && /opt/raon/bin/pip install --upgrade pip \
+        && if [ -n "${TORCH_INDEX_URL}" ]; then \
+               /opt/raon/bin/pip install ${TORCH_SPEC} --index-url "${TORCH_INDEX_URL}"; \
+           fi \
+        && /opt/raon/bin/pip install -e /opt/raon-src \
+        && /opt/raon/bin/pip install matplotlib huggingface_hub ; \
+    fi
+
 WORKDIR /app
 # pipeline must be importable as a package for `uvicorn pipeline.tts_server:app`.
 COPY pipeline/__init__.py /app/pipeline/__init__.py
 COPY pipeline/openf5.py /app/pipeline/openf5.py
 COPY pipeline/chatterbox.py /app/pipeline/chatterbox.py
+COPY pipeline/raon.py /app/pipeline/raon.py
 COPY pipeline/tts_engines.py /app/pipeline/tts_engines.py
 COPY pipeline/tts_server.py /app/pipeline/tts_server.py
 COPY assets/default_narrator.mp3 /app/assets/default_narrator.mp3
