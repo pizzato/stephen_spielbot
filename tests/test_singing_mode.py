@@ -471,6 +471,53 @@ class SongRewriteTests(TempConfigCase):
             self._regen(field="voice")
         self.assertEqual(ctx.exception.status_code, 400)
 
+    def test_a_direction_sent_with_the_re_write_persists_and_steers_it(self):
+        """A direction given in the studio must not be one-shot: it lands in
+        the create brief BEFORE the re-write, so it steers this one, every
+        later one, and the Brief button's restore."""
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "c", "lyrics": "[Chorus]\nnew"}) as ws:
+            self._regen(field="lyrics", caption="fast punk", lyrics="x",
+                        direction="a rooftop reunion — joyful, not sad")
+        self.assertIn("a rooftop reunion", ws.call_args.kwargs["topic"])
+        brief = json.loads((self.wd / "create_brief.json").read_text())
+        self.assertEqual(brief["topic"], "a rooftop reunion — joyful, not sad")
+
+    def test_a_re_write_without_a_direction_leaves_the_brief_alone(self):
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "c", "lyrics": "[Chorus]\nnew"}):
+            self._regen(field="lyrics", caption="fast punk", lyrics="x")
+        brief = json.loads((self.wd / "create_brief.json").read_text())
+        self.assertEqual(brief["topic"], "a rooftop goodbye")
+
+    def test_clearing_the_direction_falls_back_to_the_title(self):
+        with unittest.mock.patch.object(
+                backend.story_mode, "write_song",
+                return_value={"caption": "c", "lyrics": "[Chorus]\nnew"}):
+            self._regen(field="lyrics", caption="fast punk", lyrics="x",
+                        direction="")
+        brief = json.loads((self.wd / "create_brief.json").read_text())
+        self.assertEqual(brief["topic"], "Rooftop")
+
+    def test_direction_saved_with_song_edits_comes_back_from_the_studio(self):
+        backend.update_job_song(self.job_id, backend.SongUpdateBody(
+            caption="c", lyrics="[Verse]\nwords", direction="a rooftop wedding"))
+        self.assertEqual(
+            json.loads((self.wd / "create_brief.json").read_text())["topic"],
+            "a rooftop wedding")
+        self.assertEqual(backend.get_job_song(self.job_id)["direction"],
+                         "a rooftop wedding")
+
+    def test_a_title_only_brief_shows_a_blank_direction(self):
+        # A film created with an empty Direction box stores the bare title as
+        # its topic — the studio must show that as "no direction yet", not
+        # parrot the title back as if it were one.
+        (self.wd / "create_brief.json").write_text(json.dumps(
+            {"topic": "Rooftop", "video_title": "Rooftop"}))
+        self.assertEqual(backend.get_job_song(self.job_id)["direction"], "")
+
 
 class _SongFilmCase(TempConfigCase):
     """A generated song film in a work dir, ready for the studio's operations."""

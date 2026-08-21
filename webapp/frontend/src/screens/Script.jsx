@@ -168,23 +168,41 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       if (asked > 0 && !scenesSong) setScenesSong(asked)
     }
   }, [song])
+  // A direction saved from the studio lands in create_brief.json server-side —
+  // mirror it into the in-memory brief so the Brief button and "draft the
+  // story" see it without a reload.
+  const syncBriefTopic = (direction) => {
+    const topic = (direction || '').trim()
+      || (job.create_brief?.video_title || job.video_title || job.title || '').trim()
+    if (!topic || topic === (job.create_brief?.topic || '')) return
+    setJob({ ...job, create_brief: { ...(job.create_brief || {}), topic } })
+  }
   const saveSong = async () => {
     setBusy('song-save'); setError(''); setSongMsg('')
     try {
-      const s = await api.saveSong(job.job_id, (songDraft ?? song).caption, (songDraft ?? song).lyrics)
-      setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      const cur = songDraft ?? song
+      const s = await api.saveSong(job.job_id, cur.caption, cur.lyrics, cur.direction ?? null)
+      setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
+                direction: s.direction ?? (cur.direction || '') })
+      setSongDraft(null)
+      syncBriefTopic(s.direction ?? cur.direction)
       setSongMsg('Song saved — the next generation sings this version.')
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
   // Re-write the words or the sound with the LLM. The half that isn't being
   // re-written travels along as the editor shows it, so unsaved edits survive
-  // — and both halves come back saved.
+  // — and both halves come back saved. The direction travels too: it is
+  // persisted into the brief first, so it steers this re-write and the next.
   const regenSong = async (field, instruction) => {
     setBusy(`song-regen-${field}`); setError(''); setSongMsg('')
     try {
       const cur = songDraft ?? song
-      const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics, instruction)
-      setSong({ ...song, caption: s.caption, lyrics: s.lyrics }); setSongDraft(null)
+      const s = await api.regenSong(job.job_id, field, cur.caption, cur.lyrics,
+                                    instruction, cur.direction ?? null)
+      setSong({ ...song, caption: s.caption, lyrics: s.lyrics,
+                direction: s.direction ?? (cur.direction || '') })
+      setSongDraft(null)
+      syncBriefTopic(s.direction ?? cur.direction)
       setSongMsg(field === 'lyrics'
         ? 'Lyrics re-written — generate the song again to hear them sung.'
         : 'Sound re-written — generate the song again to hear it.')
@@ -1103,6 +1121,13 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
           <Card span={8} padLg className="reveal reveal-d1">
             <div className="stack gap-22">
               {songMsg && <Banner tone="ok">{songMsg}</Banner>}
+              <Field label="Direction"
+                hint="Where the film is going — the story or idea behind the song. Lyric re-writes are written from it, and it is saved into the film's brief, so the Brief button brings it back.">
+                <textarea className="textarea" rows={3}
+                  placeholder="e.g. a farewell on a rooftop at dawn — hopeful, not sad; the city wakes as she leaves"
+                  value={(songDraft ?? song).direction || ''}
+                  onChange={(e) => setSongDraft({ ...(songDraft ?? song), direction: e.target.value })} />
+              </Field>
               <Field label={
                 <RegenLabel busy={busy === 'song-regen-caption'} disabled={!!busy}
                   onRegen={(instr) => regenSong('caption', instr)}

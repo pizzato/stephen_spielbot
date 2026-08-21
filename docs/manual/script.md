@@ -48,6 +48,12 @@ draft* chip, and reopening it comes back to this tab. See
 [Singing films](../performance_films.md#singing-films-the-music-video-format) for what
 the format does to the render.
 
+- **Direction** — where the film is going: the story or idea behind the song, the same
+  thing the [Direction box](create.md#title-and-direction) in Create asks for. Lyric re-writes are
+  written from it, and it is saved into the film's brief with the song — so a direction
+  you give (or sharpen) here is what **Brief** restores, and what the story is later
+  drafted from. Give the direction here rather than in a *tell it how* instruction:
+  the instruction steers one re-write and is then forgotten.
 - **Sound** — what the music model is told about the song (genre, tempo, mood,
   arrangement). The lead performer's cast voice is described on top of this at render
   time, so leave the vocalist out.
