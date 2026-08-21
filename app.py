@@ -259,6 +259,12 @@ DEFAULT_CFG = {
     # from a still, so it matches the acted scenes it cuts against. Only scenes
     # the writer gave a cast; the rest stay on the I2V path.
     "default_h3_silent_scenes": False,
+    # Open every ACTED scene on a painted first frame. A dialogue take normally
+    # renders from its cast's portraits alone; with this on the scene's image
+    # (from its image prompt, or composed from its setting) is generated first
+    # and rides the take as its opening-composition reference. A hand-picked
+    # location reference still outranks painting one.
+    "default_h3_first_frames": False,
     # TTS engine per style (see pipeline/tts_engines.py): which narration model
     # synthesises this style's voice. Default = OpenF5-TTS-Base (Apache-2.0).
     "default_tts_engine":   "openf5",
@@ -538,6 +544,8 @@ STYLE_FIELD_TO_FLAT = {
     "h3_chain_scenes":      "default_h3_chain_scenes",
     # Act silent scenes on H3 Ref2VA instead of animating them from a still
     "h3_silent_scenes":     "default_h3_silent_scenes",
+    # Open every acted scene on a painted first-frame image
+    "h3_first_frames":      "default_h3_first_frames",
     # Ref2VA engine for performance films — see pipeline/engines.py
     "reference_engine":     "default_reference_engine",
     # TTS narration model selection — see pipeline/tts_engines.py
@@ -1003,6 +1011,11 @@ def _norm_h3_silent_scenes(value) -> bool:
     return _norm_h3_chain_scenes(value)
 
 
+def _norm_h3_first_frames(value) -> bool:
+    """Coerce the acted-first-frames toggle to a plain bool (YAML/JSON/form)."""
+    return _norm_h3_chain_scenes(value)
+
+
 def _norm_song_align_lyrics(value) -> bool:
     """Coerce the lyric-alignment toggle to a plain bool (YAML/JSON/form)."""
     return _norm_h3_chain_scenes(value)
@@ -1172,6 +1185,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "video_steps", _norm_video_steps)
         _coerce(row, "h3_chain_scenes", _norm_h3_chain_scenes)
         _coerce(row, "h3_silent_scenes", _norm_h3_silent_scenes)
+        _coerce(row, "h3_first_frames", _norm_h3_first_frames)
         _coerce(row, "reference_engine", _norm_reference_engine)
         _coerce(row, "music_engine", _norm_music_engine)
         _coerce(row, "song_align_lyrics", _norm_song_align_lyrics)
@@ -3867,13 +3881,7 @@ def _generate_active_scene_preview(
     acted_prompt = ""
     if not (image_prompt or scene.get("image_prompt")):
         from pipeline import performance as _perf
-        if _perf.is_performance_mode(md.get("mode")):
-            cast = [str(n) for n in (md.get("cast") or []) if str(n).strip()]
-            who = (f" {' and '.join(cast)} are in the scene, both fully visible."
-                   if len(cast) > 1 else f" {cast[0]} is in the scene." if cast else "")
-            setting = str(md.get("setting") or "").strip()
-            if setting:
-                acted_prompt = f"{setting}.{who} The very first moment of the scene, nobody speaking yet."
+        acted_prompt = _perf.opening_frame_prompt(md)
     base_prompt = image_prompt or scene.get("image_prompt") or acted_prompt or title
     # Re-inject any recurring character's canonical appearance so the same named
     # subject looks consistent across scenes even when the LLM paraphrased it,

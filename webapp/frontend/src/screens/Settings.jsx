@@ -2565,6 +2565,17 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <ParentVal k="h3_silent_scenes" />
                 </Field>
               )}
+              {engineInfo && (
+                <Field label="First frames — open every acted scene on a painted image"
+                  hint="An acted scene normally renders from its cast's portraits alone — no opening image. With this on, every acted scene FIRST gets a first-frame image (from its image prompt, or composed from its setting when there is none) and the take is told to open on that picture. Use it in styles where the opening composition matters more than letting the model choose its own. A hand-picked location reference still outranks painting one, and any frame can be regenerated, replaced or removed per scene in the editors. Adds one FLUX render per acted scene.">
+                  <label className="check">
+                    <input type="checkbox" checked={!!eff.h3_first_frames}
+                      onChange={(e) => setStyleField('h3_first_frames', e.target.checked)} />
+                    <span>Always give acted scenes a first frame</span>
+                  </label>
+                  <ParentVal k="h3_first_frames" />
+                </Field>
+              )}
             </div>
           </Card>
 

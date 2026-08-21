@@ -344,10 +344,19 @@ everyone stands, while faces and voices stay bound to their own references. When
 has one, it supersedes the location asset for that scene (the frame IS the place,
 photographed), keeping the reference budget tight — measured, three picture references
 hold; more and the weakest starts dropping. Because of that ranking, the first frame is
-opt-in for every acted scene: nothing auto-paints one (the Script screen's
+opt-in per scene by default: nothing auto-paints one (the Script screen's
 missing-preview pass skips acted, singing and performed-silent scenes alike), and
 **Remove first frame** is permanent — the location takes over, and neither the screen nor
 the render quietly paints the frame back.
+
+For styles where the opening composition is what carries the shot, **Settings → a style →
+Video models → First frames — open every acted scene on a painted image**
+(`h3_first_frames`) flips the default: every acted scene gets a first frame painted — by
+the Script screen's missing-preview pass and, for any scene still without one, at render
+time right before the take — from its image prompt, or composed from its **setting** with
+the cast anchored to their portraits when there is none. A hand-picked location reference
+still outranks painting one, but note that with the toggle on a *removed* frame no longer
+stays removed on a location-less scene: the next shoot paints a fresh one.
 
 **Scenery, wardrobe, and free-form references** — the `<Picture N>` slots beyond the
 portraits — live with the characters, under **Characters & Artifacts**, on both the Script

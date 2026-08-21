@@ -278,6 +278,39 @@ function SceneCard({
     }
   }
 
+  // Bring-your-own first frame: an uploaded or pasted image becomes the
+  // scene's initial frame (kept in the version strip like a painted one).
+  const applyUpload = async (filename, data) => {
+    setSelecting(true)
+    setError('')
+    try {
+      const r = await api.uploadFilmPreview(workDir, scene.id, filename, data)
+      setHistory(r.history)
+      onSaved()
+    } catch (e) {
+      setError(e.message)
+    } finally {
+      setSelecting(false)
+    }
+  }
+
+  const pasteFrame = async () => {
+    setError('')
+    try {
+      const items = await navigator.clipboard.read()
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith('image/'))
+        if (type) {
+          const blob = await item.getType(type)
+          return applyUpload(`pasted.${type.split('/')[1] || 'png'}`, await fileToDataUrl(blob))
+        }
+      }
+      throw new Error('No image on the clipboard.')
+    } catch (e) {
+      setError(e.message)
+    }
+  }
+
   const applyInpaint = async (mask, editPrompt, denoise) => {
     setBusy('inpaint'); setInpaintErr('')
     try {
@@ -591,19 +624,31 @@ function SceneCard({
                   {busy === 'narration' ? 'Rendering…' : 'Narration'}
                 </Button>
               )}
-              {/* An acted scene's frame is a reference, not a render input —
-                  Image buttons stay for narrated scenes; acted scenes get a
-                  Remove instead (the take then renders reference-only). */}
-              {!isActedMode(sceneType.mode) && (<>
+              {/* An acted scene's frame is a reference the take opens on, not
+                  a render input — it can be painted, replaced (upload/paste)
+                  or removed at will; narrated scenes keep the same painters. */}
               <GuidedRegenButton variant="ghost" icon="image" size="sm" disabled={isRendering}
-                label="Image" busyLabel="Rendering…" busy={busy === 'image'}
+                label={isActedMode(sceneType.mode) ? (previewUrl ? 'First frame' : 'Add first frame') : 'Image'}
+                busyLabel="Rendering…" busy={busy === 'image'}
                 onRegen={(instr) => rerender('image', instr)} chips={REGEN_CHIPS.image} align="left" />
               <Button variant="ghost" icon="wand-magic-sparkles" size="sm" disabled={isRendering || !previewUrl}
                 onClick={() => { setInpaintErr(''); setInpaint(true) }}>
                 Edit image
               </Button>
-              </>)}
-              {isActedMode(sceneType.mode) && previewUrl && (
+              <label className="btn btn--ghost btn--sm" title="Use your own image as this scene's initial frame"
+                style={{ cursor: isRendering ? 'default' : 'pointer' }}>
+                <Icon name="upload" /> Upload
+                <input type="file" accept="image/*" hidden disabled={isRendering}
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0]
+                    e.target.value = ''
+                    if (f) await applyUpload(f.name, await fileToDataUrl(f))
+                  }} />
+              </label>
+              <Button variant="ghost" icon="paste" size="sm" disabled={isRendering}
+                title="Use the image on the clipboard as this scene's initial frame"
+                onClick={pasteFrame}>Paste</Button>
+              {hasActedShape(sceneType.mode, actedSilent, sceneType.singing) && previewUrl && (
                 <Button variant="ghost" icon="trash-can" size="sm" disabled={isRendering}
                   title="Delete the first-frame image — the next shoot renders from portraits and visuals only"
                   onClick={async () => {

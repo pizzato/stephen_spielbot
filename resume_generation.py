@@ -373,6 +373,22 @@ def chain_scenes_flag(cfg: dict, style_name: str = "") -> bool:
     return bool(flag)
 
 
+def first_frames_flag(cfg: dict, style_name: str = "") -> bool:
+    """The style's ``h3_first_frames``, for the ACTED path.
+
+    Same three-step resolution as chain_scenes_flag above: the flat key stamped
+    into job_config at render start wins, then the styles lookup for older job
+    dirs (the flat mirror alone only ever carries the DEFAULT style).
+    """
+    flag = cfg.get("h3_first_frames")
+    if flag is None:
+        for s in cfg.get("styles") or []:
+            if isinstance(s, dict) and s.get("name") == (cfg.get("style_name") or style_name or ""):
+                flag = s.get("h3_first_frames")
+                break
+    return bool(flag)
+
+
 def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
                          vid_width: int, vid_height: int,
                          style_name: str = "") -> Path | None:
@@ -384,12 +400,16 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
     is what carries the shot — the image prompt still composes the scene, and
     for a beat with nobody in it the frame is the only reference the take has.
 
-    A dialogue scene is untouched: its pictures ARE the portraits, and the
-    Create screen's preview (when one exists) already rides along.
+    A dialogue scene is normally untouched: its pictures ARE the portraits, and
+    the Create screen's preview (when one exists) already rides along. The
+    style's ``h3_first_frames`` widens this to EVERY acted scene — dialogue
+    takes then open on a painted frame too (composed from the setting when
+    there is no image prompt), for styles where the opening image matters.
 
     Returns the frame, or None when there is nothing to make one from.
     """
-    if not _performance.is_silent(scene):
+    if not (_performance.is_silent(scene)
+            or first_frames_flag(cfg, style_name)):
         return None
     # Any existing image will do — unlike the I2V path this is a REFERENCE, not
     # frame zero, so an off-resolution preview from the Create screen is still
@@ -413,8 +433,13 @@ def ensure_opening_frame(scene, work_dir: Path, cfg: dict, *, comfy_url: str,
         return None
     prompt = str(getattr(scene, "image_prompt", "") or "").strip()
     if not prompt:
-        logger.info("Scene %d: silent scene has no image prompt — the take opens "
-                    "on its references alone", scene.id)
+        # Acted scenes are written through their fields, not an image prompt —
+        # compose the frame from the setting instead (same fallback the
+        # Create-screen preview uses, so both paint the same opening).
+        prompt = _performance.opening_frame_prompt(_performance.scene_meta(scene))
+    if not prompt:
+        logger.info("Scene %d: acted scene has no image prompt or setting — the "
+                    "take opens on its references alone", scene.id)
         return None
     engine = _engines.resolve(cfg, cfg.get("image_engine"))
     out = work_dir / f"scene_{scene.id:02d}_first_frame.png"
@@ -1293,6 +1318,7 @@ def main(work_dir: Path) -> None:
         "voice_robotic_amount": voice_robotic_amount,
         "voice_speed": voice_speed,
         "h3_silent_scenes": bool(silent_flag),
+        "h3_first_frames": first_frames_flag(cfg),
     }
     store.ensure_generation_plan(durable_job_id, work_dir, title, scenes, plan_cfg)
     store.recover_incomplete_tasks(durable_job_id)

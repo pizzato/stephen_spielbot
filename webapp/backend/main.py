@@ -212,6 +212,10 @@ def _acted_scene_ctx(wd: Path) -> dict:
     ctx = {"acted_cfg": _acted_silent_cfg(jc),
            "chained": bool(jc.get("h3_chain_scenes") if jc.get("h3_chain_scenes") is not None
                            else ss.get("h3_chain_scenes")),
+           # Style paints a first frame for EVERY acted scene (h3_first_frames)
+           # — same job-snapshot-then-style resolution as the flags above.
+           "first_frames": bool(jc.get("h3_first_frames") if jc.get("h3_first_frames") is not None
+                                else ss.get("h3_first_frames")),
            "style_note": _scene_style_note(job_id)}
     _ACTED_CTX[key] = (time.monotonic(), ctx)
     return ctx
@@ -5219,11 +5223,14 @@ def generate_all_previews(job_id: str, resolution: str = Query(""), style: str =
     # renderer's own predicate: a singing scene and an acted-silent one carry
     # mode "silent", which a mode-only check misses. A mixed film still gets
     # stills for its narrated scenes.
-    acted_cfg = (_acted_scene_ctx(wd)["acted_cfg"] if wd is not None
-                 else {"h3_silent_scenes": False})
+    ctx = (_acted_scene_ctx(wd) if wd is not None
+           else {"acted_cfg": {"h3_silent_scenes": False}, "first_frames": False})
+    # …unless the style opens every acted scene on a painted frame
+    # (h3_first_frames) — then the acted scenes get one here too, composed from
+    # their setting where no image prompt exists.
     needs_frame = [r for r in rows
-                   if not performance_mode.renders_acted(
-                       {"metadata": dict(r.get("metadata") or {})}, acted_cfg)]
+                   if ctx["first_frames"] or not performance_mode.renders_acted(
+                       {"metadata": dict(r.get("metadata") or {})}, ctx["acted_cfg"])]
     if not needs_frame:
         return {"scenes": [], "generated": 0, "failed": [],
                 "skipped": "every scene is acted — none has a first frame"}
@@ -6304,6 +6311,10 @@ def start_generation(body: GenerateBody) -> dict:
         # rather than animating them from a first frame. Stamped for the same
         # reason as the flag above — the render reads the job config flat.
         "h3_silent_scenes": gapp._norm_h3_silent_scenes(ss.get("h3_silent_scenes")),
+        # Open every acted scene on a painted first frame (the frame then rides
+        # the H3 take as its opening-composition reference). Stamped flat for
+        # the same reason as the flags above.
+        "h3_first_frames": gapp._norm_h3_first_frames(ss.get("h3_first_frames")),
         # Burn the cover into the head of the final video at the end of the
         # render ("none" | "image" | "text") — Shorts pick their own frame —
         # and how long it is held (seconds).
@@ -13481,6 +13492,12 @@ def _film_scene_image_prompt(jc: dict, row: dict, cfg: dict, wd: Path,
     prefix is applied last, matching the plain (character-less) re-render path."""
     style_name = jc.get("style_name", "")
     base_prompt = (row.get("image_prompt") or "").strip()
+    if not base_prompt:
+        # An acted scene is written through its fields, not an image prompt —
+        # compose the frame from its setting (the same fallback every other
+        # painter of an acted scene's frame uses).
+        base_prompt = performance_mode.opening_frame_prompt(
+            row.get("metadata") if isinstance(row.get("metadata"), dict) else {})
     base_prompt, reference_images = gapp._characters_prompt_and_refs(
         base_prompt, row, cfg, style_name, wd, engine=engine)
     style_clean = (jc.get("style") or "").strip().rstrip(".")
@@ -14067,6 +14084,61 @@ def delete_film_video(scene_id: int, body: FilmPreviewSelectBody) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True, "video_history": hist}
+
+
+class FilmPreviewUploadBody(BaseModel):
+    work_dir: str
+    filename: str = ""
+    data: str
+
+
+@api.post("/api/films/scenes/{scene_id}/preview-upload")
+def upload_film_preview(scene_id: int, body: FilmPreviewUploadBody) -> dict:
+    """Use the user's own image (pasted or a file) as a scene's first frame.
+
+    Saved as PNG at the film's render size (cover-crop when it differs) so the
+    classic I2V re-render accepts it as frame zero; an acted take rides it as
+    its opening-composition reference either way. The replaced image is kept as
+    a history version."""
+    import shutil
+    from PIL import Image, ImageOps
+    from pipeline.comfyui import ltx_dimensions
+
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Path is outside the output folder.")
+    sid = int(scene_id)
+    raw = _decode_image(body.data)
+
+    first_frame = wd / f"scene_{sid:02d}_first_frame.png"
+    preview = wd / f"scene_{sid:02d}_preview.png"
+    # Preserve the image we're about to overwrite so the user can return to it.
+    image_history.seed_if_empty(wd, sid, preview if preview.exists() else first_frame)
+
+    jc = _film_job_config(wd)
+    resolution = jc.get("resolution") or ""
+    dims = gapp._RESOLUTIONS.get(resolution)
+    try:
+        with Image.open(io.BytesIO(raw)) as im:
+            im = im.convert("RGB")
+            if dims:
+                tw, th = ltx_dimensions(*dims)
+                if im.size != (tw, th):
+                    im = ImageOps.fit(im, (tw, th))
+            im.save(first_frame, "PNG")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read that image: {e}")
+    shutil.copy2(first_frame, preview)
+
+    job_id = job_id_from_work_dir(wd)
+    store = DurableStore.default()
+    try:
+        store.update_scene_preview(job_id, sid, preview)
+    finally:
+        store.close()
+    image_history.record(wd, sid, preview)
+    return {"ok": True, "preview_path": str(preview),
+            "history": image_history.history(wd, sid)}
 
 
 class FilmTrimBody(BaseModel):
