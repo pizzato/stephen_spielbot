@@ -49,4 +49,6 @@ also works and uses the classic v1.1 media upload.
   the YouTube upload instead.
 - **Captions**: for OAuth 1.0a accounts the script's SRT is attached as a
   soft (closed-caption) track; OAuth 2.0 accounts skip this — it's
-  best-effort either way.
+  best-effort either way. A style with
+  [burned-in subtitles](manual/settings.md#cover-first-frame) sidesteps the
+  limitation entirely: the captions are part of the picture.

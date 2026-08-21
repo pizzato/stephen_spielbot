@@ -45,7 +45,7 @@ AI-suggested video ideas, per-scene editing with image
 inpainting, clip trimming and version history, misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with
-playlists, captions, and tags) and **X**, a publish scheduler with per-channel
+playlists, captions — attached or burned into the picture — and tags) and **X**, a publish scheduler with per-channel
 cadence, comment fetching / AI replies / community engagement, a predictive
 engagement model, and C2PA "AI-generated" content credentials on published
 videos.

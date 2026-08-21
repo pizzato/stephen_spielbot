@@ -1824,6 +1824,18 @@ def main(work_dir: Path) -> None:
             write_progress(status_file, 95, "No music — finishing the cut…")
             shutil.copy2(combined, final_path)
         ensure_video_resolution(final_path, vid_width, vid_height)
+        # Per-style: burn the script's captions into the picture itself (open
+        # captions). Before the cover burn, so the cover overlays the text.
+        # Non-fatal: a finished film without captions beats a failed render.
+        if cfg.get("burn_subtitles", cfg.get("default_burn_subtitles")):
+            write_progress(status_file, 96, "Burning subtitles into the picture…")
+            try:
+                from pipeline.captions import build_srt, burn_srt_into_video
+                srt_path = build_srt(work_dir)
+                if srt_path:
+                    burn_srt_into_video(final_path, srt_path)
+            except Exception as sub_err:
+                logger.warning("Subtitle burn failed (non-fatal): %s", sub_err)
         # Per-style automation: burn the cover into the head of the film —
         # YouTube Shorts ignore uploaded thumbnails and pick their own frame.
         # Frames are overlaid (not prepended) so caption timing stays valid.

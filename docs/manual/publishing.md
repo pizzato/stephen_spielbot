@@ -37,7 +37,9 @@ The manual upload form.
 
 - **Captions** — the script's SRT is attached on upload, in the film's language.
   Narrated scenes only: a [music video](../performance_films.md#singing-films-the-music-video-format)
-  or an all-dialogue film has no narration to caption, so no SRT is attached
+  or an all-dialogue film has no narration to caption, so no SRT is attached.
+  Styles with [burned-in subtitles](settings.md#cover-first-frame) carry the same
+  captions in the picture itself as well
 - **Tags** — the LLM's topic tags become YouTube tags and X hashtags
 - **Playlist** — the style's playlist, if it has one (`__auto__` finds or creates one named
   after the style)

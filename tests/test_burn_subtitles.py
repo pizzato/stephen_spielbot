@@ -1,0 +1,178 @@
+"""Burned-in subtitles (open captions): burn the script's SRT track into the
+final video's picture. A per-style toggle stamped into job_config.json at
+start, honoured by the render's final assembly, and re-applied by every flow
+that rebuilds the final from combined.mp4 (remix, narrator/music change,
+reassemble, localized cut — which burns its own language). Covers the ffmpeg
+command shape, the staged in-place swap, the style plumbing (_ensure_styles
+coercion + flat mirror + inheritance) and the rebuild re-apply gating."""
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+os.environ["HOME"] = tempfile.mkdtemp(prefix="spielbot-test-home-")
+
+import app  # noqa: E402
+import webapp.backend.main as backend  # noqa: E402
+import pipeline.assembler as assembler  # noqa: E402
+import pipeline.captions as captions  # noqa: E402
+
+# Work dirs must live under OUTPUT_DIR (endpoints reject paths outside it).
+_OUT = Path(tempfile.mkdtemp(prefix="spielbot-test-out-"))
+
+
+class NormTests(unittest.TestCase):
+    def test_truthy_strings_and_bools(self):
+        for yes in (True, 1, "1", "true", "Yes", " ON "):
+            self.assertIs(app._norm_burn_subtitles(yes), True, yes)
+
+    def test_everything_else_is_off(self):
+        for no in (False, 0, None, "", "false", "no", "off", "bogus"):
+            self.assertIs(app._norm_burn_subtitles(no), False, no)
+
+
+class BurnCommandTests(unittest.TestCase):
+    def test_renders_the_track_and_copies_audio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "final.mp4"
+            srt = Path(tmp) / "captions.srt"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n")
+
+            with mock.patch.object(assembler, "_run") as run:
+                result = assembler.burn_subtitles(src, srt, out)
+
+            self.assertEqual(result, out)
+            cmd = run.call_args.args[0]
+            vf = cmd[cmd.index("-vf") + 1]
+            # The track is copied to a special-character-free temp path first —
+            # the subtitles filter reads its filename through two levels of
+            # filtergraph escaping, and film names carry apostrophes/colons.
+            self.assertTrue(vf.startswith("subtitles="), vf)
+            self.assertTrue(vf.endswith("/captions.srt"), vf)
+            self.assertNotIn(str(srt), vf)
+            self.assertIn("-c:a", cmd)
+            self.assertIn("copy", cmd)
+
+    def test_temp_copy_exists_when_ffmpeg_runs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "final.mp4"
+            srt = Path(tmp) / "captions.srt"
+            src.write_bytes(b"video")
+            srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n")
+
+            def check(cmd, timeout=None):
+                vf = cmd[cmd.index("-vf") + 1]
+                self.assertTrue(Path(vf.removeprefix("subtitles=")).exists())
+
+            with mock.patch.object(assembler, "_run", side_effect=check):
+                assembler.burn_subtitles(src, srt, Path(tmp) / "out.mp4")
+
+
+class BurnInPlaceTests(unittest.TestCase):
+    def test_swaps_the_staged_result_in_place(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "final.mp4"
+            video.write_bytes(b"original")
+            srt = Path(tmp) / "captions.srt"
+            srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n")
+
+            def fake_burn(src, track, out):
+                self.assertEqual(track, srt)
+                out.write_bytes(b"captioned")
+                return out
+
+            with mock.patch("pipeline.assembler.burn_subtitles", side_effect=fake_burn):
+                result = captions.burn_srt_into_video(video, srt)
+
+            self.assertEqual(result, video)
+            self.assertEqual(video.read_bytes(), b"captioned")
+            self.assertFalse(list(Path(tmp).glob("*.tmp*")), "staging file cleaned up")
+
+    def test_requires_a_track(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = Path(tmp) / "final.mp4"
+            video.write_bytes(b"v")
+            with self.assertRaises(FileNotFoundError):
+                captions.burn_srt_into_video(video, Path(tmp) / "captions.srt")
+            (Path(tmp) / "captions.srt").write_text("")  # empty counts as missing
+            with self.assertRaises(FileNotFoundError):
+                captions.burn_srt_into_video(video, Path(tmp) / "captions.srt")
+
+
+class StylePlumbingTests(unittest.TestCase):
+    def test_ensure_styles_coerces_and_mirrors(self):
+        cfg = {"styles": [{"name": "Shorts", "burn_subtitles": "yes"}]}
+        app._ensure_styles(cfg)
+        self.assertIs(cfg["styles"][0]["burn_subtitles"], True)
+        # Flat key mirrors the default style, like every STYLE_FIELD_TO_FLAT entry.
+        self.assertIs(cfg["default_burn_subtitles"], True)
+        self.assertIs(app.style_settings(cfg, "Shorts")["burn_subtitles"], True)
+
+    def test_defaults_off(self):
+        cfg = {"styles": [{"name": "Shorts"}]}
+        app._ensure_styles(cfg)
+        self.assertIs(app.style_settings(cfg, "Shorts")["burn_subtitles"], False)
+
+    def test_sparse_child_inherits_parent_toggle(self):
+        cfg = {
+            "styles": [
+                {"name": "Base", "burn_subtitles": True},
+                {"name": "Kid", "parent": "Base"},
+            ],
+            "default_style": "Base",
+        }
+        app._ensure_styles(cfg)
+        self.assertNotIn("burn_subtitles", cfg["styles"][1])
+        self.assertIs(app.style_settings(cfg, "Kid")["burn_subtitles"], True)
+
+
+class RebuildReapplyTests(unittest.TestCase):
+    """Flows that rebuild the final from combined.mp4 re-burn a STANDING track
+    (job_config burn_subtitles) — films whose style never opted in stay clean."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        self.final = _OUT / f"{self.wd.name}.mp4"
+        self.final.write_bytes(b"v" * 20_000)
+
+    def test_standing_toggle_is_reapplied(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        srt = self.wd / "captions.srt"
+        with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
+             mock.patch("pipeline.captions.burn_srt_into_video") as burn:
+            backend._maybe_burn_subtitles(self.wd, self.final)
+        build.assert_called_once_with(self.wd, lang=None, timing_lang=None)
+        burn.assert_called_once_with(self.final, srt)
+
+    def test_localized_rebuild_burns_its_language(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        with mock.patch("pipeline.captions.build_srt", return_value=None) as build, \
+             mock.patch("pipeline.captions.burn_srt_into_video") as burn:
+            backend._maybe_burn_subtitles(self.wd, self.final, lang="pt")
+        build.assert_called_once_with(self.wd, lang="pt", timing_lang="pt")
+        # Nothing to caption (all-acted film, or no translation): no burn.
+        burn.assert_not_called()
+
+    def test_no_standing_toggle_means_no_burn(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": false}')
+        with mock.patch("pipeline.captions.build_srt") as build:
+            backend._maybe_burn_subtitles(self.wd, self.final)
+            (self.wd / "job_config.json").write_text("{}")  # and with no key at all
+            backend._maybe_burn_subtitles(self.wd, self.final)
+        build.assert_not_called()
+
+    def test_burn_failure_never_breaks_the_rebuild(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        with mock.patch("pipeline.captions.build_srt",
+                        side_effect=RuntimeError("ffprobe exploded")):
+            backend._maybe_burn_subtitles(self.wd, self.final)  # must not raise
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -298,6 +298,9 @@ DEFAULT_CFG = {
     # frame reads as a flash and gets discarded). Mirrors the default style.
     "default_first_frame_cover": "none",
     "default_first_frame_cover_seconds": 1.0,
+    # Burn the script's captions into the picture itself (open captions) when
+    # a render or rebuild produces the final video. Mirrors the default style.
+    "default_burn_subtitles": False,
     # Look of the "text" first-frame cover: font file ("" = bold system font),
     # size as % of the video width, and text colour. Mirror the default style.
     # Cover typography (pipeline/cover_typography.py): every cover background
@@ -485,6 +488,8 @@ STYLE_FIELD_TO_FLAT = {
     # uploaded thumbnail — and how long that cover is held (seconds)
     "first_frame_cover":    "default_first_frame_cover",
     "first_frame_cover_seconds": "default_first_frame_cover_seconds",
+    # Burn the script's captions into the picture itself (open captions)
+    "burn_subtitles":       "default_burn_subtitles",
     # Cover typography: text-free background + composited real-font title
     "cover_typography":     "default_cover_typography",
     # Automation — exclude this style from auto-picked queue top-ups (opt-out)
@@ -974,6 +979,11 @@ def _norm_song_align_lyrics(value) -> bool:
     return _norm_h3_chain_scenes(value)
 
 
+def _norm_burn_subtitles(value) -> bool:
+    """Coerce the burned-in subtitles toggle to a plain bool (YAML/JSON/form)."""
+    return _norm_h3_chain_scenes(value)
+
+
 def _norm_first_frame_cover(value) -> str:
     """Coerce a first-frame cover mode to "none" | "image" | "text"."""
     from pipeline.cover import norm_first_frame_cover
@@ -1144,6 +1154,7 @@ def _ensure_styles(cfg: dict, fresh: bool = False) -> dict:
         _coerce(row, "video_scenes", _norm_video_scenes)
         _coerce(row, "first_frame_cover", _norm_first_frame_cover)
         _coerce(row, "first_frame_cover_seconds", _norm_first_frame_cover_seconds)
+        _coerce(row, "burn_subtitles", _norm_burn_subtitles)
         _coerce(row, "cover_typography", _norm_cover_typography)
     # One-time flip of the old default engine (flux1-schnell) to the new default
     # (FLUX.2 Klein) so existing styles adopt it; runs once, then a deliberate
