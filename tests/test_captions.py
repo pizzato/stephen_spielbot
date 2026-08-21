@@ -247,5 +247,127 @@ class SpokenTextTests(unittest.TestCase):
         self.assertNotIn("led pipes", content)
 
 
+class DialogueCueTests(unittest.TestCase):
+    """Acted scenes caption their spoken lines, paced by length across the
+    take — with speaker names only when the scene has more than one voice."""
+
+    def test_multi_speaker_lines_share_the_take_with_names(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {"mode": "dialogue", "lines": [
+                {"speaker": "Ana", "text": "AAAA."},
+                {"speaker": "Ben", "text": "BBBB."}]}}],
+            {"scene_01_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,000 --> 00:00:02,000\nAna: AAAA.", content)
+        self.assertIn("00:00:02,000 --> 00:00:04,000\nBen: BBBB.", content)
+
+    def test_single_speaker_drops_the_name(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {"mode": "dialogue", "lines": [
+                {"speaker": "Ana", "text": "Just me talking."}]}}],
+            {"scene_01_final.mp4": 3.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,000 --> 00:00:03,000\nJust me talking.", content)
+        self.assertNotIn("Ana:", content)
+
+    def test_legacy_performance_mode_counts_as_dialogue(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {"mode": "performance", "lines": [
+                {"speaker": "Ana", "text": "Old script."}]}}],
+            {"scene_01_final.mp4": 2.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("Old script.", content)
+
+    def test_lingering_narration_on_a_dialogue_scene_never_shows(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "Leftover voice-over.",
+              "metadata": {"mode": "dialogue", "lines": [
+                  {"speaker": "Ana", "text": "The line."}]}}],
+            {"scene_01_final.mp4": 2.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("The line.", content)
+        self.assertNotIn("Leftover", content)
+
+
+class LyricCueTests(unittest.TestCase):
+    """Singing scenes caption their lyric slice (metadata ``sings``), paced
+    through the measured vocal ranges so instrumentals stay caption-free."""
+
+    def test_lines_paced_inside_the_vocal_ranges(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True,
+                "sings": "LaLaLa\nLoLoLo", "vocal_ranges": [[1.0, 3.0]]}}],
+            {"scene_01_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        # 2 s of singing inside a 4 s take: equal-length lines get 1 s each,
+        # starting at the voice's onset — the instrumental second stays clean.
+        self.assertIn("00:00:01,000 --> 00:00:02,000\nLaLaLa", content)
+        self.assertIn("00:00:02,000 --> 00:00:03,000\nLoLoLo", content)
+
+    def test_no_ranges_treats_the_whole_take_as_sung(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True,
+                "sings": "LaLaLa\nLoLoLo", "vocal_ranges": []}}],
+            {"scene_01_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,000 --> 00:00:02,000\nLaLaLa", content)
+        self.assertIn("00:00:02,000 --> 00:00:04,000\nLoLoLo", content)
+
+    def test_instrumental_scene_advances_the_clock_without_cues(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True, "sings": ""}},
+             {"id": 2, "narration": "Back to narration."}],
+            {"scene_01_final.mp4": 3.0, "scene_02_narration.wav": 2.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:03,000 --> 00:00:05,000\nBack to narration.", content)
+
+    def test_seam_straddling_line_becomes_one_cue(self):
+        # A line sung across the cut between two takes is stamped on both
+        # scenes' slices — the captions must show it once, spanning the seam.
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True, "sings": "Same line"}},
+             {"id": 2, "narration": "", "metadata": {
+                 "mode": "silent", "singing": True,
+                 "sings": "Same line\nNext line"}}],
+            {"scene_01_final.mp4": 2.0, "scene_02_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertEqual(content.count("Same line"), 1)
+        self.assertIn("00:00:00,000 --> 00:00:04,000\nSame line", content)
+        self.assertIn("00:00:04,000 --> 00:00:06,000\nNext line", content)
+
+    def test_cue_offsets_ride_the_film_timeline(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "Intro first."},
+             {"id": 2, "narration": "", "metadata": {
+                 "mode": "silent", "singing": True,
+                 "sings": "LaLaLa", "vocal_ranges": [[1.0, 2.0]]}}],
+            {"scene_01_narration.wav": 2.0, "scene_02_final.mp4": 3.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        # The range is clip-relative: 1–2 s into a scene that starts at 2 s.
+        self.assertIn("00:00:03,000 --> 00:00:04,000\nLaLaLa", content)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -51,6 +51,17 @@ frame is a 40ms flash that YouTube's frame picker throws away; a second reads as
 shot. Nothing is prepended, so the timing never shifts — the cover freezes the picture
 while the audio keeps running. Re-renders re-apply the burn automatically.
 
+### Subtitles
+
+Burn the film's captions into the picture itself (open captions) — or remove a burn
+again. The track covers everything spoken or sung: narration, the dialogue lines acted
+scenes perform, and a song film's lyrics, paced through the measured singing so
+instrumental stretches stay clean. Either way the final is rebuilt from the clean scene
+clips, so a film rendered without the style's
+[burned-in subtitles](settings.md#cover-first-frame) toggle can gain them after the
+fact, and one rendered with them can shed them. The choice is saved on the film, so
+every later rebuild (re-mix, re-voice, reassemble, localize) keeps it.
+
 ### Re-mix audio
 
 Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix film**. This
