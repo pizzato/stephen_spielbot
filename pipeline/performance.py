@@ -880,6 +880,29 @@ def renders_acted(scene, cfg: dict | None = None) -> bool:
     return is_silent(scene) and bool((cfg or {}).get("h3_silent_scenes"))
 
 
+def opening_frame_prompt(meta: dict) -> str:
+    """Fallback FIRST-FRAME prompt for an acted scene without an image prompt.
+
+    Acted scenes are written through their fields (setting/cast/beats), so
+    image_prompt is usually empty — the frame is composed from the setting
+    instead, with the cast placed in it so the opening image matches the take.
+    Every painter of an acted scene's frame (Create-screen preview, render-time
+    ensure_opening_frame, film-editor image re-render) uses this ONE helper, or
+    the same scene opens on different pictures depending on which screen made it.
+    Empty when the scene isn't acted-shaped or has no setting to paint.
+    """
+    mode = str((meta or {}).get("mode") or "").strip().lower()
+    if not (is_performance_mode(mode) or mode == "silent"):
+        return ""
+    setting = str(meta.get("setting") or "").strip()
+    if not setting:
+        return ""
+    cast = [str(n) for n in (meta.get("cast") or []) if str(n).strip()]
+    who = (f" {' and '.join(cast)} are in the scene, both fully visible."
+           if len(cast) > 1 else f" {cast[0]} is in the scene." if cast else "")
+    return f"{setting}.{who} The very first moment of the scene, nobody speaking yet."
+
+
 def parse_scene_rows(rows) -> list[dict]:
     """Stored scene rows → performance metadata dicts (json-decoded)."""
     out = []
