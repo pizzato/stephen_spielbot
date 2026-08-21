@@ -191,3 +191,23 @@ def build_srt(work_dir: Path, lang: str | None = None,
     out_path.write_text("\n".join(blocks), encoding="utf-8")
     logger.info("Built %d caption cues → %s", len(cues), out_path)
     return out_path
+
+
+def burn_srt_into_video(video_path: Path, srt_path: Path) -> Path:
+    """Burn *srt_path* into *video_path*'s picture, in place (open captions).
+
+    Timing stays valid because the frames are re-encoded, never re-timed.
+    Callers burn subtitles BEFORE any first-frame cover so the cover overlays
+    the text rather than the text scribbling over the cover.
+    """
+    from pipeline.assembler import burn_subtitles
+
+    if not (srt_path and srt_path.exists() and srt_path.stat().st_size > 0):
+        raise FileNotFoundError("No caption track to burn — build the SRT first.")
+    staged = video_path.with_name(f"{video_path.stem}.subburn.tmp{video_path.suffix}")
+    try:
+        burn_subtitles(video_path, srt_path, staged)
+        staged.replace(video_path)
+    finally:
+        staged.unlink(missing_ok=True)
+    return video_path
