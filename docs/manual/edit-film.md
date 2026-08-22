@@ -62,6 +62,13 @@ clips, so a film rendered without the style's
 fact, and one rendered with them can shed them. The choice is saved on the film, so
 every later rebuild (re-mix, re-voice, reassemble, localize) keeps it.
 
+The card also offers the caption file itself: **Download** hands you the SRT with
+timings — one button per language the film has (the original narration plus every
+saved [localization](#localize)), each timed to the published cut. It is the very
+track publishing attaches, so it drops straight into YouTube Studio, a video editor,
+or any player that loads sidecar subtitles. The look of burned-in subtitles is set per
+style under [Settings → Subtitle style](settings.md#cover-first-frame).
+
 ### Re-mix audio
 
 Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix film**. This

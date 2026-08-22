@@ -11297,6 +11297,53 @@ def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, s
     )
 
 
+def _caption_tracks_for_download(wd: Path) -> list[dict]:
+    """Every caption language the film can produce, timed to its published
+    cut — the same tracks publishing attaches — as ``[{lang, name, url}]``."""
+    main, lang, name, extras = _publish_caption_tracks(
+        wd, _video_language_for_work_dir(wd, "en"))
+    tracks = []
+    if main:
+        tracks.append({"lang": lang, "name": name, "url": ""})
+    tracks += [{"lang": t["language"], "name": t["name"], "url": ""} for t in extras]
+    for t in tracks:
+        t["url"] = f"/api/film/captions.srt?work_dir={urllib.parse.quote(str(wd))}&lang={t['lang']}"
+    return tracks
+
+
+@api.get("/api/film/captions")
+def film_caption_tracks(work_dir: str = Query(...)) -> dict:
+    """Caption tracks available to download for a film (see captions.srt)."""
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    return {"tracks": _caption_tracks_for_download(wd)}
+
+
+@api.get("/api/film/captions.srt")
+def film_captions_srt(work_dir: str = Query(...), lang: str = Query("")) -> FileResponse:
+    """Download the film's caption track as an SRT file with timings — worded
+    in *lang* (the original narration language, or any saved localization)
+    and timed to the published cut, exactly as publishing would attach it."""
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    from pipeline import captions as _captions
+    orig = _video_language_for_work_dir(wd, "en")
+    cut_lang = _published_cut_language(wd, orig)
+    code = (lang or cut_lang).strip().lower()
+    srt = _captions.build_srt(
+        wd, lang=None if code == orig else code,
+        timing_lang=None if cut_lang == orig else cut_lang)
+    if not srt:
+        raise HTTPException(404, "Nothing to caption — this film has no narration, "
+                                 "dialogue or lyrics on its scenes"
+                                 + (f" in {code}." if code != orig else "."))
+    stem = re.sub(r"[^\w-]+", "_", _video_title_for(wd)).strip("_") or wd.name
+    return FileResponse(str(srt), media_type="application/x-subrip",
+                        filename=f"{stem}_{code}.srt")
+
+
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
     """Background thread: upload to YouTube, then send completion reply."""
     try:
