@@ -219,8 +219,9 @@ class FilmUpscaleTests(unittest.TestCase):
 
         def fake_concat(paths, out, fade=0.3):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
-            # the film's own join, cuts only — never the stream copy
-            self.assertEqual(fade, 0.0)
+            # the film's own join, with its dip-to-black between scenes (the
+            # default fade, as the render uses) — never the stream copy
+            self.assertEqual(fade, 0.3)
             out.write_bytes(b"combined-scenes")
             return out
 
