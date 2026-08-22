@@ -139,6 +139,19 @@ the burn after the fact from the film editor's **Subtitles** card
 switch burned captions off, so a channel that also attaches the SRT (the channel's
 **Upload captions** toggle) would show doubled text to viewers who turn CC on.
 
+**Subtitle style** — how those burned captions look, per style, with the same kind
+of editor as cover typography: a font picker (the bundled display faces or any font
+installed on this machine; *Default* keeps the plain sans ffmpeg draws on its own),
+text size, text colour, outline width and colour, bold, a drop shadow, an optional
+solid backdrop box (colour + opacity) behind each line, position (top / middle /
+bottom, left / centre / right) and the margin from the edge. The preview beside the
+controls is one frame drawn by the very ffmpeg filter that burns real films, over a
+stand-in background, in landscape or portrait. The look is resolved live from the
+style at burn time, so a tweak applies to the next render or rebuild — a film that
+already carries burned captions picks it up on its next rebuild (or via the film
+editor's **Subtitles** card: remove, then burn again). Soft caption tracks (the SRT
+uploaded with a video) are unaffected — players style those themselves.
+
 **Cover typography** — how cover titles look. Diffusion models misspell in-image text,
 so covers are never asked to paint it: the background is always generated **text-free**,
 with the style's own image engine (it matches the film's look instead of the legacy

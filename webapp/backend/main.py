@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -6602,6 +6603,7 @@ def start_generation(body: GenerateBody) -> dict:
         # the end of the render. Stamped so the render reads it flat AND so
         # every later rebuild (remix/reassemble/localize) re-burns the track.
         "burn_subtitles": gapp._norm_burn_subtitles(ss.get("burn_subtitles")),
+        "subtitle_style": gapp._norm_subtitle_style(ss.get("subtitle_style")),
         # Cover typography: text-free background + composited real-font title
         # (pipeline/cover_typography.py). Stamped resolved so the render-time
         # cover uses the style's look without re-resolving the hierarchy.
@@ -8580,6 +8582,18 @@ def list_fonts(refresh: bool = Query(False)) -> dict:
     return {"fonts": available_fonts(refresh=refresh), "bundled": bundled_fonts()}
 
 
+def _subtitle_style_for(wd: Path) -> dict:
+    """Look of this film's burned subtitles, resolved LIVE from its style (a
+    Settings tweak applies to the very next burn — no re-render needed);
+    falls back to the look stamped at start when the style is gone."""
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    name = jc.get("style_name") or ""
+    if name and any(s.get("name") == name for s in cfg.get("styles") or []):
+        return gapp._norm_subtitle_style(gapp.style_settings(cfg, name).get("subtitle_style"))
+    return gapp._norm_subtitle_style(jc.get("subtitle_style"))
+
+
 def _first_frame_burn_opts(wd: Path) -> dict:
     """Hold duration for this film's burns.
 
@@ -8611,7 +8625,7 @@ def _maybe_burn_subtitles(wd: Path, final_path: Path | str,
         from pipeline.captions import build_srt, burn_srt_into_video
         srt = build_srt(wd, lang=lang, timing_lang=lang)
         if srt:
-            burn_srt_into_video(Path(final_path), srt)
+            burn_srt_into_video(Path(final_path), srt, style=_subtitle_style_for(wd))
     except Exception as e:
         gapp.logger.warning("Subtitle burn re-apply failed (non-fatal): %s", e)
 
@@ -11051,6 +11065,39 @@ def cover_typography_preview(body: CoverTypographyPreviewBody) -> Response:
     render_cover_typography(preview_background(w, h), buf, text,
                             gapp._norm_cover_typography(body.cover_typography))
     return Response(content=buf.getvalue(), media_type="image/png")
+
+
+class SubtitleStylePreviewBody(BaseModel):
+    subtitle_style: dict = {}
+    text: str = ""
+    orientation: str = "landscape"  # "landscape" | "portrait"
+
+
+@api.post("/api/subtitle-style/preview")
+def subtitle_style_preview(body: SubtitleStylePreviewBody) -> Response:
+    """Styles-tab live preview: one frame of the draft subtitle look, drawn by
+    the same ffmpeg filter that burns real films, over a stand-in background."""
+    import subprocess
+    from pipeline.assembler import _FFMPEG
+    from pipeline.subtitle_style import subtitles_filter
+
+    w, h = (540, 960) if body.orientation == "portrait" else (960, 540)
+    lines = [" ".join(ln.split()) for ln in (body.text or "").splitlines()]
+    text = "\n".join(ln[:80] for ln in lines if ln)[:200] or "Nobody has ever filmed this."
+    with tempfile.TemporaryDirectory(prefix="subpreview-") as td:
+        tdp = Path(td)
+        preview_background(w, h).save(tdp / "bg.png")
+        (tdp / "captions.srt").write_text(
+            f"1\n00:00:00,000 --> 00:00:05,000\n{text}\n", encoding="utf-8")
+        vf = subtitles_filter(tdp / "captions.srt",
+                              gapp._norm_subtitle_style(body.subtitle_style), tdp / "fonts")
+        proc = subprocess.run(
+            [_FFMPEG, "-y", "-loglevel", "error", "-i", str(tdp / "bg.png"),
+             "-vf", vf, "-frames:v", "1", str(tdp / "out.png")],
+            capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0 or not (tdp / "out.png").exists():
+            raise HTTPException(500, f"Preview render failed: {proc.stderr.strip()[-300:]}")
+        return Response(content=(tdp / "out.png").read_bytes(), media_type="image/png")
 
 
 class ThumbnailBody(BaseModel):
