@@ -457,15 +457,20 @@ def replace_first_frame(
     return output_path
 
 
-def burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path:
+def burn_subtitles(video_path: Path, srt_path: Path, output_path: Path,
+                   style: dict | None = None) -> Path:
     """Render an SRT track into the picture itself (open captions).
 
     The subtitles filter reads its filename through two levels of filtergraph
     escaping; copying the track to a temp path with no special characters
-    sidesteps both, whatever the film is called. Audio is stream-copied.
-    Writes to a separate output so callers can atomically swap it in after
-    ffmpeg succeeds.
+    sidesteps both, whatever the film is called. *style* is the style's
+    ``subtitle_style`` dict (pipeline/subtitle_style.py) — font, size,
+    colours, box, position; None burns libass's plain default look. Audio is
+    stream-copied. Writes to a separate output so callers can atomically swap
+    it in after ffmpeg succeeds.
     """
+    from pipeline.subtitle_style import subtitles_filter
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     logger.info("[ffmpeg] burn_subtitles: %s ← %s", video_path.name, srt_path.name)
     with tempfile.TemporaryDirectory(prefix="subburn-") as td:
@@ -474,7 +479,7 @@ def burn_subtitles(video_path: Path, srt_path: Path, output_path: Path) -> Path:
         _run([
             _FFMPEG, "-y",
             "-i", str(video_path),
-            "-vf", f"subtitles={safe_srt}",
+            "-vf", subtitles_filter(safe_srt, style, Path(td) / "fonts"),
             "-c:v", "libx264", "-crf", "18", "-preset", "fast",
             "-c:a", "copy",
             "-movflags", "+faststart",

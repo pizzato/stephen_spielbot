@@ -1993,7 +1993,8 @@ def main(work_dir: Path) -> None:
                 from pipeline.captions import build_srt, burn_srt_into_video
                 srt_path = build_srt(work_dir)
                 if srt_path:
-                    burn_srt_into_video(final_path, srt_path)
+                    burn_srt_into_video(final_path, srt_path,
+                                        style=cfg.get("subtitle_style"))
             except Exception as sub_err:
                 logger.warning("Subtitle burn failed (non-fatal): %s", sub_err)
         # Per-style automation: burn the cover into the head of the film —
