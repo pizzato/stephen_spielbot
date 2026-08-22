@@ -42,7 +42,8 @@ Around the pipeline, the web app also handles the full channel workflow: a rende
 queue with automation — global or per style, unattended in any format, music videos
 included, their song written, sung and re-voiced before the pictures are made —
 AI-suggested video ideas, per-scene editing with image
-inpainting, clip trimming and version history, misspelling-proof cover thumbnails (text-free
+inpainting, clip trimming and version history, one-click **restyling** (the same script
+or finished film in another visual style), misspelling-proof cover thumbnails (text-free
 artwork in the style's own engine + real-font typography with per-style fonts,
 colours, and accent words), publishing to **YouTube** (multi-channel, with
 playlists, captions — attached or burned into the picture — and tags) and **X**, a publish scheduler with per-channel
