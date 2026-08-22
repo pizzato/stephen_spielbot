@@ -153,6 +153,33 @@ class ScriptCharacterApiTests(unittest.TestCase):
         # thus before any scene image task), then the worker launches.
         self.assertEqual(calls, ["portraits", "previews", "plan", "launch"])
 
+    def test_render_keeps_existing_scene_images(self):
+        """Approving a script whose scenes already have images must NOT repaint
+        them. start_generation calls generate_all_previews as a plain function,
+        so the endpoint's Query(False) default for `force` never resolved —
+        and a Query object is truthy, which regenerated every scene before
+        every render."""
+        job = self._make_job([{"name": "Caesar", "description": "a lean general"}])
+        wd = Path(job["work_dir"])
+        preview = wd / "scene_01_preview.png"
+        preview.write_bytes(b"png")
+        store = backend.DurableStore.default()
+        try:
+            store.update_scene_preview(job["job_id"], 1, preview)
+        finally:
+            store.close()
+        painted = []
+        with mock.patch.object(gapp, "generate_all_script_portraits"), \
+             mock.patch.object(gapp, "_preview_worker_urls", return_value=["http://w:8188"]), \
+             mock.patch.object(gapp, "_generate_active_scene_preview",
+                               side_effect=lambda *a, **k: painted.append(a)), \
+             mock.patch.object(backend.DurableStore, "ensure_generation_plan"), \
+             mock.patch.object(gapp, "_launch_generation_job", return_value={}):
+            backend.start_generation(backend.GenerateBody(
+                job_id=job["job_id"], work_dir=job["work_dir"], n_scenes=1, style_name="Hero"))
+        self.assertEqual(painted, [])
+        self.assertEqual(preview.read_bytes(), b"png")
+
     def test_render_skips_prebuild_without_characters(self):
         job = self._make_job([])  # abstract topic — no recurring characters
         calls = self._run_start_generation(job)
