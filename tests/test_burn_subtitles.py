@@ -268,7 +268,7 @@ class CaptionDownloadTests(unittest.TestCase):
         with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
              mock.patch.object(backend, "_video_title_for", return_value="Deep Sea: Giants!"):
             resp = backend.film_captions_srt(work_dir=str(self.wd), lang="")
-        build.assert_called_once_with(self.wd, lang=None, timing_lang=None)
+        build.assert_called_once_with(self.wd, lang=None, timing_lang=None, offset=0.0)
         self.assertEqual(resp.path, str(srt))
         self.assertIn('filename="Deep_Sea_Giants_en.srt"', resp.headers["content-disposition"])
 
@@ -277,7 +277,7 @@ class CaptionDownloadTests(unittest.TestCase):
         srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nOi\n")
         with mock.patch("pipeline.captions.build_srt", return_value=srt) as build:
             backend.film_captions_srt(work_dir=str(self.wd), lang="pt")
-        build.assert_called_once_with(self.wd, lang="pt", timing_lang=None)
+        build.assert_called_once_with(self.wd, lang="pt", timing_lang=None, offset=0.0)
 
     def test_nothing_to_caption_is_a_404(self):
         with mock.patch("pipeline.captions.build_srt", return_value=None):

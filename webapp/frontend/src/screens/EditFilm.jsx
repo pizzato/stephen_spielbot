@@ -743,6 +743,13 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [ffSeconds, setFfSeconds] = useState(1)
   const [subsBusy, setSubsBusy] = useState(false)
+  // Titles & credits: the form draft (pre-filled by the backend), whether the
+  // published cut carries cards right now, and the uploaded still per card.
+  const [titleCards, setTitleCards] = useState(null)
+  const [titleCardsApplied, setTitleCardsApplied] = useState(false)
+  const [titleCardImages, setTitleCardImages] = useState({})
+  const [titleCardsBusy, setTitleCardsBusy] = useState(false)
+  const [fonts, setFonts] = useState([])
   const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -793,6 +800,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         setMusicDesc(d.music_desc || '')
         setMusicHistory(d.music_history)
         setVideoHistory(d.video_history)
+        setTitleCards(d.title_cards || null)
+        setTitleCardsApplied(!!d.title_cards_applied)
+        setTitleCardImages(d.title_card_images || {})
         // Re-voicing clones a reference clip, so only library voices qualify —
         // and only one still in the library (a film can name a deleted voice).
         if (d.song) {
@@ -817,6 +827,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       if (p.first_frame_cover_seconds) setFfSeconds(p.first_frame_cover_seconds)
     }).catch(() => {})
     api.coverHistory(workDir).then((r) => setCoverHist(r.history)).catch(() => {})
+    api.listFonts().then((r) => setFonts(r.bundled || [])).catch(() => {})
     api.listLocalizeLanguages().then(setLocalizeLangs).catch(() => {})
     api.localizeScripts(workDir).then(setLocData).catch(() => {})
   }, [workDir])
@@ -1108,6 +1119,58 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setFfCoverBusy(false) }
   }
 
+  const setCard = (which, patch) =>
+    setTitleCards((t) => ({ ...t, [which]: { ...t[which], ...patch } }))
+
+  const uploadTitleCardImage = async (which, file) => {
+    if (!file) return
+    setError('')
+    try {
+      const payload = await fileToDataUrl(file)
+      const r = await api.uploadTitleCardImage(data.work_dir, which, file.name, payload)
+      setTitleCardImages((m) => ({ ...m, [which]: r.url }))
+      setCard(which, { background: 'image' })
+    } catch (e) { setError(e.message) }
+  }
+
+  const applyTitleCards = async () => {
+    setTitleCardsBusy(true); setError(''); setStatus('')
+    try {
+      const { task_id } = await api.titleCards({ work_dir: data.work_dir, title_cards: titleCards })
+      await new Promise((resolve, reject) => {
+        const poll = setInterval(async () => {
+          try {
+            const t = await api.filmTaskStatus(task_id)
+            if (t.status === 'done') {
+              clearInterval(poll)
+              if (t.final_url) setData((d) => ({ ...d, final_url: t.final_url }))
+              if (t.video_history) setVideoHistory(t.video_history)
+              setTitleCardsApplied(true)
+              setStatus('Added the titles & credits — the previous cut is kept as a version.')
+              resolve()
+            } else if (t.status === 'error' || t.status === 'cancelled') {
+              clearInterval(poll); reject(new Error(t.error || `Titles & credits ${t.status}.`))
+            } else {
+              setStatus('Rendering the title cards and joining them to the film…')
+            }
+          } catch (e) { clearInterval(poll); reject(e) }
+        }, 3000)
+      })
+    } catch (e) { setError(e.message) } finally { setTitleCardsBusy(false) }
+  }
+
+  const removeTitleCards = async () => {
+    setTitleCardsBusy(true); setError(''); setStatus('')
+    try {
+      const r = await api.removeTitleCards(data.work_dir)
+      if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
+      if (r.video_history) setVideoHistory(r.video_history)
+      setTitleCardsApplied(false)
+      setTitleCards((t) => t && ({ ...t, opening: { ...t.opening, enabled: false }, credits: { ...t.credits, enabled: false } }))
+      setStatus(r.message || 'Titles & credits removed.')
+    } catch (e) { setError(e.message) } finally { setTitleCardsBusy(false) }
+  }
+
   const selectVideoVersion = async (versionId) => {
     setUpscaleBusy(true); setError(''); setStatus('')
     try {
@@ -1279,7 +1342,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || titleCardsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1475,6 +1538,104 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               </div>
             </div>
           )}
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Titles &amp; credits</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Open the film with a title card and close it with end credits — a
+            solid colour or your own still, with text in the style&apos;s display
+            font, faded in and out. They are joined onto the finished film
+            (nothing inside it changes), the previous cut is kept as a version,
+            and once on, every later rebuild keeps them.
+            {titleCardsApplied && <strong> This cut has them on.</strong>}
+          </p>
+          {titleCards && (
+            <div className="stack gap-18 mt-20">
+              {['opening', 'credits'].map((which) => {
+                const c = titleCards[which]
+                return (
+                  <div key={which} style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                    <Check checked={!!c.enabled} disabled={anyBusy}
+                      onChange={(v) => setCard(which, { enabled: v })}
+                      label={which === 'opening' ? 'Opening title' : 'End credits'} />
+                    {c.enabled && (
+                      <div className="stack gap-12 mt-12">
+                        <Field label="Text" hint="One line per row — blank rows leave a gap.">
+                          <textarea className="textarea" rows={which === 'opening' ? 2 : 4} value={c.text}
+                            disabled={anyBusy} onChange={(e) => setCard(which, { text: e.target.value })} />
+                        </Field>
+                        <div className="row gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                          <Field label="Background">
+                            <select className="select" value={c.background} disabled={anyBusy}
+                              onChange={(e) => setCard(which, { background: e.target.value })}>
+                              <option value="color">Solid colour</option>
+                              <option value="image" disabled={!titleCardImages[which]}>Still image</option>
+                            </select>
+                          </Field>
+                          {c.background === 'color' && (
+                            <Field label="Colour">
+                              <input className="input" type="color" value={c.color} disabled={anyBusy}
+                                onChange={(e) => setCard(which, { color: e.target.value })} style={{ width: 56, padding: 2 }} />
+                            </Field>
+                          )}
+                          <Field label="Hold (seconds)">
+                            <input className="input" type="number" min={1} max={20} step={0.5} value={c.seconds}
+                              disabled={anyBusy} onChange={(e) => setCard(which, { seconds: +e.target.value })} style={{ maxWidth: 100 }} />
+                          </Field>
+                        </div>
+                        <div className="row center gap-10" style={{ flexWrap: 'wrap' }}>
+                          {titleCardImages[which] && (
+                            <img src={titleCardImages[which]} alt="" style={{ height: 44, borderRadius: 6, objectFit: 'cover', aspectRatio: aspect }} />
+                          )}
+                          <label className="btn btn--ghost" style={{ cursor: anyBusy ? 'default' : 'pointer' }}>
+                            <Icon name="upload" style={{ width: 14 }} /> {titleCardImages[which] ? 'Replace still' : 'Upload a still'}
+                            <input type="file" accept="image/*" hidden disabled={anyBusy}
+                              onChange={(e) => { uploadTitleCardImage(which, e.target.files?.[0]); e.target.value = '' }} />
+                          </label>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+              <div style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                <div className="row gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <Field label="Font">
+                    <select className="select" value={titleCards.font} disabled={anyBusy}
+                      onChange={(e) => setTitleCards((t) => ({ ...t, font: e.target.value }))}>
+                      {!fonts.some((f) => f.name === titleCards.font) && <option value={titleCards.font}>{titleCards.font || 'Default'}</option>}
+                      {fonts.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+                    </select>
+                  </Field>
+                  <Field label="Text colour">
+                    <input className="input" type="color" value={titleCards.text_color} disabled={anyBusy}
+                      onChange={(e) => setTitleCards((t) => ({ ...t, text_color: e.target.value }))} style={{ width: 56, padding: 2 }} />
+                  </Field>
+                  <Field label="Text size">
+                    <input className="input" type="number" min={0.4} max={2.5} step={0.1} value={titleCards.scale} disabled={anyBusy}
+                      onChange={(e) => setTitleCards((t) => ({ ...t, scale: +e.target.value }))} style={{ maxWidth: 90 }} />
+                  </Field>
+                  <Field label="Fade (seconds)">
+                    <input className="input" type="number" min={0} max={3} step={0.1} value={titleCards.fade} disabled={anyBusy}
+                      onChange={(e) => setTitleCards((t) => ({ ...t, fade: +e.target.value }))} style={{ maxWidth: 90 }} />
+                  </Field>
+                </div>
+              </div>
+            </div>
+          )}
+          <div className="mt-20 stack gap-10">
+            <Button variant="primary" block icon="film"
+              disabled={anyBusy || !titleCards || !(titleCards.opening.enabled || titleCards.credits.enabled)}
+              onClick={applyTitleCards}>
+              {titleCardsBusy ? 'Adding…' : titleCardsApplied ? 'Re-apply titles & credits' : 'Add titles & credits'}
+            </Button>
+            {titleCardsApplied && (
+              <Button variant="ghost" block icon="eye-slash" disabled={anyBusy} onClick={removeTitleCards}>
+                Remove titles &amp; credits
+              </Button>
+            )}
+          </div>
         </Card>
 
         {data.can_remix === false && (
