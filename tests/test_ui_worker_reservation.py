@@ -21,8 +21,12 @@ from pipeline.timing import next_worker_free_seconds
 from pipeline.worker_pool import WorkerPool
 
 
-def _try_acquire(pool: WorkerPool, timeout: float = 0.4):
-    """acquire() in a thread; return the URL or None if it blocked past timeout."""
+def _try_acquire(pool: WorkerPool, timeout: float = 2.0):
+    """acquire() in a thread; return the URL or None if it blocked past timeout.
+
+    The timeout is the margin between "blocked" and "slow": acquire() takes a
+    file lock for the worker lease, and at 0.4 s a loaded CI runner returned
+    None for an acquire that then went through — a flaky failure."""
     box: list = []
     t = threading.Thread(target=lambda: box.append(pool.acquire()), daemon=True)
     t.start()
