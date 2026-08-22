@@ -283,6 +283,36 @@ class EndpointTests(unittest.TestCase):
             apply.assert_called_once()
             self.assertEqual(apply.call_args.kwargs["title"], "The Silent City")
 
+    def test_by_scene_upscale_reapplies_standing_burns_and_cards(self):
+        """The AI upscales rebuild the film from the scene clips, so the
+        burns and cards the published final carried must go back on; the
+        fast upscale resizes the final itself (burns included) and must not."""
+        def fake_scenes(task_id, wd, staged, w, h, cfg, command_template=None, engine=""):
+            staged.write_bytes(b"rebuilt")
+            return staged
+
+        def fake_fast(src, staged, w, h):
+            staged.write_bytes(b"resized")
+            return staged
+
+        for mode, expect in (("flashvsr", 1), ("fast", 0)):
+            with mock.patch.object(backend, "_temporal_upscale_scenes_to_final", side_effect=fake_scenes), \
+                 mock.patch("pipeline.assembler.upscale_video", side_effect=fake_fast), \
+                 mock.patch("pipeline.assembler._get_video_dimensions", return_value=(640, 360)), \
+                 mock.patch.object(backend.gapp, "_UPSCALE_RESOLUTIONS", {"4K": (3840, 2160)}), \
+                 mock.patch.object(backend.gapp, "_RESOLUTIONS", {}), \
+                 mock.patch.object(backend.gapp, "load_config", return_value={}), \
+                 mock.patch.object(backend, "_maybe_burn_subtitles") as subs, \
+                 mock.patch.object(backend, "_maybe_burn_first_frame_cover") as cover, \
+                 mock.patch.object(backend, "_maybe_apply_title_cards") as cards:
+                backend._film_tasks["up"] = {"status": "running"}
+                backend._run_final_video_upscale("up", self.wd, "4K", mode)
+            self.assertEqual(backend._film_tasks["up"]["status"], "done", mode)
+            for m in (subs, cover, cards):
+                self.assertEqual(m.call_count, expect, mode)
+            if expect:
+                cards.assert_called_once_with(self.wd, self.final)
+
     def test_head_seconds_is_best_effort(self):
         with mock.patch.object(tc, "head_seconds", side_effect=RuntimeError("probe")):
             self.assertEqual(backend._title_cards_head_seconds(self.wd), 0.0)

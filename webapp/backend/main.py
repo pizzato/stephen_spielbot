@@ -8308,6 +8308,15 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
 
         _film_checkpoint(task_id)
         staged.replace(final_path)
+        if mode in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
+            # The by-scene upscale is a rebuild from the clean scene clips, so
+            # it has to put back what the published final carried on top of
+            # them — like every other rebuild. (The fast path upscales the
+            # final itself, burns and cards included, so it must NOT re-apply:
+            # a second subtitle pass would print the captions twice.)
+            _maybe_burn_subtitles(wd, final_path)
+            _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_apply_title_cards(wd, final_path)
         mode_label = {
             "fast": "Fast",
             "ltx_latent": "LTX latent",

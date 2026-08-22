@@ -82,10 +82,12 @@ colour**, **Text size** and **Fade** apply to all cards.
 
 **Add titles & credits to the film** joins the cards onto the finished film — before and
 after, nothing inside the film changes — and keeps the previous cut as a selectable
-version. It works on any final, an upscaled one included. Running it again **replaces**
-the cards rather than stacking a second set, and **Remove titles & credits** trims them
-off again. The cards are saved on the film, so every later rebuild (re-mix, re-voice,
-reassemble, localize) puts them back.
+version. It works on any final, an upscaled one included, and the order doesn't matter:
+the cards are saved on the film, so every later rebuild (re-mix, re-voice, reassemble,
+localize, and the by-scene AI upscales) puts them back — drawn at the new size, so
+cards added before a 4K upscale come out as crisp as ones added after. Running it again
+**replaces** the cards rather than stacking a second set, and **Remove titles &
+credits** trims them off again.
 
 Because the opening cards shift the timeline, the caption track publishing attaches
 (and the SRT download) is shifted with them; burned-in subtitles are drawn before the
