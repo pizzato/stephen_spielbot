@@ -3,6 +3,7 @@
 
 import { useRef, useEffect, useState } from 'react'
 import { fileUrl } from './api'
+import { resolveStyle } from './styleUtils.js'
 
 export function Icon({ name, brand, style, spin }) {
   return <i className={`${brand ? 'fa-brands' : 'fa-solid'} fa-${name}${spin ? ' fa-spin' : ''}`} style={style}></i>
@@ -603,9 +604,9 @@ export function FilterSelect({ value, onChange, options, allLabel = 'All' }) {
   )
 }
 
-export function Segmented({ options, value, onChange }) {
+export function Segmented({ options, value, onChange, className = '' }) {
   return (
-    <div className="seg">
+    <div className={`seg ${className}`.trim()}>
       {options.map((o) => (
         <button key={o.value ?? o} className={`seg__opt ${(o.value ?? o) === value ? 'is-active' : ''}`}
           onClick={() => onChange(o.value ?? o)}>{o.label ?? o}</button>
@@ -679,7 +680,10 @@ export function ResolutionPicker({ value, onChange, meta = {} }) {
           value={current.orientation}
           onChange={(o) => emit(o, current.tier)}
         />
+        {/* Seven tiers outgrow narrow form columns; wrap rather than hide the
+            largest ones behind the .seg control's invisible horizontal scroll. */}
         <Segmented
+          className="seg--wrap"
           options={tiers.map((t) => ({ value: t.key, label: t.label || 'Standard' }))}
           value={current.tier}
           onChange={(k) => emit(current.orientation, k)}
@@ -701,6 +705,43 @@ export function Check({ checked, onChange, label, disabled }) {
       <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange?.(e.target.checked)} />
       <span>{label}</span>
     </label>
+  )
+}
+
+// Restyle: point an existing script at another style profile — or, under
+// "No style", at a visual-style sentence of your own — without touching its
+// content. Shared by the Script screen's Restyle modal and the film editor's
+// "Restyle this film" card. `value` is { styleName, style, repaintCast };
+// picking a style prefills its sentence and, like Create, locks the text while
+// the style owns one (a style's look is set in Settings, so the two can never
+// contradict each other on the prompt).
+export const NO_STYLE = '(none)'   // must match app.NO_STYLE
+export function RestyleForm({ styles = [], value, onChange, disabled }) {
+  const profile = value.styleName && value.styleName !== NO_STYLE ? resolveStyle(styles, value.styleName) : null
+  const locked = !!(profile?.visual_style || '').trim()
+  const pick = (name) => {
+    const resolved = name === NO_STYLE ? null : resolveStyle(styles, name)
+    onChange({ ...value, styleName: name, style: resolved?.visual_style || '' })
+  }
+  return (
+    <div className="stack gap-16">
+      <Field label="Style">
+        <select className="select" value={value.styleName} disabled={disabled} onChange={(e) => pick(e.target.value)}>
+          {styles.map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+          <option value={NO_STYLE}>No style — write the look yourself</option>
+        </select>
+      </Field>
+      <Field label="Visual style"
+        hint={locked ? 'Set by the style — pick “No style” to write your own.'
+          : 'Leads every scene\'s image prompt in place of the old style sentence.'}>
+        <textarea className="textarea" rows={3} value={value.style} disabled={disabled || locked}
+          placeholder="Cinematic 35mm, golden hour, painterly lighting"
+          onChange={(e) => onChange({ ...value, style: e.target.value })} />
+      </Field>
+      <Check checked={!!value.repaintCast} disabled={disabled}
+        onChange={(v) => onChange({ ...value, repaintCast: v })}
+        label="Repaint the cast's looks in the new style (untick to keep uploaded portraits)" />
+    </div>
   )
 }
 

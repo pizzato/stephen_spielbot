@@ -257,6 +257,11 @@ body {
    itself on a narrow phone instead of pushing the whole page wider. */
 .seg { display: inline-flex; max-width: 100%; overflow-x: auto; background: var(--paper-2); border-radius: var(--r-pill); padding: 4px; gap: 2px; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
 .seg::-webkit-scrollbar { display: none; }
+/* Variant for groups with too many options for one line (e.g. pixel tiers):
+   wrap onto extra rows instead of hiding the tail behind an invisible
+   horizontal scroll. The pill radius would clip corner options once the
+   group is two rows tall, so it flattens to the card radius. */
+.seg--wrap { flex-wrap: wrap; border-radius: var(--r-lg); }
 .seg__opt { flex: 0 0 auto; white-space: nowrap; border: 0; background: transparent; padding: 7px 14px; border-radius: var(--r-pill); font: 600 13px/1 var(--font); color: var(--ink-2); cursor: pointer; transition: all .15s; }
 .seg__opt.is-active { background: var(--surface); color: var(--ink); box-shadow: var(--shadow-sm); }
 
