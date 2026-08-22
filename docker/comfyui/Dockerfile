@@ -240,6 +240,27 @@ RUN if [ -n "${H3_LATENT_UPSCALER_REF}" ]; then \
         echo "H3 latent upscaler not installed (H3_LATENT_UPSCALER_REF empty)"; \
     fi
 
+# FlashVSR — one-step diffusion video super-resolution (OpenImagingLab,
+# Apache-2.0), the default finishing/Remix upscaler ("flashvsr" mode,
+# workflows/flashvsr_upscale.json). This community wrapper replaces the
+# upstream Block-Sparse-Attention kernel with Sparse SageAttention (already in
+# the image), so nothing is compiled. Its requirements are all satisfied by
+# the image (torch, einops, safetensors, huggingface_hub, triton).
+# Weights land in models/FlashVSR-v1.1/ via scripts/download_models.sh; the
+# node would otherwise auto-download them from Hugging Face on first use.
+#
+# PINNED: proven on the GB10 fleet 2026-08-22 at this commit (2x/4x, tiny and
+# full). Set empty to leave the nodes out.
+ARG FLASHVSR_NODES_REF=4820b3f02347bddcbbb9a5a85ab7638fe976366e
+RUN if [ -n "${FLASHVSR_NODES_REF}" ]; then \
+        git clone https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast.git \
+            custom_nodes/ComfyUI-FlashVSR_Ultra_Fast \
+        && git -C custom_nodes/ComfyUI-FlashVSR_Ultra_Fast checkout "${FLASHVSR_NODES_REF}" \
+        && rm -rf custom_nodes/ComfyUI-FlashVSR_Ultra_Fast/img; \
+    else \
+        echo "FlashVSR nodes not installed (FLASHVSR_NODES_REF empty)"; \
+    fi
+
 # Audio-driven H3 (this repo's addition, proven 2026-08-14): pin a whole audio
 # track across a clip so the video is generated to match it. Appended into the
 # Motion Context pack because it reuses its layout/payload patches and encode

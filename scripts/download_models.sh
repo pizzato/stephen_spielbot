@@ -218,6 +218,22 @@ download \
     "97b4a93d3ab57957d80244b141348a322d77c80a" \
     || echo "  [warn] MiniMax H3 latent upscaler skipped"
 
+# FlashVSR v1.1 — the default "flashvsr" finishing/Remix upscaler (one-step
+# diffusion video super-resolution on Wan2.1, Apache-2.0). The ComfyUI node
+# loads the whole folder by name, so all four files go to models/FlashVSR-v1.1/.
+# PINNED to a revision: single-author repo. The .ckpt/.pth files are pickles;
+# torch >= 2.6 loads them with weights_only=True, which the image satisfies.
+# https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1
+for f in LQ_proj_in.ckpt TCDecoder.ckpt Wan2.1_VAE.pth \
+         diffusion_pytorch_model_streaming_dmd.safetensors config.json model_index.json; do
+    download \
+        "JunhaoZhuang/FlashVSR-v1.1" \
+        "$f" \
+        "models/FlashVSR-v1.1" \
+        "27561b186ded3402d7c975f4fd722e2885b6135f" \
+        || echo "  [warn] FlashVSR $f skipped"
+done
+
 download \
     "Comfy-Org/ltx-2" \
     "split_files/text_encoders/gemma_3_12B_it_fp4_mixed.safetensors" \

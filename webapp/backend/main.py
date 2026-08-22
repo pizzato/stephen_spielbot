@@ -6552,7 +6552,7 @@ def start_generation(body: GenerateBody) -> dict:
         # upscaler that gets it there ("" = no finishing step). Stamped flat so
         # resume_generation.py reads them like every other render key.
         "finish_resolution": finish_resolution,
-        "finish_upscale_mode": ss.get("finish_upscale_mode") or "fast",
+        "finish_upscale_mode": ss.get("finish_upscale_mode") or "flashvsr",
         "default_voice": voice_name, "voice_ref": voice_ref or "",
         # 0 = natural; >0 robotizes at that strength (the on/off toggle was
         # folded into the level).
@@ -7045,7 +7045,7 @@ class RemixNarratorBody(BaseModel):
 class RemixUpscaleBody(BaseModel):
     work_dir: str
     target_resolution: str
-    upscale_mode: str = "fast"
+    upscale_mode: str = "flashvsr"
 
 
 class RemixVideoSelectBody(BaseModel):
@@ -8283,7 +8283,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
         )
         _film_tasks[task_id] = {"status": "running", "step": "final_upscale"}
         cfg = gapp.load_config()
-        if mode in {"ic_lora", "ltx_latent", "h3_latent"}:
+        if mode in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
             command_template = cfg.get("temporal_video_upscaler_cmd") or None
             _temporal_upscale_scenes_to_final(
                 task_id, wd, staged, target_w, target_h, cfg,
@@ -8300,6 +8300,7 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
             "ltx_latent": "LTX latent",
             "ic_lora": "LTX IC-LoRA",
             "h3_latent": "H3 latent",
+            "flashvsr": "FlashVSR",
         }.get(mode, mode)
         label = f"{mode_label} {target_w}x{target_h}"
         final_video_history.record(wd, final_path, label=label, lang=cur_lang, kind="upscale")
@@ -8347,6 +8348,7 @@ def _normalize_upscale_mode(mode: str | None) -> str:
     - ltx_latent: LTXVLatentUpsampler + latent spatial-upscaler-x2
     - ic_lora: LTX-2.3 IC-LoRA Pixel Spatial Upscaler (generative)
     - h3_latent: MiniMax H3 24-channel latent upscaler (learned 3D resize)
+    - flashvsr: FlashVSR one-step diffusion video super-resolution (2x/4x)
     ``temporal_ai`` is accepted as an alias of ``ic_lora`` for older clients.
     """
     m = (mode or "fast").strip().lower()
@@ -8356,10 +8358,12 @@ def _normalize_upscale_mode(mode: str | None) -> str:
         return "ltx_latent"
     if m in {"h3_latent", "h3", "minimax_h3_latent"}:
         return "h3_latent"
+    if m in {"flashvsr", "flash_vsr"}:
+        return "flashvsr"
     if m in {"fast", "ffmpeg"}:
         return "fast"
     raise RuntimeError(
-        "Choose a valid upscale mode (fast, ltx_latent, ic_lora, or h3_latent)."
+        "Choose a valid upscale mode (fast, flashvsr, ltx_latent, ic_lora, or h3_latent)."
     )
 
 

@@ -195,9 +195,9 @@ DEFAULT_CFG = {
     "ambient_vol": 0,
     "resolution": _DEFAULT_RESOLUTION,
     # Upscaler that finishes a render whose target is an upscale-only size
-    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("ltx_latent", "ic_lora",
-    # "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
-    "default_finish_upscale_mode": "fast",
+    # (QHD/4K): "fast" (ffmpeg Lanczos) or an AI mode ("flashvsr", "ltx_latent",
+    # "ic_lora", "h3_latent" — see pipeline/assembler.temporal_ai_upscale_video).
+    "default_finish_upscale_mode": "flashvsr",
     "max_clip_secs": 0,
     "lora_strength": 0.5,
     # First-pass (distilled LoRA) settings — set steps=8 + cfg=1.0 for distilled mode;

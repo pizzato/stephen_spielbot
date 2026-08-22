@@ -1,0 +1,43 @@
+{
+  "2": {
+    "class_type": "VHS_LoadVideoFFmpeg",
+    "inputs": {
+      "video": "{{VIDEO_NAME}}",
+      "force_rate": 0,
+      "custom_width": 0,
+      "custom_height": 0,
+      "frame_load_cap": 0,
+      "start_time": 0
+    }
+  },
+  "3": {
+    "class_type": "FlashVSRNode",
+    "inputs": {
+      "frames": ["2", 0],
+      "model": "{{MODEL}}",
+      "mode": "{{MODE}}",
+      "scale": "{{SCALE}}",
+      "tiled_vae": "{{TILED}}",
+      "tiled_dit": "{{TILED}}",
+      "unload_dit": false,
+      "seed": 0
+    }
+  },
+  "7": {
+    "class_type": "VHS_VideoCombine",
+    "inputs": {
+      "images": ["3", 0],
+      "frame_rate": "{{FPS}}",
+      "loop_count": 0,
+      "filename_prefix": "spielbot-flashvsr-upscale",
+      "format": "video/h264-mp4",
+      "pix_fmt": "yuv420p",
+      "crf": 16,
+      "save_metadata": false,
+      "trim_to_audio": false,
+      "pingpong": false,
+      "save_output": true,
+      "audio": ["2", 2]
+    }
+  }
+}

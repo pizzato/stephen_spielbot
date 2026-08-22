@@ -2582,8 +2582,9 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                 if (!anyFinishing) return null
                 return (
                   <Field label="Finishing upscaler" hint="How a QHD/4K target is reached from the rendered film. AI modes shoot each scene through a ComfyUI upscaler; Fast is a plain resample.">
-                    <select className="select" value={eff.finish_upscale_mode || 'fast'}
+                    <select className="select" value={eff.finish_upscale_mode || 'flashvsr'}
                       onChange={(e) => setStyleField('finish_upscale_mode', e.target.value)}>
+                      <option value="flashvsr">FlashVSR (video super-resolution)</option>
                       <option value="fast">Fast (ffmpeg)</option>
                       <option value="ltx_latent">LTX latent (simple model)</option>
                       <option value="ic_lora">LTX IC-LoRA (generative)</option>
