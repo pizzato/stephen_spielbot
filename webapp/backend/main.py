@@ -8376,7 +8376,7 @@ def _temporal_upscale_scenes_to_final(
     import shutil
     from pipeline.assembler import (
         _verify_upscale_not_blank,
-        concatenate_scenes_hard_cut,
+        concatenate_scenes,
         mix_background_music,
         temporal_ai_upscale_video,
     )
@@ -8402,9 +8402,9 @@ def _temporal_upscale_scenes_to_final(
     per_scene_est, _learned = film_timing.estimate("upscale_scene", width=target_w, height=target_h)
     tmp_root = wd / "final_upscale_scenes"
     # Keyed by engine + target so a re-run reuses only work done for the SAME
-    # job, and kept on disk rather than thrown away: a film can spend hours
-    # upscaling its scenes, and losing all of them because the last one failed
-    # means starting from nothing.
+    # job, and kept on disk — after success as much as after a failure: a film
+    # can spend hours upscaling its scenes, and a rebuild (a join that went
+    # wrong, a re-mixed score) should not cost that again.
     tmp_dir = tmp_root / f"{engine}-{target_w}x{target_h}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     upscaled_by_index: list[Path | None] = [None] * n_scenes
@@ -8418,9 +8418,13 @@ def _temporal_upscale_scenes_to_final(
     }
 
     def _reusable(out: Path, scene_path: Path) -> bool:
-        """True when a previous run already produced this scene at this size."""
+        """True when a previous run already produced this scene at this size
+        from the scene as it is now — a re-shot or re-voiced scene of the same
+        length must not pass off its old upscale."""
         from pipeline.assembler import _get_duration, _get_video_dimensions
         if not out.exists() or out.stat().st_size <= 10_000:
+            return False
+        if out.stat().st_mtime < scene_path.stat().st_mtime:
             return False
         try:
             if _get_video_dimensions(out) != (target_w, target_h):
@@ -8513,7 +8517,12 @@ def _temporal_upscale_scenes_to_final(
     _film_checkpoint(task_id)
     _film_tasks[task_id] = {"status": "running", "step": "finalize"}
     combined = tmp_dir / "combined.upscaled.mp4"
-    concatenate_scenes_hard_cut(upscaled, combined)
+    # The same join the film itself was assembled with: every clip is decoded
+    # and laid on one film-rate timeline. A stream copy of the clips was what
+    # assembled one film's 4K version into 21 scenes of 36 collapsing into a
+    # few milliseconds each — the concat demuxer takes the clips' timebases to
+    # be identical, and upscaled scenes do not all come back at one rate.
+    concatenate_scenes(upscaled, combined, fade=0.0)
 
     jc = _film_job_config(wd)
     music_path = wd / "background_music.wav"
@@ -8531,8 +8540,7 @@ def _temporal_upscale_scenes_to_final(
         )
     else:
         shutil.copy2(combined, staged_final)
-    # Reached only on success — the per-scene work is no longer needed.
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    combined.unlink(missing_ok=True)
     return staged_final
 
 

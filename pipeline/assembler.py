@@ -188,12 +188,16 @@ def _get_video_dimensions(path: Path) -> tuple[int, int]:
     return int(width_s), int(height_s)
 
 
-def _get_video_fps(path: Path) -> float:
+def _video_frame_rates(path: Path) -> tuple[float, float]:
+    """(nominal, average) frame rate of the first video stream — ffprobe's
+    r_frame_rate and avg_frame_rate. They agree on a constant-rate clip; they
+    differ when frames are missing or unevenly timed. 25.0 stands in for a
+    value ffprobe cannot give."""
     result = subprocess.run(
         [
             _FFPROBE, "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=avg_frame_rate,r_frame_rate",
+            "-show_entries", "stream=r_frame_rate,avg_frame_rate",
             "-of", "json",
             str(path),
         ],
@@ -201,23 +205,81 @@ def _get_video_fps(path: Path) -> float:
     )
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed:\n{result.stderr[-2000:]}")
+    rates = []
     try:
         import json
 
         streams = json.loads(result.stdout or "{}").get("streams") or []
         stream = streams[0] if streams else {}
-        for key in ("avg_frame_rate", "r_frame_rate"):
+        for key in ("r_frame_rate", "avg_frame_rate"):
             value = str(stream.get(key) or "")
             if "/" in value:
                 num, den = value.split("/", 1)
                 fps = float(num) / float(den)
             else:
                 fps = float(value)
-            if fps > 0:
-                return fps
+            rates.append(fps if fps > 0 else 25.0)
     except Exception:
-        pass
-    return 25.0
+        rates = []
+    while len(rates) < 2:
+        rates.append(25.0)
+    return rates[0], rates[1]
+
+
+def _constant_rate_source(input_path: Path, output_path: Path) -> tuple[Path, float]:
+    """The clip to hand an AI upscaler, and the frame rate to write its result at.
+
+    The ComfyUI upscale graphs load the source as a constant-rate frame
+    sequence and write the result at whatever rate we name. Naming the AVERAGE
+    rate of an unevenly timed clip (one that had frames dropped at the mux, for
+    instance) stretches it: 24 fps of frames replayed at 18 fps ran every scene
+    of a film a third long. An uneven clip is first re-encoded at its nominal
+    rate — holes filled, length unchanged — so the rate we name is the rate the
+    frames were loaded at. A clip that is already constant-rate is returned
+    untouched.
+    """
+    nominal, average = _video_frame_rates(input_path)
+    if abs(nominal - average) <= 0.01 * nominal:
+        return input_path, nominal
+    # A stream whose timestamps are already scrambled can report an absurd
+    # nominal rate; the average is then the better estimate of its real rate.
+    rate = nominal if nominal <= 120 else round(average)
+    cfr = output_path.with_name(f"{output_path.stem}.cfr{output_path.suffix}")
+    logger.info("[ffmpeg] constant-rate copy of %s at %.3f fps (nominal %.3f, average %.3f)",
+                input_path.name, rate, nominal, average)
+    _run([
+        _FFMPEG, "-y",
+        "-i", str(input_path),
+        "-vf", f"fps={rate}",
+        "-c:v", "libx264", "-crf", "18", "-preset", "fast",
+        "-pix_fmt", "yuv420p",
+        "-c:a", "copy",
+        "-movflags", "+faststart",
+        str(cfr),
+    ], timeout=1800)
+    return cfr, float(rate)
+
+
+def _restore_source_clock(video_path: Path, source_path: Path, output_path: Path,
+                          duration: float) -> Path:
+    """Put an upscaled clip back on its source's clock: the source's audio and
+    exactly the source's length.
+
+    Every upscaler round-trips through a VAE, which does not preserve frame
+    count, so a clip comes back a few frames long or short — and the
+    reassembled film drifts out of sync with its captions if that is left
+    alone. The audio is muxed first (a cheap stream copy that also trims a
+    long result); only a length that is still off is re-encoded to conform.
+    """
+    _mux_source_audio(video_path, source_path, output_path, target_duration=duration)
+    if abs(_get_duration(output_path) - duration) > 0.01:
+        conformed = output_path.with_name(f"{output_path.stem}.conformed{output_path.suffix}")
+        try:
+            conform_video_to_source(output_path, source_path, conformed, duration)
+            conformed.replace(output_path)
+        finally:
+            conformed.unlink(missing_ok=True)
+    return output_path
 
 
 def _luma_profile(path: Path, probes: int = _UPSCALE_PROBES) -> list[float]:
@@ -470,8 +532,9 @@ def temporal_ai_upscale_video(
             upscale_video_ltx_latent,
         )
 
-        duration = _get_duration(input_path)
-        fps = _get_video_fps(input_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        source, fps = _constant_rate_source(input_path, output_path)
+        duration = _get_duration(source)
         # Config wins, then the env override, then the packaged default.
         chunk_seconds = max(1.0, float(chunk_seconds or os.environ.get(
             "TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS",
@@ -516,7 +579,7 @@ def temporal_ai_upscale_video(
             """*chunk* None upscales the clip whole, in one piece."""
             if chunk is not None and duration > chunk + 0.25:
                 return _chunked_comfy_temporal_upscale(
-                    input_path,
+                    source,
                     output_path,
                     width,
                     height,
@@ -528,22 +591,33 @@ def temporal_ai_upscale_video(
                     upscale_fn=_comfy_upscale,
                 )
             if eng == "ltx_latent":
-                return upscale_video_ltx_latent(
-                    input_path, output_path, width, height,
+                upscale_video_ltx_latent(
+                    source, output_path, width, height,
                     fps=fps, timeout_seconds=timeout, comfy_url=url,
                 )
-            if eng == "h3_latent":
-                return upscale_video_h3_latent(
-                    input_path, output_path, width, height,
+            elif eng == "h3_latent":
+                upscale_video_h3_latent(
+                    source, output_path, width, height,
                     fps=fps, timeout_seconds=timeout, comfy_url=url,
                     source_width=actual_w, source_height=actual_h,
                 )
-            return upscale_video_ltx(
-                input_path, output_path, width, height,
-                fps=fps, timeout_seconds=timeout, comfy_url=url,
-                source_width=actual_w, source_height=actual_h,
-                duration_seconds=duration,
-            )
+            else:
+                upscale_video_ltx(
+                    source, output_path, width, height,
+                    fps=fps, timeout_seconds=timeout, comfy_url=url,
+                    source_width=actual_w, source_height=actual_h,
+                    duration_seconds=duration,
+                )
+            # The chunked path does this per join; the whole clip needs it just
+            # the same — ComfyUI hands back its own frame count and a padded
+            # audio track, not the source's.
+            staged = output_path.with_name(f"{output_path.stem}.clock{output_path.suffix}")
+            try:
+                _restore_source_clock(output_path, source, staged, duration)
+                staged.replace(output_path)
+            finally:
+                staged.unlink(missing_ok=True)
+            return output_path
 
         # The whole clip first, ALWAYS, however long it is. Splitting a clip and
         # xfade-joining the pieces breaks continuity at every seam — badly so
@@ -556,21 +630,25 @@ def temporal_ai_upscale_video(
             attempts.append(chunk)
             chunk /= 2
         last_blank: RuntimeError | None = None
-        for i, attempt_chunk in enumerate(attempts):
-            result = _run_once(attempt_chunk)
-            try:
-                _verify_upscale_not_blank(input_path, result)
-                return result
-            except RuntimeError as exc:
-                last_blank = exc
-                if i + 1 >= len(attempts):
-                    break
-                logger.warning(
-                    "[upscale] %s came back blank %s; retrying in %.1fs chunks (%s)",
-                    input_path.name,
-                    "whole" if attempt_chunk is None else f"at {attempt_chunk:.1f}s chunks",
-                    attempts[i + 1], eng,
-                )
+        try:
+            for i, attempt_chunk in enumerate(attempts):
+                result = _run_once(attempt_chunk)
+                try:
+                    _verify_upscale_not_blank(source, result)
+                    return result
+                except RuntimeError as exc:
+                    last_blank = exc
+                    if i + 1 >= len(attempts):
+                        break
+                    logger.warning(
+                        "[upscale] %s came back blank %s; retrying in %.1fs chunks (%s)",
+                        input_path.name,
+                        "whole" if attempt_chunk is None else f"at {attempt_chunk:.1f}s chunks",
+                        attempts[i + 1], eng,
+                    )
+        finally:
+            if source != input_path:
+                source.unlink(missing_ok=True)
         raise last_blank
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -662,17 +740,9 @@ def _chunked_comfy_temporal_upscale(
             _concat_video_chunks(upscaled, video_only)
         else:
             _xfade_video_chunks(upscaled, video_only, body_seconds=body, overlap_seconds=overlap)
-        _mux_source_audio(video_only, input_path, output_path, target_duration=duration)
-        # Every upscaler round-trips through a VAE, which does not preserve frame
-        # count, so each chunk returns slightly short and the join compounds it
-        # (measured: 6.250s of source came back as 5.917s over two chunks).
-        # _mux_source_audio can only trim, so conform to pad the shortfall —
-        # otherwise every chunked scene runs short and the reassembled film
-        # drifts out of sync with its captions.
-        if abs(_get_duration(output_path) - duration) > 0.01:
-            conformed = tmp_dir / "conformed.mp4"
-            conform_video_to_source(output_path, input_path, conformed, duration)
-            shutil.move(str(conformed), str(output_path))
+        # Each chunk returns slightly short and the join compounds it (measured:
+        # 6.250s of source came back as 5.917s over two chunks).
+        _restore_source_clock(video_only, input_path, output_path, duration)
     return output_path
 
 
@@ -702,6 +772,10 @@ def _extract_temporal_chunk(input_path: Path, output_path: Path, start: float, d
 
 
 def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
+    """Stream-copy join of clips that share one codec, size, frame rate and
+    timebase (an H3 chain's halves, a take and its continuation). The concat
+    demuxer does not rescale timestamps between files, so clips at different
+    rates must go through concatenate_scenes instead."""
     list_path = output_path.with_suffix(".concat.txt")
     try:
         list_path.write_text(
@@ -717,12 +791,17 @@ def _concat_video_chunks(chunks: list[Path], output_path: Path) -> Path:
         # With the picture starting at 0, scene N's first frame sits at exactly
         # the film time its song window says. (-avoid_negative_ts make_zero is
         # NOT a substitute: measured, it moved the picture 83 ms the same way.)
+        # PTS and DTS must move by the SAME amount. The first DTS sits two
+        # frames before the first PTS (x264's B-frame delay), so shifting DTS by
+        # STARTDTS put every B-frame's DTS after its PTS; ffmpeg "replaces by
+        # guess", stamps those frames one tick apart, and the next mux drops a
+        # quarter of the picture (a chained H3 scene lost 19 of 79 frames).
         _run([
             _FFMPEG, "-y",
             "-f", "concat", "-safe", "0",
             "-i", str(list_path),
             "-c", "copy",
-            "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTDTS",
+            "-bsf:v", "setts=pts=PTS-STARTPTS:dts=DTS-STARTPTS",
             "-movflags", "+faststart",
             str(output_path),
         ], timeout=1800)
