@@ -7168,13 +7168,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # Opening title / end credits (Titles & credits card): the standing
         # settings, pre-filled so the form opens ready, and whether the
         # published cut carries them right now.
-        "title_cards": _title_cards_form(wd, jc, _title),
+        "title_cards": _title_cards_form(wd, jc),
         "title_cards_applied": bool(_title_cards.applied_title_cards(wd, final_vid)),
-        "title_card_images": {
-            which: (_busted_file_url(_title_cards.card_image_path(wd, which))
-                    if _title_cards.card_image_path(wd, which).exists() else "")
-            for which in ("opening", "credits")
-        },
+        "title_card_images": _title_card_images(wd, jc),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
         **_film_publish_status(wd, meta, cfg),
@@ -8771,17 +8767,23 @@ def _title_cards_default_font(wd: Path) -> str:
     return str(gapp._norm_cover_typography(ss.get("cover_typography")).get("font") or "")
 
 
-def _title_cards_form(wd: Path, jc: dict, title: str) -> dict:
-    """The saved title-card settings with blanks filled for the editor: the
-    opening reads the film's title and the credits a one-line sign-off."""
+def _title_cards_form(wd: Path, jc: dict) -> dict:
+    """The saved title-card settings for the editor, with the font filled
+    from the style so the form opens ready."""
     cards = _title_cards.norm_title_cards(jc.get("title_cards"))
-    if not cards["opening"]["text"]:
-        cards["opening"]["text"] = title
-    if not cards["credits"]["text"]:
-        cards["credits"]["text"] = f"{title}\n\nMade with Stephen Spielbot"
     if not cards["font"]:
         cards["font"] = _title_cards_default_font(wd)
     return cards
+
+
+def _title_card_images(wd: Path, jc: dict) -> dict:
+    """``{card_id: url}`` for every card that has an uploaded still."""
+    out = {}
+    for card in _title_cards.norm_title_cards(jc.get("title_cards"))["cards"]:
+        path = _title_cards.card_image_path(wd, card["id"])
+        if path.exists():
+            out[card["id"]] = _busted_file_url(path)
+    return out
 
 
 def _title_cards_head_seconds(wd: Path) -> float:
@@ -8803,7 +8805,7 @@ def _maybe_apply_title_cards(wd: Path, final_path: Path | str) -> None:
     Best-effort: a rebuilt film without its titles beats a failed rebuild."""
     try:
         cfg = _title_cards.norm_title_cards(_film_job_config(wd).get("title_cards"))
-        if not (cfg["opening"]["enabled"] or cfg["credits"]["enabled"]):
+        if not cfg["cards"]:
             return
         _title_cards.apply_title_cards(
             Path(final_path), wd, cfg,
@@ -8823,7 +8825,7 @@ class TitleCardsRemoveBody(BaseModel):
 
 class TitleCardImageBody(BaseModel):
     work_dir: str
-    which: str = "opening"  # opening | credits
+    card_id: str
     filename: str = ""
     data: str
 
@@ -8882,13 +8884,12 @@ def remix_title_cards(body: TitleCardsBody) -> dict:
     if not gapp._final_path_for_work_dir(wd).exists():
         raise HTTPException(404, f"Final video not found for {wd.name}.")
     cfg = _title_cards.norm_title_cards(body.title_cards)
-    if not (cfg["opening"]["enabled"] or cfg["credits"]["enabled"]):
-        raise HTTPException(400, "Switch on the opening title or the end credits first.")
-    for which in ("opening", "credits"):
-        card = cfg[which]
-        if (card["enabled"] and card["background"] == "image"
-                and not _title_cards.card_image_path(wd, which).exists()):
-            raise HTTPException(400, f"Upload a still for the {which} card first, "
+    if not cfg["cards"]:
+        raise HTTPException(400, "Add a card first.")
+    for n, card in enumerate(cfg["cards"], 1):
+        if (card["background"] == "image"
+                and not _title_cards.card_image_path(wd, card["id"]).exists()):
+            raise HTTPException(400, f"Upload a still for card {n} first, "
                                      "or use a solid colour.")
     jc = _film_job_config(wd)
     jc["title_cards"] = cfg
@@ -8906,15 +8907,16 @@ def remix_title_cards(body: TitleCardsBody) -> dict:
 
 @api.post("/api/remix/title-cards/remove")
 def remix_title_cards_remove(body: TitleCardsRemoveBody) -> dict:
-    """Trim the stamped cards off the published cut and stop re-applying
-    them on rebuilds. The titled cut stays selectable as a version."""
+    """Trim the stamped cards off the published cut and clear the list so
+    rebuilds stop re-applying them. The titled cut stays selectable as a
+    version; uploaded stills stay on disk for a later card."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
     final_path = gapp._final_path_for_work_dir(wd)
     jc = _film_job_config(wd)
     cards = _title_cards.norm_title_cards(jc.get("title_cards"))
-    cards["opening"]["enabled"] = cards["credits"]["enabled"] = False
+    cards["cards"] = []
     jc["title_cards"] = cards
     _write_film_job_config(wd, jc)
     trimmed = False
@@ -8940,16 +8942,18 @@ def remix_title_card_image(body: TitleCardImageBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
-    which = body.which if body.which in ("opening", "credits") else "opening"
+    card_id = _title_cards.norm_card_id(body.card_id)
+    if not card_id:
+        raise HTTPException(400, "Which card is this still for?")
     raw = _decode_image(body.data)
-    dest = _title_cards.card_image_path(wd, which)
+    dest = _title_cards.card_image_path(wd, card_id)
     try:
         from PIL import Image
         with Image.open(io.BytesIO(raw)) as im:
             im.convert("RGB").save(dest, "PNG")
     except Exception as e:
         raise HTTPException(400, f"Could not read that image: {e}")
-    return {"ok": True, "which": which, "url": _busted_file_url(dest)}
+    return {"ok": True, "card_id": card_id, "url": _busted_file_url(dest)}
 
 
 @api.post("/api/remix/video-select")

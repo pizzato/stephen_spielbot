@@ -1119,17 +1119,40 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setFfCoverBusy(false) }
   }
 
-  const setCard = (which, patch) =>
-    setTitleCards((t) => ({ ...t, [which]: { ...t[which], ...patch } }))
+  // Title cards are an ordered list; each is placed at the start or the end
+  // and stacks with the others of its placement in list order.
+  const setCard = (id, patch) =>
+    setTitleCards((t) => ({ ...t, cards: t.cards.map((c) => (c.id === id ? { ...c, ...patch } : c)) }))
+  const addCard = (placement) =>
+    setTitleCards((t) => ({
+      ...t,
+      cards: [...t.cards, {
+        id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+        placement,
+        text: placement === 'start' ? (coverTitle || filmTitle || '') : 'Made with Stephen Spielbot',
+        background: 'color', color: '#000000', seconds: placement === 'start' ? 4 : 6,
+      }],
+    }))
+  const removeCard = (id) => setTitleCards((t) => ({ ...t, cards: t.cards.filter((c) => c.id !== id) }))
+  const moveCard = (id, dir) => setTitleCards((t) => {
+    const cards = [...t.cards]
+    const i = cards.findIndex((c) => c.id === id)
+    // Only reorder within the same placement — the lists are shown separately.
+    let j = i + dir
+    while (j >= 0 && j < cards.length && cards[j].placement !== cards[i].placement) j += dir
+    if (j < 0 || j >= cards.length) return t
+    ;[cards[i], cards[j]] = [cards[j], cards[i]]
+    return { ...t, cards }
+  })
 
-  const uploadTitleCardImage = async (which, file) => {
+  const uploadTitleCardImage = async (id, file) => {
     if (!file) return
     setError('')
     try {
       const payload = await fileToDataUrl(file)
-      const r = await api.uploadTitleCardImage(data.work_dir, which, file.name, payload)
-      setTitleCardImages((m) => ({ ...m, [which]: r.url }))
-      setCard(which, { background: 'image' })
+      const r = await api.uploadTitleCardImage(data.work_dir, id, file.name, payload)
+      setTitleCardImages((m) => ({ ...m, [id]: r.url }))
+      setCard(id, { background: 'image' })
     } catch (e) { setError(e.message) }
   }
 
@@ -1166,7 +1189,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       if (r.final_url) setData((d) => ({ ...d, final_url: r.final_url }))
       if (r.video_history) setVideoHistory(r.video_history)
       setTitleCardsApplied(false)
-      setTitleCards((t) => t && ({ ...t, opening: { ...t.opening, enabled: false }, credits: { ...t.credits, enabled: false } }))
+      setTitleCards((t) => t && ({ ...t, cards: [] }))
       setStatus(r.message || 'Titles & credits removed.')
     } catch (e) { setError(e.message) } finally { setTitleCardsBusy(false) }
   }
@@ -1541,66 +1564,83 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         </Card>
 
         <Card span={4} padLg className="reveal reveal-d2">
-          <span className="label-sm row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Titles &amp; credits</span>
+          <span className="label-sm row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Titles &amp; Credits</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-            Open the film with a title card and close it with end credits — a
-            solid colour or your own still, with text in the style&apos;s display
-            font, faded in and out. They are joined onto the finished film
-            (nothing inside it changes), the previous cut is kept as a version,
-            and once on, every later rebuild keeps them.
+            Stack title cards before the film and credit cards after it — each a
+            solid colour or your own still with text in the style&apos;s display font,
+            faded in and out, shown for as long as you like, one after another.
+            They are joined onto the finished film (nothing inside it changes),
+            the previous cut is kept as a version, and once on, every later rebuild
+            keeps them.
             {titleCardsApplied && <strong> This cut has them on.</strong>}
           </p>
           {titleCards && (
             <div className="stack gap-18 mt-20">
-              {['opening', 'credits'].map((which) => {
-                const c = titleCards[which]
+              {['start', 'end'].map((placement) => {
+                const list = titleCards.cards.filter((c) => c.placement === placement)
                 return (
-                  <div key={which} style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                    <Check checked={!!c.enabled} disabled={anyBusy}
-                      onChange={(v) => setCard(which, { enabled: v })}
-                      label={which === 'opening' ? 'Opening title' : 'End credits'} />
-                    {c.enabled && (
-                      <div className="stack gap-12 mt-12">
+                  <div key={placement} style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
+                    <div className="row center" style={{ justifyContent: 'space-between' }}>
+                      <span className="label-sm">{placement === 'start' ? 'Opening' : 'End'}</span>
+                      <Button variant="ghost" size="sm" icon="plus" disabled={anyBusy || titleCards.cards.length >= 12}
+                        onClick={() => addCard(placement)}>Add card</Button>
+                    </div>
+                    {list.length === 0 && (
+                      <p className="muted" style={{ fontSize: 12.5, marginTop: 8 }}>
+                        {placement === 'start' ? 'No opening cards — the film starts straight away.' : 'No end cards — the film ends on its last scene.'}
+                      </p>
+                    )}
+                    {list.map((c, i) => (
+                      <div key={c.id} className="stack gap-12" style={{ marginTop: 12, padding: 12, border: '1px solid var(--line)', borderRadius: 10 }}>
+                        <div className="row center gap-8" style={{ justifyContent: 'space-between' }}>
+                          <span className="muted" style={{ fontSize: 12 }}>Card {i + 1} of {list.length}</span>
+                          <div className="row center gap-4">
+                            <Button variant="ghost" size="sm" icon="arrow-up" disabled={anyBusy || i === 0} onClick={() => moveCard(c.id, -1)} title="Earlier" />
+                            <Button variant="ghost" size="sm" icon="arrow-down" disabled={anyBusy || i === list.length - 1} onClick={() => moveCard(c.id, 1)} title="Later" />
+                            <Button variant="ghost" size="sm" icon="xmark" disabled={anyBusy} onClick={() => removeCard(c.id)} title="Remove card" />
+                          </div>
+                        </div>
                         <Field label="Text" hint="One line per row — blank rows leave a gap.">
-                          <textarea className="textarea" rows={which === 'opening' ? 2 : 4} value={c.text}
-                            disabled={anyBusy} onChange={(e) => setCard(which, { text: e.target.value })} />
+                          <textarea className="textarea" rows={2} value={c.text}
+                            disabled={anyBusy} onChange={(e) => setCard(c.id, { text: e.target.value })} />
                         </Field>
                         <div className="row gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
                           <Field label="Background">
                             <select className="select" value={c.background} disabled={anyBusy}
-                              onChange={(e) => setCard(which, { background: e.target.value })}>
+                              onChange={(e) => setCard(c.id, { background: e.target.value })}>
                               <option value="color">Solid colour</option>
-                              <option value="image" disabled={!titleCardImages[which]}>Still image</option>
+                              <option value="image" disabled={!titleCardImages[c.id]}>Still image</option>
                             </select>
                           </Field>
                           {c.background === 'color' && (
                             <Field label="Colour">
                               <input className="input" type="color" value={c.color} disabled={anyBusy}
-                                onChange={(e) => setCard(which, { color: e.target.value })} style={{ width: 56, padding: 2 }} />
+                                onChange={(e) => setCard(c.id, { color: e.target.value })} style={{ width: 56, padding: 2 }} />
                             </Field>
                           )}
-                          <Field label="Hold (seconds)">
+                          <Field label="Show for (seconds)">
                             <input className="input" type="number" min={1} max={20} step={0.5} value={c.seconds}
-                              disabled={anyBusy} onChange={(e) => setCard(which, { seconds: +e.target.value })} style={{ maxWidth: 100 }} />
+                              disabled={anyBusy} onChange={(e) => setCard(c.id, { seconds: +e.target.value })} style={{ maxWidth: 100 }} />
                           </Field>
                         </div>
                         <div className="row center gap-10" style={{ flexWrap: 'wrap' }}>
-                          {titleCardImages[which] && (
-                            <img src={titleCardImages[which]} alt="" style={{ height: 44, borderRadius: 6, objectFit: 'cover', aspectRatio: aspect }} />
+                          {titleCardImages[c.id] && (
+                            <img src={titleCardImages[c.id]} alt="" style={{ height: 44, borderRadius: 6, objectFit: 'cover', aspectRatio: aspect }} />
                           )}
                           <label className="btn btn--ghost" style={{ cursor: anyBusy ? 'default' : 'pointer' }}>
-                            <Icon name="upload" style={{ width: 14 }} /> {titleCardImages[which] ? 'Replace still' : 'Upload a still'}
+                            <Icon name="upload" style={{ width: 14 }} /> {titleCardImages[c.id] ? 'Replace still' : 'Upload a still'}
                             <input type="file" accept="image/*" hidden disabled={anyBusy}
-                              onChange={(e) => { uploadTitleCardImage(which, e.target.files?.[0]); e.target.value = '' }} />
+                              onChange={(e) => { uploadTitleCardImage(c.id, e.target.files?.[0]); e.target.value = '' }} />
                           </label>
                         </div>
                       </div>
-                    )}
+                    ))}
                   </div>
                 )
               })}
               <div style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                <div className="row gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <span className="label-sm">Look (all cards)</span>
+                <div className="row gap-12 mt-8" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
                   <Field label="Font">
                     <select className="select" value={titleCards.font} disabled={anyBusy}
                       onChange={(e) => setTitleCards((t) => ({ ...t, font: e.target.value }))}>
@@ -1626,9 +1666,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           )}
           <div className="mt-20 stack gap-10">
             <Button variant="primary" block icon="film"
-              disabled={anyBusy || !titleCards || !(titleCards.opening.enabled || titleCards.credits.enabled)}
+              disabled={anyBusy || !titleCards || titleCards.cards.length === 0}
               onClick={applyTitleCards}>
-              {titleCardsBusy ? 'Adding…' : titleCardsApplied ? 'Re-apply titles & credits' : 'Add titles & credits'}
+              {titleCardsBusy ? 'Adding…' : titleCardsApplied ? 'Re-apply titles & credits' : 'Add titles & credits to the film'}
             </Button>
             {titleCardsApplied && (
               <Button variant="ghost" block icon="eye-slash" disabled={anyBusy} onClick={removeTitleCards}>

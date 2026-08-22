@@ -1,7 +1,7 @@
-"""Opening title / end credits (pipeline/title_cards.py): cards are drawn as
-stills (solid colour or the user's image + text in the display font), held
-with a fade, and joined onto the finished film — prepended and appended, the
-film itself untouched. The applied record keyed on the cut's DURATION is what
+"""Titles & credits (pipeline/title_cards.py): an ordered list of cards, each
+drawn as a still (solid colour or the user's image + text in the display
+font), held with a fade, and stacked before ("start") or after ("end") the
+finished film — the film itself untouched. The applied record keyed on the cut's DURATION is what
 makes re-apply replace (never stack), remove trim exactly, and a rebuilt
 final register as clean. Soft caption tracks shift by the opening card."""
 import json
@@ -38,21 +38,30 @@ def _synthetic_film(path: Path, seconds: float = 3.0, size: str = "320x180") -> 
 
 class NormTests(unittest.TestCase):
     def test_defaults_fill_and_bad_values_coerce(self):
-        cfg = tc.norm_title_cards({"opening": {"enabled": 1, "seconds": 99, "color": "red",
-                                               "background": "video"},
+        cfg = tc.norm_title_cards({"cards": [{"seconds": 99, "color": "red", "background": "video",
+                                              "placement": "middle", "id": "A/B c"}],
                                    "fade": "lots", "scale": 0, "text_color": "#abcdef"})
-        self.assertTrue(cfg["opening"]["enabled"])
-        self.assertEqual(cfg["opening"]["seconds"], tc.SECONDS_MAX)
-        self.assertEqual(cfg["opening"]["color"], "#000000")
-        self.assertEqual(cfg["opening"]["background"], "color")
-        self.assertFalse(cfg["credits"]["enabled"])
-        self.assertEqual(cfg["credits"]["seconds"], 6.0)
+        card = cfg["cards"][0]
+        self.assertEqual(card["seconds"], tc.SECONDS_MAX)
+        self.assertEqual(card["color"], "#000000")
+        self.assertEqual(card["background"], "color")
+        self.assertEqual(card["placement"], "start")
+        self.assertEqual(card["id"], "abc")  # path-safe token
         self.assertEqual(cfg["fade"], tc.FADE_DEFAULT)
         self.assertEqual(cfg["scale"], 0.4)
         self.assertEqual(cfg["text_color"], "#ABCDEF")
 
+    def test_ids_are_assigned_and_made_unique(self):
+        cfg = tc.norm_title_cards({"cards": [{}, {"id": "x"}, {"id": "x"}, {"id": "card1"}]})
+        self.assertEqual([c["id"] for c in cfg["cards"]], ["card1", "x", "x_2", "card1_2"])
+
+    def test_card_count_is_capped(self):
+        cfg = tc.norm_title_cards({"cards": [{}] * 40})
+        self.assertEqual(len(cfg["cards"]), tc.MAX_CARDS)
+
     def test_garbage_is_the_default(self):
         self.assertEqual(tc.norm_title_cards("nope"), tc.norm_title_cards(None))
+        self.assertEqual(tc.norm_title_cards(None)["cards"], [])
 
 
 class RenderCardTests(unittest.TestCase):
@@ -95,8 +104,11 @@ class ApplyStripTests(unittest.TestCase):
         self.wd = Path(tempfile.mkdtemp(prefix="spielbot-titles-"))
         self.final = _synthetic_film(self.wd / "film.mp4", seconds=3.0)
         self.cfg = {
-            "opening": {"enabled": True, "text": "", "seconds": 2},
-            "credits": {"enabled": True, "text": "The end", "seconds": 1.5, "color": "#FFFFFF"},
+            "cards": [
+                {"id": "t", "placement": "start", "text": "", "seconds": 1},
+                {"id": "d", "placement": "start", "text": "A dedication", "seconds": 1},
+                {"id": "e", "placement": "end", "text": "The end", "seconds": 1.5, "color": "#FFFFFF"},
+            ],
             "font": "Anton", "fade": 0.3,
         }
 
@@ -117,10 +129,25 @@ class ApplyStripTests(unittest.TestCase):
 
     def test_reapply_replaces_instead_of_stacking(self):
         tc.apply_title_cards(self.final, self.wd, self.cfg, title="ONE")
-        cfg2 = dict(self.cfg, credits=dict(self.cfg["credits"], enabled=False))
+        cfg2 = dict(self.cfg, cards=self.cfg["cards"][:2])  # drop the end card
         rec = tc.apply_title_cards(self.final, self.wd, cfg2, title="TWO")
         self.assertEqual((rec["head"], rec["tail"]), (2.0, 0.0))
         self.assertAlmostEqual(assembler._get_duration(self.final), 5.0, delta=0.25)
+
+    def test_start_cards_play_in_list_order(self):
+        from PIL import Image
+        cfg = {"cards": [
+            {"id": "red", "placement": "start", "text": "", "seconds": 1, "color": "#FF0000"},
+            {"id": "blue", "placement": "start", "text": "", "seconds": 1, "color": "#0000FF"},
+        ], "fade": 0}
+        tc.apply_title_cards(self.final, self.wd, cfg)
+        for t, want in ((0.5, (255, 0, 0)), (1.5, (0, 0, 255))):
+            frame = self.wd / f"f{t}.png"
+            subprocess.run(["ffmpeg", "-y", "-v", "error", "-ss", str(t), "-i", str(self.final),
+                            "-frames:v", "1", str(frame)], check=True)
+            with Image.open(frame) as im:
+                px = im.convert("RGB").getpixel((5, 5))
+            self.assertTrue(all(abs(a - b) < 40 for a, b in zip(px, want)), (t, px))
 
     def test_rebuilt_final_is_not_mistaken_for_a_titled_one(self):
         tc.apply_title_cards(self.final, self.wd, self.cfg, title="ONE")
@@ -129,9 +156,9 @@ class ApplyStripTests(unittest.TestCase):
         self.assertIsNone(tc.applied_title_cards(self.wd, self.final))
         self.assertFalse(tc.strip_title_cards(self.final, self.wd))
 
-    def test_needs_a_card_switched_on(self):
+    def test_needs_a_card(self):
         with self.assertRaises(ValueError):
-            tc.apply_title_cards(self.final, self.wd, {"opening": {"enabled": False}})
+            tc.apply_title_cards(self.final, self.wd, {"cards": []})
 
 
 class CaptionOffsetTests(unittest.TestCase):
@@ -161,34 +188,52 @@ class EndpointTests(unittest.TestCase):
         self.final.write_bytes(b"video")
         self.addCleanup(lambda: self.final.unlink(missing_ok=True))
 
-    def test_form_prefills_title_and_sign_off(self):
-        form = backend._title_cards_form(self.wd, {}, "The Silent City")
-        self.assertEqual(form["opening"]["text"], "The Silent City")
-        self.assertIn("Made with Stephen Spielbot", form["credits"]["text"])
-        saved = {"opening": {"text": "Custom"}}
-        self.assertEqual(backend._title_cards_form(self.wd, {"title_cards": saved}, "T")
-                         ["opening"]["text"], "Custom")
+    def test_form_fills_the_style_font_and_lists_stills(self):
+        with mock.patch.object(backend, "_title_cards_default_font", return_value="Anton"):
+            form = backend._title_cards_form(self.wd, {})
+        self.assertEqual(form["font"], "Anton")
+        self.assertEqual(form["cards"], [])
+        saved = {"title_cards": {"cards": [{"id": "a", "text": "Custom"}, {"id": "b"}]}}
+        tc.card_image_path(self.wd, "b").write_bytes(b"png")
+        imgs = backend._title_card_images(self.wd, saved)
+        self.assertEqual(list(imgs), ["b"])
+        self.assertIn("title_card_b.png", imgs["b"])
 
-    def test_apply_rejects_nothing_on_and_missing_still(self):
+    def test_apply_rejects_no_cards_and_missing_still(self):
         body = backend.TitleCardsBody(work_dir=str(self.wd), title_cards={})
         with self.assertRaises(backend.HTTPException) as cm:
             backend.remix_title_cards(body)
         self.assertEqual(cm.exception.status_code, 400)
         body = backend.TitleCardsBody(work_dir=str(self.wd), title_cards={
-            "opening": {"enabled": True, "background": "image"}})
+            "cards": [{"id": "a"}, {"id": "b", "background": "image"}]})
         with self.assertRaises(backend.HTTPException) as cm:
             backend.remix_title_cards(body)
-        self.assertIn("Upload a still", cm.exception.detail)
+        self.assertIn("Upload a still for card 2", cm.exception.detail)
+
+    def test_still_upload_is_keyed_on_a_safe_card_id(self):
+        import base64
+        from PIL import Image
+        import io
+        buf = io.BytesIO()
+        Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, "PNG")
+        data = base64.b64encode(buf.getvalue()).decode()
+        r = backend.remix_title_card_image(backend.TitleCardImageBody(
+            work_dir=str(self.wd), card_id="../Evil", data=data))
+        self.assertEqual(r["card_id"], "evil")
+        self.assertTrue((self.wd / "title_card_evil.png").exists())
+        with self.assertRaises(backend.HTTPException):
+            backend.remix_title_card_image(backend.TitleCardImageBody(
+                work_dir=str(self.wd), card_id="///", data=data))
 
     def test_apply_persists_settings_and_runs_the_task(self):
         calls = []
 
         def fake_apply(final_path, wd, cfg, *, title="", default_font=""):
-            calls.append((Path(final_path), cfg["opening"]["text"], title))
+            calls.append((Path(final_path), cfg["cards"][0]["text"], title))
             return {"head": 3.0, "tail": 0.0, "duration": 10.0}
 
         body = backend.TitleCardsBody(work_dir=str(self.wd), title_cards={
-            "opening": {"enabled": True, "text": "Hello", "seconds": 3}})
+            "cards": [{"id": "a", "text": "Hello", "seconds": 3}]})
         with mock.patch.object(tc, "apply_title_cards", side_effect=fake_apply), \
              mock.patch.object(backend, "_title_cards_default_font", return_value="Anton"), \
              mock.patch.object(backend.threading, "Thread") as thread:
@@ -197,8 +242,7 @@ class EndpointTests(unittest.TestCase):
             backend._run_title_cards(*args)
         self.assertTrue(r["ok"])
         jc = json.loads((self.wd / "job_config.json").read_text())
-        self.assertTrue(jc["title_cards"]["opening"]["enabled"])
-        self.assertEqual(jc["title_cards"]["opening"]["text"], "Hello")
+        self.assertEqual(jc["title_cards"]["cards"][0]["text"], "Hello")
         self.assertEqual(calls, [(self.final, "Hello", "The Silent City")])
         task = backend._film_tasks[r["task_id"]]
         self.assertEqual(task["status"], "done")
@@ -209,7 +253,7 @@ class EndpointTests(unittest.TestCase):
         self.assertEqual(hist["versions"][-1]["kind"], "titles")
 
     def test_remove_switches_off_and_trims_only_a_titled_cut(self):
-        jc = {"title_cards": {"opening": {"enabled": True, "text": "x"}}}
+        jc = {"title_cards": {"cards": [{"id": "a", "text": "x"}]}}
         (self.wd / "job_config.json").write_text(json.dumps(jc))
         body = backend.TitleCardsRemoveBody(work_dir=str(self.wd))
         with mock.patch.object(tc, "applied_title_cards", return_value=None), \
@@ -218,7 +262,7 @@ class EndpointTests(unittest.TestCase):
         self.assertFalse(r["trimmed"])
         strip.assert_not_called()
         jc = json.loads((self.wd / "job_config.json").read_text())
-        self.assertFalse(jc["title_cards"]["opening"]["enabled"])
+        self.assertEqual(jc["title_cards"]["cards"], [])
         with mock.patch.object(tc, "applied_title_cards",
                                return_value={"head": 3.0, "tail": 0, "duration": 10}), \
              mock.patch.object(tc, "strip_title_cards", return_value=True) as strip:
@@ -233,7 +277,7 @@ class EndpointTests(unittest.TestCase):
             backend._maybe_apply_title_cards(self.wd, self.final)
             apply.assert_not_called()
             (self.wd / "job_config.json").write_text(json.dumps(
-                {"title_cards": {"credits": {"enabled": True, "text": "fin"}}}))
+                {"title_cards": {"cards": [{"placement": "end", "text": "fin"}]}}))
             with mock.patch.object(backend, "_title_cards_default_font", return_value=""):
                 backend._maybe_apply_title_cards(self.wd, self.final)
             apply.assert_called_once()

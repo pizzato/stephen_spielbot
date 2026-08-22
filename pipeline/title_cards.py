@@ -2,9 +2,11 @@
 
 A card is a still — a solid colour or the user's own image — with text drawn
 in the film's display fonts, held for a few seconds with a fade in and out.
-The opening card is prepended to the published final and the credits card is
-appended; the film itself is untouched (a post-production step on the
-rendered film, like the first-frame cover burn).
+Any number of cards stack in order at the **start** (prepended, before the
+film) or the **end** (appended), so an opening can be several cards in a row
+— a title, then a dedication, then a chapter line. The film itself is
+untouched (a post-production step on the rendered film, like the
+first-frame cover burn).
 
 Prepending changes the timeline, so two things track what was stamped:
 
@@ -23,31 +25,31 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import tempfile
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 APPLIED_NAME = "title_cards_applied.json"
-OPENING_IMAGE = "title_opening.png"
-CREDITS_IMAGE = "title_credits.png"
 
 SECONDS_MIN, SECONDS_MAX, SECONDS_DEFAULT = 1.0, 20.0, 4.0
 FADE_MIN, FADE_MAX, FADE_DEFAULT = 0.0, 3.0, 0.6
 BACKGROUNDS = ("color", "image")
+PLACEMENTS = ("start", "end")
+MAX_CARDS = 12
 
-# The two cards differ only in their defaults.
-_DEFAULT_CARD = {
-    "enabled": False,
+DEFAULT_CARD = {
+    "id": "",                # stable per-card key (also names its uploaded still)
+    "placement": "start",    # start (before the film) | end (after it)
     "text": "",
-    "background": "color",   # color | image (the uploaded still)
+    "background": "color",   # color | image (the card's uploaded still)
     "color": "#000000",      # solid background
     "seconds": SECONDS_DEFAULT,
 }
 
 DEFAULT_TITLE_CARDS = {
-    "opening": dict(_DEFAULT_CARD),
-    "credits": dict(_DEFAULT_CARD, seconds=6.0),
+    "cards": [],             # ordered; start cards play in list order, so do end cards
     "font": "",              # bundled font name / font file; "" = the style's cover font
     "text_color": "#FFFFFF",
     "fade": FADE_DEFAULT,    # fade in/out on each card, seconds
@@ -76,24 +78,41 @@ def _clamp(value, lo: float, hi: float, fallback: float) -> float:
         return fallback
 
 
-def _norm_card(value, default: dict) -> dict:
+def norm_card_id(value) -> str:
+    """A card id is a short [a-z0-9_-] token: it names the card's still on
+    disk, so nothing path-like gets through."""
+    return re.sub(r"[^a-z0-9_-]", "", str(value or "").lower())[:32]
+
+
+def _norm_card(value, index: int) -> dict:
     raw = value if isinstance(value, dict) else {}
     return {
-        "enabled": bool(raw.get("enabled", default["enabled"])),
+        "id": norm_card_id(raw.get("id")) or f"card{index + 1}",
+        "placement": raw.get("placement") if raw.get("placement") in PLACEMENTS else "start",
         "text": str(raw.get("text") or "").strip(),
         "background": (raw.get("background") if raw.get("background") in BACKGROUNDS
-                       else default["background"]),
-        "color": _hex_color(raw.get("color"), default["color"]),
-        "seconds": _clamp(raw.get("seconds"), SECONDS_MIN, SECONDS_MAX, default["seconds"]),
+                       else "color"),
+        "color": _hex_color(raw.get("color"), DEFAULT_CARD["color"]),
+        "seconds": _clamp(raw.get("seconds"), SECONDS_MIN, SECONDS_MAX, SECONDS_DEFAULT),
     }
 
 
 def norm_title_cards(value) -> dict:
-    """Coerce a stored/posted title-cards dict to the full, typed shape."""
+    """Coerce a stored/posted title-cards dict to the full, typed shape.
+    Card ids are made unique (a duplicate gets a numbered suffix)."""
     raw = value if isinstance(value, dict) else {}
+    cards, seen = [], set()
+    raw_cards = raw.get("cards") if isinstance(raw.get("cards"), list) else []
+    for i, c in enumerate(raw_cards[:MAX_CARDS]):
+        card = _norm_card(c, i)
+        base, n = card["id"], 2
+        while card["id"] in seen:
+            card["id"] = f"{base}_{n}"
+            n += 1
+        seen.add(card["id"])
+        cards.append(card)
     return {
-        "opening": _norm_card(raw.get("opening"), DEFAULT_TITLE_CARDS["opening"]),
-        "credits": _norm_card(raw.get("credits"), DEFAULT_TITLE_CARDS["credits"]),
+        "cards": cards,
         "font": str(raw.get("font") or "").strip(),
         "text_color": _hex_color(raw.get("text_color"), DEFAULT_TITLE_CARDS["text_color"]),
         "fade": _clamp(raw.get("fade"), FADE_MIN, FADE_MAX, FADE_DEFAULT),
@@ -101,8 +120,9 @@ def norm_title_cards(value) -> dict:
     }
 
 
-def card_image_path(work_dir: Path | str, which: str) -> Path:
-    return Path(work_dir) / (OPENING_IMAGE if which == "opening" else CREDITS_IMAGE)
+def card_image_path(work_dir: Path | str, card_id: str) -> Path:
+    """The still uploaded for one card."""
+    return Path(work_dir) / f"title_card_{norm_card_id(card_id) or 'card'}.png"
 
 
 # ── rendering ─────────────────────────────────────────────────────────────────
@@ -310,11 +330,12 @@ def strip_title_cards(final_path: Path | str, work_dir: Path | str) -> bool:
 
 def apply_title_cards(final_path: Path | str, work_dir: Path | str, cfg: dict, *,
                       title: str = "", default_font: str = "") -> dict:
-    """Stamp the configured cards onto *final_path* in place.
+    """Stamp the configured cards onto *final_path* in place: every "start"
+    card in list order before the film, every "end" card in list order after.
 
     A cut that already carries cards is stripped first so the new cards
     replace rather than stack. Returns the applied record
-    ``{"head", "tail", "duration"}`` (head/tail 0 when a card is off)."""
+    ``{"head", "tail", "duration"}`` (the total seconds stacked at each end)."""
     from pipeline.assembler import (_FILM_AR, _get_duration, _get_video_dimensions,
                                     _video_frame_rates)
 
@@ -322,8 +343,8 @@ def apply_title_cards(final_path: Path | str, work_dir: Path | str, cfg: dict, *
     cfg = norm_title_cards(cfg)
     if not (final_path.exists() and final_path.stat().st_size > 0):
         raise FileNotFoundError("Final video not found; render the film first.")
-    if not (cfg["opening"]["enabled"] or cfg["credits"]["enabled"]):
-        raise ValueError("Switch on the opening title or the end credits first.")
+    if not cfg["cards"]:
+        raise ValueError("Add a card first.")
 
     strip_title_cards(final_path, work_dir)
     width, height = _get_video_dimensions(final_path)
@@ -332,38 +353,35 @@ def apply_title_cards(final_path: Path | str, work_dir: Path | str, cfg: dict, *
 
     with tempfile.TemporaryDirectory(prefix="titlecards-") as td:
         td = Path(td)
-        parts: list[Path] = []
+        head_parts: list[Path] = []
+        tail_parts: list[Path] = []
         head = tail = 0.0
-        for which in ("opening", "credits"):
-            card = cfg[which]
-            if not card["enabled"]:
-                if which == "opening":
-                    parts.append(final_path)
-                continue
-            text = card["text"] or (title if which == "opening" else "")
-            png = td / f"{which}.png"
+        for card in cfg["cards"]:
+            text = card["text"] or (title if card["placement"] == "start" else "")
+            png = td / f"{card['id']}.png"
             render_card(png, width, height, text,
                         background=card["background"], color=card["color"],
-                        image_path=card_image_path(work_dir, which), font=font,
+                        image_path=card_image_path(work_dir, card["id"]), font=font,
                         text_color=cfg["text_color"], scale=cfg["scale"])
-            clip = card_clip(png, td / f"{which}.mp4", card["seconds"],
+            clip = card_clip(png, td / f"{card['id']}.mp4", card["seconds"],
                              width=width, height=height, fps=fps, fade=cfg["fade"],
                              sample_rate=_FILM_AR)
-            parts.append(clip)
-            if which == "opening":
-                head = card["seconds"]
-                parts.append(final_path)
+            if card["placement"] == "start":
+                head_parts.append(clip)
+                head += card["seconds"]
             else:
-                tail = card["seconds"]
+                tail_parts.append(clip)
+                tail += card["seconds"]
         staged = final_path.with_name(f"{final_path.stem}.titled.tmp{final_path.suffix}")
-        logger.info("[ffmpeg] apply_title_cards: %s (head %.2fs, tail %.2fs)",
-                    final_path.name, head, tail)
+        logger.info("[ffmpeg] apply_title_cards: %s (%d start card(s) %.2fs, %d end card(s) %.2fs)",
+                    final_path.name, len(head_parts), head, len(tail_parts), tail)
         try:
-            _concat(parts, staged, width=width, height=height, fps=fps)
+            _concat([*head_parts, final_path, *tail_parts], staged,
+                    width=width, height=height, fps=fps)
             staged.replace(final_path)
         finally:
             staged.unlink(missing_ok=True)
 
-    rec = {"head": head, "tail": tail, "duration": _get_duration(final_path)}
+    rec = {"head": round(head, 3), "tail": round(tail, 3), "duration": _get_duration(final_path)}
     _applied_path(work_dir).write_text(json.dumps(rec), encoding="utf-8")
     return rec

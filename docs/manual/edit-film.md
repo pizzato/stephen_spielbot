@@ -69,26 +69,28 @@ track publishing attaches, so it drops straight into YouTube Studio, a video edi
 or any player that loads sidecar subtitles. The look of burned-in subtitles is set per
 style under [Settings → Subtitle style](settings.md#cover-first-frame).
 
-### Titles & credits
+### Titles & Credits
 
-Open the film with a **title card** and close it with **end credits** — each a still,
-either a **solid colour** or a still image of your own (**Upload a still**, cover-cropped
-to the film's frame), with text drawn in the style's display font, faded in and out.
-The opening text prefills with the film's title and the credits with a sign-off; every
-row of the text box is a line on the card, blank rows leave a gap. **Hold** is how long
-each card stays up; **Font**, **Text colour**, **Text size** and **Fade** apply to both.
+Stack title cards before the film and credit cards after it. **Add card** under
+**Opening** or **End** adds one; each card is a still — a **solid colour** or a still
+image of your own (**Upload a still**, cover-cropped to the film's frame) — with text
+drawn in the style's display font, **shown for** as many seconds as you like, faded in
+and out. Every row of the text box is a line on the card, blank rows leave a gap. Cards
+of one placement play one after another in the order listed (the arrows reorder them),
+so an opening can be a title, then a dedication, then a chapter line. **Font**, **Text
+colour**, **Text size** and **Fade** apply to all cards.
 
-**Add titles & credits** joins the cards onto the finished film — prepended and
-appended, nothing inside the film changes — and keeps the previous cut as a selectable
+**Add titles & credits to the film** joins the cards onto the finished film — before and
+after, nothing inside the film changes — and keeps the previous cut as a selectable
 version. It works on any final, an upscaled one included. Running it again **replaces**
 the cards rather than stacking a second set, and **Remove titles & credits** trims them
-off again. The settings are saved on the film, so every later rebuild (re-mix, re-voice,
-reassemble, localize) puts the cards back.
+off again. The cards are saved on the film, so every later rebuild (re-mix, re-voice,
+reassemble, localize) puts them back.
 
-Because the opening card shifts the timeline, the caption track publishing attaches
-(and the SRT download) is shifted with it; burned-in subtitles are drawn before the
+Because the opening cards shift the timeline, the caption track publishing attaches
+(and the SRT download) is shifted with them; burned-in subtitles are drawn before the
 cards go on, so they stay aligned with the picture. The cover burn, likewise, stamps the
-film's own opening frames — the title card plays first, then the cover shot.
+film's own opening frames — the title cards play first, then the cover shot.
 
 ### Re-mix audio
 
