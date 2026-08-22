@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
-import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect } from '../components.jsx'
+import { Card, Field, Segmented, ResolutionPicker, Button, Chip, Icon, Thumb, Banner, RegenLabel, GuidedRegenButton, VersionStrip, MusicVersionStrip, InpaintModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard, fmtDuration, DurationInput, SONG_FILE_ACCEPT, SONG_UPLOAD_MAX, FilterSelect, RestyleForm, NO_STYLE } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import { useHashParams } from '../nav.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -432,6 +432,9 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
   const [regenStatus, setRegenStatus] = useState('')
   const [fieldBusy, setFieldBusy] = useState('')
   const [confirmDelScript, setConfirmDelScript] = useState(false)
+  // Restyle modal: null when closed, else { styleName, style, repaintCast }.
+  const [restyle, setRestyle] = useState(null)
+  const [restyleMsg, setRestyleMsg] = useState('')
   const [confirmDelScene, setConfirmDelScene] = useState(false)
 
   // Sync state and switch to Cover when a new job loads
@@ -565,6 +568,35 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
     setBusy('dup:' + workDir); setError('')
     try {
       applyLoaded(await api.duplicateScript(workDir))
+      await refreshScripts()
+    } catch (e) { setError(e.message) } finally { setBusy('') }
+  }
+
+  // Swap this script's visual style in place: every prompt loses the old style
+  // sentence and gains the new one, and the previews/first frames/cover (and,
+  // if ticked, the cast's looks) painted in the old style are retired so the
+  // render paints the new one. Everything else — narration, scenes, cast — stays.
+  const openRestyle = () => {
+    const name = job?.style_name || castStyles.defaultStyle
+    setRestyle({ styleName: name, style: job?.style || resolveStyle(castStyles.styles, name)?.visual_style || '', repaintCast: true })
+  }
+  const applyRestyle = async () => {
+    if (!job || !restyle) return
+    setBusy('restyle'); setError(''); setRestyleMsg('')
+    try {
+      const r = await api.restyleJob(job.job_id, {
+        style_name: restyle.styleName, style: restyle.style, repaint_cast: restyle.repaintCast,
+      })
+      applyLoaded(r)
+      // Same job id, so the job-sync effect above won't re-seed — refresh the
+      // editor's scene/cast/style state from the restyled payload by hand.
+      setScenes(r.scenes || [])
+      setCharacters(r.characters || [])
+      setStyle(r.style || '')
+      setRestyle(null)
+      const n = (r.retired || []).length
+      const asWhat = r.style_name === NO_STYLE ? 'with your own look' : `as “${r.style_name}”`
+      setRestyleMsg(`Restyled ${asWhat}${n ? ` — ${n} image${n === 1 ? '' : 's'} retired (kept as versions) so the render paints the new look` : ''}. Approve to render.`)
       await refreshScripts()
     } catch (e) { setError(e.message) } finally { setBusy('') }
   }
@@ -1052,6 +1084,8 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
                 <option value="5">5 passes</option>
                 <option value="auto">Until stable</option>
               </select>
+              <Button variant="ghost" icon="palette" disabled={!!busy} onClick={openRestyle}
+                title="Keep everything and change only the visual style — prompts are rewritten and the old-look images retired">Restyle</Button>
               <Button variant="ghost" icon="gavel" disabled={criticBusy || busy === 'generate'}
                 onClick={runCritic}>{criticBusy ? 'Critiquing…' : 'Run critic'}</Button>
               <Button variant="primary" iconRight="layer-group" disabled={busy === 'generate'}
@@ -1072,6 +1106,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}
       {view === 'cover' && coverMsg && <Banner tone="ok">{coverMsg}</Banner>}
       {view === 'scenes' && criticMsg && <Banner tone="ok">{criticMsg}</Banner>}
+      {view === 'scenes' && restyleMsg && <Banner tone="ok">{restyleMsg}</Banner>}
       {view === 'scenes' && criticBusy && <Banner tone="info">The critic is reading the whole script — checking consistency, repetition, and engagement…</Banner>}
       {view === 'scenes' && job && versions.length > 0 && (
         <div className="row center gap-10 reveal" style={{ marginBottom: 16 }}>
@@ -1451,6 +1486,32 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
               <Button variant="ghost" icon="wand-magic-sparkles" onClick={() => go('create')}>Create new</Button>
             </div>
           </Card>
+        </div>
+      )}
+
+      {restyle && job && (
+        <div onClick={() => busy !== 'restyle' && setRestyle(null)}
+          style={{ position: 'fixed', inset: 0, zIndex: 1100, background: 'rgba(0,0,0,.82)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+          <div onClick={(e) => e.stopPropagation()}
+            style={{ background: 'var(--paper)', borderRadius: 'var(--r-lg)', padding: 20, width: 'min(560px, 96vw)', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 30px 80px rgba(0,0,0,.5)' }}>
+            <div className="row center between" style={{ marginBottom: 12 }}>
+              <span className="h-title">Restyle this script</span>
+              <button type="button" className="btn btn--quiet" disabled={busy === 'restyle'} onClick={() => setRestyle(null)}><Icon name="xmark" /></button>
+            </div>
+            <p className="muted" style={{ fontSize: 12.5, marginTop: 0, marginBottom: 14 }}>
+              Keeps the story, narration, scenes and cast exactly as they are and changes only the look:
+              the old style sentence is stripped from every scene prompt and the new one put in its place,
+              and the scene images, cover and (if ticked) cast looks painted in the old style are retired —
+              kept as versions — so the render paints everything afresh.
+            </p>
+            <RestyleForm styles={castStyles.styles} value={restyle} onChange={setRestyle} disabled={busy === 'restyle'} />
+            <div className="row gap-10" style={{ marginTop: 16, justifyContent: 'flex-end' }}>
+              <Button variant="ghost" disabled={busy === 'restyle'} onClick={() => setRestyle(null)}>Cancel</Button>
+              <Button variant="primary" icon="palette" disabled={busy === 'restyle'} onClick={applyRestyle}>
+                {busy === 'restyle' ? 'Restyling…' : 'Restyle'}
+              </Button>
+            </div>
+          </div>
         </div>
       )}
 
