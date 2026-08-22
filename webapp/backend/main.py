@@ -8528,7 +8528,10 @@ def _temporal_upscale_scenes_to_final(
     # assembled one film's 4K version into 21 scenes of 36 collapsing into a
     # few milliseconds each — the concat demuxer takes the clips' timebases to
     # be identical, and upscaled scenes do not all come back at one rate.
-    concatenate_scenes(upscaled, combined, fade=0.0)
+    # Same dip-to-black between scenes as the render and every rebuild, too:
+    # joined with fade=0 the upscaled film cut hard where the original faded,
+    # and a bright-to-bright cut read as a frame flashing between the scenes.
+    concatenate_scenes(upscaled, combined)
 
     jc = _film_job_config(wd)
     music_path = wd / "background_music.wav"
