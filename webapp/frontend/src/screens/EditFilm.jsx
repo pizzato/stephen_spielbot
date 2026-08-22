@@ -743,6 +743,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [ffSeconds, setFfSeconds] = useState(1)
   const [subsBusy, setSubsBusy] = useState(false)
+  const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -1223,6 +1224,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setLocAudioBusy('') }
   }
 
+  useEffect(() => {
+    if (!data?.work_dir) return
+    api.filmCaptionTracks(data.work_dir).then((r) => setCaptionTracks(r.tracks || [])).catch(() => setCaptionTracks([]))
+  }, [data?.work_dir])
+
   const burnSubtitles = async (burn) => {
     setSubsBusy(true); setError(''); setStatus('')
     try {
@@ -1455,6 +1461,20 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               </Button>
             )}
           </div>
+          {captionTracks && captionTracks.length > 0 && (
+            <div className="mt-16">
+              <div className="muted" style={{ fontSize: 12 }}>
+                Download the caption file with timings (SRT) — the same track publishing attaches:
+              </div>
+              <div className="row center gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
+                {captionTracks.map((t) => (
+                  <a key={t.lang} className="btn btn--ghost" href={t.url} download>
+                    <Icon name="download" style={{ width: 14 }} /> {t.name} <span className="mono" style={{ fontSize: 11 }}>.srt</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
 
         {data.can_remix === false && (
