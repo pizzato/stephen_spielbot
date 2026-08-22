@@ -1826,11 +1826,13 @@ _FLASHVSR_MODEL = "FlashVSR-v1.1"
 # "tiny" (streaming TC decoder) measured within a hair of "full" per pixel on
 # the GB10 at 60% of the time; "full" is the alternative.
 _FLASHVSR_MODE = "tiny"
-# The node takes an integer factor and only 2x / 4x are well-trained. Above this
-# many OUTPUT pixels the untiled DiT/VAE ran out of memory on a 128 GB GB10
-# (2816x2816 = 7.9 MP passed, 5120x2816 = 14.4 MP did not), so larger outputs
-# go through the node's own tiling — slower, but it finishes.
-_FLASHVSR_UNTILED_MAX_PIXELS = 9_000_000
+# The node takes an integer factor and only 2x / 4x are well-trained. The
+# untiled DiT/VAE holds the whole output clip, so memory scales with OUTPUT
+# pixels x frames. On a 128 GB GB10: 2816x2816 x 117 f (0.93 G) passed,
+# 3840x2048 x 294 f (2.3 G) and 5120x2816 x 120 f (1.7 G) ran out. Above this
+# many pixel-frames the clip goes through the node's own tiling — slower, but
+# it finishes. An untiled run that still OOMs is retried tiled.
+_FLASHVSR_UNTILED_MAX_PIXEL_FRAMES = 1_000_000_000
 _FLASHVSR_2X_TOLERANCE = 2.5
 
 
@@ -1852,7 +1854,7 @@ def upscale_video_flashvsr(
     overshot and scaled back to exactly what was asked for. Output length equals
     the input (no VAE padding drift), and the source audio is carried through.
     """
-    from pipeline.assembler import _get_video_dimensions
+    from pipeline.assembler import _get_duration, _get_video_dimensions
 
     src = Path(input_path)
     if source_width is None or source_height is None:
@@ -1865,49 +1867,60 @@ def upscale_video_flashvsr(
     # past 2x — e.g. an H3 1920x1024 render finishing at 3840x2160 — stays at
     # 2x and lets the final normalize cover the remainder.
     scale = 2 if needed <= _FLASHVSR_2X_TOLERANCE else 4
-    out_pixels = int(source_width) * int(source_height) * scale * scale
-    tiled = out_pixels > _FLASHVSR_UNTILED_MAX_PIXELS
     fps_val = max(1.0, float(fps or LTX_FPS))
+    frames = max(1, round(_get_duration(src) * fps_val))
+    out_pixel_frames = int(source_width) * int(source_height) * scale * scale * frames
+    tiled = out_pixel_frames > _FLASHVSR_UNTILED_MAX_PIXEL_FRAMES
 
     video_name = _stage_video_for_load(src, comfy_url=comfy_url)
-    workflow = _load_workflow("flashvsr_upscale.json")
-    workflow = _fill_template(workflow, {
-        "VIDEO_NAME": video_name,
-        "MODEL": _FLASHVSR_MODEL,
-        "MODE": _FLASHVSR_MODE,
-        "SCALE": scale,
-        "TILED": tiled,
-        "FPS": fps_val,
-    })
+    template = _load_workflow("flashvsr_upscale.json")
 
-    logger.info(
-        "[comfy] upscale_video_flashvsr %s %dx%d -> %dx%d (scale %dx, %s%s) "
-        "fps=%.3f timeout=%ds on %s",
-        src.name, source_width, source_height, requested_w, requested_h,
-        scale, _FLASHVSR_MODE, ", tiled" if tiled else "",
-        fps_val, timeout_seconds, comfy_url,
-    )
-    last_retryable: Exception | None = None
-    prompt_id = ""
-    for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
-        client_id = str(uuid.uuid4())
-        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
-        try:
-            _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
-            break
-        except (DroppedJobError, StuckJobError) as exc:
-            last_retryable = exc
-            if attempt >= _COMFY_PROMPT_ATTEMPTS:
-                raise RuntimeError(
-                    f"ComfyUI FlashVSR upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
-                    f"{_final_retryable_message(exc)}"
-                ) from exc
-            logger.warning(
-                "[comfy] FlashVSR upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
-                prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
-            )
-    else:
+    def _submit(tiled: bool) -> str:
+        workflow = _fill_template(template, {
+            "VIDEO_NAME": video_name,
+            "MODEL": _FLASHVSR_MODEL,
+            "MODE": _FLASHVSR_MODE,
+            "SCALE": scale,
+            "TILED": tiled,
+            "FPS": fps_val,
+        })
+        logger.info(
+            "[comfy] upscale_video_flashvsr %s %dx%d -> %dx%d (scale %dx, %s%s, %d frames) "
+            "fps=%.3f timeout=%ds on %s",
+            src.name, source_width, source_height, requested_w, requested_h,
+            scale, _FLASHVSR_MODE, ", tiled" if tiled else "", frames,
+            fps_val, timeout_seconds, comfy_url,
+        )
+        last_retryable: Exception | None = None
+        for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
+            client_id = str(uuid.uuid4())
+            prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+            try:
+                _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+                return prompt_id
+            except (DroppedJobError, StuckJobError) as exc:
+                last_retryable = exc
+                if attempt >= _COMFY_PROMPT_ATTEMPTS:
+                    raise RuntimeError(
+                        f"ComfyUI FlashVSR upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                        f"{_final_retryable_message(exc)}"
+                    ) from exc
+                logger.warning(
+                    "[comfy] FlashVSR upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                    prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
+                )
         raise RuntimeError(f"ComfyUI FlashVSR upscale did not complete: {last_retryable}")
+
+    try:
+        prompt_id = _submit(tiled)
+    except RuntimeError as exc:
+        if tiled or "out of memory" not in str(exc).lower():
+            raise
+        logger.warning(
+            "[comfy] FlashVSR ran out of memory untiled on %s (%d pixel-frames); retrying tiled",
+            src.name, out_pixel_frames,
+        )
+        prompt_id = _submit(True)
 
     outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
     if not outputs:

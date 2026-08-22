@@ -300,7 +300,7 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             self.assertEqual(conform.call_args[0][3], 6.25)
 
 class ComfyFlashVsrUpscaleTests(unittest.TestCase):
-    def _run(self, w, h, src_w, src_h):
+    def _run(self, w, h, src_w, src_h, seconds=5.0):
         with tempfile.TemporaryDirectory() as tmp:
             src = Path(tmp) / "input.mp4"
             out = Path(tmp) / "out.mp4"
@@ -318,6 +318,7 @@ class ComfyFlashVsrUpscaleTests(unittest.TestCase):
                      {"filename": "spielbot-flashvsr-upscale_00001.mp4", "subfolder": "", "type": "output"}
                  ]), \
                  mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=seconds), \
                  mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
                 comfyui.upscale_video_flashvsr(
                     src, out, w, h, fps=24,
@@ -350,6 +351,40 @@ class ComfyFlashVsrUpscaleTests(unittest.TestCase):
         self.assertEqual(wf["3"]["inputs"]["scale"], 4)
         self.assertIs(wf["3"]["inputs"]["tiled_dit"], True)
         self.assertIs(wf["3"]["inputs"]["tiled_vae"], True)
+
+    def test_long_clip_tiles_even_at_2x(self):
+        """Memory scales with frames too: 12 s of 1920x1024 at 2x OOMed untiled."""
+        wf = self._run(3840, 2160, 1920, 1024, seconds=12.25)
+        self.assertEqual(wf["3"]["inputs"]["scale"], 2)
+        self.assertIs(wf["3"]["inputs"]["tiled_dit"], True)
+
+    def test_untiled_oom_retries_tiled(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            submitted = []
+
+            def fake_queue(workflow, client_id, comfy_url):
+                submitted.append(workflow["3"]["inputs"]["tiled_dit"])
+                return f"prompt-{len(submitted)}"
+
+            def fake_wait(prompt_id, client_id, timeout, comfy_url):
+                if prompt_id == "prompt-1":
+                    raise RuntimeError("ComfyUI execution error at FlashVSRNode: "
+                                       "Allocation on device 0 would exceed allowed memory. (out of memory)")
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion", side_effect=fake_wait), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "x.mp4", "subfolder": "", "type": "output"}]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=5.0), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_flashvsr(
+                    src, out, 2560, 1408, fps=24, source_width=1280, source_height=704)
+            self.assertEqual(submitted, [False, True])
 
     def test_dispatcher_routes_flashvsr(self):
         from pipeline import assembler
