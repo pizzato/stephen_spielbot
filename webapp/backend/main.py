@@ -6303,7 +6303,12 @@ def start_generation(body: GenerateBody) -> dict:
             if not performance_film:
                 (work_dir / "progress.json").write_text(json.dumps(
                     {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
-                generate_all_previews(job_id, resolution, body.style or "")
+                # Called as a plain function, so the endpoint's Query(...)
+                # defaults don't resolve: force must be passed explicitly —
+                # Query(False) is a truthy object, and leaving it repainted
+                # every scene's image before each render (issue: images
+                # regenerated on approve).
+                generate_all_previews(job_id, resolution, body.style or "", force=False)
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
 
