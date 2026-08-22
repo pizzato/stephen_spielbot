@@ -116,7 +116,16 @@ the film is assembled — so if a scene fails the completed ones are reused when
 again, and the same target can be rebuilt later without redoing the GPU work. A scene you
 re-shoot or re-voice afterwards is upscaled afresh; its cached copy is not reused. Each
 upscaled scene is put back on its source's exact length with the source's audio before the
-film is joined the same way the original was, so the upscaled cut keeps the film's timing.
+film is joined the same way the original was — the same dip-to-black between scenes
+included — so the upscaled cut keeps the film's timing.
+
+The scene clips in the editor stay at the render size: the upscale is a *final version*,
+not a new set of scenes. Any later edit that rebuilds the film — a re-voiced or re-mixed
+song, burned-in subtitles, a trim, a re-shot scene — assembles from the render-size
+scenes again, so run **Upscale video** once more afterwards. The cached upscaled scenes
+make that quick: only scenes whose clip actually changed go back to the GPU (a new
+singer changes the audio mix, not the clips, so that is just the join), and the new
+upscaled version sits alongside the old ones in the version picker.
 Workers are shared with everything else through [per-worker leases](../cluster.md#one-job-per-worker-no-matter-who-asks):
 scenes beyond the free workers wait as *queued* rows, and an upscale started while a
 film renders (or a second upscale) queues behind it instead of overloading the GPUs.
