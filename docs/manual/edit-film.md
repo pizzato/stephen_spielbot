@@ -104,8 +104,12 @@ pickers offer them too — as targets: such a film renders at FHD and the pipeli
 this same upscale as its finishing step.) Only targets larger than the film's current
 size are listed.
 
-Scenes are upscaled one per worker in parallel and kept on disk as they finish, so if a
-scene fails the completed ones are reused when you run it again rather than redone.
+Scenes are upscaled one per worker in parallel and kept on disk as they finish — and after
+the film is assembled — so if a scene fails the completed ones are reused when you run it
+again, and the same target can be rebuilt later without redoing the GPU work. A scene you
+re-shoot or re-voice afterwards is upscaled afresh; its cached copy is not reused. Each
+upscaled scene is put back on its source's exact length with the source's audio before the
+film is joined the same way the original was, so the upscaled cut keeps the film's timing.
 Workers are shared with everything else through [per-worker leases](../cluster.md#one-job-per-worker-no-matter-who-asks):
 scenes beyond the free workers wait as *queued* rows, and an upscale started while a
 film renders (or a second upscale) queues behind it instead of overloading the GPUs.
