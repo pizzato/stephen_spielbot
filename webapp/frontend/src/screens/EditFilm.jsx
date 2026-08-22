@@ -725,7 +725,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [locSaveBusy, setLocSaveBusy] = useState(false)
   const [locAudioBusy, setLocAudioBusy] = useState('')
   const [upscaleResolution, setUpscaleResolution] = useState('')
-  const [upscaleMode, setUpscaleMode] = useState('fast')
+  const [upscaleMode, setUpscaleMode] = useState('flashvsr')
   // Re-render the same script at another resolution (a separate film, not a
   // version of this one) — see the "Render at another size" card.
   const [reRenderResolution, setReRenderResolution] = useState('')
@@ -1590,6 +1590,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <span className="label-sm row center gap-10"><Icon name="up-right-and-down-left-from-center" style={{ color: 'var(--ink-3)', width: 16 }} /> Upscale video</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             Upscale the finished film and keep it as a selectable final version.
+            <strong> FlashVSR</strong> is the default: real video super-resolution with{' '}
+            <a href="https://github.com/OpenImagingLab/FlashVSR" target="_blank" rel="noreferrer">FlashVSR</a>{' '}
+            (2× normally, 4× when the target needs it).
             <strong> Fast</strong> is plain ffmpeg.
             <strong> LTX latent</strong> is the simple model upscaler (latent 2×).
             <strong> LTX IC-LoRA</strong> is the generative{' '}
@@ -1610,6 +1613,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             <Field label="Mode">
               <select className="select" value={upscaleMode} disabled={anyBusy || !upscaleResolution}
                 onChange={(e) => setUpscaleMode(e.target.value)}>
+                <option value="flashvsr">FlashVSR (video super-resolution)</option>
                 <option value="fast">Fast (ffmpeg)</option>
                 <option value="ltx_latent">LTX latent (simple model)</option>
                 <option value="ic_lora">LTX IC-LoRA (generative)</option>

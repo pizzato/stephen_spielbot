@@ -17,6 +17,7 @@ rebuilds.
 | [LTX 2.3](https://huggingface.co/Lightricks/LTX-2.3) | ~28 GB | Keyframed establishing shots + Remix spatial upscalers |
 | [FLUX.2 Klein 4B](https://huggingface.co/Comfy-Org/vae-text-encorder-for-flux-klein-4b) | ~16 GB | Scene first-frame images and the "Edit image" inpaint |
 | [ACE-Step 1.5](https://github.com/ace-step/ACE-Step) | ~5 GB | Background music (default engine) |
+| [FlashVSR v1.1](https://huggingface.co/JunhaoZhuang/FlashVSR-v1.1) | ~7 GB | Default finishing / Edit-film upscaler (video super-resolution) |
 | Chatterbox Multilingual | ~3.5 GB | Optional multilingual narration (pre-warmed into each TTS worker's HF cache) |
 | LibriVox character voices | small | 10 public-domain voices auto-cast onto script characters (`make download-voices`) |
 
@@ -51,6 +52,17 @@ If you'd rather fetch them yourself:
     huggingface-cli download Lightricks/LTX-2.5 vae/ltx-2.5-video-vae-bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False --token "$HF_TOKEN"
     huggingface-cli download Lightricks/LTX-2.5 vae/ltx-2.5-audio-vae-bf16.safetensors --local-dir models/vae --local-dir-use-symlinks False --token "$HF_TOKEN"
     huggingface-cli download Lightricks/LTX-2.5 latent_upscale_models/ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors --local-dir models/latent_upscale_models --local-dir-use-symlinks False --token "$HF_TOKEN"
+    ```
+
+=== "FlashVSR v1.1 (~7 GB, default upscaler)"
+
+    The ComfyUI node loads the whole folder by name, so every file goes in
+    `models/FlashVSR-v1.1/`:
+
+    ```bash
+    for f in LQ_proj_in.ckpt TCDecoder.ckpt Wan2.1_VAE.pth diffusion_pytorch_model_streaming_dmd.safetensors config.json model_index.json; do
+      huggingface-cli download JunhaoZhuang/FlashVSR-v1.1 "$f" --revision 27561b186ded3402d7c975f4fd722e2885b6135f --local-dir models/FlashVSR-v1.1 --local-dir-use-symlinks False
+    done
     ```
 
 === "FLUX.2 Klein 4B (~16 GB)"
@@ -315,10 +327,11 @@ finishing upscale automatically (the style's **Finishing upscaler** picks the mo
 Measured on a GB10: the H3 latent upscaler reached 4096×4096 from a 1024×1024 source
 in ~13 min for a 6 s clip.
 
-The Edit film screen's final-video upscale has four modes:
+The Edit film screen's final-video upscale has five modes; **FlashVSR** is the default:
 
 | Mode | What it does |
 |---|---|
+| **FlashVSR** | [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) v1.1 — one-step diffusion *video* super-resolution (Wan2.1-based, Apache-2.0), run in its `tiny` streaming mode through [ComfyUI-FlashVSR_Ultra_Fast](https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast). A true pixel upscaler, not a latent resize: it recovers texture (stone, foliage, signage) without the latent modes' artefacts, keeps colour, and returns exactly the source frame count. Runs at **2×** unless the target needs more than 2.5× the source, then **4×**; the remainder is a plain resample. On a GB10 a 5 s 1280×704 scene takes ~4 min at 2×; 4× outputs above ~9 MP are tiled by the node and take ~30 min |
 | **Fast** | Plain ffmpeg scale |
 | **LTX latent** | Simple model path: `LTXVLatentUpsampler` + `ltx-2.3-spatial-upscaler-x2-1.1` |
 | **LTX IC-LoRA** | Generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) (2×/4× IC-LoRA via ComfyUI-LTXVideo) |

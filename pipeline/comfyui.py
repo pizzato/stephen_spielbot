@@ -1817,6 +1817,108 @@ def upscale_video_h3_latent(
     return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
 
 
+# FlashVSR (OpenImagingLab, Apache-2.0) — one-step diffusion video
+# super-resolution on Wan2.1; a true pixel VSR model rather than a latent
+# resize. Runs through ComfyUI-FlashVSR_Ultra_Fast, which swaps the upstream
+# Block-Sparse-Attention kernel for Sparse SageAttention (no custom build).
+# https://github.com/OpenImagingLab/FlashVSR
+_FLASHVSR_MODEL = "FlashVSR-v1.1"
+# "tiny" (streaming TC decoder) measured within a hair of "full" per pixel on
+# the GB10 at 60% of the time; "full" is the alternative.
+_FLASHVSR_MODE = "tiny"
+# The node takes an integer factor and only 2x / 4x are well-trained. Above this
+# many OUTPUT pixels the untiled DiT/VAE ran out of memory on a 128 GB GB10
+# (2816x2816 = 7.9 MP passed, 5120x2816 = 14.4 MP did not), so larger outputs
+# go through the node's own tiling — slower, but it finishes.
+_FLASHVSR_UNTILED_MAX_PIXELS = 9_000_000
+_FLASHVSR_2X_TOLERANCE = 2.5
+
+
+def upscale_video_flashvsr(
+    input_path: Path,
+    output_path: Path,
+    width: int,
+    height: int,
+    fps: float,
+    timeout_seconds: int = 7200,
+    comfy_url: str = COMFYUI_URL,
+    *,
+    source_width: int | None = None,
+    source_height: int | None = None,
+) -> Path:
+    """Upscale an existing MP4 with FlashVSR.
+
+    Picks 2x unless the target needs more, then 4x; anything in between is
+    overshot and scaled back to exactly what was asked for. Output length equals
+    the input (no VAE padding drift), and the source audio is carried through.
+    """
+    from pipeline.assembler import _get_video_dimensions
+
+    src = Path(input_path)
+    if source_width is None or source_height is None:
+        source_width, source_height = _get_video_dimensions(src)
+
+    requested_w, requested_h = int(width), int(height)
+    needed = max(requested_w / max(1, int(source_width)),
+                 requested_h / max(1, int(source_height)))
+    # 4x costs ~10x the time of 2x (it has to tile), so a target only a little
+    # past 2x — e.g. an H3 1920x1024 render finishing at 3840x2160 — stays at
+    # 2x and lets the final normalize cover the remainder.
+    scale = 2 if needed <= _FLASHVSR_2X_TOLERANCE else 4
+    out_pixels = int(source_width) * int(source_height) * scale * scale
+    tiled = out_pixels > _FLASHVSR_UNTILED_MAX_PIXELS
+    fps_val = max(1.0, float(fps or LTX_FPS))
+
+    video_name = _stage_video_for_load(src, comfy_url=comfy_url)
+    workflow = _load_workflow("flashvsr_upscale.json")
+    workflow = _fill_template(workflow, {
+        "VIDEO_NAME": video_name,
+        "MODEL": _FLASHVSR_MODEL,
+        "MODE": _FLASHVSR_MODE,
+        "SCALE": scale,
+        "TILED": tiled,
+        "FPS": fps_val,
+    })
+
+    logger.info(
+        "[comfy] upscale_video_flashvsr %s %dx%d -> %dx%d (scale %dx, %s%s) "
+        "fps=%.3f timeout=%ds on %s",
+        src.name, source_width, source_height, requested_w, requested_h,
+        scale, _FLASHVSR_MODE, ", tiled" if tiled else "",
+        fps_val, timeout_seconds, comfy_url,
+    )
+    last_retryable: Exception | None = None
+    prompt_id = ""
+    for attempt in range(1, _COMFY_PROMPT_ATTEMPTS + 1):
+        client_id = str(uuid.uuid4())
+        prompt_id = _queue_prompt(workflow, client_id, comfy_url=comfy_url)
+        try:
+            _wait_for_completion(prompt_id, client_id, timeout=timeout_seconds, comfy_url=comfy_url)
+            break
+        except (DroppedJobError, StuckJobError) as exc:
+            last_retryable = exc
+            if attempt >= _COMFY_PROMPT_ATTEMPTS:
+                raise RuntimeError(
+                    f"ComfyUI FlashVSR upscale did not complete after {_COMFY_PROMPT_ATTEMPTS} attempts: "
+                    f"{_final_retryable_message(exc)}"
+                ) from exc
+            logger.warning(
+                "[comfy] FlashVSR upscale prompt %s… failed attempt %d/%d on %s: %s; re-submitting",
+                prompt_id[:8], attempt, _COMFY_PROMPT_ATTEMPTS, comfy_url, exc,
+            )
+    else:
+        raise RuntimeError(f"ComfyUI FlashVSR upscale did not complete: {last_retryable}")
+
+    outputs = _get_outputs(prompt_id, comfy_url=comfy_url)
+    if not outputs:
+        raise RuntimeError(f"No output files from ComfyUI for FlashVSR upscale prompt {prompt_id} ({comfy_url})")
+
+    video_item = next((o for o in outputs if str(o.get("filename", "")).lower().endswith(".mp4")), outputs[0])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    downloaded = _download_output(video_item, output_path, comfy_url=comfy_url)
+    return _ensure_exact_video_resolution(downloaded, requested_w, requested_h)
+
+
 def _ensure_exact_video_resolution(video_path: Path, width: int, height: int) -> Path:
     from pipeline.assembler import ensure_video_resolution
 

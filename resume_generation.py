@@ -1075,7 +1075,7 @@ def _finish_upscale_scenes(
         return scene_finals, vid_width, vid_height
 
     mode = str(cfg.get("finish_upscale_mode") or "fast").strip().lower()
-    if mode not in {"fast", "ltx_latent", "ic_lora", "h3_latent"}:
+    if mode not in {"fast", "ltx_latent", "ic_lora", "h3_latent", "flashvsr"}:
         logger.warning("Unknown finish_upscale_mode %r — using fast", mode)
         mode = "fast"
 

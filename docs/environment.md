@@ -39,7 +39,7 @@ See [model licensing](tts_licensing.md) before pointing these at other weights.
 
 | Variable | Default | Description |
 |---|---|---|
-| `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the film editor's temporal AI upscaler. Blank uses the packaged LTX-2.3 IC-LoRA workflow |
+| `TEMPORAL_VIDEO_UPSCALER_CMD` | _(unset)_ | Optional external command template for the film editor's AI upscaler. Blank uses the packaged ComfyUI workflows (FlashVSR by default) |
 | `TEMPORAL_VIDEO_UPSCALER_TIMEOUT` | `7200` | Timeout for the temporal AI upscaler, in seconds |
 | `TEMPORAL_VIDEO_UPSCALE_CHUNK_SECONDS` | `12.0` | Seconds per chunk for the temporal AI upscaler — long clips are upscaled in chunks and crossfaded back together. Raise it on a GPU with more memory |
 | `TEMPORAL_VIDEO_UPSCALE_CHUNK_OVERLAP` | `0.5` | Crossfade overlap between those chunks, in seconds (capped at 45% of the chunk length) |

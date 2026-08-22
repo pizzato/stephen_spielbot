@@ -114,6 +114,7 @@ in smaller chunks, because joining separately upscaled pieces shows at the seams
 
 | Mode | What it does |
 |---|---|
+| **FlashVSR** | The default. [FlashVSR](https://github.com/OpenImagingLab/FlashVSR) video super-resolution — recovers real texture and edges, keeps colour, no cross-hatch. 2× normally; 4× (slower, tiled) only when the target is more than 2.5× the source |
 | **Fast** | Plain ffmpeg scale |
 | **LTX latent** | The simple model upscaler (latent 2×) |
 | **LTX IC-LoRA** | The generative [Pixel Spatial Upscaler](https://huggingface.co/Lightricks/LTX-2.3-22b-IC-LoRA-Pixel-Spatial-Upscaler) |

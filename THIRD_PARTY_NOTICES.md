@@ -34,6 +34,7 @@ a convenience summary, **not** legal advice — always check the linked model ca
 | MiniMax H3 w4a8 Ref2VA checkpoint (default performance-film engine; 4-bit weights) | `Kijai/MiniMax-H3-experimental` | Derived from MiniMax H3 — **MiniMax H3 Community License** | ⚠️ Same territory restrictions and attribution as the base H3 weights |
 | MiniMax H3 Turbo LoRA (opt-in few-step distillation) | `larryvrh/MiniMax-H3-Turbo-Lora` | Apache-2.0 (the base H3 weights it patches keep the MiniMax H3 Community License) | ✅ LoRA itself yes; output remains bound by the H3 terms above |
 | MiniMax H3 latent upscaler (opt-in Remix "H3 latent" upscale mode) | `LBH-123-AI/Minimax_h3_latent_Upscaler` | Apache-2.0 (community-trained on H3 latents; the H3 VAE it decodes through keeps the MiniMax H3 Community License) | ✅ Upscaler itself yes; output remains bound by the H3 terms above |
+| FlashVSR v1.1 (default "FlashVSR" finishing / Remix upscale mode: streaming DMD diffusion model, LQ projector, TC decoder, Wan2.1 VAE) | `JunhaoZhuang/FlashVSR-v1.1` | Apache-2.0 (OpenImagingLab; built on Wan2.1, itself Apache-2.0) | ✅ |
 
 ## Audio models
 
@@ -93,6 +94,7 @@ The Dockerfiles under `docker/` clone or pip-install third-party code when
 | [ComfyUI-MiniMax-H3-Turbo](https://github.com/Larryvrh/ComfyUI-MiniMax-H3-Turbo) | `docker/comfyui` | Apache-2.0 |
 | [ComfyUI-H3-Motion-Context](https://github.com/NikoDemon80/ComfyUI-H3-Motion-Context) | `docker/comfyui` (pinned; omit with an empty `H3_MOTION_CONTEXT_REF`) | GPL-3.0 |
 | [Comfyui_Minimax_h3_latent_Upscaler](https://github.com/LBH-123-AI/Comfyui_Minimax_h3_latent_Upscaler) | `docker/comfyui` (pinned; omit with an empty `H3_LATENT_UPSCALER_REF`) | ⚠️ **No license declared** on the node repo — only the weights it loads are Apache-2.0. Redistributing the built image carries that ambiguity; set the ref empty to leave it out |
+| [ComfyUI-FlashVSR_Ultra_Fast](https://github.com/lihaoyun6/ComfyUI-FlashVSR_Ultra_Fast) (FlashVSR upscaler; bundles Sparse SageAttention in place of the upstream Block-Sparse kernel) | `docker/comfyui` (pinned; omit with an empty `FLASHVSR_NODES_REF`) | GPL-3.0 (the FlashVSR weights it loads are Apache-2.0) |
 | [seed-vc](https://github.com/Plachtaa/seed-vc) (song re-voicing; run with `docker exec`, never imported) | `docker/comfyui` (cloned into `/opt/seed-vc`; `make svc-install` adds it to older containers) | GPL-3.0 |
 | [F5-TTS](https://github.com/SWivid/F5-TTS) (code only) | `docker/tts` | MIT |
 | [chatterbox-tts](https://github.com/resemble-ai/chatterbox) | `docker/tts` | MIT |

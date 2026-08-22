@@ -299,6 +299,76 @@ class ComfyLtxUpscaleTests(unittest.TestCase):
             conform.assert_called_once()
             self.assertEqual(conform.call_args[0][3], 6.25)
 
+class ComfyFlashVsrUpscaleTests(unittest.TestCase):
+    def _run(self, w, h, src_w, src_h):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "out.mp4"
+            src.write_bytes(b"video")
+            queued = {}
+
+            def fake_queue(workflow, client_id, comfy_url):
+                queued["workflow"] = workflow
+                return "prompt-1"
+
+            with mock.patch.object(comfyui, "_stage_video_for_load", return_value="staged.mp4"), \
+                 mock.patch.object(comfyui, "_queue_prompt", side_effect=fake_queue), \
+                 mock.patch.object(comfyui, "_wait_for_completion"), \
+                 mock.patch.object(comfyui, "_get_outputs", return_value=[
+                     {"filename": "spielbot-flashvsr-upscale_00001.mp4", "subfolder": "", "type": "output"}
+                 ]), \
+                 mock.patch.object(comfyui, "_download_output", return_value=out), \
+                 mock.patch.object(comfyui, "_ensure_exact_video_resolution", return_value=out):
+                comfyui.upscale_video_flashvsr(
+                    src, out, w, h, fps=24,
+                    source_width=src_w, source_height=src_h,
+                )
+            return queued["workflow"]
+
+    def test_exact_double_is_2x_untiled(self):
+        wf = self._run(2560, 1408, 1280, 704)
+        node = wf["3"]
+        self.assertEqual(node["class_type"], "FlashVSRNode")
+        self.assertEqual(node["inputs"]["model"], comfyui._FLASHVSR_MODEL)
+        self.assertEqual(node["inputs"]["mode"], "tiny")
+        self.assertEqual(node["inputs"]["scale"], 2)
+        self.assertIs(node["inputs"]["tiled_dit"], False)
+        self.assertIs(node["inputs"]["tiled_vae"], False)
+        # Source audio rides through to the combine.
+        self.assertEqual(wf["7"]["inputs"]["audio"], ["2", 2])
+
+    def test_slightly_over_2x_stays_at_2x(self):
+        """An H3 1920x1024 render finishing at 4K UHD is 2.11x — 4x would cost
+        ten times more; the final normalize covers the remainder."""
+        wf = self._run(3840, 2160, 1920, 1024)
+        self.assertEqual(wf["3"]["inputs"]["scale"], 2)
+        self.assertIs(wf["3"]["inputs"]["tiled_dit"], False)
+
+    def test_big_jump_is_4x_and_tiled(self):
+        """5120x2816 out of 1280x704 ran out of memory untiled on a GB10."""
+        wf = self._run(5120, 2816, 1280, 704)
+        self.assertEqual(wf["3"]["inputs"]["scale"], 4)
+        self.assertIs(wf["3"]["inputs"]["tiled_dit"], True)
+        self.assertIs(wf["3"]["inputs"]["tiled_vae"], True)
+
+    def test_dispatcher_routes_flashvsr(self):
+        from pipeline import assembler
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "in.mp4"
+            src.write_bytes(b"video")
+            out = Path(tmp) / "out.mp4"
+            with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1280, 704)), \
+                 mock.patch.object(assembler, "_get_duration", return_value=5.0), \
+                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_verify_upscale_not_blank"), \
+                 mock.patch.object(comfyui, "upscale_video_flashvsr", return_value=out) as up:
+                result = assembler.temporal_ai_upscale_video(
+                    src, out, 2560, 1408, engine="flashvsr", comfy_url="http://w:8188")
+            self.assertEqual(result, out)
+            self.assertEqual(up.call_count, 1)
+            self.assertEqual(up.call_args.kwargs["source_width"], 1280)
+
+
 class UpscaleResolutionSplitTests(unittest.TestCase):
     """Finishing sizes must be reachable by upscale and by nothing else."""
 
