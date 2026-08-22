@@ -423,6 +423,25 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
 
   // Scenes tab
   const [scenes, setScenes] = useState(job?.scenes || [])
+  // The scenes were divided against the song on disk THEN; a take generated,
+  // re-voiced, uploaded or picked since may be another length, and the scenes
+  // do not follow it — the render stops on this before shooting anything, so
+  // say it here first. Mirrors pipeline.performance.song_windows_past_track.
+  const songFit = (() => {
+    const dur = Number(song?.duration) || 0
+    const windows = scenes.filter((s) => s.singing && Array.isArray(s.song_window) && s.song_window.length > 1)
+    if (!dur || !windows.length) return null
+    const end = Math.max(...windows.map((s) => Number(s.song_window[1]) || 0))
+    const past = windows.filter((s) => Number(s.song_window[1]) > dur + 0.25).map((s) => s.id)
+    if (past.length) {
+      const which = past.length === 1 ? `scene ${past[0]}` : `scenes ${past[0]}–${past[past.length - 1]}`
+      return { tone: 'warn', text: `The song in use is ${dur.toFixed(0)} s long but the scenes were divided for ${end.toFixed(0)} s of song — ${which} would perform past its end, and the render stops on it. Draft the story from this song again (${view === 'song' ? 'below' : 'Song tab'}) and divide it, or put the take the story was divided for back in use.` }
+    }
+    if (dur - end > 3) {
+      return { tone: 'info', text: `The scenes cover ${end.toFixed(0)} s of the ${dur.toFixed(0)} s song in use — the film will end ${(dur - end).toFixed(0)} s before the song does. Draft the story from this song again to use all of it.` }
+    }
+    return null
+  })()
   const [cur, setCur] = useState(0)
   const [lightbox, setLightbox] = useState(null)
   const [inpaint, setInpaint] = useState(false)
@@ -1101,6 +1120,7 @@ export default function Script({ job, setJob, meta, onGenerate, go }) {
       </div>
 
       <Banner tone="danger">{error}</Banner>
+      {(view === 'scenes' || view === 'song') && songFit && <Banner tone={songFit.tone}>{songFit.text}</Banner>}
       {job?.queue_item_id && view === 'scenes' && <Banner tone="info">Editing a queued request — “Save to queue slot” keeps its position and lets it render straight from this script.</Banner>}
       {genAll && <Banner tone="info">{genAllMsg}</Banner>}
       {!genAll && regenStatus && <Banner tone="ok">{regenStatus}</Banner>}

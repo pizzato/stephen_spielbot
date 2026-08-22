@@ -100,6 +100,15 @@ the format does to the render.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
   what gets divided, so extend it before drafting the story.
+- **Changing the song after the story is divided** — every scene performs a fixed stretch
+  of the track the story was divided against, and a take generated, re-voiced, uploaded or
+  put back *in use* afterwards may be another length. The scenes don't follow it: a
+  shorter song leaves the last scenes performing a stretch that no longer exists, and a
+  longer one plays on after the film ends. Both tabs show a notice naming the scenes
+  affected, and a render stops on it before shooting anything rather than failing an hour
+  in. The fix is the same flow as the first time — **Draft the story →** from the song in
+  use and divide it (a film that already has scenes forks into a new script, keeping this
+  one) — or put the take the story was divided for back in use.
 
 Every step on this tab can also run unattended — see
 [what automation makes](settings.md#what-automation-makes). With its song review gate on,
