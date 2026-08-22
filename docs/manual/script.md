@@ -295,6 +295,24 @@ The scene's still, generated on demand:
 
 The filmstrip, with **Regenerate all** to repaint every frame.
 
+## Restyle
+
+**Restyle**, in the Scenes view header, changes a script's visual style in place and keeps
+everything else — story, narration, scenes, cast. Pick a **Style** (its visual-style
+sentence fills in and is locked, as on [Create](create.md)) or **No style** to write the
+look yourself, choose whether to **repaint the cast's looks**, and click **Restyle**.
+
+The old style sentence is stripped from the head of every scene's image prompt and the new
+one put in its place; acted scenes get their H3 prompt re-assembled under the new style
+(a hand-edited prompt is left as written). The scene previews, cover and — if ticked — cast
+portraits painted in the old style are retired (kept in their version strips), so the
+missing previews are painted in the new look straight away and the render uses them. The
+script's brief and queue entry move to the new style too, so approving it renders with
+that style's narrator, engines and mix.
+
+A film that has already rendered is restyled into a *copy* from the film editor's
+[Restyle this film](edit-film.md#restyle-this-film) card, so the original stays intact.
+
 ## The critic
 
 In the Scenes view header: pick **1, 2, 3, 5 passes** or **Until stable**, then

@@ -236,6 +236,14 @@ export const api = {
   // re-render of the same script, kept as its own film.
   duplicateAndRender: (workDir, resolution) =>
     req('POST', '/scripts/duplicate-render', { work_dir: workDir, resolution }),
+  // Restyle: swap the visual style of a script in place (old style sentence
+  // stripped from every prompt, new one laid on, style-conditioned images
+  // retired). Returns the same payload as loadScript.
+  restyleJob: (jobId, body) => req('POST', `/jobs/${jobId}/restyle`, body),
+  // Duplicate a finished film, restyle the copy and queue it — the same film
+  // in another look, kept as its own film.
+  duplicateAndRestyle: (workDir, body) =>
+    req('POST', '/scripts/duplicate-restyle', { work_dir: workDir, ...body }),
   getScenes: (jobId) => req('GET', `/jobs/${jobId}/scenes`),
   saveScene: (jobId, sceneId, body) => req('PUT', `/jobs/${jobId}/scenes/${sceneId}`, body),
   // Scene structure (issue #193). Scene ids are renumbered to 1..N on every
