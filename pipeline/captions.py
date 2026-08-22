@@ -293,8 +293,10 @@ def build_srt(work_dir: Path, lang: str | None = None,
     return out_path
 
 
-def burn_srt_into_video(video_path: Path, srt_path: Path) -> Path:
-    """Burn *srt_path* into *video_path*'s picture, in place (open captions).
+def burn_srt_into_video(video_path: Path, srt_path: Path,
+                        style: dict | None = None) -> Path:
+    """Burn *srt_path* into *video_path*'s picture, in place (open captions),
+    in the style's ``subtitle_style`` look (None = plain default).
 
     Timing stays valid because the frames are re-encoded, never re-timed.
     Callers burn subtitles BEFORE any first-frame cover so the cover overlays
@@ -306,7 +308,7 @@ def burn_srt_into_video(video_path: Path, srt_path: Path) -> Path:
         raise FileNotFoundError("No caption track to burn — build the SRT first.")
     staged = video_path.with_name(f"{video_path.stem}.subburn.tmp{video_path.suffix}")
     try:
-        burn_subtitles(video_path, srt_path, staged)
+        burn_subtitles(video_path, srt_path, staged, style=style)
         staged.replace(video_path)
     finally:
         staged.unlink(missing_ok=True)

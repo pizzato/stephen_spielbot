@@ -100,6 +100,15 @@ the format does to the render.
 - **Scenes** splits the finished song into performed takes (blank = automatic), then
   **Draft the story →** writes the story from these lyrics. The song's *current* length is
   what gets divided, so extend it before drafting the story.
+- **Changing the song after the story is divided** — every scene performs a fixed stretch
+  of the track the story was divided against, and a take generated, re-voiced, uploaded or
+  put back *in use* afterwards may be another length. The scenes don't follow it: a
+  shorter song leaves the last scenes performing a stretch that no longer exists, and a
+  longer one plays on after the film ends. Both tabs show a notice naming the scenes
+  affected, and a render stops on it before shooting anything rather than failing an hour
+  in. The fix is the same flow as the first time — **Draft the story →** from the song in
+  use and divide it (a film that already has scenes forks into a new script, keeping this
+  one) — or put the take the story was divided for back in use.
 
 Every step on this tab can also run unattended — see
 [what automation makes](settings.md#what-automation-makes). With its song review gate on,
@@ -285,6 +294,24 @@ The scene's still, generated on demand:
 ### All scenes
 
 The filmstrip, with **Regenerate all** to repaint every frame.
+
+## Restyle
+
+**Restyle**, in the Scenes view header, changes a script's visual style in place and keeps
+everything else — story, narration, scenes, cast. Pick a **Style** (its visual-style
+sentence fills in and is locked, as on [Create](create.md)) or **No style** to write the
+look yourself, choose whether to **repaint the cast's looks**, and click **Restyle**.
+
+The old style sentence is stripped from the head of every scene's image prompt and the new
+one put in its place; acted scenes get their H3 prompt re-assembled under the new style
+(a hand-edited prompt is left as written). The scene previews, cover and — if ticked — cast
+portraits painted in the old style are retired (kept in their version strips), so the
+missing previews are painted in the new look straight away and the render uses them. The
+script's brief and queue entry move to the new style too, so approving it renders with
+that style's narrator, engines and mix.
+
+A film that has already rendered is restyled into a *copy* from the film editor's
+[Restyle this film](edit-film.md#restyle-this-film) card, so the original stays intact.
 
 ## The critic
 

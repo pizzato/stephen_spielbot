@@ -51,8 +51,11 @@ class BurnCommandTests(unittest.TestCase):
             # the subtitles filter reads its filename through two levels of
             # filtergraph escaping, and film names carry apostrophes/colons.
             self.assertTrue(vf.startswith("subtitles="), vf)
-            self.assertTrue(vf.endswith("/captions.srt"), vf)
+            track = vf.split(":", 1)[0]
+            self.assertTrue(track.endswith("/captions.srt"), vf)
             self.assertNotIn(str(srt), vf)
+            # The style's look rides along as an ASS force_style override.
+            self.assertIn(":force_style='", vf)
             self.assertIn("-c:a", cmd)
             self.assertIn("copy", cmd)
 
@@ -65,7 +68,7 @@ class BurnCommandTests(unittest.TestCase):
 
             def check(cmd, timeout=None):
                 vf = cmd[cmd.index("-vf") + 1]
-                self.assertTrue(Path(vf.removeprefix("subtitles=")).exists())
+                self.assertTrue(Path(vf.split(":", 1)[0].removeprefix("subtitles=")).exists())
 
             with mock.patch.object(assembler, "_run", side_effect=check):
                 assembler.burn_subtitles(src, srt, Path(tmp) / "out.mp4")
@@ -79,7 +82,7 @@ class BurnInPlaceTests(unittest.TestCase):
             srt = Path(tmp) / "captions.srt"
             srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n")
 
-            def fake_burn(src, track, out):
+            def fake_burn(src, track, out, style=None):
                 self.assertEqual(track, srt)
                 out.write_bytes(b"captioned")
                 return out
@@ -148,7 +151,7 @@ class RebuildReapplyTests(unittest.TestCase):
              mock.patch("pipeline.captions.burn_srt_into_video") as burn:
             backend._maybe_burn_subtitles(self.wd, self.final)
         build.assert_called_once_with(self.wd, lang=None, timing_lang=None)
-        burn.assert_called_once_with(self.final, srt)
+        burn.assert_called_once_with(self.final, srt, style=mock.ANY)
 
     def test_localized_rebuild_burns_its_language(self):
         (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
@@ -247,3 +250,41 @@ class RemixSubtitlesEndpointTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CaptionDownloadTests(unittest.TestCase):
+    """/api/film/captions.srt hands the publishing caption track (with timings)
+    to the browser as a named .srt download, per language."""
+
+    def setUp(self):
+        p = mock.patch.object(backend.gapp, "OUTPUT_DIR", _OUT)
+        p.start()
+        self.addCleanup(p.stop)
+        self.wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+
+    def test_serves_the_track_as_a_named_download(self):
+        srt = self.wd / "captions.srt"
+        srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nHi\n")
+        with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
+             mock.patch.object(backend, "_video_title_for", return_value="Deep Sea: Giants!"):
+            resp = backend.film_captions_srt(work_dir=str(self.wd), lang="")
+        build.assert_called_once_with(self.wd, lang=None, timing_lang=None)
+        self.assertEqual(resp.path, str(srt))
+        self.assertIn('filename="Deep_Sea_Giants_en.srt"', resp.headers["content-disposition"])
+
+    def test_localized_language_is_worded_in_that_language(self):
+        srt = self.wd / "captions_pt.srt"
+        srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nOi\n")
+        with mock.patch("pipeline.captions.build_srt", return_value=srt) as build:
+            backend.film_captions_srt(work_dir=str(self.wd), lang="pt")
+        build.assert_called_once_with(self.wd, lang="pt", timing_lang=None)
+
+    def test_nothing_to_caption_is_a_404(self):
+        with mock.patch("pipeline.captions.build_srt", return_value=None):
+            with self.assertRaises(backend.HTTPException) as cm:
+                backend.film_captions_srt(work_dir=str(self.wd), lang="")
+        self.assertEqual(cm.exception.status_code, 404)
+
+    def test_rejects_paths_outside_the_output_folder(self):
+        with self.assertRaises(backend.HTTPException):
+            backend.film_captions_srt(work_dir="/etc", lang="")

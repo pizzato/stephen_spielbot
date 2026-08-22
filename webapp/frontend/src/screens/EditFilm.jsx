@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import {
   Card, Field, Button, Chip, Check, Icon, Banner, Segmented, RegenLabel, GuidedRegenButton,
   VersionStrip, VideoVersionStrip, MusicVersionStrip, InpaintModal, TrimModal, ContinueModal, voiceMetaMap, voiceLabel, SceneTypeControls, ActedPrompt, isActedMode, hasActedShape, CatalogueRefCard,
+  RestyleForm, NO_STYLE,
 } from '../components.jsx'
 import { api, fileUrl } from '../api.js'
 import PerformanceScenes from './PerformanceScenes.jsx'
@@ -731,9 +732,18 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [reRenderResolution, setReRenderResolution] = useState('')
   const [reRenderBusy, setReRenderBusy] = useState(false)
   const [reRenderDone, setReRenderDone] = useState(null)
+  // Restyle this film: the style list for the picker and the form's draft.
+  const [styles, setStyles] = useState([])
+  const [restyle, setRestyle] = useState({ styleName: '', style: '', repaintCast: true })
+  const [restyleBusy, setRestyleBusy] = useState(false)
+  const [restyleDone, setRestyleDone] = useState(null)
+  useEffect(() => {
+    api.getConfig().then((c) => setStyles((c?.config || c || {}).styles || [])).catch(() => {})
+  }, [])
   const [ffCoverBusy, setFfCoverBusy] = useState(false)
   const [ffSeconds, setFfSeconds] = useState(1)
   const [subsBusy, setSubsBusy] = useState(false)
+  const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('')
@@ -778,6 +788,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
       .then((d) => {
         setData(d)
         setVol({ voice: d.voice_vol, music: d.music_vol, ambient: d.ambient_vol })
+        setRestyle({ styleName: d.style_name || '', style: d.style || '', repaintCast: true })
         setVoice(d.voice || d.voices?.[0] || '')
         setMusicDesc(d.music_desc || '')
         setMusicHistory(d.music_history)
@@ -1058,6 +1069,18 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setReRenderBusy(false) }
   }
 
+  // Same script in another look, as its own film: duplicate, restyle the
+  // copy (prompts rewritten, old-look images retired) and queue it.
+  const restyleFilm = async () => {
+    setRestyleBusy(true); setError(''); setStatus(''); setRestyleDone(null)
+    try {
+      const r = await api.duplicateAndRestyle(data.work_dir || workDir, {
+        style_name: restyle.styleName, style: restyle.style, repaint_cast: restyle.repaintCast,
+      })
+      setRestyleDone(r)
+    } catch (e) { setError(e.message) } finally { setRestyleBusy(false) }
+  }
+
   const burnFirstFrameCover = async () => {
     setFfCoverBusy(true); setError(''); setStatus('')
     try {
@@ -1201,6 +1224,11 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     } catch (e) { setError(e.message) } finally { setLocAudioBusy('') }
   }
 
+  useEffect(() => {
+    if (!data?.work_dir) return
+    api.filmCaptionTracks(data.work_dir).then((r) => setCaptionTracks(r.tracks || [])).catch(() => setCaptionTracks([]))
+  }, [data?.work_dir])
+
   const burnSubtitles = async (burn) => {
     setSubsBusy(true); setError(''); setStatus('')
     try {
@@ -1251,7 +1279,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   }
   if (!data) return <p className="muted">Loading final cut…</p>
 
-  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy
+  const anyBusy = busy || musicBusy || narratorBusy || upscaleBusy || ffCoverBusy || subsBusy || localizeBusy || locSaveBusy || !!locAudioBusy || reRenderBusy || restyleBusy
 
   // Language of the currently selected final cut, for the marking chip. Only
   // shown once the film has language info (a localization or a tagged version).
@@ -1433,6 +1461,20 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               </Button>
             )}
           </div>
+          {captionTracks && captionTracks.length > 0 && (
+            <div className="mt-16">
+              <div className="muted" style={{ fontSize: 12 }}>
+                Download the caption file with timings (SRT) — the same track publishing attaches:
+              </div>
+              <div className="row center gap-8 mt-8" style={{ flexWrap: 'wrap' }}>
+                {captionTracks.map((t) => (
+                  <a key={t.lang} className="btn btn--ghost" href={t.url} download>
+                    <Icon name="download" style={{ width: 14 }} /> {t.name} <span className="mono" style={{ fontSize: 11 }}>.srt</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
 
         {data.can_remix === false && (
@@ -1668,6 +1710,43 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                     ? go('progress', { workDir: reRenderDone.work_dir })
                     : go('queue'))}>
                   {reRenderDone.started ? 'Follow the render' : 'Open the queue'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+
+        <Card span={4} padLg className="reveal reveal-d2">
+          <span className="label-sm row center gap-10"><Icon name="palette" style={{ color: 'var(--ink-3)', width: 16 }} /> Restyle this film</span>
+          <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+            Shoot this same script in another visual style — the story, narration, scenes and
+            cast stay as they are; only the style sentence on every prompt changes, and the
+            images are painted afresh in the new look. This film stays exactly as it is; the
+            restyled copy lands in the Library as its own film.
+          </p>
+          <div className="mt-24">
+            <RestyleForm styles={styles} value={restyle} onChange={(v) => { setRestyle(v); setRestyleDone(null) }} disabled={anyBusy} />
+          </div>
+          <div className="mt-24">
+            <Button variant="primary" block icon="palette"
+              disabled={anyBusy || !restyle.styleName}
+              onClick={restyleFilm}>
+              {restyleBusy ? 'Queueing…' : 'Restyle and render'}
+            </Button>
+          </div>
+          {restyleDone && (
+            <div className="mt-16">
+              <p className="muted" style={{ fontSize: 13 }}>
+                {restyleDone.started
+                  ? `Rendering “${restyleDone.title}” ${restyleDone.style_name === NO_STYLE ? 'in your own look' : `as “${restyleDone.style_name}”`}.`
+                  : `Queued “${restyleDone.title}” ${restyleDone.style_name === NO_STYLE ? 'in your own look' : `as “${restyleDone.style_name}”`} — it renders when the queue reaches it.`}
+              </p>
+              <div className="mt-16">
+                <Button variant="ghost" block icon="arrow-right"
+                  onClick={() => (restyleDone.started
+                    ? go('progress', { workDir: restyleDone.work_dir })
+                    : go('queue'))}>
+                  {restyleDone.started ? 'Follow the render' : 'Open the queue'}
                 </Button>
               </div>
             </div>

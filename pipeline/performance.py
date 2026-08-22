@@ -856,6 +856,55 @@ def is_singing(scene) -> bool:
     return is_silent(scene) and bool(scene_meta(scene).get("singing"))
 
 
+# A window may end this much past the track: the last cut is frame-snapped
+# and a re-voiced or uploaded take can run a few frames short of the original.
+SONG_WINDOW_SLACK_SECONDS = 0.25
+
+
+def song_windows_past_track(scenes, track_seconds: float) -> tuple[float, list[int]]:
+    """Where a song film's scene windows end, and which singing scenes run
+    past the track in use: (planned end, ids of scenes whose window ends after
+    *track_seconds*).
+
+    The windows are cut at divide time against the track on disk then. A song
+    generated, re-voiced or uploaded AFTER that keeps the scenes as they were,
+    so a shorter take leaves the last scenes performing a stretch of song that
+    no longer exists — their slices cut empty and the worker rejects them, a
+    fleet-hour into the render."""
+    planned_end = 0.0
+    overrun: list[int] = []
+    for s in scenes:
+        if not is_singing(s):
+            continue
+        window = scene_meta(s).get("song_window") or []
+        if len(window) < 2:
+            continue
+        try:
+            end = float(window[1])
+        except (TypeError, ValueError):
+            continue
+        planned_end = max(planned_end, end)
+        if end > float(track_seconds) + SONG_WINDOW_SLACK_SECONDS:
+            sid = s.get("id") if isinstance(s, dict) else getattr(s, "id", None)
+            overrun.append(int(sid or 0))
+    return planned_end, overrun
+
+
+def song_length_mismatch_message(track_seconds: float, planned_end: float,
+                                 overrun: list[int]) -> str:
+    """The one sentence every path shows when the song in use no longer fits
+    the scenes — the render's early stop, a single scene's re-shoot, the Song
+    tab's notice."""
+    ids = sorted(overrun)
+    which = (f"scene {ids[0]}" if len(ids) == 1
+             else f"scenes {ids[0]}–{ids[-1]}" if ids == list(range(ids[0], ids[-1] + 1))
+             else "scenes " + ", ".join(str(i) for i in ids))
+    return (f"The song in use is {track_seconds:.0f}s long but the scenes were divided "
+            f"for {planned_end:.0f}s of song — {which} would perform past its end. "
+            "Draft the story from this song again and divide it, or put the take "
+            "the story was divided for back in use.")
+
+
 def renders_acted(scene, cfg: dict | None = None) -> bool:
     """Does this scene render as ONE H3 Ref2VA take rather than first-frame I2V?
 

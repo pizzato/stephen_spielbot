@@ -62,6 +62,13 @@ clips, so a film rendered without the style's
 fact, and one rendered with them can shed them. The choice is saved on the film, so
 every later rebuild (re-mix, re-voice, reassemble, localize) keeps it.
 
+The card also offers the caption file itself: **Download** hands you the SRT with
+timings — one button per language the film has (the original narration plus every
+saved [localization](#localize)), each timed to the published cut. It is the very
+track publishing attaches, so it drops straight into YouTube Studio, a video editor,
+or any player that loads sidecar subtitles. The look of burned-in subtitles is set per
+style under [Settings → Subtitle style](settings.md#cover-first-frame).
+
 ### Re-mix audio
 
 Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix film**. This
@@ -104,8 +111,12 @@ pickers offer them too — as targets: such a film renders at FHD and the pipeli
 this same upscale as its finishing step.) Only targets larger than the film's current
 size are listed.
 
-Scenes are upscaled one per worker in parallel and kept on disk as they finish, so if a
-scene fails the completed ones are reused when you run it again rather than redone.
+Scenes are upscaled one per worker in parallel and kept on disk as they finish — and after
+the film is assembled — so if a scene fails the completed ones are reused when you run it
+again, and the same target can be rebuilt later without redoing the GPU work. A scene you
+re-shoot or re-voice afterwards is upscaled afresh; its cached copy is not reused. Each
+upscaled scene is put back on its source's exact length with the source's audio before the
+film is joined the same way the original was, so the upscaled cut keeps the film's timing.
 Workers are shared with everything else through [per-worker leases](../cluster.md#one-job-per-worker-no-matter-who-asks):
 scenes beyond the free workers wait as *queued* rows, and an upscale started while a
 film renders (or a second upscale) queues behind it instead of overloading the GPUs.
@@ -142,6 +153,30 @@ is rendering.
 The result is a **separate film**, not a version of this one: its own folder, its own
 final video, its own publishing. This film is left exactly as it is. Both appear in
 [Films](films.md) under the same title, each card showing its resolution.
+
+### Restyle this film
+
+Shoots the *same script* again in another **visual style** — the story, narration, scenes
+and cast stay exactly as they are; only the look changes. Every style sits at the head of
+each scene's image prompt as a sentence (the style's *Visual style* from
+[Settings → Styles](settings.md)), so swapping styles by editing prompts was slow and easy
+to get wrong — and a re-render then reused the first frames painted in the old look anyway.
+
+Pick a **Style**: its visual-style sentence fills in and is locked, exactly as on
+[Create](create.md). Pick **No style** to write the look yourself. **Repaint the cast's
+looks** (on by default) also retires the cast's portraits so they are painted afresh in
+the new style — untick it to keep portraits you uploaded. Click **Restyle and render**.
+
+The copy is duplicated as [Duplicate](script.md) would, then restyled: the old style
+sentence is stripped from every scene prompt and the new one put in its place, acted
+scenes get their H3 prompt re-assembled under the new style, and the scene images, cover
+and (if ticked) cast looks that carried the old style are retired — kept as versions —
+so the render paints everything in the new look. It goes into the [queue](queue.md)
+approved. The result is a **separate film** with the new style's settings (narrator,
+engines, mix); this film is left exactly as it is.
+
+To change the style of a script that has *not* rendered yet, use **Restyle** on the
+[Script screen](script.md#restyle) instead — it works in place.
 
 ### Background music
 

@@ -1648,5 +1648,80 @@ class SoundedTakeTests(unittest.TestCase):
         self.assertEqual(trims, [5.0])
 
 
+class SongFitTests(unittest.TestCase):
+    """A song generated, re-voiced, uploaded or picked AFTER the divide can be
+    another length; the scenes keep the windows cut for the old take. "The
+    Cycle" was divided for a 230 s take, its song re-sung at 185 s, and the
+    render shot 37 of 46 scenes before the first empty slice failed."""
+
+    def _scenes(self, windows, singing=True):
+        out = []
+        for i, (t0, t1) in enumerate(windows, start=1):
+            md = {"mode": "silent", "singing": singing, "song_window": [t0, t1]}
+            out.append(Scene(id=i, title=f"s{i}", image_prompt="i", video_prompt="v",
+                             narration="", mode="silent", duration=t1 - t0,
+                             metadata_extra=md))
+        return out
+
+    def test_windows_inside_the_track_fit(self):
+        scenes = self._scenes([(0, 5), (5, 10), (10, 15)])
+        self.assertEqual(perf.song_windows_past_track(scenes, 15.1), (15.0, []))
+        # The last cut is frame-snapped and a re-voiced take runs a hair short.
+        self.assertEqual(perf.song_windows_past_track(scenes, 14.8), (15.0, []))
+
+    def test_scenes_past_a_shorter_song_are_named(self):
+        scenes = self._scenes([(0, 5), (5, 10), (10, 15), (15, 20)])
+        end, past = perf.song_windows_past_track(scenes, 12.0)
+        self.assertEqual((end, past), (20.0, [3, 4]))
+        msg = perf.song_length_mismatch_message(12.0, end, past)
+        self.assertIn("12s long", msg)
+        self.assertIn("divided for 20s of song", msg)
+        self.assertIn("scenes 3–4 would perform past its end", msg)
+        self.assertIn("Draft the story from this song again", msg)
+
+    def test_stored_rows_and_non_singing_scenes(self):
+        rows = [{"id": 1, "metadata": {"mode": "silent", "singing": True, "song_window": [0, 9]}},
+                {"id": 2, "metadata": {"mode": "narration", "song_window": [9, 30]}}]
+        self.assertEqual(perf.song_windows_past_track(rows, 6.0), (9.0, [1]))
+        self.assertEqual(perf.song_windows_past_track(self._scenes([(0, 9)], singing=False), 6.0),
+                         (0.0, []))
+        self.assertIn("scene 1 would", perf.song_length_mismatch_message(6.0, 9.0, [1]))
+
+    def test_a_single_scene_past_the_song_is_refused_before_it_is_shot(self):
+        """The film editor's re-shoot of one scene: no take without its track."""
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as tmp:
+            wd = Path(tmp)
+            (wd / "background_music.wav").write_bytes(b"wav")
+            scene = _singing()
+            scene.metadata_extra = {**scene.metadata_extra, "song_window": [185.2, 190.2],
+                                    "seconds": 5.0}
+            with unittest.mock.patch.object(rg, "_track_seconds", return_value=185.24), \
+                 unittest.mock.patch("app.resolve_performance_references",
+                                     return_value={"pictures": [{"slot": 1, "name": "Ada",
+                                                                 "kind": "character",
+                                                                 "path": str(wd / "p.png")}],
+                                                   "audios": []}), \
+                 unittest.mock.patch.object(rg, "_cut_audio_segment") as cut, \
+                 unittest.mock.patch("pipeline.comfyui.generate_video_h3_ref") as gen:
+                with self.assertRaises(RuntimeError) as caught:
+                    rg._render_performance_clip(
+                        scene, scene.metadata_extra, wd,
+                        {"style_name": "Song", "h3_silent_scenes": True},
+                        wd / "scene_02_clip.mp4", comfy_url="http://w:8188",
+                        vid_width=704, vid_height=1280, style_name="Song")
+            self.assertIn("185s long", str(caught.exception))
+            cut.assert_not_called()
+            gen.assert_not_called()
+
+    def test_a_cut_past_the_end_of_the_song_does_not_pass_as_audio(self):
+        import resume_generation as rg
+        with tempfile.TemporaryDirectory() as tmp:
+            song = _write_song(Path(tmp) / "song.wav", [(20.0, 0.4)])
+            with self.assertRaises(ValueError):
+                rg._cut_audio_segment(song, Path(tmp) / "cut.wav", 25.0, 30.0)
+            self.assertFalse((Path(tmp) / "cut.wav").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -685,6 +685,16 @@ def _render_performance_shots(scene, shots, scene_meta, work_dir, cfg, *, comfy_
     return final
 
 
+def _track_seconds(path: Path) -> float:
+    """Length of the song in use, 0.0 when it cannot be measured — the window
+    checks below then stand aside rather than fail a film on a probe hiccup."""
+    from pipeline.assembler import _get_duration as probe
+    try:
+        return float(probe(path) or 0.0)
+    except Exception:
+        return 0.0
+
+
 def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
     """Cut [t0, t1] seconds out of an audio file (re-encoded PCM, sample-exact).
 
@@ -701,6 +711,11 @@ def _cut_audio_segment(src: Path, out: Path, t0: float, t1: float) -> Path:
          "-i", str(src), "-ss", f"{t0:.6f}", "-to", f"{t1:.6f}",
          "-c:a", "pcm_s16le", str(out)],
         check=True, capture_output=True)
+    # ffmpeg happily writes a header-only WAV for a cut that starts past the
+    # end of the file; the worker then fails it as "No audio frames decoded".
+    if out.stat().st_size <= 128:
+        out.unlink(missing_ok=True)
+        raise ValueError(f"audio segment [{t0}, {t1}] lies past the end of {src.name}")
     return out
 
 
@@ -749,6 +764,16 @@ def _render_performance_clip(scene, meta, work_dir, cfg, clip: Path, *, comfy_ur
     window = meta.get("song_window") if meta.get("singing") else None
     song_track = work_dir / "background_music.wav"
     if window and song_track.exists():
+        # A window past the song in use is not a cutting hiccup to shrug off —
+        # a take shot without its track would perform nothing. Say what is
+        # wrong (the full render checks every scene before shooting any; this
+        # is the single scene re-shot from the editor).
+        track_len = _track_seconds(song_track)
+        if track_len > 0:
+            planned_end, overrun = _performance.song_windows_past_track([scene], track_len)
+            if overrun:
+                raise RuntimeError(_performance.song_length_mismatch_message(
+                    track_len, planned_end, overrun))
         try:
             t0, t1 = float(window[0]), float(window[1])
             seg = work_dir / f"scene_{scene.id:02d}_track.wav"
@@ -1599,6 +1624,18 @@ def main(work_dir: Path) -> None:
                     f"retrying. {first_line}",
                 )
 
+    if singing_film and music_path.exists():
+        # The song the scenes were divided for may not be the song in use any
+        # more (a take generated, re-voiced or uploaded since). Caught here,
+        # before a single take is shot: a film once rendered 37 of its 46
+        # scenes — a fleet-hour — before the first empty slice failed.
+        track_len = _track_seconds(music_path)
+        planned_end, overrun = (_performance.song_windows_past_track(scenes, track_len)
+                                if track_len > 0 else (0.0, []))
+        if overrun:
+            raise RuntimeError(_performance.song_length_mismatch_message(
+                track_len, planned_end, overrun))
+
     write_progress(status_file, video_band[0], "Music ready. Generating cover image and scene videos…")
 
     # ── Cover image (at ~35%, non-blocking, non-fatal) ───────────────────────
@@ -1956,7 +1993,8 @@ def main(work_dir: Path) -> None:
                 from pipeline.captions import build_srt, burn_srt_into_video
                 srt_path = build_srt(work_dir)
                 if srt_path:
-                    burn_srt_into_video(final_path, srt_path)
+                    burn_srt_into_video(final_path, srt_path,
+                                        style=cfg.get("subtitle_style"))
             except Exception as sub_err:
                 logger.warning("Subtitle burn failed (non-fatal): %s", sub_err)
         # Per-style automation: burn the cover into the head of the film —

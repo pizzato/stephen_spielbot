@@ -135,7 +135,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"temporal-upscaled-scene")
             return out
 
-        def fake_concat(paths, out):
+        def fake_concat(paths, out, fade=0.3):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4"])
             out.write_bytes(b"temporal-upscaled-final")
             return out
@@ -147,7 +147,7 @@ class FilmUpscaleTests(unittest.TestCase):
              }), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
-             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.upscale_video") as fast:
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
@@ -171,7 +171,7 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(b"latent-upscaled-scene")
             return out
 
-        def fake_concat(paths, out):
+        def fake_concat(paths, out, fade=0.3):
             out.write_bytes(b"latent-upscaled-final")
             return out
 
@@ -183,7 +183,7 @@ class FilmUpscaleTests(unittest.TestCase):
              mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal) as temporal, \
-             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.upscale_video") as fast:
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "ltx_latent")
@@ -217,8 +217,10 @@ class FilmUpscaleTests(unittest.TestCase):
             out.write_bytes(f"upscaled:{src.name}".encode())
             return out
 
-        def fake_concat(paths, out):
+        def fake_concat(paths, out, fade=0.3):
             self.assertEqual([p.name for p in paths], ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
+            # the film's own join, cuts only — never the stream copy
+            self.assertEqual(fade, 0.0)
             out.write_bytes(b"combined-scenes")
             return out
 
@@ -238,7 +240,7 @@ class FilmUpscaleTests(unittest.TestCase):
              mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188", "http://w2:8188"]), \
              mock.patch("pipeline.assembler._get_video_dimensions", return_value=(512, 288)), \
              mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
-             mock.patch("pipeline.assembler.concatenate_scenes_hard_cut", side_effect=fake_concat), \
+             mock.patch("pipeline.assembler.concatenate_scenes", side_effect=fake_concat), \
              mock.patch("pipeline.assembler.mix_background_music", side_effect=fake_mix):
             backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
             backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "temporal_ai")
@@ -251,6 +253,48 @@ class FilmUpscaleTests(unittest.TestCase):
         history = backend.final_video_history.history(wd)
         self.assertEqual(len(history["versions"]), 2)
         self.assertEqual(history["selected"], 2)
+        # Hours of GPU work stay on disk for a rebuild; only the joined copy goes.
+        kept = wd / "final_upscale_scenes" / "ic_lora-1920x1080"
+        self.assertEqual(sorted(p.name for p in kept.iterdir()),
+                         ["scene_01_final.upscaled.mp4", "scene_02_final.upscaled.mp4"])
+
+    def test_cached_scene_upscale_is_reused_only_when_fresher_than_the_scene(self):
+        """A scene re-shot to the same length must not pass off its old upscale."""
+        wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
+        wd.with_suffix(".mp4").write_bytes(b"low-res-final")
+        scene = wd / "scene_01_final.mp4"
+        scene.write_bytes(b"scene-one" * 1500)
+        cached = wd / "final_upscale_scenes" / "ic_lora-1920x1080" / "scene_01_final.upscaled.mp4"
+        cached.parent.mkdir(parents=True)
+        cached.write_bytes(b"cached-upscale" * 1000)
+
+        def run(cached_is_fresher: bool) -> list:
+            stamp = scene.stat().st_mtime + (60 if cached_is_fresher else -60)
+            os.utime(cached, (stamp, stamp))
+            calls = []
+
+            def fake_temporal(src, out, *_a, **_kw):
+                calls.append(src)
+                out.write_bytes(b"fresh-upscale" * 1000)
+                return out
+
+            with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Landscape FHD (1920×1080)": (1920, 1080)}), \
+                 mock.patch.object(backend.gapp, "load_config", return_value={"comfy_workers": ["http://w1:8188"]}), \
+                 mock.patch("pipeline.worker_pool.alive_workers", return_value=["http://w1:8188"]), \
+                 mock.patch("pipeline.assembler._get_video_dimensions",
+                            side_effect=lambda p: (1920, 1080) if "upscaled" in p.name else (512, 288)), \
+                 mock.patch("pipeline.assembler._get_duration", return_value=3.0), \
+                 mock.patch("pipeline.assembler._verify_upscale_not_blank"), \
+                 mock.patch("pipeline.assembler.temporal_ai_upscale_video", side_effect=fake_temporal), \
+                 mock.patch("pipeline.assembler.concatenate_scenes",
+                            side_effect=lambda paths, out, fade=0.3: out.write_bytes(b"joined") or out):
+                backend._film_tasks["tid"] = {"status": "running", "step": "final_upscale"}
+                backend._run_final_video_upscale("tid", wd, "Landscape FHD (1920×1080)", "ic_lora")
+            self.assertEqual(backend._film_tasks["tid"]["status"], "done")
+            return calls
+
+        self.assertEqual(run(cached_is_fresher=True), [])
+        self.assertEqual(run(cached_is_fresher=False), [scene])
 
     def test_remix_upscale_endpoint_accepts_target_and_mode(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))

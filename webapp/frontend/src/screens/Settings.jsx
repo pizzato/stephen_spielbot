@@ -683,6 +683,134 @@ function CoverTypographyEditor({ value, onChange, systemFonts, bundledFonts }) {
   )
 }
 
+// Per-style look of burned-in subtitles — defaults mirrored from
+// pipeline/subtitle_style.py so the editor shows effective values before the
+// style has its own dict.
+const SS_DEFAULTS = {
+  font: '', scale: 1.0, bold: false, color: '#FFFFFF', position: 'bottom',
+  align: 'center', outline: 1.0, outline_color: '#000000', shadow: false,
+  card: false, card_color: '#000000', card_opacity: 0.55, margin: 4,
+}
+
+// Editor for a style's subtitle_style: controls beside a live preview frame
+// drawn by the very ffmpeg filter that burns real films.
+function SubtitleStyleEditor({ value, onChange, systemFonts, bundledFonts }) {
+  const st = { ...SS_DEFAULTS, ...(value || {}) }
+  const set = (k, v) => onChange({ ...st, [k]: v })
+  const [sample, setSample] = useState('The deep sea hides giants\nnobody has ever filmed.')
+  const [portrait, setPortrait] = useState(false)
+  const [preview, setPreview] = useState('')
+  const [previewErr, setPreviewErr] = useState('')
+  const stKey = JSON.stringify(st)
+  useEffect(() => {
+    let gone = false
+    const t = setTimeout(() => {
+      fetch('/api/subtitle-style/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtitle_style: st, text: sample, orientation: portrait ? 'portrait' : 'landscape' }),
+      }).then((res) => {
+        if (!res.ok) throw new Error(`Preview failed (${res.status})`)
+        return res.blob()
+      }).then((blob) => {
+        if (gone) return
+        setPreview((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob) })
+        setPreviewErr('')
+      }).catch((e) => { if (!gone) setPreviewErr(e.message) })
+    }, 300)
+    return () => { gone = true; clearTimeout(t) }
+  }, [stKey, sample, portrait])  // eslint-disable-line react-hooks/exhaustive-deps
+  const fontKnown = !st.font || (bundledFonts || []).some((f) => f.name === st.font)
+    || (systemFonts || []).some((f) => f.path === st.font)
+  return (
+    <div className="stack gap-16" style={{ border: '1px solid var(--line)', borderRadius: 'var(--r-md)', padding: 16 }}>
+      <div className="row gap-22 row--wrap" style={{ alignItems: 'flex-start' }}>
+          <div className="stack gap-14" style={{ flex: '1 1 340px', minWidth: 300 }}>
+            <Field label="Font" hint="Bundled fonts ship with Spielbot; system fonts come from this machine. The default is the player-style sans that ffmpeg uses on its own.">
+              <select className="select" value={st.font || ''} onChange={(e) => set('font', e.target.value)} style={{ maxWidth: 320 }}>
+                <option value="">Default (Arial / sans)</option>
+                {(bundledFonts || []).length > 0 && (
+                  <optgroup label="Bundled">
+                    {(bundledFonts || []).map((f) => <option key={f.path} value={f.name}>{f.name}</option>)}
+                  </optgroup>
+                )}
+                <optgroup label="System">
+                  {(systemFonts || []).map((f) => <option key={f.path} value={f.path}>{f.name}</option>)}
+                </optgroup>
+                {st.font && !fontKnown && <option value={st.font}>{st.font} (not found)</option>}
+              </select>
+            </Field>
+            <div className="row gap-14 row--wrap">
+              <Field label="Position">
+                <select className="select" value={st.position} onChange={(e) => set('position', e.target.value)}>
+                  <option value="top">Top</option>
+                  <option value="middle">Middle</option>
+                  <option value="bottom">Bottom</option>
+                </select>
+              </Field>
+              <Field label="Alignment">
+                <select className="select" value={st.align} onChange={(e) => set('align', e.target.value)}>
+                  <option value="left">Left</option>
+                  <option value="center">Centre</option>
+                  <option value="right">Right</option>
+                </select>
+              </Field>
+              <Field label="Edge margin" hint="% of the picture height.">
+                <input className="input" type="number" min={0} max={40} value={st.margin}
+                  onChange={(e) => set('margin', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+            </div>
+            <div className="row gap-14 row--wrap">
+              <Field label="Text size" hint="Multiplier on the standard subtitle size.">
+                <input className="input" type="number" min={0.5} max={2.5} step={0.05} value={st.scale}
+                  onChange={(e) => set('scale', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+              <Field label="Text colour">
+                <input className="input" type="color" value={st.color}
+                  onChange={(e) => set('color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+              </Field>
+              <Field label="Outline width" hint="0 = no stroke.">
+                <input className="input" type="number" min={0} max={4} step={0.5} value={st.outline}
+                  onChange={(e) => set('outline', +e.target.value)} style={{ maxWidth: 100 }} />
+              </Field>
+              <Field label="Outline colour">
+                <input className="input" type="color" value={st.outline_color}
+                  onChange={(e) => set('outline_color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+              </Field>
+            </div>
+            <Check checked={!!st.bold} onChange={(v) => set('bold', v)} label="Bold" />
+            <Check checked={!!st.shadow} onChange={(v) => set('shadow', v)} label="Drop shadow under the text" />
+            <Check checked={!!st.card} onChange={(v) => set('card', v)}
+              label="Backdrop box — solid panel behind each line" />
+            {st.card && (
+              <div className="row gap-14 row--wrap">
+                <Field label="Box colour">
+                  <input className="input" type="color" value={st.card_color}
+                    onChange={(e) => set('card_color', e.target.value)} style={{ maxWidth: 90, height: 38, padding: 4, cursor: 'pointer' }} />
+                </Field>
+                <Field label="Box opacity">
+                  <input className="input" type="number" min={0.05} max={1} step={0.05} value={st.card_opacity}
+                    onChange={(e) => set('card_opacity', +e.target.value)} style={{ maxWidth: 100 }} />
+                </Field>
+              </div>
+            )}
+          </div>
+          <div className="stack gap-8" style={{ flex: '0 1 380px', minWidth: 260 }}>
+            <Field label="Preview text" hint="Sample only — real films show their own captions.">
+              <textarea className="input" rows={2} value={sample} maxLength={200} onChange={(e) => setSample(e.target.value)} />
+            </Field>
+            <Check checked={portrait} onChange={setPortrait} label="Portrait (Shorts)" />
+            <div style={{ borderRadius: 'var(--r-md)', overflow: 'hidden', background: '#15171a', alignSelf: portrait ? 'center' : 'stretch', width: portrait ? 236 : undefined, aspectRatio: portrait ? '9 / 16' : '16 / 9' }}>
+              {preview && <img src={preview} alt="Subtitle style preview"
+                style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />}
+            </div>
+            {previewErr && <div style={{ fontSize: 12, color: 'var(--danger)' }}>{previewErr}</div>}
+          </div>
+      </div>
+    </div>
+  )
+}
+
 const TABS = [
   { id: 'infra', label: 'Infrastructure' },
   { id: 'styles', label: 'Styles' },
@@ -1363,6 +1491,10 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
       case 'cover_typography': {
         const t = { ...CT_DEFAULTS, ...(v || {}) }
         return `${t.font} · ${t.position} · accent ${String(t.accent).replace('_', ' ')}`
+      }
+      case 'subtitle_style': {
+        const t = { ...SS_DEFAULTS, ...(v || {}) }
+        return `${t.font || 'default font'} · ${t.position} · ×${t.scale}`
       }
       case 'voice':
         return v || '(F5-TTS default)'
@@ -2221,6 +2353,12 @@ export default function Settings({ meta, setMeta, leaveGuardRef, go }) {
                   <span>Burn subtitles into the final video</span>
                 </label>
                 <ParentVal k="burn_subtitles" />
+              </Field>
+              <Field label="Subtitle style" hint="How burned-in subtitles look — font, size, colours, outline or backdrop box, and where they sit. Applies to every burn from now on (renders and rebuilds alike); already-burned films pick it up on their next rebuild.">
+                <SubtitleStyleEditor value={eff.subtitle_style}
+                  onChange={(v) => setStyleField('subtitle_style', v)}
+                  systemFonts={fontInfo || []} bundledFonts={fontBundled} />
+                <ParentVal k="subtitle_style" />
               </Field>
               <Field label="Cover typography" hint="How cover titles look. The artwork is always generated TEXT-FREE (with this style's own image engine) and the title is drawn on top with real fonts — it can never be misspelled, regenerating rerolls only the artwork, and phrase edits re-apply instantly.">
                 <CoverTypographyEditor value={eff.cover_typography}

@@ -18,6 +18,7 @@ import json
 import os
 import re
 import subprocess
+import tempfile
 import sys
 import threading
 import time
@@ -4797,6 +4798,238 @@ def duplicate_script_and_render(body: DuplicateRenderBody) -> dict:
             "queue_item_id": queued.get("queue_item_id"),
             "started": queued.get("started")}
 
+# ── Restyle: swap a script's visual style without touching its content ───────
+# The visual style is baked into every scene's image_prompt as a leading
+# sentence (script generation and the render both prepend the composed style,
+# and the editor shows prompts exactly as they render). That makes "same film,
+# different look" a prompt-surgery job by hand — and an easy one to get wrong,
+# since a re-render then reuses the cached first frames painted in the OLD
+# look. _restyle_script does the whole swap in one place.
+
+def _strip_style_prefix(text: str, prefixes: list[str]) -> str:
+    """Remove every known style sentence leading *text* (repeatedly — an
+    earlier by-hand restyle may have stacked two). Matching is case-insensitive
+    and tolerant of the ". " / ", " joiner the prefix was glued on with."""
+    out = (text or "").strip()
+    cands = sorted({p.strip().rstrip(".").strip() for p in prefixes if p and p.strip()},
+                   key=len, reverse=True)
+    changed = True
+    while changed and out:
+        changed = False
+        for cand in cands:
+            if out.lower().startswith(cand.lower()):
+                rest = out[len(cand):].lstrip()
+                if rest[:1] in (".", ","):
+                    rest = rest[1:]
+                out = rest.strip()
+                changed = True
+                break
+    return out
+
+
+def _restyle_script(wd: Path, *, style_name: str, style: str,
+                    repaint_cast: bool = True) -> dict:
+    """Re-point an existing script at another visual style, in place.
+
+    Every scene's image_prompt loses its baked style sentence and gains the
+    new one (video prompts just lose the old one — the render adds the style
+    at shoot time); acted scenes get their H3 prompt re-assembled under the
+    new style note (a hand-edited prompt_override is left as written). The
+    job's style_name / style sentence are updated everywhere the render reads
+    them (store config + metadata, create_brief.json, job_config.json), and
+    the images that carried the old look are retired so nothing reuses them:
+    scene previews and first frames, the cover, and — when *repaint_cast* —
+    the per-script cast portraits (the next render paints fresh ones). All of
+    them stay in their version histories. Returns the Script-editor payload."""
+    job_id = job_id_from_work_dir(wd)
+    cfg = gapp.load_config()
+    ss = gapp.style_settings(cfg, style_name)
+    new_style_name = ss["name"]
+    new_style = (style or "").strip().rstrip(".").strip()
+    if not new_style:
+        new_style = (ss.get("visual_style") or "").strip().rstrip(".").strip()
+    new_prefix = gapp._compose_visual_style(new_style, cfg, new_style_name)
+
+    fallback_title = wd.name.replace("-", " ").title()
+    _title, old_style, _music, old_style_name, _brief = _script_source_meta(job_id, fallback_title)
+    jc_path = wd / "job_config.json"
+    jc: dict = {}
+    if jc_path.exists():
+        try:
+            jc = json.loads(jc_path.read_text())
+        except Exception:
+            jc = {}
+    # Everything that may ever have been glued onto a prompt's head: the exact
+    # text a render stamped (style_prefix), the script's style sentence, the
+    # old profile's visual style, and their compositions — plus the NEW ones,
+    # so re-applying is idempotent.
+    old_ss = gapp.style_settings(cfg, old_style_name or jc.get("style_name", ""))
+    prefixes = [
+        jc.get("style_prefix", ""), jc.get("style", ""), old_style,
+        old_ss.get("visual_style", ""),
+        gapp._compose_visual_style(old_style, cfg, old_ss["name"]),
+        gapp._compose_visual_style(jc.get("style", ""), cfg, old_ss["name"]),
+        new_style, ss.get("visual_style", ""), new_prefix,
+    ]
+
+    rows = _read_script_scenes(wd)
+    retired: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if performance_mode.is_performance_mode(meta.get("mode")):
+            if not (meta.get("prompt_override") or "").strip():
+                acted = performance_mode.acted_meta(
+                    {"metadata": meta, "lines": meta.get("lines") or [],
+                     "video_prompt": row.get("video_prompt") or "",
+                     "image_prompt": row.get("image_prompt") or ""})
+                row["video_prompt"] = performance_mode.build_h3_prompt(
+                    acted, style_note=new_style,
+                    picture_names=list(acted.get("cast") or []),
+                    audio_names=performance_mode.speakers_in(
+                        acted.get("lines") or [])[:performance_mode.MAX_SPEAKERS_PER_SCENE])
+            continue
+        image_prompt = _strip_style_prefix(row.get("image_prompt") or "", prefixes)
+        row["image_prompt"] = _apply_style_prefix(new_prefix, image_prompt) if image_prompt else ""
+        row["video_prompt"] = _strip_style_prefix(row.get("video_prompt") or "", prefixes)
+        # The look is in the pixels too: retire this scene's preview and first
+        # frame (kept as history versions) so the render paints the new style.
+        try:
+            sid = int(row.get("id", 0))
+        except (TypeError, ValueError):
+            continue
+        for suffix in ("_preview.png", "_first_frame.png"):
+            p = wd / f"scene_{sid:02d}{suffix}"
+            if p.exists():
+                image_history.seed_if_empty(wd, sid, p)
+                p.unlink()
+                retired.append(p.name)
+    gapp._persist_script_snapshot(wd, rows)
+
+    for name in ("cover.png", "cover_bg.png"):
+        p = wd / name
+        if p.exists():
+            if name == "cover.png":
+                image_history.cover_seed_if_empty(wd, p)
+            p.unlink()
+            retired.append(name)
+
+    if repaint_cast:
+        chars = gapp._read_script_characters(wd)
+        touched = False
+        for c in chars:
+            if c.get("ref_image"):
+                p = gapp._script_characters_dir(wd) / c["ref_image"]
+                if p.exists():
+                    image_history.char_seed_if_empty(wd, c["id"], p)
+                c["ref_image"] = ""
+                touched = True
+                retired.append(f"look:{c.get('name') or c['id']}")
+        if touched:
+            gapp._write_script_characters(wd, chars)
+
+    # The brief is what the Script editor and a re-draft read the style from.
+    brief = _read_create_brief(wd)
+    if brief:
+        _write_create_brief(wd, {**brief, "style_name": new_style_name,
+                                 "visual_style": new_style})
+    # A rendered film's job_config is what the film editor's scene re-renders
+    # and the resume path read; the per-style keys it carries are re-stamped
+    # when the film is queued again.
+    if jc:
+        jc.update({"style": new_style, "style_name": new_style_name,
+                   "style_prefix": new_prefix})
+        jc_path.write_text(json.dumps(jc, indent=2))
+
+    store = DurableStore.default()
+    try:
+        job = store.get_job(job_id)
+        d = _row_to_dict(job) if job else {}
+        config = json.loads(d.get("config_json") or "{}")
+        metadata = json.loads(d.get("metadata_json") or "{}")
+        config["style_name"] = new_style_name
+        if isinstance(config.get("create_brief"), dict):
+            config["create_brief"] = {**config["create_brief"],
+                                      "style_name": new_style_name,
+                                      "visual_style": new_style}
+        metadata["style"] = new_style
+        # (status is untouched on conflict — a finished film stays finished.)
+        store.create_or_update_job(job_id, wd, d.get("title") or fallback_title,
+                                   config=config, metadata=metadata)
+        store.upsert_scenes(job_id, rows)
+        for row in rows:
+            try:
+                store.update_scene_preview(job_id, int(row.get("id", 0)), "")
+            except (TypeError, ValueError):
+                pass
+    finally:
+        store.close()
+    gapp.logger.info("Restyled %s → %r (%d images retired)", wd.name, new_style_name, len(retired))
+    payload = load_script(work_dir=str(wd))
+    payload["retired"] = retired
+    return payload
+
+
+class RestyleBody(BaseModel):
+    style_name: str = ""
+    # The film's visual-style sentence; blank = the picked style's own.
+    style: str = ""
+    repaint_cast: bool = True
+
+
+@api.post("/api/jobs/{job_id}/restyle")
+def restyle_job(job_id: str, body: RestyleBody) -> dict:
+    """Swap this script's visual style in place (Script screen → Restyle).
+    Returns the refreshed Script-editor payload."""
+    wd = gapp._job_work_dir(job_id)
+    if not wd or not Path(wd).exists():
+        raise HTTPException(404, "Script folder not found.")
+    return _restyle_script(Path(wd), style_name=body.style_name, style=body.style,
+                           repaint_cast=body.repaint_cast)
+
+
+class DuplicateRestyleBody(BaseModel):
+    work_dir: str
+    style_name: str = ""
+    style: str = ""
+    repaint_cast: bool = True
+    title: str = ""
+
+
+@api.post("/api/scripts/duplicate-restyle")
+def duplicate_script_and_restyle(body: DuplicateRestyleBody) -> dict:
+    """Duplicate a finished film, restyle the copy and queue it to render — the
+    same script and cut in another look, kept as its own film (the film
+    editor's "Restyle this film"). The original stays exactly as it is."""
+    dup = duplicate_script(DuplicateScriptBody(work_dir=body.work_dir, title=body.title))
+    new_wd = Path(dup["work_dir"])
+    restyled = _restyle_script(new_wd, style_name=body.style_name, style=body.style,
+                               repaint_cast=body.repaint_cast)
+    brief = restyled.get("create_brief") or {}
+    try:
+        minutes = float(brief.get("minutes") or 0)
+    except (TypeError, ValueError):
+        minutes = 0.0
+    queued = queue_from_job(FromJobBody(
+        job_id=restyled["job_id"], work_dir=restyled["work_dir"],
+        video_title=restyled.get("video_title") or restyled.get("title") or "",
+        n_scenes=len(restyled.get("scenes") or []),
+        minutes=minutes,
+        style=restyled.get("style") or "",
+        resolution=restyled.get("resolution") or "",
+        voice=restyled.get("voice") or "",
+        music_desc=restyled.get("music_desc") or "",
+        style_name=restyled.get("style_name") or "",
+        approved=True,
+    ))
+    return {"ok": True, "job_id": restyled["job_id"], "work_dir": restyled["work_dir"],
+            "title": restyled.get("video_title") or restyled.get("title") or "",
+            "style_name": restyled.get("style_name") or "",
+            "retired": restyled.get("retired") or [],
+            "queue_item_id": queued.get("queue_item_id"),
+            "started": queued.get("started")}
+
 
 @api.get("/api/jobs/{job_id}/scenes")
 def job_scenes(job_id: str) -> dict:
@@ -6303,7 +6536,12 @@ def start_generation(body: GenerateBody) -> dict:
             if not performance_film:
                 (work_dir / "progress.json").write_text(json.dumps(
                     {"pct": 0, "msg": "Generating character-consistent scene frames…", "ts": time.time()}))
-                generate_all_previews(job_id, resolution, body.style or "")
+                # Called as a plain function, so the endpoint's Query(...)
+                # defaults don't resolve: force must be passed explicitly —
+                # Query(False) is a truthy object, and leaving it repainted
+                # every scene's image before each render (issue: images
+                # regenerated on approve).
+                generate_all_previews(job_id, resolution, body.style or "", force=False)
     except Exception as e:
         gapp.logger.warning("Character pre-build before render failed (non-fatal): %s", e)
 
@@ -6365,6 +6603,7 @@ def start_generation(body: GenerateBody) -> dict:
         # the end of the render. Stamped so the render reads it flat AND so
         # every later rebuild (remix/reassemble/localize) re-burns the track.
         "burn_subtitles": gapp._norm_burn_subtitles(ss.get("burn_subtitles")),
+        "subtitle_style": gapp._norm_subtitle_style(ss.get("subtitle_style")),
         # Cover typography: text-free background + composited real-font title
         # (pipeline/cover_typography.py). Stamped resolved so the render-time
         # cover uses the style's look without re-resolving the hierarchy.
@@ -6389,6 +6628,9 @@ def start_generation(body: GenerateBody) -> dict:
         "ambient_vol": ss.get("ambient_vol"),
         "music_desc": body.music_desc or "", "title": title,
         "video_title": (body.video_title or "").strip(), "style": style_clean,
+        # The exact text baked onto every image prompt's head — what a later
+        # Restyle strips before laying the new style on.
+        "style_prefix": combined_style,
     })
 
     # Link to an originating YouTube queue item, if one matches by final title.
@@ -6916,6 +7158,9 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
         "resolution": jc.get("resolution") or cfg.get("resolution", gapp._DEFAULT_RESOLUTION),
+        # The look this film was shot in, for the "Restyle this film" card.
+        "style_name": jc.get("style_name") or "",
+        "style": jc.get("style") or "",
         # Whether this film's final carries burned-in (open) captions, so the
         # Subtitles card offers the opposite action (burn ⇄ remove).
         "burn_subtitles": bool(jc.get("burn_subtitles")),
@@ -8137,7 +8382,7 @@ def _temporal_upscale_scenes_to_final(
     import shutil
     from pipeline.assembler import (
         _verify_upscale_not_blank,
-        concatenate_scenes_hard_cut,
+        concatenate_scenes,
         mix_background_music,
         temporal_ai_upscale_video,
     )
@@ -8163,9 +8408,9 @@ def _temporal_upscale_scenes_to_final(
     per_scene_est, _learned = film_timing.estimate("upscale_scene", width=target_w, height=target_h)
     tmp_root = wd / "final_upscale_scenes"
     # Keyed by engine + target so a re-run reuses only work done for the SAME
-    # job, and kept on disk rather than thrown away: a film can spend hours
-    # upscaling its scenes, and losing all of them because the last one failed
-    # means starting from nothing.
+    # job, and kept on disk — after success as much as after a failure: a film
+    # can spend hours upscaling its scenes, and a rebuild (a join that went
+    # wrong, a re-mixed score) should not cost that again.
     tmp_dir = tmp_root / f"{engine}-{target_w}x{target_h}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     upscaled_by_index: list[Path | None] = [None] * n_scenes
@@ -8179,9 +8424,13 @@ def _temporal_upscale_scenes_to_final(
     }
 
     def _reusable(out: Path, scene_path: Path) -> bool:
-        """True when a previous run already produced this scene at this size."""
+        """True when a previous run already produced this scene at this size
+        from the scene as it is now — a re-shot or re-voiced scene of the same
+        length must not pass off its old upscale."""
         from pipeline.assembler import _get_duration, _get_video_dimensions
         if not out.exists() or out.stat().st_size <= 10_000:
+            return False
+        if out.stat().st_mtime < scene_path.stat().st_mtime:
             return False
         try:
             if _get_video_dimensions(out) != (target_w, target_h):
@@ -8274,7 +8523,12 @@ def _temporal_upscale_scenes_to_final(
     _film_checkpoint(task_id)
     _film_tasks[task_id] = {"status": "running", "step": "finalize"}
     combined = tmp_dir / "combined.upscaled.mp4"
-    concatenate_scenes_hard_cut(upscaled, combined)
+    # The same join the film itself was assembled with: every clip is decoded
+    # and laid on one film-rate timeline. A stream copy of the clips was what
+    # assembled one film's 4K version into 21 scenes of 36 collapsing into a
+    # few milliseconds each — the concat demuxer takes the clips' timebases to
+    # be identical, and upscaled scenes do not all come back at one rate.
+    concatenate_scenes(upscaled, combined, fade=0.0)
 
     jc = _film_job_config(wd)
     music_path = wd / "background_music.wav"
@@ -8292,8 +8546,7 @@ def _temporal_upscale_scenes_to_final(
         )
     else:
         shutil.copy2(combined, staged_final)
-    # Reached only on success — the per-scene work is no longer needed.
-    shutil.rmtree(tmp_dir, ignore_errors=True)
+    combined.unlink(missing_ok=True)
     return staged_final
 
 
@@ -8333,6 +8586,18 @@ def list_fonts(refresh: bool = Query(False)) -> dict:
     return {"fonts": available_fonts(refresh=refresh), "bundled": bundled_fonts()}
 
 
+def _subtitle_style_for(wd: Path) -> dict:
+    """Look of this film's burned subtitles, resolved LIVE from its style (a
+    Settings tweak applies to the very next burn — no re-render needed);
+    falls back to the look stamped at start when the style is gone."""
+    jc = _film_job_config(wd)
+    cfg = gapp.load_config()
+    name = jc.get("style_name") or ""
+    if name and any(s.get("name") == name for s in cfg.get("styles") or []):
+        return gapp._norm_subtitle_style(gapp.style_settings(cfg, name).get("subtitle_style"))
+    return gapp._norm_subtitle_style(jc.get("subtitle_style"))
+
+
 def _first_frame_burn_opts(wd: Path) -> dict:
     """Hold duration for this film's burns.
 
@@ -8364,7 +8629,7 @@ def _maybe_burn_subtitles(wd: Path, final_path: Path | str,
         from pipeline.captions import build_srt, burn_srt_into_video
         srt = build_srt(wd, lang=lang, timing_lang=lang)
         if srt:
-            burn_srt_into_video(Path(final_path), srt)
+            burn_srt_into_video(Path(final_path), srt, style=_subtitle_style_for(wd))
     except Exception as e:
         gapp.logger.warning("Subtitle burn re-apply failed (non-fatal): %s", e)
 
@@ -10806,6 +11071,39 @@ def cover_typography_preview(body: CoverTypographyPreviewBody) -> Response:
     return Response(content=buf.getvalue(), media_type="image/png")
 
 
+class SubtitleStylePreviewBody(BaseModel):
+    subtitle_style: dict = {}
+    text: str = ""
+    orientation: str = "landscape"  # "landscape" | "portrait"
+
+
+@api.post("/api/subtitle-style/preview")
+def subtitle_style_preview(body: SubtitleStylePreviewBody) -> Response:
+    """Styles-tab live preview: one frame of the draft subtitle look, drawn by
+    the same ffmpeg filter that burns real films, over a stand-in background."""
+    import subprocess
+    from pipeline.assembler import _FFMPEG
+    from pipeline.subtitle_style import subtitles_filter
+
+    w, h = (540, 960) if body.orientation == "portrait" else (960, 540)
+    lines = [" ".join(ln.split()) for ln in (body.text or "").splitlines()]
+    text = "\n".join(ln[:80] for ln in lines if ln)[:200] or "Nobody has ever filmed this."
+    with tempfile.TemporaryDirectory(prefix="subpreview-") as td:
+        tdp = Path(td)
+        preview_background(w, h).save(tdp / "bg.png")
+        (tdp / "captions.srt").write_text(
+            f"1\n00:00:00,000 --> 00:00:05,000\n{text}\n", encoding="utf-8")
+        vf = subtitles_filter(tdp / "captions.srt",
+                              gapp._norm_subtitle_style(body.subtitle_style), tdp / "fonts")
+        proc = subprocess.run(
+            [_FFMPEG, "-y", "-loglevel", "error", "-i", str(tdp / "bg.png"),
+             "-vf", vf, "-frames:v", "1", str(tdp / "out.png")],
+            capture_output=True, text=True, timeout=60)
+        if proc.returncode != 0 or not (tdp / "out.png").exists():
+            raise HTTPException(500, f"Preview render failed: {proc.stderr.strip()[-300:]}")
+        return Response(content=(tdp / "out.png").read_bytes(), media_type="image/png")
+
+
 class ThumbnailBody(BaseModel):
     work_dir: str
     video_id: str = ""
@@ -11001,6 +11299,53 @@ def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, s
         LANGUAGES.get(cut_lang, cut_lang.upper()),
         extras,
     )
+
+
+def _caption_tracks_for_download(wd: Path) -> list[dict]:
+    """Every caption language the film can produce, timed to its published
+    cut — the same tracks publishing attaches — as ``[{lang, name, url}]``."""
+    main, lang, name, extras = _publish_caption_tracks(
+        wd, _video_language_for_work_dir(wd, "en"))
+    tracks = []
+    if main:
+        tracks.append({"lang": lang, "name": name, "url": ""})
+    tracks += [{"lang": t["language"], "name": t["name"], "url": ""} for t in extras]
+    for t in tracks:
+        t["url"] = f"/api/film/captions.srt?work_dir={urllib.parse.quote(str(wd))}&lang={t['lang']}"
+    return tracks
+
+
+@api.get("/api/film/captions")
+def film_caption_tracks(work_dir: str = Query(...)) -> dict:
+    """Caption tracks available to download for a film (see captions.srt)."""
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    return {"tracks": _caption_tracks_for_download(wd)}
+
+
+@api.get("/api/film/captions.srt")
+def film_captions_srt(work_dir: str = Query(...), lang: str = Query("")) -> FileResponse:
+    """Download the film's caption track as an SRT file with timings — worded
+    in *lang* (the original narration language, or any saved localization)
+    and timed to the published cut, exactly as publishing would attach it."""
+    wd = Path(work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    from pipeline import captions as _captions
+    orig = _video_language_for_work_dir(wd, "en")
+    cut_lang = _published_cut_language(wd, orig)
+    code = (lang or cut_lang).strip().lower()
+    srt = _captions.build_srt(
+        wd, lang=None if code == orig else code,
+        timing_lang=None if cut_lang == orig else cut_lang)
+    if not srt:
+        raise HTTPException(404, "Nothing to caption — this film has no narration, "
+                                 "dialogue or lyrics on its scenes"
+                                 + (f" in {code}." if code != orig else "."))
+    stem = re.sub(r"[^\w-]+", "_", _video_title_for(wd)).strip("_") or wd.name
+    return FileResponse(str(srt), media_type="application/x-subrip",
+                        filename=f"{stem}_{code}.srt")
 
 
 def _run_upload_task(task_id: str, body_dict: dict, wd: Path, final: Path, thumb) -> None:
