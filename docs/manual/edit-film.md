@@ -142,6 +142,30 @@ The result is a **separate film**, not a version of this one: its own folder, it
 final video, its own publishing. This film is left exactly as it is. Both appear in
 [Films](films.md) under the same title, each card showing its resolution.
 
+### Restyle this film
+
+Shoots the *same script* again in another **visual style** — the story, narration, scenes
+and cast stay exactly as they are; only the look changes. Every style sits at the head of
+each scene's image prompt as a sentence (the style's *Visual style* from
+[Settings → Styles](settings.md)), so swapping styles by editing prompts was slow and easy
+to get wrong — and a re-render then reused the first frames painted in the old look anyway.
+
+Pick a **Style**: its visual-style sentence fills in and is locked, exactly as on
+[Create](create.md). Pick **No style** to write the look yourself. **Repaint the cast's
+looks** (on by default) also retires the cast's portraits so they are painted afresh in
+the new style — untick it to keep portraits you uploaded. Click **Restyle and render**.
+
+The copy is duplicated as [Duplicate](script.md) would, then restyled: the old style
+sentence is stripped from every scene prompt and the new one put in its place, acted
+scenes get their H3 prompt re-assembled under the new style, and the scene images, cover
+and (if ticked) cast looks that carried the old style are retired — kept as versions —
+so the render paints everything in the new look. It goes into the [queue](queue.md)
+approved. The result is a **separate film** with the new style's settings (narrator,
+engines, mix); this film is left exactly as it is.
+
+To change the style of a script that has *not* rendered yet, use **Restyle** on the
+[Script screen](script.md#restyle) instead — it works in place.
+
 ### Background music
 
 Edit the music prompt and **Regenerate music**. This re-runs the film's
