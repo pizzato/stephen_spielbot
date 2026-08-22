@@ -392,11 +392,21 @@ class ComfyFlashVsrUpscaleTests(unittest.TestCase):
             src = Path(tmp) / "in.mp4"
             src.write_bytes(b"video")
             out = Path(tmp) / "out.mp4"
+            def fake_clock(video_path, _source, output_path, _duration):
+                output_path.write_bytes(video_path.read_bytes())
+                return output_path
+
+            def fake_up(inp, outp, *a, **kw):
+                outp.write_bytes(b"upscaled")
+                return outp
+
             with mock.patch.object(assembler, "_get_video_dimensions", return_value=(1280, 704)), \
                  mock.patch.object(assembler, "_get_duration", return_value=5.0), \
-                 mock.patch.object(assembler, "_get_video_fps", return_value=24.0), \
+                 mock.patch.object(assembler, "_constant_rate_source", side_effect=lambda inp, _o: (inp, 24.0)), \
                  mock.patch.object(assembler, "_verify_upscale_not_blank"), \
-                 mock.patch.object(comfyui, "upscale_video_flashvsr", return_value=out) as up:
+                 mock.patch.object(assembler, "_restore_source_clock", side_effect=fake_clock), \
+                 mock.patch("pipeline.comfyui.upscale_video_flashvsr", side_effect=fake_up) as up, \
+                 mock.patch.dict("os.environ", {"TEMPORAL_VIDEO_UPSCALER_CMD": ""}, clear=False):
                 result = assembler.temporal_ai_upscale_video(
                     src, out, 2560, 1408, engine="flashvsr", comfy_url="http://w:8188")
             self.assertEqual(result, out)
