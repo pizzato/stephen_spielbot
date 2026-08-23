@@ -69,6 +69,31 @@ track publishing attaches, so it drops straight into YouTube Studio, a video edi
 or any player that loads sidecar subtitles. The look of burned-in subtitles is set per
 style under [Settings → Subtitle style](settings.md#cover-first-frame).
 
+### Titles & Credits
+
+Stack title cards before the film and credit cards after it. **Add card** under
+**Opening** or **End** adds one; each card is a still — a **solid colour** or a still
+image of your own (**Upload a still**, cover-cropped to the film's frame) — with text
+drawn in the style's display font, **shown for** as many seconds as you like, faded in
+and out. Every row of the text box is a line on the card, blank rows leave a gap. Cards
+of one placement play one after another in the order listed (the arrows reorder them),
+so an opening can be a title, then a dedication, then a chapter line. **Font**, **Text
+colour**, **Text size** and **Fade** apply to all cards.
+
+**Add titles & credits to the film** joins the cards onto the finished film — before and
+after, nothing inside the film changes — and keeps the previous cut as a selectable
+version. It works on any final, an upscaled one included, and the order doesn't matter:
+the cards are saved on the film, so every later rebuild (re-mix, re-voice, reassemble,
+localize, and the by-scene AI upscales) puts them back — drawn at the new size, so
+cards added before a 4K upscale come out as crisp as ones added after. Running it again
+**replaces** the cards rather than stacking a second set, and **Remove titles &
+credits** trims them off again.
+
+Because the opening cards shift the timeline, the caption track publishing attaches
+(and the SRT download) is shifted with them; burned-in subtitles are drawn before the
+cards go on, so they stay aligned with the picture. The cover burn, likewise, stamps the
+film's own opening frames — the title cards play first, then the cover shot.
+
 ### Re-mix audio
 
 Three sliders — **Voice**, **Music**, **Ambient** (0–150%) — then **Re-mix film**. This

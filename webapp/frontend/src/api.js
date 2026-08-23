@@ -297,6 +297,11 @@ export const api = {
   remixSubtitles: (body) => req('POST', '/remix/subtitles', body),
   filmCaptionTracks: (workDir) => req('GET', `/film/captions?work_dir=${encodeURIComponent(workDir)}`),
   firstFrameCover: (body) => req('POST', '/remix/first-frame-cover', body),
+  // Opening title / end credits stamped onto the finished film (post-production).
+  titleCards: (body) => req('POST', '/remix/title-cards', body),
+  removeTitleCards: (workDir) => req('POST', '/remix/title-cards/remove', { work_dir: workDir }),
+  uploadTitleCardImage: (workDir, cardId, filename, data) =>
+    req('POST', '/remix/title-cards/image', { work_dir: workDir, card_id: cardId, filename, data }),
   saveCoverPhrase: (workDir, phrase) => req('POST', '/films/cover-phrase', { work_dir: workDir, phrase }),
   listFonts: () => req('GET', '/fonts'),
   localizeFilm: (body) => req('POST', '/remix/localize', body),

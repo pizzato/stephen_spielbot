@@ -74,6 +74,7 @@ from pipeline.cover import (  # noqa: E402
     cover_phrase_for,
     shorten_title_for_cover,
 )
+from pipeline import title_cards as _title_cards  # noqa: E402
 from pipeline.cover_typography import (  # noqa: E402
     COVER_BASE_NAME,
     apply_cover_typography,
@@ -7164,6 +7165,12 @@ def remix_load(work_dir: str = Query("")) -> dict:
         # Whether this film's final carries burned-in (open) captions, so the
         # Subtitles card offers the opposite action (burn ⇄ remove).
         "burn_subtitles": bool(jc.get("burn_subtitles")),
+        # Opening title / end credits (Titles & credits card): the standing
+        # settings, pre-filled so the form opens ready, and whether the
+        # published cut carries them right now.
+        "title_cards": _title_cards_form(wd, jc),
+        "title_cards_applied": bool(_title_cards.applied_title_cards(wd, final_vid)),
+        "title_card_images": _title_card_images(wd, jc),
         # Same publish/approval status the Films tab shows, so the review screen
         # can surface the Approve gate (publish_require_approval) inline.
         **_film_publish_status(wd, meta, cfg),
@@ -7196,6 +7203,7 @@ def remix_apply(body: RemixBody) -> dict:
         if final_path:
             _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_apply_title_cards(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Remix failed.")
     return {"message": message, "final_url": _busted_file_url(Path(final_path))}
@@ -7325,6 +7333,7 @@ def _run_remix_narrator(task_id: str, wd: Path, voice: str) -> None:
         )
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_apply_title_cards(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -7624,6 +7633,7 @@ def _assemble_localized_final(wd: Path, lang: str, jc: dict, order: list[int]) -
     # A localized cut gets its captions burned in the published language too.
     _maybe_burn_subtitles(wd, final_path, lang=lang)
     _maybe_burn_first_frame_cover(wd, final_path, cover_path=loc_cover)
+    _maybe_apply_title_cards(wd, final_path)
     history = final_video_history.record(wd, final_path, label=LANGUAGES[lang], lang=lang,
                                          kind="localize")
     return history, len(scene_finals)
@@ -8050,6 +8060,7 @@ def _run_music_regen(task_id: str, wd: Path, music_desc: str) -> None:
             raise RuntimeError(message or "Re-mux failed after regenerating music.")
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_apply_title_cards(wd, final_path)
         _film_tasks[task_id] = {
             "status": "done",
             "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
@@ -8127,6 +8138,7 @@ def _remux_with_current_music(wd: Path) -> str:
         raise RuntimeError(message or "Re-mux failed.")
     _maybe_burn_subtitles(wd, final_path)
     _maybe_burn_first_frame_cover(wd, final_path)
+    _maybe_apply_title_cards(wd, final_path)
     return final_path
 
 
@@ -8239,6 +8251,7 @@ def select_music(body: MusicSelectBody) -> dict:
         if final_path:
             _maybe_burn_subtitles(wd, final_path)
             _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_apply_title_cards(wd, final_path)
     if not final_path:
         raise HTTPException(500, message or "Re-mux failed.")
     return {
@@ -8295,6 +8308,15 @@ def _run_final_video_upscale(task_id: str, wd: Path, target_name: str, upscale_m
 
         _film_checkpoint(task_id)
         staged.replace(final_path)
+        if mode in {"ic_lora", "ltx_latent", "h3_latent", "flashvsr"}:
+            # The by-scene upscale is a rebuild from the clean scene clips, so
+            # it has to put back what the published final carried on top of
+            # them — like every other rebuild. (The fast path upscales the
+            # final itself, burns and cards included, so it must NOT re-apply:
+            # a second subtitle pass would print the captions twice.)
+            _maybe_burn_subtitles(wd, final_path)
+            _maybe_burn_first_frame_cover(wd, final_path)
+            _maybe_apply_title_cards(wd, final_path)
         mode_label = {
             "fast": "Fast",
             "ltx_latent": "LTX latent",
@@ -8744,6 +8766,203 @@ def remix_first_frame_cover(body: FirstFrameCoverBody) -> dict:
         daemon=True,
     ).start()
     return {"ok": True, "task_id": tid}
+
+
+def _title_cards_default_font(wd: Path) -> str:
+    """The style's cover font — the cards share the film's display face
+    unless the form picks another."""
+    jc = _film_job_config(wd)
+    ss = gapp.style_settings(gapp.load_config(), jc.get("style_name") or "")
+    return str(gapp._norm_cover_typography(ss.get("cover_typography")).get("font") or "")
+
+
+def _title_cards_form(wd: Path, jc: dict) -> dict:
+    """The saved title-card settings for the editor, with the font filled
+    from the style so the form opens ready."""
+    cards = _title_cards.norm_title_cards(jc.get("title_cards"))
+    if not cards["font"]:
+        cards["font"] = _title_cards_default_font(wd)
+    return cards
+
+
+def _title_card_images(wd: Path, jc: dict) -> dict:
+    """``{card_id: url}`` for every card that has an uploaded still."""
+    out = {}
+    for card in _title_cards.norm_title_cards(jc.get("title_cards"))["cards"]:
+        path = _title_cards.card_image_path(wd, card["id"])
+        if path.exists():
+            out[card["id"]] = _busted_file_url(path)
+    return out
+
+
+def _title_cards_head_seconds(wd: Path) -> float:
+    """Opening-card length on the published cut (0 when none) — the shift
+    soft caption tracks need. Best-effort: a probe failure means no shift."""
+    try:
+        return _title_cards.head_seconds(wd, gapp._final_path_for_work_dir(wd))
+    except Exception:
+        return 0.0
+
+
+def _maybe_apply_title_cards(wd: Path, final_path: Path | str) -> None:
+    """Re-stamp the film's standing opening title / end credits after a final
+    rebuild. Every rebuild starts from combined.mp4, which never carries the
+    cards, so a film that switched them on (job_config "title_cards") would
+    otherwise silently lose them on a remix, re-voice or reassemble. Call
+    LAST — after the subtitle and cover burns — so captions stay aligned to
+    the film and the cover still opens the film itself.
+    Best-effort: a rebuilt film without its titles beats a failed rebuild."""
+    try:
+        cfg = _title_cards.norm_title_cards(_film_job_config(wd).get("title_cards"))
+        if not cfg["cards"]:
+            return
+        _title_cards.apply_title_cards(
+            Path(final_path), wd, cfg,
+            title=_video_title_for(wd), default_font=_title_cards_default_font(wd))
+    except Exception as e:
+        gapp.logger.warning("Title cards re-apply failed (non-fatal): %s", e)
+
+
+class TitleCardsBody(BaseModel):
+    work_dir: str
+    title_cards: dict
+
+
+class TitleCardsRemoveBody(BaseModel):
+    work_dir: str
+
+
+class TitleCardImageBody(BaseModel):
+    work_dir: str
+    card_id: str
+    filename: str = ""
+    data: str
+
+
+def _run_title_cards(task_id: str, wd: Path, cfg: dict) -> None:
+    """Background thread: prepend the opening title and append the end
+    credits to the final video. Keeps the previous cut as a version."""
+    started = _film_task_started_at(task_id) or time.time()
+    final_path = gapp._final_path_for_work_dir(wd)
+    try:
+        _film_checkpoint(task_id)
+        if not final_path.exists() or final_path.stat().st_size <= 0:
+            raise RuntimeError("Final video not found; render the film first.")
+        final_video_history.seed_if_empty(wd, final_path, "Original")
+        _hist = final_video_history.history(wd)
+        cur_lang = next(
+            (v.get("lang") for v in _hist["versions"] if v["id"] == _hist["selected"]),
+            None,
+        )
+        _film_tasks[task_id] = {"status": "running", "step": "title_cards"}
+        rec = _title_cards.apply_title_cards(
+            final_path, wd, cfg,
+            title=_video_title_for(wd), default_font=_title_cards_default_font(wd))
+        final_video_history.record(wd, final_path, label="Titles & credits",
+                                   lang=cur_lang, kind="titles")
+        _film_tasks[task_id] = {
+            "status": "done",
+            "final_url": f"/api/file?path={final_path}&t={int(time.time())}",
+            "video_history": final_video_history.history(wd),
+            "title_cards_applied": True,
+            "head": rec["head"], "tail": rec["tail"],
+        }
+    except Exception as e:
+        _finish_film_task_error(task_id, e)
+    finally:
+        _record_film_task_activity(
+            task_id,
+            started=started,
+            done_name="Added titles & credits to the film",
+            failed_name="Titles & credits failed",
+            cancelled_name="Titles & credits cancelled",
+            detail=wd.name,
+        )
+
+
+@api.post("/api/remix/title-cards")
+def remix_title_cards(body: TitleCardsBody) -> dict:
+    """Add an opening title card and/or end credits to the finished film.
+
+    The settings are persisted to the film's job_config first, so every later
+    rebuild (remix, re-voice, reassemble, localize) re-stamps them. A cut
+    that already has cards gets them replaced, never doubled."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    if not gapp._final_path_for_work_dir(wd).exists():
+        raise HTTPException(404, f"Final video not found for {wd.name}.")
+    cfg = _title_cards.norm_title_cards(body.title_cards)
+    if not cfg["cards"]:
+        raise HTTPException(400, "Add a card first.")
+    for n, card in enumerate(cfg["cards"], 1):
+        if (card["background"] == "image"
+                and not _title_cards.card_image_path(wd, card["id"]).exists()):
+            raise HTTPException(400, f"Upload a still for card {n} first, "
+                                     "or use a solid colour.")
+    jc = _film_job_config(wd)
+    jc["title_cards"] = cfg
+    _write_film_job_config(wd, jc)
+
+    tid = f"title_cards_{int(time.time())}"
+    _film_tasks[tid] = {"status": "running", "step": "title_cards"}
+    _film_task_meta[tid] = {
+        "work_dir": str(wd), "scene_id": 0, "component": "title_cards",
+        "started_at": time.time(),
+    }
+    threading.Thread(target=_run_title_cards, args=(tid, wd, cfg), daemon=True).start()
+    return {"ok": True, "task_id": tid}
+
+
+@api.post("/api/remix/title-cards/remove")
+def remix_title_cards_remove(body: TitleCardsRemoveBody) -> dict:
+    """Trim the stamped cards off the published cut and clear the list so
+    rebuilds stop re-applying them. The titled cut stays selectable as a
+    version; uploaded stills stay on disk for a later card."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    final_path = gapp._final_path_for_work_dir(wd)
+    jc = _film_job_config(wd)
+    cards = _title_cards.norm_title_cards(jc.get("title_cards"))
+    cards["cards"] = []
+    jc["title_cards"] = cards
+    _write_film_job_config(wd, jc)
+    trimmed = False
+    with _track_op("Removing titles & credits", wd.name):
+        if final_path.exists() and _title_cards.applied_title_cards(wd, final_path):
+            final_video_history.seed_if_empty(wd, final_path, "Original")
+            trimmed = _title_cards.strip_title_cards(final_path, wd)
+            final_video_history.record(wd, final_path, label="Titles removed", kind="titles")
+    return {
+        "ok": True,
+        "trimmed": trimmed,
+        "message": "Titles & credits removed." if trimmed else "This cut has no titles to remove.",
+        "final_url": _busted_file_url(final_path),
+        "video_history": final_video_history.history(wd),
+        "title_cards_applied": False,
+    }
+
+
+@api.post("/api/remix/title-cards/image")
+def remix_title_card_image(body: TitleCardImageBody) -> dict:
+    """Save the user's own still as a card background (cover-cropped to the
+    film's frame when the card is rendered)."""
+    wd = Path(body.work_dir)
+    if not _safe_under(wd, gapp.OUTPUT_DIR):
+        raise HTTPException(400, "Work path is outside the output folder.")
+    card_id = _title_cards.norm_card_id(body.card_id)
+    if not card_id:
+        raise HTTPException(400, "Which card is this still for?")
+    raw = _decode_image(body.data)
+    dest = _title_cards.card_image_path(wd, card_id)
+    try:
+        from PIL import Image
+        with Image.open(io.BytesIO(raw)) as im:
+            im.convert("RGB").save(dest, "PNG")
+    except Exception as e:
+        raise HTTPException(400, f"Could not read that image: {e}")
+    return {"ok": True, "card_id": card_id, "url": _busted_file_url(dest)}
 
 
 @api.post("/api/remix/video-select")
@@ -11283,9 +11502,14 @@ def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, s
     cut_lang = _published_cut_language(wd, orig)
     timing = None if cut_lang == orig else cut_lang
 
+    # Soft tracks overlay the published cut — shift them past its opening
+    # title card (pipeline/title_cards.py); 0 when the cut carries none.
+    offset = _title_cards_head_seconds(wd)
+
     def _srt(code: str) -> Path | None:
         return _captions.build_srt(
             wd, lang=None if code == orig else code, timing_lang=timing,
+            offset=offset,
         )
 
     main = _srt(cut_lang)
@@ -11341,7 +11565,8 @@ def film_captions_srt(work_dir: str = Query(...), lang: str = Query("")) -> File
     code = (lang or cut_lang).strip().lower()
     srt = _captions.build_srt(
         wd, lang=None if code == orig else code,
-        timing_lang=None if cut_lang == orig else cut_lang)
+        timing_lang=None if cut_lang == orig else cut_lang,
+        offset=_title_cards_head_seconds(wd))
     if not srt:
         raise HTTPException(404, "Nothing to caption — this film has no narration, "
                                  "dialogue or lyrics on its scenes"
@@ -13662,6 +13887,7 @@ def _reassemble_film_core(wd: Path, op_name: str = "Reassembling film") -> int:
         # size instead of being resampled with the frame.
         _maybe_burn_subtitles(wd, final_path)
         _maybe_burn_first_frame_cover(wd, final_path)
+        _maybe_apply_title_cards(wd, final_path)
         # Films with kept versions: the published file is now the plain concat,
         # so say so instead of leaving the manifest pointing at the upscale (or
         # other derived cut) this just replaced. Films with no history — almost

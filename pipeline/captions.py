@@ -210,8 +210,12 @@ def _scene_duration(work_dir: Path, sid: int, timing_lang: str | None) -> float:
 
 
 def build_srt(work_dir: Path, lang: str | None = None,
-              timing_lang: str | None = None) -> Path | None:
+              timing_lang: str | None = None, offset: float = 0.0) -> Path | None:
     """Write an SRT caption track for the film in *work_dir*.
+
+    ``offset`` shifts every cue later by that many seconds — the length of an
+    opening title card prepended to the published cut (pipeline/title_cards.py).
+    Burned captions are drawn before the card goes on, so they pass 0.
 
     ``lang`` selects the caption TEXT: ``None`` for the original narration, or a
     language code whose translations were saved by the localize feature
@@ -235,7 +239,7 @@ def build_srt(work_dir: Path, lang: str | None = None,
         return None  # no saved translation for this language — nothing to caption
 
     cues: list[tuple[float, float, str]] = []
-    cursor = 0.0  # start of the current scene on the final timeline
+    cursor = max(0.0, float(offset or 0.0))  # start of the current scene on the final timeline
     for scene in scenes:
         sid = int(scene.get("id") or 0)
         dur = _scene_duration(work_dir, sid, timing_lang)
