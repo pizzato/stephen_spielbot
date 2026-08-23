@@ -17,6 +17,7 @@ import app  # noqa: E402
 import webapp.backend.main as backend  # noqa: E402
 import pipeline.assembler as assembler  # noqa: E402
 import pipeline.captions as captions  # noqa: E402
+from pipeline import final_video_history  # noqa: E402
 
 # Work dirs must live under OUTPUT_DIR (endpoints reject paths outside it).
 _OUT = Path(tempfile.mkdtemp(prefix="spielbot-test-out-"))
@@ -238,6 +239,67 @@ class RemixSubtitlesEndpointTests(unittest.TestCase):
                 backend.remix_subtitles(
                     backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
         self.assertEqual(ctx.exception.status_code, 400)
+
+    def test_picked_upscale_is_burnt_in_place_not_rebuilt(self):
+        """A derived cut (upscale / localized re-voicing) is the work the
+        versions list keeps — burning must draw onto it, not throw it away by
+        rebuilding the plain concat from the scene parts."""
+        final_video_history.record(self.wd, self.final, label="Original")
+        final_video_history.record(self.wd, self.final,
+                                   label="FlashVSR 2560x1440", kind="upscale")
+        srt = self.wd / "captions.srt"
+        with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
+             mock.patch("pipeline.captions.burn_srt_into_video") as burn, \
+             mock.patch.object(backend, "_title_cards_head_seconds", return_value=6.5), \
+             mock.patch.object(backend, "_reassemble_film_core") as core:
+            result = backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        core.assert_not_called()
+        burn.assert_called_once_with(self.final, srt, style=mock.ANY)
+        # Cues shift past the opening title card: the rebuild path burns
+        # before the cards go on, an in-place burn cannot.
+        self.assertEqual(build.call_args.kwargs["offset"], 6.5)
+        self.assertIs(self._jc()["burn_subtitles"], True)
+        self.assertIs(result["burn_subtitles"], True)
+        hist = final_video_history.history(self.wd)
+        newest = hist["versions"][-1]
+        self.assertEqual(newest["label"], "Subtitles burned")
+        self.assertEqual(hist["selected"], newest["id"])
+
+    def test_burning_onto_an_already_burnt_cut_is_refused(self):
+        from fastapi import HTTPException
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        final_video_history.record(self.wd, self.final, label="Original")
+        final_video_history.record(self.wd, self.final,
+                                   label="FlashVSR 2560x1440", kind="upscale")
+        with mock.patch("pipeline.captions.burn_srt_into_video") as burn:
+            with self.assertRaises(HTTPException) as ctx:
+                backend.remix_subtitles(
+                    backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        self.assertEqual(ctx.exception.status_code, 400)
+        burn.assert_not_called()
+
+    def test_removing_a_burn_from_a_picked_cut_says_what_it_replaced(self):
+        (self.wd / "job_config.json").write_text('{"burn_subtitles": true}')
+        final_video_history.record(self.wd, self.final, label="Original")
+        final_video_history.record(self.wd, self.final,
+                                   label="FlashVSR 2560x1440", kind="upscale")
+        with mock.patch.object(backend, "_reassemble_film_core", return_value=3) as core:
+            result = backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=False))
+        core.assert_called_once_with(self.wd, "Removing subtitles")
+        self.assertIn("FlashVSR 2560x1440", result["message"])
+
+    def test_plain_cut_still_rebuilds(self):
+        """No kept versions (almost every film): unchanged behaviour."""
+        srt = self.wd / "captions.srt"
+        with mock.patch("pipeline.captions.build_srt", return_value=srt), \
+             mock.patch("pipeline.captions.burn_srt_into_video") as burn, \
+             mock.patch.object(backend, "_reassemble_film_core", return_value=3) as core:
+            backend.remix_subtitles(
+                backend.RemixSubtitlesBody(work_dir=str(self.wd), burn=True))
+        core.assert_called_once_with(self.wd, "Burning subtitles")
+        burn.assert_not_called()
 
     def test_outside_output_dir_is_rejected(self):
         from fastapi import HTTPException
