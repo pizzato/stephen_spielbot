@@ -1359,6 +1359,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
     try {
       const r = await api.remixSubtitles({ work_dir: data.work_dir, burn })
       setStatus(r.message)
+      if (r.video_history) setVideoHistory(r.video_history)
       setData((d) => ({
         ...d, burn_subtitles: r.burn_subtitles,
         final_url: r.final_url ? r.final_url + `&t=${Date.now()}` : d.final_url,
@@ -1571,7 +1572,10 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
             narration, the dialogue spoken in acted scenes, and a song&apos;s lyrics.
             The final is rebuilt from the clean scene clips, so you can burn them
             in after the fact and remove them again the same way. Once on, every
-            later rebuild keeps them.
+            later rebuild keeps them. When the cut you picked under Versions is an
+            upscale or a localized re-voicing, the captions are drawn onto that cut
+            instead, so it keeps its resolution — but removing them again rebuilds
+            from the scene clips.
           </p>
           <div className="mt-24">
             {data.burn_subtitles ? (

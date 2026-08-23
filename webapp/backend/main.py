@@ -7216,11 +7216,56 @@ class RemixSubtitlesBody(BaseModel):
     burn: bool = True
 
 
+def _burn_subtitles_onto_cut(wd: Path, curated: dict) -> dict:
+    """Draw the captions straight onto the published cut, in place.
+
+    The rebuild below re-makes the final from the clean scene parts, which
+    throws away a derived cut — an upscale, a localized re-voicing — the very
+    work the versions list exists to keep. When the picked cut is one of
+    those, burn onto it instead. The cues are shifted past any opening title
+    card (the rebuild gets that for free, burning before the cards go on) and
+    the burnt cut is kept as its own version."""
+    if _film_job_config(wd).get("burn_subtitles"):
+        raise HTTPException(400, f"“{curated['label']}” already carries burned captions — "
+                                 "burning again would print them twice. Remove them first.")
+    from pipeline.captions import build_srt, burn_srt_into_video
+    final_path = gapp._final_path_for_work_dir(wd)
+    orig = _video_language_for_work_dir(wd, "en")
+    cut_lang = _published_cut_language(wd, orig)
+    localized = None if cut_lang == orig else cut_lang
+    style = _subtitle_style_for(wd)
+    srt = build_srt(wd, lang=localized, timing_lang=localized,
+                    offset=_title_cards_head_seconds(wd), style=style)
+    if srt is None:
+        raise HTTPException(400, "Nothing to caption — this film has no "
+                                 "narration, dialogue or lyrics on its scenes.")
+    with _track_op("Burning subtitles", wd.name):
+        final_video_history.seed_if_empty(wd, final_path, "Original")
+        burn_srt_into_video(final_path, srt, style=style)
+        jc = _film_job_config(wd)
+        jc["burn_subtitles"] = True
+        _write_film_job_config(wd, jc)
+        final_video_history.record(wd, final_path, label="Subtitles burned",
+                                   lang=curated.get("lang"), kind="subtitles")
+    return {
+        "message": f"Subtitles burned into the picked cut (“{curated['label']}”), "
+                   "which keeps it as it is instead of rebuilding from the scene parts.",
+        "final_url": _busted_file_url(final_path),
+        "burn_subtitles": True,
+        "video_history": final_video_history.history(wd),
+    }
+
+
 @api.post("/api/remix/subtitles")
 def remix_subtitles(body: RemixSubtitlesBody) -> dict:
     """Burn the film's captions into the picture after the fact — or remove
     a burn again — by rebuilding the final from the (caption-free) scene
     finals with the film's standing ``burn_subtitles`` flag flipped.
+
+    A picked cut the rebuild cannot reproduce (an upscale, a localized
+    re-voicing) is burnt in place instead, so the choice under Versions
+    survives — see _burn_subtitles_onto_cut. Removing a burn always rebuilds:
+    captions live in the pixels, and only a fresh picture is free of them.
 
     The flag is persisted to the film's job_config first, so every later
     rebuild (remix, re-voice, reassemble, localize) keeps the choice. Works
@@ -7230,6 +7275,9 @@ def remix_subtitles(body: RemixSubtitlesBody) -> dict:
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
+    curated = _curated_final_version(wd)
+    if body.burn and curated:
+        return _burn_subtitles_onto_cut(wd, curated)
     if body.burn:
         from pipeline.captions import build_srt
         if build_srt(wd, style=_subtitle_style_for(wd)) is None:
@@ -7244,11 +7292,17 @@ def remix_subtitles(body: RemixSubtitlesBody) -> dict:
     except ValueError as e:
         raise HTTPException(400, str(e))
     final_path = gapp._final_path_for_work_dir(wd)
+    message = ("Subtitles burned into the picture."
+               if body.burn else "Burned subtitles removed.")
+    if curated:
+        message += (f" This replaced the picked cut “{curated['label']}” with a fresh build "
+                    "of the scene parts — captions live in the pixels, so removing them "
+                    "means re-drawing the picture. Pick it again under Versions to get it back.")
     return {
-        "message": ("Subtitles burned into the picture."
-                    if body.burn else "Burned subtitles removed."),
+        "message": message,
         "final_url": _busted_file_url(final_path),
         "burn_subtitles": bool(body.burn),
+        "video_history": final_video_history.history(wd),
     }
 
 
