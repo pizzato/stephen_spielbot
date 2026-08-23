@@ -30,6 +30,12 @@ edit it, then stays put; wrap a word in `*asterisks*` to give it the accent colo
 Saving the phrase re-draws the title on the cover instantly (the artwork is untouched),
 and **Re-apply title text** does the same after a typography tweak in Settings.
 
+**Re-generate** rerolls the artwork. Its *tell it how* caret steers the reroll — the
+direction you type leads the prompt and outranks both the film's own scene imagery and the
+composition guidance, so "make it all robots" or "night, not day" actually changes the
+picture. The style's visual look and the no-text rule still hold, so the reroll stays part
+of the same production and the title is still drawn on afterwards.
+
 **Edit cover** opens a masked inpaint. The edit runs on the cover's text-free background
 and the title is re-drawn on top, so inpainting can't smear the lettering.
 

@@ -154,14 +154,28 @@ def build_cover_prompt(style: str = "", scenes=None, instruction: str = "",
             provided, a short subject hint is appended so the cover reflects the
             actual video content (not random topic-biased imagery).
     instruction: optional one-off user steering from the Re-generate popover
-            (e.g. "make it all robots"), appended to the prompt.
+            (e.g. "make it all robots"). It LEADS the prompt: trailing it after
+            the long boilerplate left it under-weighted and sitting right next
+            to the "Avoid:" list, where the model could read it as one more
+            thing to leave out — so a steer simply never landed.
     text_position: where the title will land ("top"/"middle"/"bottom") — asks
             the model for calmer space there.
     """
+    instruction = (instruction or "").strip()[:500]
     style_note = style.strip().rstrip(".")
     style_line = f"Video visual style: {style_note}. " if style_note else ""
     aspects = _extract_scene_aspects(scenes)
-    subject_hint = f"Key visual elements from the video: {aspects}. " if aspects else ""
+    if not aspects:
+        subject_hint = ""
+    elif instruction:
+        # A steer outranks the film's own imagery: the scene elements drop from
+        # content the cover must show to material it may draw on. Without this
+        # the concrete scene text ("a woman on a rainy street") simply beats a
+        # conflicting direction ("make it all robots").
+        subject_hint = ("Visual elements from the video, to draw on only where they fit "
+                        f"that direction: {aspects}. ")
+    else:
+        subject_hint = f"Key visual elements from the video: {aspects}. "
     pos = text_position if text_position in ("top", "middle", "bottom") else "bottom"
     space_hint = ("the vertical middle band" if pos == "middle"
                   else f"the {pos} third") + " of the frame"
@@ -172,9 +186,9 @@ def build_cover_prompt(style: str = "", scenes=None, instruction: str = "",
         space_hint=space_hint,
         negative=_prompts.value("cover_negative_notext"),
     )
-    instruction = (instruction or "").strip()[:500]
     if instruction:
-        prompt = f"{prompt}. {instruction}"
+        prompt = (f"{instruction.rstrip('.')}. That direction outranks everything "
+                  f"below — where they conflict, follow it. {prompt}")
     return prompt
 
 

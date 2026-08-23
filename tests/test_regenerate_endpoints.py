@@ -534,12 +534,33 @@ class InstructionSteeringTests(unittest.TestCase):
             backend.yt_post_title(backend.DescribeBody(work_dir=wd, title="current", instruction="add a number"))
         self.assertIn("add a number", llm.call_args.args[1])
 
-    def test_build_cover_prompt_appends_instruction(self):
+    def test_build_cover_prompt_leads_with_instruction(self):
+        """The steer must OPEN the prompt, not trail it.
+
+        Appended last it sat immediately after the "Avoid:" negative list, where
+        the model reads it as one more thing to leave out — the reason typing
+        into "tell it how" changed nothing."""
         from pipeline.cover import build_cover_prompt
         base = build_cover_prompt("cinematic")
         steered = build_cover_prompt("cinematic", instruction="make it all robots")
         self.assertNotIn("make it all robots", base)
-        self.assertTrue(steered.rstrip().endswith("make it all robots"))
+        self.assertTrue(steered.startswith("make it all robots."))
+        self.assertLess(steered.index("make it all robots"), steered.index("Avoid:"))
+        # An un-steered cover is unchanged.
+        self.assertEqual(base, build_cover_prompt("cinematic", instruction="   "))
+
+    def test_build_cover_prompt_subordinates_scene_hint_to_instruction(self):
+        """With a steer, the film's own imagery drops to optional reference —
+        otherwise the concrete scene text beats a conflicting direction."""
+        from pipeline.cover import build_cover_prompt
+        scenes = [{"image_prompt": "A woman walking through a rainy street at night"}]
+        base = build_cover_prompt("cinematic", scenes=scenes)
+        steered = build_cover_prompt("cinematic", scenes=scenes,
+                                     instruction="make it all robots")
+        self.assertIn("Key visual elements from the video:", base)
+        self.assertNotIn("Key visual elements from the video:", steered)
+        self.assertIn("only where they fit that direction", steered)
+        self.assertIn("A woman walking through a rainy street", steered)
 
     def test_rerender_film_scene_threads_instruction(self):
         wd = Path(tempfile.mkdtemp(prefix="spielbot-film-", dir=_OUT))
