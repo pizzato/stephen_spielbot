@@ -1499,8 +1499,8 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
               : <div className="gfill g2" style={{ position: 'absolute', inset: 0 }}></div>}
           </div>
           <div className="mt-16">
-            <Field label="Cover phrase" hint="The short text drawn on the cover — follows the title until you edit it. Wrap a word in *asterisks* to give it the accent colour.">
-              <input className="input" value={coverPhrase} maxLength={80} disabled={!!ytBusy}
+            <Field label="Cover phrase" hint="The short text drawn on the cover — follows the title until you edit it. Only words wrapped in *asterisks* get the accent colour (the title's default marks them for you — remove them for no accent). Press Enter to force a line break.">
+              <textarea className="textarea" rows={2} value={coverPhrase} maxLength={80} disabled={!!ytBusy}
                 onChange={(e) => { setCoverPhrase(e.target.value); setStatus('') }} />
             </Field>
             {coverPhrase !== coverPhraseSaved && (

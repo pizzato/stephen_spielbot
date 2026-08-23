@@ -72,13 +72,14 @@ from pipeline.cover import (  # noqa: E402
     COVER_PHRASE_MAX_CHARS,
     cover_dimensions,
     cover_phrase_for,
-    shorten_title_for_cover,
+    default_cover_phrase,
 )
 from pipeline import title_cards as _title_cards  # noqa: E402
 from pipeline.cover_typography import (  # noqa: E402
     COVER_BASE_NAME,
     apply_cover_typography,
     bundled_fonts,
+    mark_accent,
     preview_background,
     render_cover_typography,
 )
@@ -7153,8 +7154,8 @@ def remix_load(work_dir: str = Query("")) -> dict:
         "song": _remix_song_info(wd),
         # Short text on the cover image + first-frame burn: saved override,
         # else derived from the title (edit it from the cover card).
-        "cover_phrase": cover_phrase_for(wd, _title),
-        "cover_phrase_default": shorten_title_for_cover(_title),
+        "cover_phrase": cover_phrase_for(wd, _title, _cover_typography_for(wd)["accent"]),
+        "cover_phrase_default": default_cover_phrase(_title, _cover_typography_for(wd)["accent"]),
         # Whether a text-free background exists, so "Re-apply text" can work
         # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
@@ -7818,7 +7819,7 @@ def _localize_metadata(wd: Path, lang: str) -> dict[str, str]:
     title = _video_title_for(wd)
     translated = translate_metadata(
         title, _cached_description(wd), LANGUAGES.get(lang, lang),
-        cover_phrase=cover_phrase_for(wd, title),
+        cover_phrase=cover_phrase_for(wd, title, _cover_typography_for(wd)["accent"]),
     )
     data["title"] = translated["title"]
     data["description"] = translated["description"]
@@ -10552,8 +10553,8 @@ def yt_post_prefill(work_dir: str = Query("")) -> dict:
         # the original cut in the Version picker.
         "original_cover_url": _busted_file_url(orig_cover) if orig_cover.exists() and orig_cover.stat().st_size > 1000 else "",
         # Short text on the cover image + first-frame burn (editable per film).
-        "cover_phrase": cover_phrase_for(wd, _title),
-        "cover_phrase_default": shorten_title_for_cover(_title),
+        "cover_phrase": cover_phrase_for(wd, _title, _cover_typography_for(wd)["accent"]),
+        "cover_phrase_default": default_cover_phrase(_title, _cover_typography_for(wd)["accent"]),
         # Whether a text-free background exists — drives "Re-apply title text"
         # (covers that predate typography need one regeneration first).
         "cover_has_bg": (wd / COVER_BASE_NAME).exists(),
@@ -11006,13 +11007,14 @@ def _render_localized_cover(wd: Path, lang: str) -> Path | None:
         data = json.loads((wd / "localize_scripts" / f"{lang}.json").read_text())
     except Exception:
         return None
+    typo = _cover_typography_for(wd)
     phrase = (data.get("cover_phrase") or "").strip() \
-        or shorten_title_for_cover((data.get("title") or "").strip())
+        or default_cover_phrase((data.get("title") or "").strip(), typo["accent"])
     if not phrase:
         return None
     out = wd / "localize" / lang / "cover.png"
     out.parent.mkdir(parents=True, exist_ok=True)
-    render_cover_typography(base, out, phrase, _cover_typography_for(wd))
+    render_cover_typography(base, out, phrase, typo)
     return out
 
 
@@ -11255,28 +11257,37 @@ class CoverPhraseBody(BaseModel):
     phrase: str = ""
 
 
+def _clean_cover_phrase(text: str) -> str:
+    """Normalise editor text for the cover: whitespace collapsed within each
+    line, blank lines dropped, newlines kept (they force line breaks)."""
+    lines = [" ".join(ln.split()) for ln in (text or "").replace("\r", "").split("\n")]
+    return "\n".join(ln for ln in lines if ln)[:COVER_PHRASE_MAX_CHARS].strip()
+
+
 @api.post("/api/films/cover-phrase")
 def save_cover_phrase(body: CoverPhraseBody) -> dict:
     """Save the film's cover phrase — the short text the cover image prints and
     the first-frame burn stamps. Blank (or exactly the title-derived default)
-    clears the override, so the phrase follows the title again."""
+    clears the override, so the phrase follows the title again. Line breaks
+    are kept: each one forces a line on the cover."""
     wd = Path(body.work_dir)
     if not _safe_under(wd, gapp.OUTPUT_DIR):
         raise HTTPException(400, "Work path is outside the output folder.")
     if not wd.exists():
         raise HTTPException(404, "Film directory not found.")
     title = _video_title_for(wd)
-    phrase = " ".join((body.phrase or "").split()).strip()[:COVER_PHRASE_MAX_CHARS]
+    typo = _cover_typography_for(wd)
+    phrase = _clean_cover_phrase(body.phrase)
     path = wd / COVER_PHRASE_FILE
-    if not phrase or phrase == shorten_title_for_cover(title):
+    if not phrase or phrase == default_cover_phrase(title, typo["accent"]):
         path.unlink(missing_ok=True)
     else:
         path.write_text(phrase, encoding="utf-8")
-    # The new phrase (incl. *accent* markup) is re-composited onto the saved
-    # text-free background right away — no image regeneration. The stale-final
-    # sweep re-burns any first-frame cover. None = no background yet (a film
-    # whose cover predates typography): the phrase applies on the next regen.
-    retexted = apply_cover_typography(wd, _cover_typography_for(wd), title) is not None
+    # The new phrase (incl. *accent* markup + line breaks) is re-composited
+    # onto the saved text-free background right away — no image regeneration.
+    # The stale-final sweep re-burns any first-frame cover. None = no background
+    # yet (a cover that predates typography): the phrase applies on the next regen.
+    retexted = apply_cover_typography(wd, typo, title) is not None
     # The old phrase's translations no longer apply — drop them so localized
     # covers fall back to each localization's title-derived phrase instead of
     # keeping a translation of text that's gone. Best-effort.
@@ -11292,8 +11303,8 @@ def save_cover_phrase(body: CoverPhraseBody) -> dict:
         "ok": True,
         "retexted": retexted,
         "cover_url": f"/api/file?path={wd / 'cover.png'}&t={int(time.time())}" if retexted else "",
-        "cover_phrase": cover_phrase_for(wd, title),
-        "cover_phrase_default": shorten_title_for_cover(title),
+        "cover_phrase": cover_phrase_for(wd, title, typo["accent"]),
+        "cover_phrase_default": default_cover_phrase(title, typo["accent"]),
     }
 
 
@@ -11332,10 +11343,12 @@ def cover_typography_preview(body: CoverTypographyPreviewBody) -> Response:
     cw, ch = cover_dimensions(*dims)
     # Half resolution keeps the round-trip snappy; the layout scales linearly.
     w, h = max(2, cw // 2), max(2, ch // 2)
-    text = " ".join((body.text or "").split())[:COVER_PHRASE_MAX_CHARS] or "The Secret Story"
+    typo = gapp._norm_cover_typography(body.cover_typography)
+    text = _clean_cover_phrase(body.text) or "The Secret Story"
+    if "*" not in text:  # plain sample: show the rule the way a new film's phrase gets it
+        text = mark_accent(text, typo["accent"])
     buf = io.BytesIO()
-    render_cover_typography(preview_background(w, h), buf, text,
-                            gapp._norm_cover_typography(body.cover_typography))
+    render_cover_typography(preview_background(w, h), buf, text, typo)
     return Response(content=buf.getvalue(), media_type="image/png")
 
 

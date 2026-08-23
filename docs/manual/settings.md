@@ -175,11 +175,14 @@ so covers are never asked to paint it: the background is always generated **text
 with the style's own image engine (it matches the film's look instead of the legacy
 FLUX.1-schnell pin), and the title is drawn on top with real fonts. Font (a bundled
 thumbnail-grade set plus anything installed on the machine), position, alignment, case,
-size, colours, an optional backdrop card, and an **accent rule** (first/last word, last
-line, longest word — a different colour and size for the words that matter) are all set
-here, with a live preview rendered by the exact code that composites real covers. Per
-film, wrap words in `*asterisks*` in the cover phrase to hand-pick the accented words,
-and use **Re-apply title text** on the cover card to restyle an existing cover instantly
+size, colours, an optional backdrop card, and an **accent rule** (first/last/longest
+word — a different colour and size for the word that matters) are all set here, with a
+live preview rendered by the exact code that composites real covers. The rule only
+decides how a new film's title-derived cover phrase is written: the chosen word arrives
+wrapped in `*asterisks*` (`The Silent *City*`), and **only marked words are ever
+accented**. Edit the film's phrase to move the asterisks, add more, or strip them for a
+cover with no accent at all; a line break in the phrase forces a line on the cover. Use
+**Re-apply title text** on the cover card to restyle an existing cover instantly
 — no image regeneration needed. Regenerating a cover rerolls only the artwork; the words
 are always pixel-perfect.
 
@@ -192,9 +195,8 @@ Devanagari), the first installed font that covers the phrase. Only the fallback 
 every other typography setting still applies. Chinese and Japanese are written without
 spaces, so their titles break **between characters** instead — a long title fills two or
 three big lines rather than one small one, and never starts a line on closing punctuation.
-Accent rules that pick a word (first/last/longest) have nothing word-shaped to grab in
-those scripts, so they accent the last line instead — nothing when the title fits on one.
-`*Asterisks*` still work, and mark the exact characters they wrap.
+The accent rule has nothing word-shaped to grab in those scripts, so the default phrase
+marks a single character; `*asterisks*` mark the exact characters they wrap.
 
 ### Script & content
 
