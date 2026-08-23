@@ -46,14 +46,15 @@ DEFAULT_CARD = {
     "background": "color",   # color | image (the card's uploaded still)
     "color": "#000000",      # solid background
     "seconds": SECONDS_DEFAULT,
+    # The look is per card — a title card and a credits card rarely share one.
+    "font": "",              # bundled font name / font file; "" = the style's cover font
+    "text_color": "#FFFFFF",
+    "scale": 1.0,            # size multiplier on the auto-fitted text
+    "fade": FADE_DEFAULT,    # fade in/out, seconds
 }
 
 DEFAULT_TITLE_CARDS = {
     "cards": [],             # ordered; start cards play in list order, so do end cards
-    "font": "",              # bundled font name / font file; "" = the style's cover font
-    "text_color": "#FFFFFF",
-    "fade": FADE_DEFAULT,    # fade in/out on each card, seconds
-    "scale": 1.0,            # size multiplier on the auto-fitted text
 }
 
 # Tolerance when matching a final's duration against the stamped record.
@@ -84,8 +85,16 @@ def norm_card_id(value) -> str:
     return re.sub(r"[^a-z0-9_-]", "", str(value or "").lower())[:32]
 
 
-def _norm_card(value, index: int) -> dict:
+def norm_card(value, index: int = 0, shared: dict | None = None) -> dict:
+    """One card, fully typed. *shared* is the pre-per-card-look shape's
+    top-level font/text_color/scale/fade — films saved by that build keep
+    their look when a card carries none of its own."""
     raw = value if isinstance(value, dict) else {}
+    shared = shared or {}
+
+    def look(key):
+        return raw[key] if key in raw else shared.get(key)
+
     return {
         "id": norm_card_id(raw.get("id")) or f"card{index + 1}",
         "placement": raw.get("placement") if raw.get("placement") in PLACEMENTS else "start",
@@ -94,6 +103,10 @@ def _norm_card(value, index: int) -> dict:
                        else "color"),
         "color": _hex_color(raw.get("color"), DEFAULT_CARD["color"]),
         "seconds": _clamp(raw.get("seconds"), SECONDS_MIN, SECONDS_MAX, SECONDS_DEFAULT),
+        "font": str(look("font") or "").strip(),
+        "text_color": _hex_color(look("text_color"), DEFAULT_CARD["text_color"]),
+        "scale": _clamp(look("scale"), 0.4, 2.5, 1.0),
+        "fade": _clamp(look("fade"), FADE_MIN, FADE_MAX, FADE_DEFAULT),
     }
 
 
@@ -104,20 +117,14 @@ def norm_title_cards(value) -> dict:
     cards, seen = [], set()
     raw_cards = raw.get("cards") if isinstance(raw.get("cards"), list) else []
     for i, c in enumerate(raw_cards[:MAX_CARDS]):
-        card = _norm_card(c, i)
+        card = norm_card(c, i, shared=raw)
         base, n = card["id"], 2
         while card["id"] in seen:
             card["id"] = f"{base}_{n}"
             n += 1
         seen.add(card["id"])
         cards.append(card)
-    return {
-        "cards": cards,
-        "font": str(raw.get("font") or "").strip(),
-        "text_color": _hex_color(raw.get("text_color"), DEFAULT_TITLE_CARDS["text_color"]),
-        "fade": _clamp(raw.get("fade"), FADE_MIN, FADE_MAX, FADE_DEFAULT),
-        "scale": _clamp(raw.get("scale"), 0.4, 2.5, 1.0),
-    }
+    return {"cards": cards}
 
 
 def card_image_path(work_dir: Path | str, card_id: str) -> Path:
@@ -349,7 +356,6 @@ def apply_title_cards(final_path: Path | str, work_dir: Path | str, cfg: dict, *
     strip_title_cards(final_path, work_dir)
     width, height = _get_video_dimensions(final_path)
     fps = _video_frame_rates(final_path)[0]
-    font = cfg["font"] or default_font
 
     with tempfile.TemporaryDirectory(prefix="titlecards-") as td:
         td = Path(td)
@@ -361,10 +367,11 @@ def apply_title_cards(final_path: Path | str, work_dir: Path | str, cfg: dict, *
             png = td / f"{card['id']}.png"
             render_card(png, width, height, text,
                         background=card["background"], color=card["color"],
-                        image_path=card_image_path(work_dir, card["id"]), font=font,
-                        text_color=cfg["text_color"], scale=cfg["scale"])
+                        image_path=card_image_path(work_dir, card["id"]),
+                        font=card["font"] or default_font,
+                        text_color=card["text_color"], scale=card["scale"])
             clip = card_clip(png, td / f"{card['id']}.mp4", card["seconds"],
-                             width=width, height=height, fps=fps, fade=cfg["fade"],
+                             width=width, height=height, fps=fps, fade=card["fade"],
                              sample_rate=_FILM_AR)
             if card["placement"] == "start":
                 head_parts.append(clip)

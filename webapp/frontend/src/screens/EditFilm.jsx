@@ -704,6 +704,31 @@ function SceneCard({
   )
 }
 
+// Live preview of one title card — drawn by the backend with the exact code
+// that renders the real card, debounced so typing doesn't hammer it.
+function TitleCardPreview({ workDir, card, imageUrl, aspect }) {
+  const [src, setSrc] = useState('')
+  const key = JSON.stringify(card) + (imageUrl || '')
+  useEffect(() => {
+    let gone = false
+    const t = setTimeout(() => {
+      fetch('/api/remix/title-cards/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ work_dir: workDir, card }),
+      }).then((res) => { if (!res.ok) throw new Error(); return res.blob() })
+        .then((blob) => { if (!gone) setSrc((old) => { if (old) URL.revokeObjectURL(old); return URL.createObjectURL(blob) }) })
+        .catch(() => {})
+    }, 350)
+    return () => { gone = true; clearTimeout(t) }
+  }, [key, workDir])  // eslint-disable-line react-hooks/exhaustive-deps
+  return (
+    <div style={{ aspectRatio: aspect, width: '100%', borderRadius: 8, overflow: 'hidden', background: 'var(--line)' }}>
+      {src && <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} />}
+    </div>
+  )
+}
+
 // ── Film tab: final cut + whole-video metadata + audio remix ──────────────────
 
 function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
@@ -748,6 +773,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   const [titleCards, setTitleCards] = useState(null)
   const [titleCardsApplied, setTitleCardsApplied] = useState(false)
   const [titleCardImages, setTitleCardImages] = useState({})
+  const [titleCardsDefaultFont, setTitleCardsDefaultFont] = useState('')
   const [titleCardsBusy, setTitleCardsBusy] = useState(false)
   const [fonts, setFonts] = useState([])
   const [captionTracks, setCaptionTracks] = useState(null)  // [{lang, name, url}] downloadable SRTs
@@ -803,6 +829,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
         setTitleCards(d.title_cards || null)
         setTitleCardsApplied(!!d.title_cards_applied)
         setTitleCardImages(d.title_card_images || {})
+        setTitleCardsDefaultFont(d.title_cards_default_font || '')
         // Re-voicing clones a reference clip, so only library voices qualify —
         // and only one still in the library (a film can name a deleted voice).
         if (d.song) {
@@ -1123,16 +1150,28 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
   // and stacks with the others of its placement in list order.
   const setCard = (id, patch) =>
     setTitleCards((t) => ({ ...t, cards: t.cards.map((c) => (c.id === id ? { ...c, ...patch } : c)) }))
+  // A new card follows the look of the one before it (the last of its
+  // placement, else the last card at all), so a stack reads as one sequence.
   const addCard = (placement) =>
-    setTitleCards((t) => ({
-      ...t,
-      cards: [...t.cards, {
-        id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
-        placement,
-        text: placement === 'start' ? (coverTitle || filmTitle || '') : 'Made with Stephen Spielbot',
-        background: 'color', color: '#000000', seconds: placement === 'start' ? 4 : 6,
-      }],
-    }))
+    setTitleCards((t) => {
+      const prev = [...t.cards].reverse().find((c) => c.placement === placement) || t.cards[t.cards.length - 1]
+      const look = prev
+        ? { background: prev.background, color: prev.color, seconds: prev.seconds, font: prev.font,
+            text_color: prev.text_color, scale: prev.scale, fade: prev.fade }
+        : { background: 'color', color: '#000000', seconds: placement === 'start' ? 4 : 6,
+            font: titleCardsDefaultFont, text_color: '#FFFFFF', scale: 1, fade: 0.6 }
+      // A still belongs to one card — the new one starts on a solid colour.
+      if (look.background === 'image') look.background = 'color'
+      return {
+        ...t,
+        cards: [...t.cards, {
+          id: `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`,
+          placement,
+          text: placement === 'start' ? (coverTitle || filmTitle || '') : 'Made with Stephen Spielbot',
+          ...look,
+        }],
+      }
+    })
   const removeCard = (id) => setTitleCards((t) => ({ ...t, cards: t.cards.filter((c) => c.id !== id) }))
   const moveCard = (id, dir) => setTitleCards((t) => {
     const cards = [...t.cards]
@@ -1567,8 +1606,9 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
           <span className="label-sm row center gap-10"><Icon name="film" style={{ color: 'var(--ink-3)', width: 16 }} /> Titles &amp; Credits</span>
           <p className="muted" style={{ fontSize: 13, marginTop: 6 }}>
             Stack title cards before the film and credit cards after it — each a
-            solid colour or your own still with text in the style&apos;s display font,
-            faded in and out, shown for as long as you like, one after another.
+            solid colour or your own still with its own text, font, colours and
+            fade, shown for as long as you like, one after another. A new card
+            starts with the look of the one before it.
             They are joined onto the finished film (nothing inside it changes),
             the previous cut is kept as a version, and once on, every later rebuild
             keeps them.
@@ -1600,6 +1640,7 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                             <Button variant="ghost" size="sm" icon="xmark" disabled={anyBusy} onClick={() => removeCard(c.id)} title="Remove card" />
                           </div>
                         </div>
+                        <TitleCardPreview workDir={data.work_dir} card={c} imageUrl={titleCardImages[c.id]} aspect={aspect} />
                         <Field label="Text" hint="One line per row — blank rows leave a gap.">
                           <textarea className="textarea" rows={2} value={c.text}
                             disabled={anyBusy} onChange={(e) => setCard(c.id, { text: e.target.value })} />
@@ -1633,35 +1674,32 @@ function FilmTab({ workDir, go, meta, filmTitle, onTitleChange }) {
                               onChange={(e) => { uploadTitleCardImage(c.id, e.target.files?.[0]); e.target.value = '' }} />
                           </label>
                         </div>
+                        <div className="row gap-12" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                          <Field label="Font">
+                            <select className="select" value={c.font} disabled={anyBusy}
+                              onChange={(e) => setCard(c.id, { font: e.target.value })}>
+                              {!fonts.some((f) => f.name === c.font) && <option value={c.font}>{c.font || 'Default'}</option>}
+                              {fonts.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
+                            </select>
+                          </Field>
+                          <Field label="Text colour">
+                            <input className="input" type="color" value={c.text_color} disabled={anyBusy}
+                              onChange={(e) => setCard(c.id, { text_color: e.target.value })} style={{ width: 56, padding: 2 }} />
+                          </Field>
+                          <Field label="Text size">
+                            <input className="input" type="number" min={0.4} max={2.5} step={0.1} value={c.scale} disabled={anyBusy}
+                              onChange={(e) => setCard(c.id, { scale: +e.target.value })} style={{ maxWidth: 90 }} />
+                          </Field>
+                          <Field label="Fade (seconds)">
+                            <input className="input" type="number" min={0} max={3} step={0.1} value={c.fade} disabled={anyBusy}
+                              onChange={(e) => setCard(c.id, { fade: +e.target.value })} style={{ maxWidth: 90 }} />
+                          </Field>
+                        </div>
                       </div>
                     ))}
                   </div>
                 )
               })}
-              <div style={{ borderTop: '1px solid var(--line)', paddingTop: 14 }}>
-                <span className="label-sm">Look (all cards)</span>
-                <div className="row gap-12 mt-8" style={{ flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                  <Field label="Font">
-                    <select className="select" value={titleCards.font} disabled={anyBusy}
-                      onChange={(e) => setTitleCards((t) => ({ ...t, font: e.target.value }))}>
-                      {!fonts.some((f) => f.name === titleCards.font) && <option value={titleCards.font}>{titleCards.font || 'Default'}</option>}
-                      {fonts.map((f) => <option key={f.name} value={f.name}>{f.name}</option>)}
-                    </select>
-                  </Field>
-                  <Field label="Text colour">
-                    <input className="input" type="color" value={titleCards.text_color} disabled={anyBusy}
-                      onChange={(e) => setTitleCards((t) => ({ ...t, text_color: e.target.value }))} style={{ width: 56, padding: 2 }} />
-                  </Field>
-                  <Field label="Text size">
-                    <input className="input" type="number" min={0.4} max={2.5} step={0.1} value={titleCards.scale} disabled={anyBusy}
-                      onChange={(e) => setTitleCards((t) => ({ ...t, scale: +e.target.value }))} style={{ maxWidth: 90 }} />
-                  </Field>
-                  <Field label="Fade (seconds)">
-                    <input className="input" type="number" min={0} max={3} step={0.1} value={titleCards.fade} disabled={anyBusy}
-                      onChange={(e) => setTitleCards((t) => ({ ...t, fade: +e.target.value }))} style={{ maxWidth: 90 }} />
-                  </Field>
-                </div>
-              </div>
             </div>
           )}
           <div className="mt-20 stack gap-10">

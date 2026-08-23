@@ -4,6 +4,7 @@ font), held with a fade, and stacked before ("start") or after ("end") the
 finished film — the film itself untouched. The applied record keyed on the cut's DURATION is what
 makes re-apply replace (never stack), remove trim exactly, and a rebuilt
 final register as clean. Soft caption tracks shift by the opening card."""
+import io
 import json
 import os
 import shutil
@@ -39,17 +40,29 @@ def _synthetic_film(path: Path, seconds: float = 3.0, size: str = "320x180") -> 
 class NormTests(unittest.TestCase):
     def test_defaults_fill_and_bad_values_coerce(self):
         cfg = tc.norm_title_cards({"cards": [{"seconds": 99, "color": "red", "background": "video",
-                                              "placement": "middle", "id": "A/B c"}],
-                                   "fade": "lots", "scale": 0, "text_color": "#abcdef"})
+                                              "placement": "middle", "id": "A/B c",
+                                              "fade": "lots", "scale": 0, "text_color": "#abcdef"}]})
         card = cfg["cards"][0]
         self.assertEqual(card["seconds"], tc.SECONDS_MAX)
         self.assertEqual(card["color"], "#000000")
         self.assertEqual(card["background"], "color")
         self.assertEqual(card["placement"], "start")
         self.assertEqual(card["id"], "abc")  # path-safe token
-        self.assertEqual(cfg["fade"], tc.FADE_DEFAULT)
-        self.assertEqual(cfg["scale"], 0.4)
-        self.assertEqual(cfg["text_color"], "#ABCDEF")
+        # The look is per card.
+        self.assertEqual(card["fade"], tc.FADE_DEFAULT)
+        self.assertEqual(card["scale"], 0.4)
+        self.assertEqual(card["text_color"], "#ABCDEF")
+        self.assertEqual(card["font"], "")
+
+    def test_legacy_shared_look_falls_through_to_cards_without_one(self):
+        # Films saved before the look moved onto each card kept font/colour/
+        # size/fade at the top level; those still render the way they did.
+        cfg = tc.norm_title_cards({"cards": [{"id": "a"}, {"id": "b", "font": "Bangers", "fade": 0}],
+                                   "font": "Anton", "text_color": "#FFD400", "scale": 1.5, "fade": 1})
+        a, b = cfg["cards"]
+        self.assertEqual((a["font"], a["text_color"], a["scale"], a["fade"]), ("Anton", "#FFD400", 1.5, 1.0))
+        self.assertEqual((b["font"], b["text_color"], b["fade"]), ("Bangers", "#FFD400", 0.0))
+        self.assertNotIn("font", cfg)
 
     def test_ids_are_assigned_and_made_unique(self):
         cfg = tc.norm_title_cards({"cards": [{}, {"id": "x"}, {"id": "x"}, {"id": "card1"}]})
@@ -190,9 +203,10 @@ class EndpointTests(unittest.TestCase):
 
     def test_form_fills_the_style_font_and_lists_stills(self):
         with mock.patch.object(backend, "_title_cards_default_font", return_value="Anton"):
-            form = backend._title_cards_form(self.wd, {})
-        self.assertEqual(form["font"], "Anton")
-        self.assertEqual(form["cards"], [])
+            form = backend._title_cards_form(
+                self.wd, {"title_cards": {"cards": [{"id": "a"}, {"id": "b", "font": "Bangers"}]}})
+        # A card with no font of its own shows the style's (what it renders in).
+        self.assertEqual([c["font"] for c in form["cards"]], ["Anton", "Bangers"])
         saved = {"title_cards": {"cards": [{"id": "a", "text": "Custom"}, {"id": "b"}]}}
         tc.card_image_path(self.wd, "b").write_bytes(b"png")
         imgs = backend._title_card_images(self.wd, saved)
@@ -213,7 +227,6 @@ class EndpointTests(unittest.TestCase):
     def test_still_upload_is_keyed_on_a_safe_card_id(self):
         import base64
         from PIL import Image
-        import io
         buf = io.BytesIO()
         Image.new("RGB", (8, 8), (1, 2, 3)).save(buf, "PNG")
         data = base64.b64encode(buf.getvalue()).decode()
@@ -312,6 +325,26 @@ class EndpointTests(unittest.TestCase):
                 self.assertEqual(m.call_count, expect, mode)
             if expect:
                 cards.assert_called_once_with(self.wd, self.final)
+
+    def test_preview_renders_one_card_at_the_film_aspect(self):
+        from PIL import Image
+        (self.wd / "job_config.json").write_text(json.dumps({"resolution": "Portrait (720×1280)"}))
+        body = backend.TitleCardPreviewBody(work_dir=str(self.wd), card={
+            "id": "a", "text": "Hi", "color": "#FF0000", "font": "Anton"})
+        with mock.patch.object(backend.gapp, "_RESOLUTIONS", {"Portrait (720×1280)": (720, 1280), backend.gapp._DEFAULT_RESOLUTION: (1920, 1080)}), \
+             mock.patch("pipeline.assembler._get_video_dimensions", side_effect=RuntimeError("not a video")), \
+             mock.patch.object(backend, "_title_cards_default_font", return_value=""):
+            resp = backend.remix_title_card_preview(body)  # falls back to the configured size
+        self.assertEqual(resp.media_type, "image/png")
+        with Image.open(io.BytesIO(resp.body)) as im:
+            self.assertEqual(im.size, (480, 854))
+            self.assertEqual(im.getpixel((2, 2)), (255, 0, 0))
+        # With a real final on disk its own size wins (an upscaled or odd cut).
+        with mock.patch("pipeline.assembler._get_video_dimensions", return_value=(1920, 1080)), \
+             mock.patch.object(backend, "_title_cards_default_font", return_value=""):
+            resp = backend.remix_title_card_preview(body)
+        with Image.open(io.BytesIO(resp.body)) as im:
+            self.assertEqual(im.size, (480, 270))
 
     def test_head_seconds_is_best_effort(self):
         with mock.patch.object(tc, "head_seconds", side_effect=RuntimeError("probe")):

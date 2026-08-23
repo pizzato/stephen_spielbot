@@ -73,12 +73,15 @@ style under [Settings → Subtitle style](settings.md#cover-first-frame).
 
 Stack title cards before the film and credit cards after it. **Add card** under
 **Opening** or **End** adds one; each card is a still — a **solid colour** or a still
-image of your own (**Upload a still**, cover-cropped to the film's frame) — with text
-drawn in the style's display font, **shown for** as many seconds as you like, faded in
-and out. Every row of the text box is a line on the card, blank rows leave a gap. Cards
-of one placement play one after another in the order listed (the arrows reorder them),
-so an opening can be a title, then a dedication, then a chapter line. **Font**, **Text
-colour**, **Text size** and **Fade** apply to all cards.
+image of your own (**Upload a still**, cover-cropped to the film's frame) — with its
+own text, **font**, **text colour**, **text size** and **fade**, **shown for** as many
+seconds as you like. A live **preview** above each card shows exactly what will be
+drawn, at the film's aspect. Every row of the text box is a line on the card, blank
+rows leave a gap. Cards of one placement play one after another in the order listed
+(the arrows reorder them), so an opening can be a title, then a dedication, then a
+chapter line. A new card starts with the look of the one before it (the last card of
+its placement), so a stack reads as one sequence; the first card takes the style's
+cover font.
 
 **Add titles & credits to the film** joins the cards onto the finished film — before and
 after, nothing inside the film changes — and keeps the previous cut as a selectable
