@@ -371,3 +371,124 @@ class LyricCueTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeasuredLineTimeTests(unittest.TestCase):
+    """A singing scene whose divide stamped ``line_times`` dates each cue off
+    the measured span instead of pacing the lines by length."""
+
+    def test_line_times_win_over_pacing(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True,
+                "sings": "LaLaLa\nLoLoLo", "vocal_ranges": [[0.0, 4.0]],
+                "line_times": [[0.5, 1.2], [2.8, 3.9]]}}],
+            {"scene_01_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,500 --> 00:00:01,200\nLaLaLa", content)
+        self.assertIn("00:00:02,800 --> 00:00:03,900\nLoLoLo", content)
+
+    def test_mismatched_line_times_fall_back_to_pacing(self):
+        wd, patch = _film(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True,
+                "sings": "LaLaLa\nLoLoLo", "line_times": [[0.5, 1.2]]}}],
+            {"scene_01_final.mp4": 4.0},
+        )
+        with patch:
+            content = captions.build_srt(wd).read_text()
+        self.assertIn("00:00:00,000 --> 00:00:02,000\nLaLaLa", content)
+
+    def test_divide_stamps_line_times_relative_to_the_window(self):
+        from pipeline.song_timing import window_lines
+        spans = [(0.0, 2.0), (2.0, 5.5), (5.5, 8.0), (9.0, 12.0)]
+        self.assertEqual(window_lines(spans, 5.0, 10.0),
+                         [[0.0, 0.5], [0.5, 3.0], [4.0, 5.0]])
+
+
+class ReadabilityTests(unittest.TestCase):
+    """The style's ``min_seconds`` holds short cues on screen: merge with the
+    next cue on the same scene into a two-line cue, else extend."""
+
+    def _srt(self, scenes, durations, style):
+        wd, patch = _film(scenes, durations)
+        with patch:
+            return captions.build_srt(wd, style=style).read_text()
+
+    def test_short_lyric_lines_become_couplets(self):
+        content = self._srt(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True,
+                "sings": "Rain leaves the ocean,\nrises to the sky.\nFalls upon the mountain,\nfinds the sea in time."}}],
+            {"scene_01_final.mp4": 8.0},
+            {"min_seconds": 2.5},
+        )
+        self.assertIn("00:00:00,000 --> 00:00:03,6", content)
+        self.assertIn("Rain leaves the ocean,\nrises to the sky.\n", content)
+        self.assertIn("Falls upon the mountain,\nfinds the sea in time.\n", content)
+        self.assertEqual(content.count("-->"), 2)
+
+    def test_zero_keeps_every_line(self):
+        content = self._srt(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True, "sings": "LaLaLa\nLoLoLo"}}],
+            {"scene_01_final.mp4": 2.0},
+            {"min_seconds": 0},
+        )
+        self.assertEqual(content.count("-->"), 2)
+
+    def test_merges_across_a_scene_seam(self):
+        content = self._srt(
+            [{"id": 1, "narration": "One."}, {"id": 2, "narration": "Two."}],
+            {"scene_01_narration.wav": 1.0, "scene_02_narration.wav": 1.0},
+            {"min_seconds": 2.5},
+        )
+        # One continuous timeline: the couplet spans the seam, then is held.
+        self.assertIn("00:00:00,000 --> 00:00:02,500\nOne.\nTwo.", content)
+        self.assertEqual(content.count("-->"), 1)
+
+    def test_held_cue_stops_at_the_next_one(self):
+        content = self._srt(
+            [{"id": 1, "narration": "A" * 50 + ". Next."}],
+            {"scene_01_narration.wav": 3.0},
+            {"min_seconds": 4},
+        )
+        self.assertIn("00:00:02,7", content)  # first cue held only to the second's start
+        self.assertEqual(content.count("-->"), 2)
+
+    def test_long_lines_are_held_not_stacked(self):
+        long = "A" * 50 + "."
+        content = self._srt(
+            [{"id": 1, "narration": f"{long} Short."}],
+            {"scene_01_narration.wav": 3.0},
+            {"min_seconds": 2.5},
+        )
+        self.assertEqual(content.count("-->"), 2)
+        self.assertNotIn(f"{long}\nShort.", content)
+
+    def test_no_merge_across_an_instrumental_gap(self):
+        content = self._srt(
+            [{"id": 1, "narration": "", "metadata": {
+                "mode": "silent", "singing": True, "sings": "LaLaLa\nLoLoLo",
+                "line_times": [[0.0, 1.0], [4.0, 5.0]]}}],
+            {"scene_01_final.mp4": 6.0},
+            {"min_seconds": 2.5},
+        )
+        self.assertIn("00:00:00,000 --> 00:00:02,500\nLaLaLa", content)
+        self.assertIn("00:00:04,000 --> 00:00:06,500\nLoLoLo", content)
+
+    def test_delay_shifts_the_track(self):
+        content = self._srt(
+            [{"id": 1, "narration": "Hello there."}],
+            {"scene_01_narration.wav": 3.0},
+            {"delay": 0.4},
+        )
+        self.assertIn("00:00:00,400 --> 00:00:03,400\nHello there.", content)
+        content = self._srt(
+            [{"id": 1, "narration": "Hello there."}],
+            {"scene_01_narration.wav": 3.0},
+            {"delay": -0.5},
+        )
+        self.assertIn("00:00:00,000 --> 00:00:02,500\nHello there.", content)

@@ -150,7 +150,7 @@ class RebuildReapplyTests(unittest.TestCase):
         with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
              mock.patch("pipeline.captions.burn_srt_into_video") as burn:
             backend._maybe_burn_subtitles(self.wd, self.final)
-        build.assert_called_once_with(self.wd, lang=None, timing_lang=None)
+        build.assert_called_once_with(self.wd, lang=None, timing_lang=None, style=mock.ANY)
         burn.assert_called_once_with(self.final, srt, style=mock.ANY)
 
     def test_localized_rebuild_burns_its_language(self):
@@ -158,7 +158,7 @@ class RebuildReapplyTests(unittest.TestCase):
         with mock.patch("pipeline.captions.build_srt", return_value=None) as build, \
              mock.patch("pipeline.captions.burn_srt_into_video") as burn:
             backend._maybe_burn_subtitles(self.wd, self.final, lang="pt")
-        build.assert_called_once_with(self.wd, lang="pt", timing_lang="pt")
+        build.assert_called_once_with(self.wd, lang="pt", timing_lang="pt", style=mock.ANY)
         # Nothing to caption (all-acted film, or no translation): no burn.
         burn.assert_not_called()
 
@@ -268,7 +268,7 @@ class CaptionDownloadTests(unittest.TestCase):
         with mock.patch("pipeline.captions.build_srt", return_value=srt) as build, \
              mock.patch.object(backend, "_video_title_for", return_value="Deep Sea: Giants!"):
             resp = backend.film_captions_srt(work_dir=str(self.wd), lang="")
-        build.assert_called_once_with(self.wd, lang=None, timing_lang=None, offset=0.0)
+        build.assert_called_once_with(self.wd, lang=None, timing_lang=None, offset=0.0, style=mock.ANY)
         self.assertEqual(resp.path, str(srt))
         self.assertIn('filename="Deep_Sea_Giants_en.srt"', resp.headers["content-disposition"])
 
@@ -277,7 +277,7 @@ class CaptionDownloadTests(unittest.TestCase):
         srt.write_text("1\n00:00:00,000 --> 00:00:01,000\nOi\n")
         with mock.patch("pipeline.captions.build_srt", return_value=srt) as build:
             backend.film_captions_srt(work_dir=str(self.wd), lang="pt")
-        build.assert_called_once_with(self.wd, lang="pt", timing_lang=None, offset=0.0)
+        build.assert_called_once_with(self.wd, lang="pt", timing_lang=None, offset=0.0, style=mock.ANY)
 
     def test_nothing_to_caption_is_a_404(self):
         with mock.patch("pipeline.captions.build_srt", return_value=None):

@@ -150,7 +150,25 @@ stand-in background, in landscape or portrait. The look is resolved live from th
 style at burn time, so a tweak applies to the next render or rebuild — a film that
 already carries burned captions picks it up on its next rebuild (or via the film
 editor's **Subtitles** card: remove, then burn again). Soft caption tracks (the SRT
-uploaded with a video) are unaffected — players style those themselves.
+uploaded with a video) are unaffected by the look — players style those themselves.
+
+Two **timing** controls sit with the look and shape every caption track the film
+produces, burned and soft alike:
+
+- **Minimum on screen** (seconds, default 2.5) — a caption shorter than this is first
+  joined with the next one on the same scene into a two-line caption (each half stays
+  one line, so the stack never grows past two; a caption that already fills a line, or
+  a gap of more than 1.5 s between the two, holds instead), and whatever still falls
+  short is held longer — up to the next caption's start, never over it. Short lyric
+  lines read as couplets instead of one-second flashes. `0` shows every line exactly as
+  it is spoken or sung.
+- **Delay** (seconds, default 0) — shifts the whole track later; negative shifts it
+  earlier. For a film whose captions read a touch early or late as a whole.
+
+Song films date each lyric line from the measured singing itself: with
+[lyric alignment](#narrator-audio) on, the divide whisper-aligns the lyric sheet against
+the track's vocal stem and keeps each line's sung time on its scene, so its caption
+starts when the line is actually heard rather than at an evenly-paced estimate.
 
 **Cover typography** — how cover titles look. Diffusion models misspell in-image text,
 so covers are never asked to paint it: the background is always generated **text-free**,

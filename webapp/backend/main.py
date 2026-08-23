@@ -7230,7 +7230,7 @@ def remix_subtitles(body: RemixSubtitlesBody) -> dict:
         raise HTTPException(400, "Work path is outside the output folder.")
     if body.burn:
         from pipeline.captions import build_srt
-        if build_srt(wd) is None:
+        if build_srt(wd, style=_subtitle_style_for(wd)) is None:
             raise HTTPException(400, "Nothing to caption — this film has no "
                                      "narration, dialogue or lyrics on its scenes.")
     jc = _film_job_config(wd)
@@ -8652,9 +8652,10 @@ def _maybe_burn_subtitles(wd: Path, final_path: Path | str,
         if not _film_job_config(wd).get("burn_subtitles"):
             return
         from pipeline.captions import build_srt, burn_srt_into_video
-        srt = build_srt(wd, lang=lang, timing_lang=lang)
+        style = _subtitle_style_for(wd)
+        srt = build_srt(wd, lang=lang, timing_lang=lang, style=style)
         if srt:
-            burn_srt_into_video(Path(final_path), srt, style=_subtitle_style_for(wd))
+            burn_srt_into_video(Path(final_path), srt, style=style)
     except Exception as e:
         gapp.logger.warning("Subtitle burn re-apply failed (non-fatal): %s", e)
 
@@ -11509,7 +11510,7 @@ def _publish_caption_tracks(wd: Path, fallback_lang: str) -> tuple[str | None, s
     def _srt(code: str) -> Path | None:
         return _captions.build_srt(
             wd, lang=None if code == orig else code, timing_lang=timing,
-            offset=offset,
+            offset=offset, style=_subtitle_style_for(wd),
         )
 
     main = _srt(cut_lang)
@@ -11566,7 +11567,7 @@ def film_captions_srt(work_dir: str = Query(...), lang: str = Query("")) -> File
     srt = _captions.build_srt(
         wd, lang=None if code == orig else code,
         timing_lang=None if cut_lang == orig else cut_lang,
-        offset=_title_cards_head_seconds(wd))
+        offset=_title_cards_head_seconds(wd), style=_subtitle_style_for(wd))
     if not srt:
         raise HTTPException(404, "Nothing to caption — this film has no narration, "
                                  "dialogue or lyrics on its scenes"
