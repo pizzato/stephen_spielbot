@@ -47,21 +47,34 @@ def shorten_title_for_cover(title: str, max_chars: int = 40) -> str:
 # Per-film override for the phrase printed on the cover image and burned into
 # the first frame. Written from the edit/publish screens; absent or blank, the
 # phrase stays derived from the title (deterministic — the LLM cover-phrase
-# feature was deliberately reverted, see #86).
+# feature was deliberately reverted, see #86). The text may carry *accent*
+# markup and explicit line breaks — see pipeline.cover_typography.
 COVER_PHRASE_FILE = "cover_phrase.txt"
 COVER_PHRASE_MAX_CHARS = 80
 
 
-def cover_phrase_for(work_dir: Path | str, title: str = "") -> str:
+def default_cover_phrase(title: str, accent: str = "last_word") -> str:
+    """The title-derived cover phrase WITH the style's accent rule written in
+    as ``*markup*`` ("Hello *world*" for ``last_word``). The renderer only
+    ever accents marked words, so the rule lives in the phrase text itself —
+    editing it (or removing the asterisks) is the whole override mechanism."""
+    from pipeline.cover_typography import mark_accent
+
+    return mark_accent(shorten_title_for_cover(title), accent)
+
+
+def cover_phrase_for(work_dir: Path | str, title: str = "",
+                     accent: str = "last_word") -> str:
     """The short text shown on the cover image and the first-frame burn:
-    the film's saved override (cover_phrase.txt), else shortened from *title*."""
+    the film's saved override (cover_phrase.txt), else the default derived
+    from *title* with the style's *accent* rule marked up."""
     try:
         text = (Path(work_dir) / COVER_PHRASE_FILE).read_text(encoding="utf-8").strip()
         if text:
             return text[:COVER_PHRASE_MAX_CHARS]
     except Exception:
         pass
-    return shorten_title_for_cover(title)
+    return default_cover_phrase(title, accent)
 
 
 _STYLE_KEYWORDS = (

@@ -42,7 +42,7 @@ class RenderLocalizedCoverTests(unittest.TestCase):
         wd = _film(self.out, {"title": "Título PT: legenda"})
         with mock.patch.object(backend, "render_cover_typography") as rct:
             backend._render_localized_cover(wd, "pt")
-        self.assertEqual(rct.call_args.args[2], "Título PT")  # shortened title
+        self.assertEqual(rct.call_args.args[2], "Título *PT*")  # shortened title + accent rule
 
     def test_no_background_or_no_translation_returns_none(self):
         self.assertIsNone(backend._render_localized_cover(

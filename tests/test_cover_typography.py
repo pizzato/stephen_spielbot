@@ -56,35 +56,45 @@ class NormTests(unittest.TestCase):
 class MarkupTests(unittest.TestCase):
     def test_no_markup(self):
         self.assertEqual(ct.split_phrase_markup("The Silent City"),
-                         ("The Silent City", set()))
+                         ("The Silent City", set(), set()))
 
     def test_single_and_multi_word_spans(self):
-        clean, acc = ct.split_phrase_markup("The *Secret* Life of *Deep Sea* Giants")
+        clean, acc, starts = ct.split_phrase_markup("The *Secret* Life of *Deep Sea* Giants")
         self.assertEqual(clean, "The Secret Life of Deep Sea Giants")
         self.assertEqual(acc, {1, 4, 5})
+        self.assertEqual(starts, set())
 
     def test_unpaired_asterisk_accents_the_rest(self):
-        clean, acc = ct.split_phrase_markup("Fall of *Rome Tonight")
+        clean, acc, _ = ct.split_phrase_markup("Fall of *Rome Tonight")
         self.assertEqual(clean, "Fall of Rome Tonight")
         self.assertEqual(acc, {2, 3})
 
-    def test_strip_removes_markup_only(self):
-        self.assertEqual(ct.strip_phrase_markup("A *B* C"), "A B C")
+    def test_newlines_force_line_starts(self):
+        clean, acc, starts = ct.split_phrase_markup("The *Secret*\r\n\nLife of\n*Giants*")
+        self.assertEqual(clean, "The Secret\nLife of\nGiants")  # blank line dropped
+        self.assertEqual(acc, {1, 4})
+        self.assertEqual(starts, {2, 4})
+
+    def test_strip_removes_markup_and_breaks(self):
+        self.assertEqual(ct.strip_phrase_markup("A *B*\nC"), "A B C")
         self.assertEqual(ct.strip_phrase_markup(""), "")
 
 
 class AccentRuleTests(unittest.TestCase):
-    WORDS = ["Alpha", "Bee", "Gammagamma", "Delta"]
+    PHRASE = "Alpha Bee Gammagamma Delta"
 
-    def test_rules(self):
-        self.assertEqual(ct._accent_set(self.WORDS, "none", set()), (set(), False))
-        self.assertEqual(ct._accent_set(self.WORDS, "first_word", set()), ({0}, False))
-        self.assertEqual(ct._accent_set(self.WORDS, "last_word", set()), ({3}, False))
-        self.assertEqual(ct._accent_set(self.WORDS, "longest_word", set()), ({2}, False))
-        self.assertEqual(ct._accent_set(self.WORDS, "last_line", set()), (set(), True))
+    def test_rules_become_markup(self):
+        self.assertEqual(ct.mark_accent(self.PHRASE, "none"), self.PHRASE)
+        self.assertEqual(ct.mark_accent(self.PHRASE, "first_word"), "*Alpha* Bee Gammagamma Delta")
+        self.assertEqual(ct.mark_accent(self.PHRASE, "last_word"), "Alpha Bee Gammagamma *Delta*")
+        self.assertEqual(ct.mark_accent(self.PHRASE, "longest_word"), "Alpha Bee *Gammagamma* Delta")
+        self.assertEqual(ct.mark_accent("", "last_word"), "")
 
-    def test_markup_overrides_rule(self):
-        self.assertEqual(ct._accent_set(self.WORDS, "first_word", {3}), ({3}, False))
+    def test_cjk_rule_marks_one_character(self):
+        self.assertEqual(ct.mark_accent("AI 如何改变", "last_word"), "AI 如何改*变*")
+
+    def test_retired_last_line_normalises_to_last_word(self):
+        self.assertEqual(ct.norm_cover_typography({"accent": "last_line"})["accent"], "last_word")
 
 
 class CJKTests(unittest.TestCase):
@@ -124,7 +134,7 @@ class CJKTests(unittest.TestCase):
         self.assertEqual(spaced, [True, True, False, False, False])
 
     def test_markup_accents_characters(self):
-        clean, acc = ct.split_phrase_markup("*人工智能*如何改变世界")
+        clean, acc, _ = ct.split_phrase_markup("*人工智能*如何改变世界")
         self.assertEqual(clean, self.TITLE)
         self.assertEqual(acc, {0, 1, 2, 3})
 
@@ -164,11 +174,9 @@ class CJKTests(unittest.TestCase):
         one_line = 320 * 0.82 / len(self.LONG)
         self.assertGreater(meta["font_size"], one_line * 1.5)
 
-    def test_word_accent_rules_fall_back_to_the_last_line(self):
+    def test_rule_is_not_applied_at_render(self):
         _, one = self._render("a1.png", self.TITLE, {"accent": "last_word"})
-        self.assertEqual(one["accents"], [])           # single line: nothing to accent
-        _, many = self._render("a2.png", self.LONG, {"accent": "last_word"})
-        self.assertEqual(len(many["accents"]), len(many["lines"][-1]))
+        self.assertEqual(one["accents"], [])           # no markup: nothing accented
 
     def test_japanese_renders_too(self):
         _, meta = self._render("ja.png", "日本の火山はなぜ夜に歌うのか")
@@ -208,13 +216,17 @@ class RenderTests(unittest.TestCase):
         colors = set(Image.open(out).convert("RGB").getdata())
         self.assertIn((255, 0, 85), colors)
 
-    def test_markup_beats_rule_in_render(self):
+    def test_only_markup_accents_in_render(self):
         _, meta = self._render("mk.png", "Alpha *Beta* Gamma", {"accent": "first_word"})
         self.assertEqual(meta["accents"], [1])
+        _, plain = self._render("pl.png", "Alpha Beta Gamma", {"accent": "first_word"})
+        self.assertEqual(plain["accents"], [])
 
-    def test_last_line_accent_degrades_to_last_word_on_one_line(self):
-        _, meta = self._render("ll.png", "Tiny", {"accent": "last_line"})
-        self.assertEqual(meta["accents"], [0])
+    def test_newlines_fix_the_rows(self):
+        _, meta = self._render("nl.png", "One\nTwo Three\nFour", {})
+        self.assertEqual(meta["lines"], [["ONE"], ["TWO", "THREE"], ["FOUR"]])
+        _, free = self._render("nf.png", "One Two Three Four", {})
+        self.assertEqual(len(free["lines"]), 1)
 
     def test_card_changes_the_render(self):
         a, _ = self._render("card0.png", "The Silent City", {"card": False})

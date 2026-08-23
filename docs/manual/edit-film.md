@@ -26,7 +26,10 @@ Also **Approve** when the film is held by the [approval gate](settings.md#publis
 
 The thumbnail, plus the **cover phrase** — the short text drawn on the cover with the
 style's [cover typography](settings.md#cover-first-frame). It follows the title until you
-edit it, then stays put; wrap a word in `*asterisks*` to give it the accent colour.
+edit it, then stays put. Only words wrapped in `*asterisks*` get the accent colour —
+the title-derived phrase arrives with the style's accent word already marked
+(`The Silent *City*`), so move the asterisks, add more, or delete them for no accent.
+Press Enter in the box to force a line break on the cover.
 Saving the phrase re-draws the title on the cover instantly (the artwork is untouched),
 and **Re-apply title text** does the same after a typography tweak in Settings.
 
